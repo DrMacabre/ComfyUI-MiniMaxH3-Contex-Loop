@@ -1,5 +1,17 @@
 # Example workflows
 
+## Looping MiniMax H3 Seamless Chain Global Refs Example
+
+Disk-backed recursive Ref2VA chain using the visual H3 Chain Plan editor,
+global character references, a frame-exact source-song timeline, per-segment
+checkpointing, interruption resume, and final assembly. The recovery branch is
+muted by default and can assemble an already completed chain without sampling
+the last scene again.
+
+Replace the supplied image/audio filenames and model selections with files
+available in your ComfyUI installation. Scene-count and duration labels are
+intentionally generic because both are controlled by the editable plan.
+
 ## MiniMax H3 with Motion Context
 
 The original compact FL2VA motion-and-audio continuation workflow included
