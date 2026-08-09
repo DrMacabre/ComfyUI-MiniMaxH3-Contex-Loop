@@ -103,6 +103,51 @@ def main():
     assert run(None, mixed_refs)["cond_video_latents"] == ["R1", "R2"]
     print("4. one mechanism only: unchanged")
 
+    # 5. H3-Multishot installs this merge globally from h3_avbank_probe at
+    # package import. It produces the same video-latent ordering our graph
+    # needs, while stock preserves reference audio and frame_count. Recognise
+    # it and stand down instead of rejecting a safe, already-active owner.
+    mb2 = make_model_base()
+    original = mb2.MiniMaxH3.extra_conds
+
+    def extra_conds(self, **kwargs):
+        out = original(self, **kwargs)
+        kfs = kwargs.get("minimax_keyframes")
+        refs = kwargs.get("minimax_refs")
+        if kfs and refs:
+            out["minimax_payload"].cond["cond_video_latents"] = (
+                [item["latent"] for item in kfs]
+                + [item["latent"] for item in refs if "latent" in item])
+        return out
+
+    extra_conds._h3_avbank_merge = True
+    extra_conds.__module__ = "custom_nodes.h3_multishot.h3_avbank_probe"
+    mb2.MiniMaxH3.extra_conds = extra_conds
+    sys.modules.pop("patch_payload", None)
+    pp2 = importlib.import_module("patch_payload")
+    assert pp2._already_patched(mb2.MiniMaxH3) == "h3_multishot"
+    assert pp2.apply_patch(), "compatible H3-Multishot patch was refused"
+    assert mb2.MiniMaxH3.extra_conds is extra_conds, "compatible patch was wrapped"
+    got = mb2.MiniMaxH3().extra_conds(
+        minimax_keyframes=mc_kf, minimax_refs=mixed_refs,
+        minimax_frame_count=124)["minimax_payload"].cond
+    assert got["cond_video_latents"] == ["KF", "R1", "R2"], got
+    assert got["cond_audio_latents"] == ["A2", "A3"], got
+    assert got["frame_count"] == 124, got
+    print("5. H3-Multishot AV-bank payload owner: compatible and reused")
+
+    # The marker alone is not a compatibility contract. Only Multishot's
+    # known module is accepted; an unrelated wrapper remains refused.
+    mb3 = make_model_base()
+    foreign = mb3.MiniMaxH3.extra_conds
+    foreign._h3_avbank_merge = True
+    foreign.__module__ = "some_other_h3_pack.payload"
+    sys.modules.pop("patch_payload", None)
+    pp3 = importlib.import_module("patch_payload")
+    assert pp3._already_patched(mb3.MiniMaxH3) == "foreign"
+    assert not pp3.apply_patch(), "unrelated marker collision was accepted"
+    print("6. lookalike marker from an unrelated pack: still refused")
+
     print("payload gate test passed")
 
 

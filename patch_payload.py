@@ -61,6 +61,7 @@ MC_AUDIO_KEY = "motion_context_audio_end_frame"
 # another pack, can recognise it and stand down instead of wrapping it.
 # Shared ABI across every pack that vendors this patch.
 PATCH_MARKER = "_h3_motion_context_payload_patch"
+MULTISHOT_PATCH_MARKER = "_h3_avbank_merge"
 
 _orig_extra_conds = None
 _applied = False
@@ -109,13 +110,13 @@ setattr(_patched_extra_conds, PATCH_MARKER, True)
 def _already_patched(cls):
     """Has another copy of this file already wrapped extra_conds?
 
-    Returns None, "same", "other" or "foreign". The marker only
-    recognises copies new enough to set it, so a wrapper merely NAMED
-    like ours counts as another copy: an older version, or a fork, and
-    the second one in stands down. Anything else wrapping extra_conds is
-    a different pack solving the same problem its own way, and this one
-    refuses rather than stacking on it. See patch_layout's version for
-    how the detection works and what it cannot see.
+    Returns None, "same", "other", "h3_multishot" or "foreign". The
+    marker only recognises copies new enough to set it, so a wrapper
+    merely NAMED like ours counts as another copy: an older version, or
+    a fork, and the second one in stands down. Anything else wrapping
+    extra_conds is a different pack solving the same problem its own way,
+    and this one refuses rather than stacking on it. See patch_layout's
+    version for how the detection works and what it cannot see.
     """
     fn = getattr(cls, "extra_conds", None)
     if fn is None:
@@ -124,6 +125,18 @@ def _already_patched(cls):
         return "same"
     if getattr(fn, "__name__", "") == "_patched_extra_conds":
         return "other"
+    # H3-Multishot installs its AV-bank merge at package import time. Its
+    # wrapper calls stock first, then rebuilds cond_video_latents as keyframes
+    # followed by reference video latents -- the same row order required here.
+    # Stock already supplies reference audio latents and frame_count, so that
+    # wrapper is sufficient for our marked Ref2VA + motion-context payloads.
+    # Require both its public marker and source-module suffix: a coincidental
+    # attribute on an unrelated wrapper must remain a hard collision.
+    where = str(getattr(fn, "__module__", "") or "")
+    if (getattr(fn, MULTISHOT_PATCH_MARKER, False)
+            and (where == "h3_avbank_probe"
+                 or where.endswith(".h3_avbank_probe"))):
+        return "h3_multishot"
     if hasattr(fn, "__wrapped__"):
         return "foreign"
     home = getattr(cls, "__module__", None)
@@ -159,6 +172,10 @@ def apply_patch():
         if who == "same":
             _LOG.info("h3_motion_context: keyframe/ref coexistence already "
                       "enabled by another pack, standing down")
+        elif who == "h3_multishot":
+            _LOG.info(
+                "h3_motion_context: H3-Multishot's compatible AV-bank "
+                "payload merge is active; standing down without stacking")
         else:
             _LOG.warning(
                 "h3_motion_context: the H3 payload patch is already "

@@ -59,7 +59,8 @@ git clone https://github.com/ethanfel/ComfyUI-MiniMaxH3-Contex-Loop.git
 
 Restart ComfyUI and hard-refresh the browser. Niko’s upstream pack is optional;
 install it alongside this one if you also want its manual Motion Context,
-Save Latent, and Load Latent nodes.
+Save Latent, and Load Latent nodes. H3-Multishot can also remain installed; its
+AV-bank payload merge is detected and reused without stacking another wrapper.
 
 Final assembly needs `ffmpeg` on `PATH`.
 
