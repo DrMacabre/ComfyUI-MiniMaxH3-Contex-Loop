@@ -1,7 +1,12 @@
 import {app} from "/scripts/app.js";
 import {api} from "/scripts/api.js";
 import {parsePlanJson, planToJson} from "./h3_chain_plan_core.mjs";
-import {applyReviewEdit, reviewCountdown, reviewSeed} from "./h3_chain_review_core.mjs";
+import {
+    applyReviewEdit,
+    checkpointResumeOptions,
+    reviewCountdown,
+    reviewSeed,
+} from "./h3_chain_review_core.mjs";
 
 const NODE_NAME = "MiniMaxH3ChainReview";
 const PLAN_NAME = "MiniMaxH3ChainPlan";
@@ -78,7 +83,14 @@ function injectStyles() {
         .h3r-warning { color:#f2bd67; }
         .h3r-prefix { margin:0; padding:6px 7px; max-height:90px; overflow:auto;
             border-left:2px solid #56637e; color:#aeb5c5; white-space:pre-wrap; }
-        .h3r-root.h3r-busy .h3r-button { opacity:.45; pointer-events:none; }
+        .h3r-resume { display:flex; flex-direction:column; gap:6px; margin-top:2px;
+            padding:8px; border:1px solid #3f4759; border-radius:6px; background:#14161c; }
+        .h3r-resume-title { font-weight:700; color:#a9c2ff; }
+        .h3r-resume-row { display:flex; gap:6px; align-items:center; }
+        .h3r-resume-select { flex:1; min-width:0; padding:6px; border:1px solid #56637e;
+            border-radius:5px; background:#101218; color:#eef1f7; }
+        .h3r-resume-status { color:#8f98aa; white-space:pre-wrap; }
+        .h3r-root.h3r-busy .h3r-actions .h3r-button { opacity:.45; pointer-events:none; }
     `;
     document.head.appendChild(style);
 }
@@ -136,9 +148,30 @@ function videoUrl(item) {
     return api.apiURL(`/view?${query.toString()}`);
 }
 
-function updatePlan(reviewNode, index, prompt, seed) {
-    const planNode = findUpstreamNode(reviewNode, PLAN_NAME) ??
+function upstreamPlanNode(reviewNode) {
+    return findUpstreamNode(reviewNode, PLAN_NAME) ??
         allNodes(app.graph).find((item) => nodeType(item) === PLAN_NAME);
+}
+
+function widgetByName(node, name) {
+    return node?.widgets?.find((item) => item.name === name);
+}
+
+function planResumeContext(reviewNode) {
+    const planNode = upstreamPlanNode(reviewNode);
+    const planWidget = widgetByName(planNode, "plan_json");
+    const runWidget = widgetByName(planNode, "run_name");
+    if (!planWidget || !runWidget) {
+        throw new Error("Connect this Review Gate to an H3 Chain Plan and Loop Start.");
+    }
+    const plan = parsePlanJson(String(planWidget.value ?? ""));
+    const runName = String(runWidget.value ?? "").trim();
+    if (!runName) throw new Error("The H3 Chain Plan run_name is empty.");
+    return {runName, clipCount: plan.shots.length};
+}
+
+function updatePlan(reviewNode, index, prompt, seed) {
+    const planNode = upstreamPlanNode(reviewNode);
     const widget = planNode?.widgets?.find((item) => item.name === "plan_json");
     if (!widget) return false;
     const plan = applyReviewEdit(
@@ -243,10 +276,89 @@ function mount(node) {
     const status = document.createElement("div");
     status.className = "h3r-status";
     status.textContent = "The loop will pause here after each saved segment.";
-    root.append(head, video, prefix, promptLabel, seedRow, actions, status);
+
+    const resume = document.createElement("section");
+    resume.className = "h3r-resume";
+    const resumeTitle = document.createElement("div");
+    resumeTitle.className = "h3r-resume-title";
+    resumeTitle.textContent = "Resume from saved checkpoint";
+    const resumeRow = document.createElement("div");
+    resumeRow.className = "h3r-resume-row";
+    const resumeSelect = document.createElement("select");
+    resumeSelect.className = "h3r-resume-select";
+    const refreshResume = document.createElement("button");
+    refreshResume.type = "button";
+    refreshResume.className = "h3r-button";
+    refreshResume.textContent = "Refresh";
+    const loadResume = document.createElement("button");
+    loadResume.type = "button";
+    loadResume.className = "h3r-button h3r-approve";
+    loadResume.textContent = "Load checkpoint";
+    const resumeStatus = document.createElement("div");
+    resumeStatus.className = "h3r-resume-status";
+    resumeStatus.textContent = "Refresh to discover saved scenes for this run.";
+    resumeRow.append(resumeSelect, refreshResume, loadResume);
+    resume.append(resumeTitle, resumeRow, resumeStatus);
+
+    root.append(head, video, prefix, promptLabel, seedRow, actions, status, resume);
 
     let current = null;
     let countdownTimer = null;
+    let resumeChoices = [];
+
+    async function refreshResumeOptions() {
+        resumeSelect.replaceChildren();
+        resumeChoices = [];
+        loadResume.disabled = true;
+        try {
+            const context = planResumeContext(node);
+            const query = new URLSearchParams({run_name: context.runName});
+            const response = await api.fetchApi(
+                `/h3_motion_context/checkpoints?${query.toString()}`,
+            );
+            const body = await response.json();
+            if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
+            resumeChoices = checkpointResumeOptions(
+                body.checkpoints, context.clipCount);
+            for (const option of resumeChoices) {
+                const element = document.createElement("option");
+                element.value = String(option.resumeScene);
+                element.textContent = `Resume scene ${option.resumeScene} — checkpoint ${option.savedScene} · ${option.sceneId}`;
+                resumeSelect.append(element);
+            }
+            loadResume.disabled = resumeChoices.length === 0;
+            const complete = (body.checkpoints ?? []).filter((item) => item.ready).length;
+            resumeStatus.textContent = resumeChoices.length
+                ? `${complete} saved checkpoint${complete === 1 ? "" : "s"} found. Select the scene to resume.`
+                : complete >= context.clipCount
+                    ? `All ${context.clipCount} scenes are saved; there is no later scene to resume.`
+                    : "No usable predecessor checkpoint was found for a later scene.";
+        } catch (error) {
+            resumeStatus.textContent = error.message;
+        }
+    }
+
+    refreshResume.addEventListener("click", refreshResumeOptions);
+    node._h3RefreshResume = refreshResumeOptions;
+    loadResume.addEventListener("click", () => {
+        const resumeScene = Number(resumeSelect.value);
+        if (!Number.isInteger(resumeScene)) return;
+        if (prepareResume(node, resumeScene)) {
+            const choice = resumeChoices.find(
+                (item) => item.resumeScene === resumeScene);
+            const preview = choice?.partialVideo ?? choice?.video;
+            if (preview) {
+                video.src = videoUrl(preview);
+                video.load();
+                badge.textContent = choice?.partialVideo
+                    ? `partial through checkpoint ${choice.savedScene}`
+                    : `saved scene ${choice.savedScene} · ${choice.sceneId}`;
+            }
+            resumeStatus.textContent = `Checkpoint ${resumeScene - 1} loaded for preview. Loop Start is armed for scene ${resumeScene}; queue the workflow to validate and resume.`;
+        } else {
+            resumeStatus.textContent = "Could not find the connected H3 Chain Loop Start node.";
+        }
+    });
 
     function stopCountdown() {
         if (countdownTimer != null) clearInterval(countdownTimer);
@@ -298,7 +410,9 @@ function mount(node) {
             const body = await response.json();
             if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
             if (action === "approve") {
-                status.textContent = "Approval received — workflow resumed.";
+                status.textContent = current.unload_models_while_waiting
+                    ? "Approval received — workflow is resuming and reloading the model stack."
+                    : "Approval received — workflow resumed.";
             } else if (action === "retry" || action === "reroll") {
                 seed.value = body.seed;
                 const saved = updatePlan(node, current.clip_index, prompt.value, body.seed);
@@ -307,8 +421,11 @@ function mount(node) {
             } else if (action === "stop") {
                 const prepared = current.clip_index < current.clip_count &&
                     prepareResume(node, current.clip_index + 1);
-                status.textContent = "Stopped at the accepted checkpoint." +
+                status.textContent = (current.assemble_partial_on_stop
+                    ? "Stop accepted — assembling the partial video…"
+                    : "Stopped at the accepted checkpoint.") +
                     (prepared ? ` Loop Start is ready at clip ${current.clip_index + 1}.` : "");
+                setTimeout(refreshResumeOptions, 0);
             }
         } catch (error) {
             root.classList.remove("h3r-busy");
@@ -351,6 +468,12 @@ function mount(node) {
         root.classList.add("h3r-busy");
         status.className = "h3r-status";
         status.textContent = data.status || "Review resolved; continuing…";
+        if (data.partial_video) {
+            video.src = videoUrl(data.partial_video);
+            video.load();
+            badge.textContent = "partial joined video";
+        }
+        if (data.action === "stop") setTimeout(refreshResumeOptions, 0);
     };
 
     const widget = node.addDOMWidget("h3_chain_review", "h3-chain-review", root, {
@@ -366,6 +489,7 @@ function mount(node) {
     };
     node.setSize?.([Math.max(node.size?.[0] ?? 540, 540), Math.max(node.size?.[1] ?? 650, 650)]);
     setTimeout(fetchPending, 0);
+    setTimeout(refreshResumeOptions, 0);
 }
 
 api.addEventListener("h3_chain_review", (event) => routeReview(event.detail));
@@ -387,5 +511,8 @@ app.registerExtension({
     },
     async afterConfigureGraph() {
         await fetchPending();
+        for (const node of allNodes(app.graph)) {
+            if (nodeType(node) === NODE_NAME) node._h3RefreshResume?.();
+        }
     },
 });

@@ -111,6 +111,12 @@ RECOMMENDED PLAN SETTINGS
 RUN / RESUME
 - New run: unique run_name and Loop Start start_clip=1.
 - Resume at scene N: keep the same settings and run_name; set start_clip=N.
+- The Review Gate can discover saved checkpoints and set start_clip for you:
+  Refresh, select Resume scene N, then press Load checkpoint.
+- Approve & stop can join all accepted scenes into a partial MP4. Checkpointed
+  audio is the default; wire the full song to source_audio to use source audio.
+- Optional model unloading releases VRAM while the gate waits. Continuing must
+  reload models; stopping ends the execution without a reload.
 - Changing a completed scene's prompt, seed, length, model settings, references,
   or source audio invalidates its checkpoint history.
 - Change generation_fingerprint whenever model, VAE, LoRA, references, CFG,
@@ -450,6 +456,14 @@ the following for an earlier completed scene invalidates resume:
 - width, height, context, crop, anchor, encoding, or audio mode;
 - source audio waveform;
 - `generation_fingerprint`.
+
+The checkpoint browser embedded in the Review Gate is a shortcut for this
+setup. It lists saved predecessor slots under the current `run_name`, changes
+Loop Start's `start_clip`, and leaves the same validation to the next queued
+execution. Loading previews the joined partial through that checkpoint when
+available, or the saved predecessor scene otherwise. **Approve & stop** also
+writes a partial joined video through the accepted scene when
+`assemble_partial_on_stop` is enabled.
 
 Model, VAE, LoRA, references, CFG, sampler, and scheduler sit outside the Plan
 node, so the chain cannot inspect them directly. Record them in

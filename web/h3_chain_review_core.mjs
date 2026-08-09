@@ -39,3 +39,25 @@ export function reviewCountdown(deadlineSeconds, nowMilliseconds = Date.now()) {
     const remainder = String(seconds % 60).padStart(2, "0");
     return {seconds, text: `${minutes}:${remainder}`};
 }
+
+export function checkpointResumeOptions(checkpoints, clipCount) {
+    const total = Number(clipCount);
+    if (!Number.isInteger(total) || total < 1) return [];
+    const byResumeScene = new Map();
+    for (const item of checkpoints ?? []) {
+        const savedScene = Number(item?.scene);
+        const resumeScene = Number(item?.resume_scene ?? savedScene + 1);
+        if (!item?.ready || !Number.isInteger(savedScene) || savedScene < 1
+            || !Number.isInteger(resumeScene) || resumeScene < 2
+            || resumeScene > total) continue;
+        byResumeScene.set(resumeScene, {
+            savedScene,
+            resumeScene,
+            sceneId: String(item.scene_id ?? `clip_${String(savedScene).padStart(4, "0")}`),
+            video: item.video ?? null,
+            partialVideo: item.partial_video ?? null,
+        });
+    }
+    return [...byResumeScene.values()].sort((left, right) =>
+        left.resumeScene - right.resumeScene);
+}

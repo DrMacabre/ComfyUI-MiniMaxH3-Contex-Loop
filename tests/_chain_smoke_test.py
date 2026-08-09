@@ -481,6 +481,7 @@ def main():
 
             async def approve_live_review():
                 sent = []
+                unload_calls = []
 
                 class ReviewServerInstance:
                     client_id = "smoke-client"
@@ -492,11 +493,15 @@ def main():
                     instance = ReviewServerInstance()
 
                 original_server = chain.PromptServer
+                import comfy.model_management as model_management
+                original_unload = model_management.unload_all_models
+                model_management.unload_all_models = lambda: unload_calls.append(True)
                 chain.PromptServer = ReviewServer
                 try:
                     task = asyncio.create_task(
                         chain.MiniMaxH3ChainReview().review(
                             state1, segment1, True, False, 0.0,
+                            True, False, "none",
                             audio_for_frames(5), unique_id="review-node"))
                     for _ in range(100):
                         if chain._PENDING_REVIEWS:
@@ -514,11 +519,13 @@ def main():
                     assert response.status == 200
                     result = await asyncio.wait_for(task, timeout=5.0)
                     assert result["result"][0]["segment"] == segment1["segment"]
+                    assert unload_calls == [True]
                     assert not chain._PENDING_REVIEWS
 
                     timeout_task = asyncio.create_task(
                         chain.MiniMaxH3ChainReview().review(
                             state1, segment1, True, True, 0.001,
+                            False, False, "none",
                             audio_for_frames(5), unique_id="review-node"))
                     timeout_result = await asyncio.wait_for(
                         timeout_task, timeout=2.0)
@@ -528,6 +535,7 @@ def main():
                     assert not chain._PENDING_REVIEWS
                 finally:
                     chain.PromptServer = original_server
+                    model_management.unload_all_models = original_unload
 
             asyncio.run(approve_live_review())
 
@@ -551,6 +559,7 @@ def main():
                         result.append(asyncio.run(
                             chain.MiniMaxH3ChainReview().review(
                                 state1, segment1, True, False, 0.0,
+                                False, False, "none",
                                 audio_for_frames(5), unique_id="review-node")))
 
                     worker = threading.Thread(target=execute_review, daemon=True)
@@ -650,6 +659,80 @@ def main():
             result2 = saver.save(
                 state2, images2, av_latent(), audio_for_frames(4))
             segment2 = result2["result"][0]
+
+            async def stop_with_partial_review():
+                sent = []
+
+                class ReviewServerInstance:
+                    client_id = "partial-stop-smoke-client"
+
+                    def send_sync(self, event, payload, client_id):
+                        sent.append((event, payload, client_id))
+
+                class ReviewServer:
+                    instance = ReviewServerInstance()
+
+                original_server = chain.PromptServer
+                chain.PromptServer = ReviewServer
+                try:
+                    task = asyncio.create_task(
+                        chain.MiniMaxH3ChainReview().review(
+                            state2, segment2, True, False, 0.0,
+                            False, True, "checkpointed", audio_for_frames(4),
+                            source, unique_id="review-node"))
+                    for _ in range(100):
+                        if chain._PENDING_REVIEWS:
+                            break
+                        await asyncio.sleep(0.01)
+                    assert chain._PENDING_REVIEWS and sent
+                    token = sent[-1][1]["token"]
+
+                    class StopRequest:
+                        async def json(self):
+                            return {"token": token, "action": "stop"}
+
+                    response = await chain._submit_review_decision(StopRequest())
+                    assert response.status == 200
+                    result = await asyncio.wait_for(task, timeout=10.0)
+                    assert "partial video" in result["result"][1]
+                    resolved = [payload for event, payload, _client in sent
+                                if event == "h3_chain_review_resolved"]
+                    assert resolved and resolved[-1]["partial_video"]
+                    item = resolved[-1]["partial_video"]
+                    partial_path = pathlib.Path(
+                        tempdir, item["subfolder"], item["filename"])
+                    assert partial_path.is_file() and partial_path.stat().st_size > 0
+                    streams = subprocess.check_output([
+                        "ffprobe", "-v", "error", "-show_entries",
+                        "stream=codec_type", "-of", "csv=p=0",
+                        str(partial_path),
+                    ], text=True).splitlines()
+                    assert "video" in streams and "audio" in streams
+                finally:
+                    chain.PromptServer = original_server
+
+            asyncio.run(stop_with_partial_review())
+            partial_manifest = pathlib.Path(
+                tempdir, "h3_chains", "smoke", "partial",
+                "through_clip_0002.manifest.json")
+            assert partial_manifest.is_file()
+            partial_data = json.loads(partial_manifest.read_text())
+            assert partial_data["format"] == "h3_chain_partial_manifest_v2"
+            assert partial_data["clip_count"] == 2
+            print("review stop: joined partial AV video and checkpoint manifest")
+
+            class CheckpointRequest:
+                query = {"run_name": "smoke"}
+
+            checkpoint_response = asyncio.run(
+                chain._list_saved_checkpoints(CheckpointRequest()))
+            checkpoint_body = json.loads(checkpoint_response.text)
+            assert [item["scene"] for item in checkpoint_body["checkpoints"]] == [1, 2]
+            assert all(item["ready"] for item in checkpoint_body["checkpoints"])
+            assert all(item["video"] for item in checkpoint_body["checkpoints"])
+            assert checkpoint_body["checkpoints"][1]["partial_video"]
+            print("checkpoint browser: discovered both saved resume slots")
+
             complete = dict(state2)
             complete["segments"] = state2["segments"] + [segment2]
             manifest = chain._manifest_from_state(complete)

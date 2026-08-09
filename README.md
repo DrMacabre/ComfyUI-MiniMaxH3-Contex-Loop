@@ -165,23 +165,40 @@ Checkpoint and Loop End; trimmed audio goes to Segment + Checkpoint.
 For human validation after every iteration, insert `H3 Chain Review Gate`
 between Segment + Checkpoint and Loop End, and wire the same frame-exact
 trimmed audio into its optional `audio` input. The checkpoint is committed
-before review begins. The gate then muxes a temporary review MP4, unloads model
-weights from VRAM by default, and waits asynchronously while its node UI plays
-the clip with synchronized sound. Its controls provide:
+before review begins. The gate then muxes a temporary review MP4 and waits
+asynchronously while its node UI plays the clip with synchronized sound. Its
+controls provide:
 
 - **Approve & continue** — accept this clip and render the next scene;
 - **Retry prompt / seed** — edit the scene prompt or seed and replace this clip;
 - **Reroll seed** — retain the edited prompt, choose a new uint64 seed, and retry;
-- **Approve & stop** — keep the checkpoint and end this run for later resume.
+- **Approve & stop** — keep the checkpoint, end this run, and by default join
+  every accepted scene through this point into a partial MP4.
 
-`play_notification_sound` is off by default; enable it for a short local browser chime when a review is
-ready. Browsers may require one prior interaction with the ComfyUI page before
-allowing notification audio. `auto_continue_timeout_minutes` shows a live
-countdown and automatically approves the clip when it expires; leave it at
-`0` to wait indefinitely.
+`play_notification_sound` is off by default; enable it for a short local
+browser chime when a review is ready. Browsers may require one prior interaction
+with the ComfyUI page before allowing notification audio.
+`auto_continue_timeout_minutes` shows a live countdown and automatically
+approves the clip when it expires; leave it at `0` to wait indefinitely.
 
-To release VRAM for a long break, choose **Approve & stop**, restart or free the
-models after execution ends, then resume from the saved chain checkpoint.
+`unload_models_while_waiting` is optional and off by default. When enabled it
+releases VRAM during review; **Approve & continue** then reloads the model stack.
+The cross-thread gate wake-up remains active while unloading. A stop does not
+reload models because execution ends at the checkpoint.
+
+`assemble_partial_on_stop` writes
+`final/partial_through_clip_NNNN.mp4`. `partial_audio_source=checkpointed` uses
+the delivered audio stored by Segment + Checkpoint; `source` requires the full
+song on the Review Gate's `source_audio` input; `none` makes a silent partial.
+If requested audio is unavailable, the gate still writes a silent partial and
+reports the reason.
+
+The bottom of the Review Gate is also a checkpoint browser. **Refresh** lists
+the saved scenes for the Plan's current `run_name`; select **Resume scene N**
+and press **Load checkpoint** to set Loop Start to `start_clip=N`. Queueing the
+workflow then performs the normal hash/integrity validation and loads scene
+`N-1` as context. Loading also displays the joined partial video through that
+checkpoint when one exists, otherwise it displays the saved predecessor scene.
 
 Prompt and seed retries remain at the same clip index and retain only the last
 accepted predecessor as motion/audio context. The rejected artifacts are
@@ -285,6 +302,8 @@ prompt, seed, duration, resolution, context setting, or audio mode is rejected
 until those earlier clips are regenerated. Changing the source song is also
 detected from its waveform hash. Re-running a clip overwrites its fixed
 segment/checkpoint slot, so rejected attempts do not accumulate.
+The Review Gate's checkpoint browser performs this `start_clip` setup without
+manually editing Loop Start; the validation rules are identical.
 
 If all clips were saved but the browser, Loop End, or final assembly stopped,
 connect the same Plan (and source song when applicable) to `H3 Chain Load

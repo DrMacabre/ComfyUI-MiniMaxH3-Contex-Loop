@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import {
     applyReviewEdit,
+    checkpointResumeOptions,
     reviewCountdown,
     reviewSeed,
 } from "../web/h3_chain_review_core.mjs";
@@ -30,5 +31,19 @@ assert.throws(
 assert.deepEqual(reviewCountdown(130, 100_000), {seconds: 30, text: "0:30"});
 assert.deepEqual(reviewCountdown(100, 100_001), {seconds: 0, text: "0:00"});
 assert.equal(reviewCountdown(null, 0), null);
+
+assert.deepEqual(checkpointResumeOptions([
+    {scene: 2, resume_scene: 3, scene_id: "second", ready: true,
+        video: {filename: "second.mp4"}},
+    {scene: 1, resume_scene: 2, scene_id: "first", ready: true,
+        partial_video: {filename: "partial.mp4"}},
+    {scene: 3, resume_scene: 4, scene_id: "final", ready: true},
+    {scene: 1, resume_scene: 2, scene_id: "broken", ready: false},
+], 3), [
+    {savedScene: 1, resumeScene: 2, sceneId: "first", video: null,
+        partialVideo: {filename: "partial.mp4"}},
+    {savedScene: 2, resumeScene: 3, sceneId: "second",
+        video: {filename: "second.mp4"}, partialVideo: null},
+]);
 
 console.log("H3 Chain Review editor helpers: ok");

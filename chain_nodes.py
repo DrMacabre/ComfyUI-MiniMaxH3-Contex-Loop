@@ -515,6 +515,15 @@ def _absolute_output_path(path: str) -> str:
     return resolved
 
 
+def _video_output_item(path: str) -> dict[str, str]:
+    relative = _relative_output_path(path)
+    return {
+        "filename": os.path.basename(relative),
+        "subfolder": os.path.dirname(relative),
+        "type": "output",
+    }
+
+
 def _artifact_paths(plan: dict[str, Any], index: int) -> dict[str, str]:
     run_dir = _run_dir(plan)
     return {
@@ -1190,12 +1199,7 @@ def _review_video(plan: dict[str, Any], segment: dict[str, Any],
                     filename.endswith(".review.mp4")):
                 _safe_unlink(os.path.join(review_dir, filename))
 
-    relative = _relative_output_path(review_path)
-    return ({
-        "filename": os.path.basename(relative),
-        "subfolder": os.path.dirname(relative),
-        "type": "output",
-    }, True, "")
+    return (_video_output_item(review_path), True, "")
 
 
 def _review_display_id(unique_id: Any, dynprompt: Any) -> str:
@@ -1264,11 +1268,28 @@ class MiniMaxH3ChainReview:
                     "step": 0.5,
                     "tooltip": "Automatically approve and continue after this "
                                "many minutes. 0 waits indefinitely."}),
+                "unload_models_while_waiting": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Release model weights from VRAM after the review "
+                               "appears. Approval remains responsive; continuing "
+                               "must reload the model stack."}),
+                "assemble_partial_on_stop": ("BOOLEAN", {
+                    "default": True,
+                    "tooltip": "Approve & stop also joins every accepted segment "
+                               "through the current scene into a partial MP4."}),
+                "partial_audio_source": (["checkpointed", "source", "none"], {
+                    "default": "checkpointed",
+                    "tooltip": "Audio for the partial MP4. checkpointed uses each "
+                               "saved delivered-audio track; source requires the "
+                               "full source_audio input."}),
             },
             "optional": {
                 "audio": ("AUDIO", {
                     "tooltip": "Wire frame-exact delivered audio from H3 "
                                "Motion Context Trim for synchronized review."}),
+                "source_audio": ("AUDIO", {
+                    "tooltip": "Optional full source track used only when partial "
+                               "audio source is source."}),
             },
             "hidden": {
                 "dynprompt": "DYNPROMPT",
@@ -1290,7 +1311,9 @@ class MiniMaxH3ChainReview:
         return float("NaN")
 
     async def review(self, state, segment, enabled, play_notification_sound,
-                     auto_continue_timeout_minutes, audio=None,
+                     auto_continue_timeout_minutes, unload_models_while_waiting,
+                     assemble_partial_on_stop, partial_audio_source, audio=None,
+                     source_audio=None,
                      dynprompt=None, unique_id=None):
         plan = state["plan"]
         index = int(state["index"])
@@ -1330,6 +1353,8 @@ class MiniMaxH3ChainReview:
             "has_audio": has_audio,
             "warning": warning,
             "play_notification_sound": bool(play_notification_sound),
+            "unload_models_while_waiting": bool(unload_models_while_waiting),
+            "assemble_partial_on_stop": bool(assemble_partial_on_stop),
             "timeout_seconds": timeout_seconds,
             "deadline": deadline,
             "server_now": server_now,
@@ -1342,6 +1367,13 @@ class MiniMaxH3ChainReview:
         }
         PromptServer.instance.send_sync(
             "h3_chain_review", payload, PromptServer.instance.client_id)
+
+        if unload_models_while_waiting:
+            try:
+                import comfy.model_management as model_management
+                model_management.unload_all_models()
+            except Exception as exc:
+                _LOG.warning("H3 Chain Review could not unload models: %s", exc)
 
         try:
             decision = await _await_review_decision(future, timeout_seconds)
@@ -1367,6 +1399,29 @@ class MiniMaxH3ChainReview:
             if ExecutionBlocker is None:
                 raise RuntimeError("This ComfyUI build does not support review blocking.")
             status = "approved clip %d and stopped at its checkpoint" % index
+            partial_item = None
+            if assemble_partial_on_stop:
+                try:
+                    partial_path, partial_warning = _assemble_review_partial(
+                        state, segment, partial_audio_source, source_audio)
+                    partial_item = _video_output_item(partial_path)
+                    status += "; partial video: %s" % partial_path
+                    if partial_warning:
+                        status += "; %s" % partial_warning
+                except Exception as exc:
+                    _LOG.exception("H3 Chain partial stop assembly failed")
+                    status += "; partial assembly failed: %s" % exc
+            resolved = {
+                "token": token,
+                "node_id": payload["node_id"],
+                "action": "stop",
+                "status": status,
+            }
+            if partial_item is not None:
+                resolved["partial_video"] = partial_item
+            PromptServer.instance.send_sync(
+                "h3_chain_review_resolved", resolved,
+                PromptServer.instance.client_id)
             return {
                 "ui": {"text": [status]},
                 "result": (ExecutionBlocker(None), status),
@@ -1386,10 +1441,12 @@ class MiniMaxH3ChainReview:
                 "result": (revised_segment, status)}
 
 
-def _manifest_from_state(state: dict[str, Any]) -> dict[str, Any]:
-    plan = state["plan"]
-    segments = [_public_segment(item) for item in state["segments"]]
-    expected_count = len(plan["shots"])
+def _manifest_from_segments(plan: dict[str, Any], values: list[dict[str, Any]],
+                            complete: bool) -> dict[str, Any]:
+    segments = [_public_segment(item) for item in values]
+    expected_count = len(plan["shots"]) if complete else len(segments)
+    if expected_count < 1:
+        raise ValueError("H3 chain manifest requires at least one saved clip.")
     if len(segments) != expected_count:
         raise ValueError(
             "H3 chain manifest is incomplete: found %d persisted clips, expected %d."
@@ -1397,16 +1454,39 @@ def _manifest_from_state(state: dict[str, Any]) -> dict[str, Any]:
     indexes = [int(item.get("index", -1)) for item in segments]
     if indexes != list(range(1, expected_count + 1)):
         raise ValueError("H3 chain manifest segment indexes are not contiguous.")
-    return {
-        "format": "h3_chain_manifest_v2",
+    total_frames = (int(plan["total_delivered_frames"]) if complete else
+                    sum(int(item["delivered_frames"]) for item in segments))
+    manifest = {
+        "format": ("h3_chain_manifest_v2" if complete
+                   else "h3_chain_partial_manifest_v2"),
         "run_name": plan["run_name"],
         "plan_hash": plan["plan_hash"],
         "compatibility": plan["compatibility"],
         "clip_count": expected_count,
-        "total_delivered_frames": plan["total_delivered_frames"],
-        "duration_seconds": plan["total_delivered_frames"] / float(FPS),
+        "total_delivered_frames": total_frames,
+        "duration_seconds": total_frames / float(FPS),
         "segments": segments,
     }
+    if not complete:
+        manifest["planned_clip_count"] = len(plan["shots"])
+        manifest["last_completed_clip"] = len(segments)
+    return manifest
+
+
+def _manifest_from_state(state: dict[str, Any]) -> dict[str, Any]:
+    return _manifest_from_segments(state["plan"], state["segments"], True)
+
+
+def _partial_manifest(state: dict[str, Any],
+                      segment: dict[str, Any]) -> dict[str, Any]:
+    plan = state["plan"]
+    index = int(state["index"])
+    values = list(state.get("segments", [])) + [_public_segment(segment)]
+    if index != len(values):
+        raise ValueError(
+            "H3 partial manifest expected clip %d after %d predecessors." %
+            (index, len(values) - 1))
+    return _manifest_from_segments(plan, values, False)
 
 
 def _manifest_path(plan: dict[str, Any]) -> str:
@@ -1792,6 +1872,45 @@ class MiniMaxH3ChainAssemble:
         return {"ui": {"text": [status]}, "result": (final_path,)}
 
 
+def _assemble_review_partial(
+    state: dict[str, Any],
+    segment: dict[str, Any],
+    audio_source: str,
+    source_audio: dict[str, Any] | None,
+) -> tuple[str, str]:
+    manifest = _partial_manifest(state, segment)
+    index = int(segment["index"])
+    partial_dir = os.path.join(_run_dir(state["plan"]), "partial")
+    manifest_path = os.path.join(
+        partial_dir, "through_clip_%04d.manifest.json" % index)
+    _atomic_json(manifest_path, manifest)
+
+    selected = {
+        "checkpointed": "generated",
+        "source": "source",
+        "none": "none",
+    }.get(str(audio_source))
+    if selected is None:
+        raise ValueError("Unknown H3 partial audio source %r." % audio_source)
+
+    assembler = MiniMaxH3ChainAssemble()
+    filename = "partial_through_clip_%04d" % index
+    warning = ""
+    try:
+        result = assembler.assemble(
+            manifest, selected, filename, 192, source_audio)
+    except Exception as audio_error:
+        if selected == "none":
+            raise
+        _LOG.warning(
+            "H3 Chain partial audio assembly failed; saving silent video: %s",
+            audio_error)
+        result = assembler.assemble(
+            manifest, "none", filename, 192, source_audio)
+        warning = "audio unavailable, so the partial video is silent (%s)" % audio_error
+    return str(result["result"][0]), warning
+
+
 async def _submit_review_decision(request):
     try:
         body = await request.json()
@@ -1872,12 +1991,62 @@ async def _list_pending_reviews(_request):
     return web.json_response({"reviews": reviews})
 
 
+async def _list_saved_checkpoints(request):
+    run_name = _safe_name(request.query.get("run_name", ""), "")
+    if not run_name:
+        return web.json_response(
+            {"error": "A non-empty H3 chain run_name is required."}, status=400)
+    checkpoint_dir = os.path.join(
+        _output_root(), "h3_chains", run_name, "checkpoints")
+    checkpoints = []
+    if os.path.isdir(checkpoint_dir):
+        for filename in sorted(os.listdir(checkpoint_dir)):
+            match = re.fullmatch(r"clip_(\d{4})\.json", filename)
+            if match is None:
+                continue
+            try:
+                metadata = _read_json(os.path.join(checkpoint_dir, filename))
+                segment = metadata.get("segment")
+                if not isinstance(segment, dict):
+                    continue
+                index = int(segment.get("index", int(match.group(1))))
+                if index != int(match.group(1)):
+                    continue
+                segment_path = _absolute_output_path(segment["segment"])
+                checkpoint_path = _absolute_output_path(segment["checkpoint"])
+                ready = (os.path.isfile(segment_path) and
+                         os.path.isfile(checkpoint_path))
+                item = {
+                    "scene": index,
+                    "scene_id": str(segment.get("id") or "clip_%04d" % index),
+                    "resume_scene": index + 1,
+                    "ready": ready,
+                }
+                if os.path.isfile(segment_path):
+                    item["video"] = _video_output_item(segment_path)
+                partial_path = os.path.join(
+                    _output_root(), "h3_chains", run_name, "final",
+                    "partial_through_clip_%04d.mp4" % index)
+                if os.path.isfile(partial_path):
+                    item["partial_video"] = _video_output_item(partial_path)
+                checkpoints.append(item)
+            except (OSError, TypeError, ValueError, json.JSONDecodeError,
+                    KeyError):
+                continue
+    return web.json_response({
+        "run_name": run_name,
+        "checkpoints": checkpoints,
+    })
+
+
 if (PromptServer is not None and web is not None and
         getattr(PromptServer, "instance", None) is not None):
     PromptServer.instance.routes.post(
         "/h3_motion_context/review")(_submit_review_decision)
     PromptServer.instance.routes.get(
         "/h3_motion_context/reviews")(_list_pending_reviews)
+    PromptServer.instance.routes.get(
+        "/h3_motion_context/checkpoints")(_list_saved_checkpoints)
 
 
 CHAIN_NODE_CLASS_MAPPINGS = {
