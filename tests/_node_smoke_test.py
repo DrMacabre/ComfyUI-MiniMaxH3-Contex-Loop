@@ -82,7 +82,21 @@ def main():
 
     class MiniMaxH3:
         def extra_conds(self, **kw):
-            return {}
+            # Faithful shape of the stock overwrite behavior: keyframe video
+            # latents are assigned first, then refs replace them.
+            payload = {}
+            keyframes = kw.get("minimax_keyframes")
+            refs = kw.get("minimax_refs")
+            if keyframes is not None:
+                payload["cond_video_latents"] = [
+                    kf["latent"] for kf in keyframes if "latent" in kf]
+            if refs is not None:
+                payload["cond_video_latents"] = [
+                    ref["latent"] for ref in refs if "latent" in ref]
+                payload["cond_audio_latents"] = [
+                    ref["audio_latent"] for ref in refs
+                    if ref.get("audio_latent") is not None]
+            return {"minimax_payload": types.SimpleNamespace(cond=payload)}
     mb.MiniMaxH3 = MiniMaxH3
     sys.modules["comfy.model_base"] = mb
     sys.modules["comfy"].model_base = mb
@@ -139,6 +153,9 @@ def main():
     sys.modules["safetensors"] = st
     sys.modules["safetensors.torch"] = stt
 
+    stock_layout_init = mm.PackedLayout.__init__
+    stock_extra_conds = MiniMaxH3.extra_conds
+
     # import the package by file location so it works whatever the repo
     # folder is called (ComfyUI-H3-Motion-Context, h3_motion_context, ...)
     import importlib.util
@@ -147,9 +164,16 @@ def main():
         submodule_search_locations=[_PKG_DIR])
     pkg = importlib.util.module_from_spec(spec)
     sys.modules["h3mc_pkg"] = pkg
-    spec.loader.exec_module(pkg)  # applies patches, registers nodes
+    spec.loader.exec_module(pkg)  # registers nodes; patches remain opt-in
     nodes = sys.modules["h3mc_pkg.nodes"]
+    patch_layout = sys.modules["h3mc_pkg.patch_layout"]
+    patch_payload = sys.modules["h3mc_pkg.patch_payload"]
     assert pkg.NODE_CLASS_MAPPINGS
+    assert mm.PackedLayout.__init__ is stock_layout_init
+    assert MiniMaxH3.extra_conds is stock_extra_conds
+    assert not patch_layout.is_applied()
+    assert not patch_payload.is_applied()
+    print("import isolation: registering the pack leaves stock H3 untouched")
 
     # a 124-frame clip: latent_t 37 (7 full 17-frame groups + 1 + 4),
     # audio grid ceil(124 * 5/3) = 207 steps, overhang exactly 1/3
@@ -193,6 +217,30 @@ def main():
         context_frames=context, context_length=22, encode_mode="video",
         anchor_mode="head", crop="disabled", audio_context_length=22,
         audio_mode="timeline", context_latent=prev)
+
+    assert patch_layout.is_applied() and patch_payload.is_applied()
+    assert mm.PackedLayout.__init__ is not stock_layout_init
+    assert MiniMaxH3.extra_conds is not stock_extra_conds
+
+    # Once an opted-in graph has installed the wrappers, an ordinary H3 graph
+    # with stock keyframes + refs must still get stock overwrite semantics.
+    ordinary = MiniMaxH3().extra_conds(
+        minimax_keyframes=[{"latent": "stock-keyframe"}],
+        minimax_refs=[{"latent": "stock-ref"}],
+    )["minimax_payload"].cond
+    assert ordinary["cond_video_latents"] == ["stock-ref"]
+
+    # Motion Context's private marker opts this payload into coexistence.
+    marked = MiniMaxH3().extra_conds(
+        minimax_keyframes=[{
+            "latent": "motion-keyframe", nodes.MC_KEY: 0,
+        }],
+        minimax_refs=[{"latent": "stock-ref"}],
+        minimax_frame_count=frames,
+    )["minimax_payload"].cond
+    assert marked["cond_video_latents"] == ["motion-keyframe", "stock-ref"]
+    assert marked["frame_count"] == frames
+    print("inline activation: marked payload opts in; unmarked H3 stays stock")
 
     kfs = captured["minimax_keyframes"]
     assert len(kfs) == 7, len(kfs)

@@ -15,8 +15,9 @@ Workflow and the underlying Ref2VA multi-reference/audio compatibility patch
 were contributed by **seitanism** in the Banodoco MiniMax H3
 seamless-extension thread: [original patch](https://discord.com/channels/1076117621407223829/1535700117452226560/1535771676158206032)
 and [original workflow](https://discord.com/channels/1076117621407223829/1535700117452226560/1535771814452793474),
-shared on 2026-08-08. The compatibility behavior is now built into this node
-pack; do not run the separately posted patch script on this version.
+shared on 2026-08-08. The compatibility behavior is now activated inline by
+the `H3 Motion Context` node and is marker-gated so unrelated H3 workflows keep
+stock behavior; do not run the separately posted patch script on this version.
 
 Extra custom nodes used by the demo:
 

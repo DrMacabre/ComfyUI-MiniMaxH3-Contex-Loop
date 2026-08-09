@@ -3,7 +3,8 @@
 Clip chaining for MiniMax H3: pin the tail of the previous clip (picture
 and sound) so the next clip genuinely continues it.
 
-Applies both patches at import time, then registers the nodes.
+Registers the nodes without changing ComfyUI's runtime behavior. The Motion
+Context node activates both patches inline on first execution:
 
   patch_layout   lifts the first/last-only keyframe anchor restriction,
                  moves pinned audio onto the clip's own timeline, and
@@ -12,16 +13,12 @@ Applies both patches at import time, then registers the nodes.
   patch_payload  stops the refs branch clobbering keyframe cond latents,
                  so pinned video and pinned audio can be used together
 
-If either self-test fails the nodes still load but refuse to run the
-affected path, so an upstream ComfyUI change produces a clear message
-rather than a silently wrong render.
+Both wrappers are marker-gated, so H3 workflows that do not pass through a
+Motion Context node keep stock behavior even after an opted-in workflow has
+run. If either self-test fails the nodes still load but refuse to run the
+affected path, so an upstream ComfyUI change produces a clear message rather
+than a silently wrong render.
 """
-
-from .patch_layout import apply_patch as _apply_layout_patch
-from .patch_payload import apply_patch as _apply_payload_patch
-
-_apply_layout_patch()
-_apply_payload_patch()
 
 from .nodes import (
     NODE_CLASS_MAPPINGS as _CONTEXT_NODE_CLASS_MAPPINGS,

@@ -9,10 +9,13 @@ clip B. B picks up exactly where A left off: same motion, same direction and
 speed, and the same audio - not similar audio, the *same waveform*,
 continued. Repeat down a chain as long as you like.
 
-This is done entirely with runtime patches. No ComfyUI files are edited on
-disk. Drop the folder in, restart, and if a future ComfyUI update changes
-something underneath, the patches detect it at startup and refuse to run
-rather than quietly rendering something wrong.
+This is done with inline, marker-gated runtime patches. No ComfyUI files are
+edited on disk, and importing this node pack does not patch ComfyUI. The first
+`H3 Motion Context` execution validates and activates the hooks; H3 workflows
+that do not use Motion Context remain on stock behavior, including workflows
+queued later in the same ComfyUI process. If a future ComfyUI update changes
+something underneath, the opted-in node refuses to run rather than quietly
+rendering something wrong.
 
 ## How is this different from LTX motion context?
 
@@ -24,7 +27,7 @@ sampling step. The only thing preventing a *run* of consecutive frames was
 a single check in ComfyUI that rejected any keyframe that wasn't the first
 or last frame. Mathematically, the position formula already worked for every
 frame in between. This project lifts that restriction (and verifies its own
-math against ComfyUI's at every startup).
+math against ComfyUI's when Motion Context first opts in).
 
 The bigger difference is audio. H3 generates picture and sound together,
 and this carries **both** streams across the join. Getting audio to
@@ -34,16 +37,17 @@ repo (see "The audio story" below).
 
 ## Install
 
-Drop the folder into `ComfyUI/custom_nodes/` and restart. Watch the console
-for:
+Drop the folder into `ComfyUI/custom_nodes/` and restart. Merely loading the
+pack only registers its nodes. The first time a workflow executes
+`H3 Motion Context`, watch the console for:
 
 ```
 h3_motion_context: interior keyframe anchors enabled
 h3_motion_context: keyframe/ref coexistence enabled
 ```
 
-If a self-test fails instead, the reason is logged and the nodes refuse to
-run. That's deliberate: a loud failure beats a subtly wrong render.
+If a self-test fails instead, the reason is logged and that opted-in node
+refuses to run. That's deliberate: a loud failure beats a subtly wrong render.
 
 ## Wiring
 
@@ -103,8 +107,9 @@ The Ref2VA multi-reference/audio compatibility
 and [six-clip global-ref demo workflow](https://discord.com/channels/1076117621407223829/1535700117452226560/1535771814452793474)
 were contributed by **seitanism** in the Banodoco MiniMax H3
 seamless-extension thread.
-They are included here with attribution; this repo integrates the shared patch
-directly so users do not have to run its external patching script.
+They are included here with attribution; this repo activates the shared
+compatibility behavior inline when Motion Context executes, so users do not
+have to run its external patching script and unrelated H3 workflows stay stock.
 
 ## Automated disk-backed chains
 
@@ -328,12 +333,13 @@ a seam and the ear is least forgiving about artifacts).
 
 **One machine, one configuration.** Everything here was verified on a
 single Windows machine at one resolution with one sampler. The math is
-self-tested at every startup; the perceptual results are one person's
+self-tested on first inline activation; the perceptual results are one person's
 renders.
 
 **ComfyUI's H3 support is young and moving.** The patches depend on the
-current shape of ComfyUI's H3 code. They verify those assumptions at
-startup and shut down loudly if anything changed, so the failure mode is
+current shape of ComfyUI's H3 code. They verify those assumptions when an
+H3 Motion Context path first opts in and shut down loudly if anything changed,
+so the failure mode is
 "the node refuses to run after an update," not corrupted output.
 
 **Turn Spectrum off.** Step-skipping optimizers like
@@ -355,9 +361,11 @@ sound with `match_tail` on, Spectrum off. That is the configuration every
 ## Status and testing
 
 Built and verified against ComfyUI master as of early August 2026, while
-H3 support was days old. The math patches self-test against the live
-ComfyUI code at every startup, so an upstream change surfaces as a clear
-refusal, not a bad render. The repo also ships two standalone patch/node tests
+H3 support was days old. Importing the pack is side-effect free; the math
+patches self-test against the live ComfyUI code on first Motion Context
+execution, and remain behaviorally gated to its private conditioning markers.
+An upstream change surfaces as a clear refusal, not a bad render. The repo also
+ships two standalone patch/node tests
 that run without ComfyUI or a GPU (only numpy needed), plus a CPU chain
 integration test against an adjacent ComfyUI checkout:
 
@@ -373,8 +381,8 @@ All three should print their checks and finish with a pass line.
 
 | File | Role |
 |---|---|
-| `patch_layout.py` | Lifts the first/last-only keyframe restriction; moves pinned audio onto the clip timeline, including after existing R2V refs; keeps everything aligned when references shift the layout. Self-tests at startup. |
-| `patch_payload.py` | Lets pinned video and pinned audio coexist (stock code let one overwrite the other). |
+| `patch_layout.py` | Marker-gated wrapper that lifts the first/last-only keyframe restriction, moves pinned audio onto the clip timeline, and keeps R2V refs aligned. Self-tests on first inline activation. |
+| `patch_payload.py` | Marker-gated wrapper that lets Motion Context video and refs coexist while leaving unmarked H3 payloads stock. |
 | `nodes.py` | The four nodes: Motion Context, Trim, and the latent Save/Load pair. |
 | `chain_nodes.py` | The eight MiniMax-specific plan, recursive loop, segment/checkpoint, resume/manifest recovery, and assembly nodes. |
 | `tests/seam_probe.py` | Measures whether a join's audio is a true continuation, a sound-alike, or drifting. |

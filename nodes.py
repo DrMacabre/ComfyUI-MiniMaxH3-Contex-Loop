@@ -41,8 +41,16 @@ try:
 except ImportError:  # ComfyUI always ships safetensors; belt and braces
     _st_load = _st_save = None
 
-from .patch_layout import MC_KEY, MC_AUDIO_KEY, is_applied
-from .patch_payload import is_applied as payload_patch_applied
+from .patch_layout import (
+    MC_KEY,
+    MC_AUDIO_KEY,
+    apply_patch as apply_layout_patch,
+    is_applied,
+)
+from .patch_payload import (
+    apply_patch as apply_payload_patch,
+    is_applied as payload_patch_applied,
+)
 
 try:
     import torchaudio
@@ -55,6 +63,28 @@ FRAME_PER_TOKEN = (1, 4, 4, 4, 4)
 FPS = 24  # H3's native rate; audio latents run at 40 Hz, hence FRAME_RESCALE 5/3
 FRAME_RESCALE = 5.0 / 3.0
 AUDIO_HZ = 40.0
+
+
+def _activate_inline_patches():
+    """Opt this execution path into the two marker-gated H3 patches.
+
+    Importing the node pack only registers nodes. Activation happens here,
+    immediately before Motion Context produces marked conditioning. Both
+    wrappers call the original implementation unchanged for unmarked graphs,
+    including H3 jobs queued after an opted-in one in the same process.
+    """
+    layout_ok = apply_layout_patch()
+    payload_ok = apply_payload_patch()
+    if not layout_ok or not is_applied():
+        raise RuntimeError(
+            "h3_motion_context: the inline layout patch could not be enabled, "
+            "so interior anchors would be rejected by ComfyUI. Check the log "
+            "for the self-test failure reason.")
+    if not payload_ok or not payload_patch_applied():
+        raise RuntimeError(
+            "h3_motion_context: the inline payload patch could not be enabled. "
+            "Ref2VA refs could overwrite the motion-context video latents. "
+            "Check the log for the compatibility failure reason.")
 
 # Run lengths the video VAE's downscale formula max(1, (n - 5) // 17 * 5 + 2)
 # actually distinguishes. Anything between two grid points encodes to the same
@@ -273,11 +303,7 @@ class MiniMaxH3MotionContext:
               encode_mode, anchor_mode, crop, audio_context_length=22,
               audio_mode="timeline", context_latent=None, audio_vae=None,
               context_audio=None):
-        if not is_applied():
-            raise RuntimeError(
-                "h3_motion_context: the layout patch is not active, so interior "
-                "anchors would be rejected by ComfyUI. Check the startup log for "
-                "the self-test failure reason.")
+        _activate_inline_patches()
 
         video = _video_from_latent(latent)
         latent_t = int(video.shape[2])
@@ -370,11 +396,6 @@ class MiniMaxH3MotionContext:
         a_frames = 0
         audio_src = "off"
         if context_latent is not None or context_audio is not None:
-            if not payload_patch_applied():
-                raise RuntimeError(
-                    "h3_motion_context: the payload patch is not active. Without it "
-                    "the audio ref would overwrite the pinned video latents and the "
-                    "motion context would be lost. Check the startup log.")
             # the audio window is independent of the video one: audio cond
             # rows cost rows but never cost delivered frames
             a_frames = int(audio_context_length) or span

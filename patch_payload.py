@@ -20,9 +20,11 @@ the forward pass expects when it writes rows into the never-denoised slots.
 Only this payload assignment is in the way.
 
 This wrapper re-runs the same logic and concatenates instead, keeping
-keyframe latents first to match the row order. Graphs using only one
-mechanism are unaffected: with no refs the ref list is empty, with no
-keyframes the keyframe list is.
+keyframe latents first to match the row order. It is deliberately opt-in:
+the payload changes only when a keyframe or ref carries one of Motion
+Context's private markers. An ordinary H3 graph combining stock keyframes
+and refs therefore keeps stock ComfyUI behavior even after this wrapper has
+been installed by an opted-in graph.
 """
 
 import logging
@@ -34,6 +36,13 @@ _LOG = logging.getLogger("h3_motion_context")
 _orig_extra_conds = None
 _applied = False
 
+# Kept in sync with patch_layout.py without importing that module here. This
+# wrapper must remain independently testable against the small fake model_base
+# harness, and the marker strings are the stable wire contract between the two
+# patches and the node.
+MC_KEY = "motion_context_index"
+MC_AUDIO_KEY = "motion_context_audio_end_frame"
+
 
 def _patched_extra_conds(self, **kwargs):
     out = _orig_extra_conds(self, **kwargs)
@@ -42,6 +51,10 @@ def _patched_extra_conds(self, **kwargs):
     refs = kwargs.get("minimax_refs", None)
     if not keyframes or not refs:
         return out  # only one mechanism in play, stock behaviour is correct
+    has_motion_context = any(MC_KEY in kf for kf in keyframes) or any(
+        MC_AUDIO_KEY in ref for ref in refs)
+    if not has_motion_context:
+        return out  # unmarked graph: preserve stock ComfyUI behavior exactly
 
     cond = out.get("minimax_payload", None)
     payload = getattr(cond, "cond", None) if cond is not None else None
