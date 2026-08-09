@@ -37,7 +37,7 @@ function injectStyles() {
             --h3c-muted: color-mix(in srgb, var(--h3c-text) 58%, transparent);
             --h3c-accent: #7fa8ff;
             box-sizing: border-box;
-            height: ${EDITOR_HEIGHT}px;
+            min-height: 0;
             overflow: auto;
             padding: 10px;
             border: 1px solid var(--h3c-border);
@@ -267,6 +267,31 @@ function mountEditor(node) {
     function graphDirty() {
         node.graph?.setDirtyCanvas?.(true, true);
         app.graph?.setDirtyCanvas?.(true, true);
+    }
+
+    function applyResponsiveSize() {
+        collapseWidget(planWidget);
+        const computed = node.computeSize?.();
+        const width = Math.max(node.size?.[0] || computed?.[0] || 0, MIN_WIDTH);
+        // Preserve the workflow/user-selected height. The DOM widget receives
+        // all free vertical space above its minimum, so taller nodes reveal
+        // more scene cards and shorter nodes scroll internally.
+        const height = Math.max(
+            node.size?.[1] || 0,
+            computed?.[1] || 0,
+            EDITOR_HEIGHT + 120,
+        );
+        // Call even when dimensions are unchanged so ComfyUI recomputes the
+        // DOM widget's free-space allocation after plan_json was collapsed.
+        node.setSize?.([width, height]);
+        graphDirty();
+    }
+
+    function scheduleResponsiveSize() {
+        // Workflow configuration restores serialized dimensions after
+        // onNodeCreated. Reallocate the DOM viewport once layout has settled.
+        requestAnimationFrame(() => requestAnimationFrame(applyResponsiveSize));
+        setTimeout(applyResponsiveSize, 150);
     }
 
     function currentSettings() {
@@ -676,15 +701,14 @@ function mountEditor(node) {
         widget._h3TimingWrapped = true;
     }
 
-    node._h3ChainEditorRefresh = () => loadFromWidget(true);
-    loadFromWidget(true);
-    setTimeout(() => {
+    node._h3ChainEditorRefresh = () => {
         collapseWidget(planWidget);
-        node.setSize?.([
-            Math.max(node.size?.[0] || 0, MIN_WIDTH),
-            Math.max(node.computeSize?.()[1] || 0, EDITOR_HEIGHT + 120),
-        ]);
-    }, 50);
+        loadFromWidget(true);
+        scheduleResponsiveSize();
+    };
+    node._h3ChainEditorFit = applyResponsiveSize;
+    loadFromWidget(true);
+    scheduleResponsiveSize();
 }
 
 app.registerExtension({
@@ -702,6 +726,13 @@ app.registerExtension({
         const onConfigure = nodeType.prototype.onConfigure;
         nodeType.prototype.onConfigure = function () {
             const result = onConfigure?.apply(this, arguments);
+            setTimeout(() => this._h3ChainEditorRefresh?.(), 0);
+            return result;
+        };
+
+        const onGraphConfigured = nodeType.prototype.onGraphConfigured;
+        nodeType.prototype.onGraphConfigured = function () {
+            const result = onGraphConfigured?.apply(this, arguments);
             setTimeout(() => this._h3ChainEditorRefresh?.(), 0);
             return result;
         };

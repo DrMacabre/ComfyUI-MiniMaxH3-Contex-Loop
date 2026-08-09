@@ -94,5 +94,9 @@ const editorSource = fs.readFileSync(
 );
 assert.match(editorSource, /collapseWidget\(planWidget\)/);
 assert.match(editorSource, /display[^\n]+none[^\n]+important/);
+assert.match(editorSource, /onGraphConfigured/);
+assert.match(editorSource, /scheduleResponsiveSize\(\)/);
+assert.doesNotMatch(editorSource, /height: \$\{EDITOR_HEIGHT\}px/);
+assert.match(editorSource, /node\.size\?\.\[1\][^\n]+0,/);
 
 console.log("H3 Chain Plan editor core: parsing, uint64 seeds, timing and edits pass");
