@@ -163,6 +163,10 @@ Checkpoint and Loop End; trimmed audio goes to Segment + Checkpoint.
 The plan is compact JSON. Global prompt text can live in `prompt_prefix`; each
 shot supplies only what changes:
 
+For easier human editing, both `prompt_prefix` and per-shot `prompt` may be
+arrays of strings. The node joins the entries with real newlines; use an empty
+string entry for a blank line. Ordinary string prompts remain supported.
+
 For the complete copy/paste format reference—including scene lengths, exact
 frame rules, seeds, steps, audio modes, and resume behavior—see
 [`H3_CHAIN_FORMAT_GUIDE.md`](H3_CHAIN_FORMAT_GUIDE.md).

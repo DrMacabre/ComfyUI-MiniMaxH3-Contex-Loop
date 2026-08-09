@@ -86,6 +86,15 @@ def _safe_name(value: str, fallback: str = "chain") -> str:
     return (text or fallback)[:96]
 
 
+def _prompt_text(value: Any, label: str) -> str:
+    """Normalize a prompt string or a human-editable JSON array of lines."""
+    if isinstance(value, list):
+        if not all(isinstance(line, str) for line in value):
+            raise ValueError("%s line arrays may contain only strings." % label)
+        return "\n".join(value).strip()
+    return str(value or "").strip()
+
+
 def _h3_frame_length(seconds: float) -> int:
     """Round a duration up to H3's valid 17k+5 frame grid."""
     seconds = float(seconds)
@@ -289,7 +298,10 @@ def _normalize_plan(
     if default_steps < 1:
         raise ValueError("Default sampler steps must be at least 1.")
 
-    prompt_prefix = str(raw.get("prompt_prefix", raw.get("global_prompt", ""))).strip()
+    prompt_prefix = _prompt_text(
+        raw.get("prompt_prefix", raw.get("global_prompt", "")),
+        "H3 Chain prompt_prefix",
+    )
     seen_ids: set[str] = set()
     shots: list[dict[str, Any]] = []
     stitched_frames = 0
@@ -306,7 +318,8 @@ def _normalize_plan(
             raise ValueError("Duplicate H3 shot id %r." % shot_id)
         seen_ids.add(shot_id)
 
-        prompt = str(item.get("prompt", "")).strip()
+        prompt = _prompt_text(item.get("prompt", ""),
+                              "Shot %d (%s) prompt" % (index, shot_id))
         if not prompt:
             raise ValueError("Shot %d (%s) has an empty prompt." % (index, shot_id))
         if prompt_prefix:

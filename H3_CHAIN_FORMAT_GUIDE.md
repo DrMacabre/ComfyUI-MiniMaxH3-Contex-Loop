@@ -23,25 +23,42 @@ and no trailing commas.
   "shots": [
     {
       "id": "intro",
-      "prompt": "Opening scene.",
+      "prompt": [
+        "Use <Picture 1> for the subject's identity and physical features.",
+        "Her wardrobe remains unchanged throughout the sequence.",
+        "",
+        "Begin with an opening tracking shot backstage.",
+        "End while she is opening the corridor door."
+      ],
       "seed": 123
     },
     {
       "id": "street",
-      "prompt": "Continue into the street.",
+      "prompt": [
+        "Continue through the already-opening door without resetting her stride.",
+        "Keep the incoming camera direction, lighting and subject pose.",
+        "",
+        "Move from the corridor into the street.",
+        "End with the camera beginning a left orbit."
+      ],
       "duration_seconds": 10,
       "steps": 24,
       "seed": 456
     },
     {
       "id": "outro",
-      "prompt": "Finish the take.",
+      "prompt": [
+        "Continue the unfinished left orbit from the previous scene.",
+        "Resolve the performance and finish on a calm wide composition."
+      ],
       "length": 124
     }
   ]
 }
 
 SCENE OVERRIDES
+- prompt can be one string OR an array of readable lines. The node joins array
+  entries with real line breaks. Use an empty string entry for a blank line.
 - duration_seconds: requested generated duration; rounded UP to H3's 17k+5 grid.
 - length or frames: exact raw frame count; must be 5, 22, 39, 56...3592.
 - steps: sampler steps for this scene, 1–10000.
@@ -88,8 +105,8 @@ The source song must cover the complete delivered video duration.
 
 ```text
 Plan = {
-  "prompt_prefix"?: string,
-  "global_prompt"?: string,       // alias of prompt_prefix
+  "prompt_prefix"?: string | string[],
+  "global_prompt"?: string | string[], // alias of prompt_prefix
   "defaults"?: {
     "duration_seconds"?: number,
     "steps"?: integer
@@ -99,7 +116,7 @@ Plan = {
 
 Shot = string | {
   "id"?: string,
-  "prompt": string,
+  "prompt": string | string[],
   "duration_seconds"?: number,
   "length"?: integer,
   "frames"?: integer,             // alias of length
@@ -122,7 +139,7 @@ comments and `?` markers. Actual `plan_json` must be strict JSON:
 | Field | Required | Meaning |
 |---|---:|---|
 | `shots` | Yes | Ordered list of scenes. Each entry can be an object or a prompt string. |
-| `prompt_prefix` | No | Text prepended to every scene prompt, separated by one blank line. Use it for identity, wardrobe, style, camera, and continuity rules shared by all scenes. |
+| `prompt_prefix` | No | String or array of lines prepended to every scene prompt, separated by one blank line. Use it for identity, wardrobe, style, camera, and continuity rules shared by all scenes. |
 | `global_prompt` | No | Alias for `prompt_prefix`. `prompt_prefix` wins when both are present. |
 | `defaults.duration_seconds` | No | JSON-level default scene duration. Overrides the node's `default_duration_seconds`. |
 | `defaults.steps` | No | JSON-level default sampler steps. Overrides the node's `default_steps`. |
@@ -137,7 +154,7 @@ per-shot value > JSON defaults > H3 Chain Plan node value
 
 | Field | Required | Rules and behavior |
 |---|---:|---|
-| `prompt` | Yes | Non-empty scene prompt. The shared prefix is prepended automatically. |
+| `prompt` | Yes | Non-empty string or array of strings. Array entries are joined with real newlines; use `""` for a blank line. The shared prefix is prepended automatically. |
 | `id` | No | Unique checkpoint identifier. Defaults to `clip_0001`, `clip_0002`, etc. Unsupported filename characters become `_`; the result is limited to 96 characters. |
 | `duration_seconds` | No | Positive requested raw generation duration. It is rounded up to a valid H3 frame count. Ignored when `length` or `frames` is present. |
 | `length` | No | Exact raw frame count. Must be between 5 and 3592 and satisfy `length % 17 == 5`. |
@@ -241,8 +258,41 @@ scene has enough context. The plan rejects shorter predecessors before render.
 
 ## Prompt formatting
 
+For human editing, use an array of lines instead of writing escaped `\n`
+characters. The node joins entries with real newlines. Use an empty string
+entry when you want a blank line:
+
+```json
+{
+  "shots": [
+    {
+      "id": "arrival",
+      "prompt": [
+        "Use <Picture 1> for her facial identity, hairstyle, skin tone, age, body proportions, and distinctive physical features.",
+        "Her wardrobe is the outfit defined here.",
+        "",
+        "Throughout every scene S1 wears the same fitted thigh-length dove-grey designer cocktail dress in opaque structured fabric with a deliberate low cleavage cutout, carries a small black designer handbag, and wears black high-heeled pumps.",
+        "",
+        "<Subject 2> (S2) enters from camera right."
+      ]
+    }
+  ]
+}
+```
+
+This reaches MiniMax as:
+
+```text
+Use <Picture 1> for her facial identity, hairstyle, skin tone, age, body proportions, and distinctive physical features.
+Her wardrobe is the outfit defined here.
+
+Throughout every scene S1 wears the same fitted thigh-length dove-grey designer cocktail dress in opaque structured fabric with a deliberate low cleavage cutout, carries a small black designer handbag, and wears black high-heeled pumps.
+
+<Subject 2> (S2) enters from camera right.
+```
+
 Put stable information in `prompt_prefix` and only scene-specific changes in
-each `prompt`:
+each `prompt`; both fields accept the same readable array format:
 
 ```json
 {

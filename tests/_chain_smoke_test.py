@@ -86,6 +86,40 @@ def main():
     }
     assert required <= set(package.NODE_CLASS_MAPPINGS)
 
+    readable_prompts = chain._normalize_plan(
+        json.dumps({
+            "prompt_prefix": ["Shared identity.", "", "Shared wardrobe."],
+            "shots": [{
+                "id": "multiline",
+                "prompt": [
+                    "Use <Picture 1> for her facial identity.",
+                    "Throughout every scene S1 wears the same dress.",
+                    "<Subject 2> enters from camera right.",
+                ],
+                "length": 39,
+            }],
+        }),
+        "readable", 32, 32, 22, "video", "head", "disabled",
+        "source_track", 0, 15, 2, 1, 30,
+    )
+    assert readable_prompts["shots"][0]["prompt"] == (
+        "Shared identity.\n\nShared wardrobe.\n\n"
+        "Use <Picture 1> for her facial identity.\n"
+        "Throughout every scene S1 wears the same dress.\n"
+        "<Subject 2> enters from camera right."
+    )
+    try:
+        chain._normalize_plan(
+            json.dumps({"shots": [{"prompt": ["valid", 42]}]}),
+            "bad_lines", 32, 32, 22, "video", "head", "disabled",
+            "source_track", 0, 15, 2, 1, 30,
+        )
+    except ValueError as exc:
+        assert "only strings" in str(exc)
+    else:
+        raise AssertionError("prompt line array accepted a non-string item")
+    print("prompts: string arrays become real newlines; invalid lines rejected")
+
     # ComfyUI rounds H3's 40 Hz audio grid to the nearest step. Depending on
     # frame length, the decoded stream can land 1/3 step above or below the
     # exact 24 fps picture duration. Match Tail must frame-lock both cases.
