@@ -106,6 +106,128 @@ seamless-extension thread.
 They are included here with attribution; this repo integrates the shared patch
 directly so users do not have to run its external patching script.
 
+## Automated disk-backed chains
+
+The `H3 Chain` nodes turn a repeated Ref2VA graph into one recursive sampling
+body. They are specialized for MiniMax rather than generic carry-value loop
+nodes: shot lengths are placed on H3's `17k+5` frame grid, source-song windows
+are computed from the delivered frame timeline, clip 1 bypasses Motion Context,
+and every later clip receives the preceding frame tail and optional AV latent.
+The recursion engine is a self-contained MiniMax adaptation of Ethanfel's SxCP
+loop implementation; ComfyUI-Prompt-Builder is not a runtime dependency.
+
+The graph shape is:
+
+```
+H3 Chain Plan -> H3 Chain Loop Start -> H3 Chain Current Shot
+                                         | prompt / seed / length / audio slice
+                                         v
+                              MiniMaxH3ReferenceToVideo
+                                         v
+                                  H3 Chain Context
+                                         v
+                              guider / sampler / decode
+                                         v
+                               H3 Motion Context Trim
+                                  |                |
+                                  v                v
+                     H3 Chain Segment +       H3 Chain Loop End
+                         Checkpoint  ---------->    |
+                                                   | recurse
+                                                   v
+                                          next planned clip
+
+H3 Chain Loop End.manifest -> H3 Chain Assemble
+```
+
+Wire the original song into Loop Start, Current Shot, and Assemble when using a
+source-track mode. All three nodes verify the same full-waveform hash, so a
+miswire cannot render or mux a different song. Source audio must cover the full
+planned video duration; a short track fails before sampling instead of silently
+truncating the final video.
+
+Wire `Loop Start.state` into `Current Shot.state`, then use the pass-through
+`Current Shot.state` for Chain Context, Segment + Checkpoint, and Loop End.
+Wire the Start's `flow` directly to Loop End. The stock Ref2VA node receives
+the Current Shot outputs for `prompt`, `width`, `height`, `length`, and its
+first standalone audio-reference socket. `noise_seed` goes to Random Noise and
+`steps` goes to Basic Scheduler. The sampler's raw output goes to both decode
+nodes, Segment + Checkpoint, and Loop End. Trimmed images go to Segment +
+Checkpoint and Loop End; trimmed audio goes to Segment + Checkpoint.
+
+The plan is compact JSON. Global prompt text can live in `prompt_prefix`; each
+shot supplies only what changes:
+
+```json
+{
+  "prompt_prefix": "Global subject and continuity instructions.",
+  "defaults": {"duration_seconds": 15, "steps": 20},
+  "shots": [
+    {"id": "intro", "prompt": "Opening shot.", "seed": 123},
+    {"id": "street", "prompt": "Continue into the street.", "seed": 456},
+    {"id": "outro", "prompt": "Finish the take.", "duration_seconds": 5}
+  ]
+}
+```
+
+You may specify an exact `length` instead of seconds, but it must satisfy
+`length % 17 == 5`. Missing seeds are deterministically derived from
+`base_seed`, clip index, and shot id. Resolution and context settings are
+global and checkpointed; changing them invalidates resume. Set
+`generation_fingerprint` to a stable version tag for the external model, VAEs,
+global references, CFG, and scheduler, and change that tag whenever any of those
+inputs changes. It becomes part of the resume compatibility hash.
+
+### Segments and resume
+
+Every iteration writes these artifacts under
+`output/h3_chains/<run_name>/` before the next clip begins:
+
+- `segments/clip_0001.<transaction>.mp4`: video-only H.264 segment;
+- `checkpoints/clip_0001.<transaction>.safetensors`: context frames, AV latent,
+  and delivered generated audio;
+- `checkpoints/clip_0001.json`: prompt/seed/timing hashes and artifact manifest.
+
+The JSON file is the atomic commit point. A retry first writes a new immutable
+video/checkpoint pair and their SHA-256 hashes, then switches the fixed JSON slot
+to that pair in one rename. An interruption cannot combine a new video with an
+old latent checkpoint; successful retries clean the superseded pair.
+
+The loop carries only the last context frames and compact AV latent in memory;
+it never builds the multi-gigabyte cumulative IMAGE tensor used by manually
+duplicated long-chain workflows. `H3 Chain Assemble` stream-copies the video
+segments and muxes audio only at the end.
+
+To resume at clip N, keep the same `run_name` and set `start_clip=N`. The Start
+node loads clip N-1, verifies every predecessor against the current plan, and
+continues. Prompts for clip N and later may be changed. Any change to an earlier
+prompt, seed, duration, resolution, context setting, or audio mode is rejected
+until those earlier clips are regenerated. Changing the source song is also
+detected from its waveform hash. Re-running a clip overwrites its fixed
+segment/checkpoint slot, so rejected attempts do not accumulate.
+
+If all clips were saved but the browser, Loop End, or final assembly stopped,
+connect the same Plan (and source song when applicable) to `H3 Chain Load
+Completed Manifest`. It validates every artifact and rebuilds the manifest for
+Assemble without sampling the last clip again.
+
+### Chain audio modes
+
+- `source_track`: Current Shot slices the uploaded song for every Ref2VA clip;
+  Motion Context carries video only; Assemble muxes the original song. This is
+  the recommended music-video mode.
+- `generated_audio`: no source reference is needed; Chain Context carries the
+  previous raw audio latent on the timeline and Assemble concatenates the
+  checkpointed generated audio. Segment + Checkpoint requires trimmed decoded
+  audio in this mode and rejects any sample count that does not exactly match
+  the delivered video frames.
+- `source_plus_timeline`: supplies both the source-song Ref2VA window and the
+  preceding generated audio latent. This is experimental; Assemble uses the
+  source track by default.
+
+Segment saving requires the PyAV/libx264 support shipped with normal ComfyUI
+installations. Final assembly requires `ffmpeg` on `PATH`.
+
 ## Settings and what to pick
 
 **context_length** - how many frames of the previous clip to carry over.
@@ -235,15 +357,17 @@ sound with `match_tail` on, Spectrum off. That is the configuration every
 Built and verified against ComfyUI master as of early August 2026, while
 H3 support was days old. The math patches self-test against the live
 ComfyUI code at every startup, so an upstream change surfaces as a clear
-refusal, not a bad render. The repo also ships two standalone test
-scripts that run without ComfyUI or a GPU (only numpy needed):
+refusal, not a bad render. The repo also ships two standalone patch/node tests
+that run without ComfyUI or a GPU (only numpy needed), plus a CPU chain
+integration test against an adjacent ComfyUI checkout:
 
 ```
 python tests/_mock_harness.py       # patch logic against a faithful stock model
 python tests/_node_smoke_test.py    # the node end to end, R2V refs + save/load
+python tests/_chain_smoke_test.py   # timing, recursion, segments, resume, assemble
 ```
 
-Both should print their checks and finish with a pass line.
+All three should print their checks and finish with a pass line.
 
 ## Files
 
@@ -252,8 +376,9 @@ Both should print their checks and finish with a pass line.
 | `patch_layout.py` | Lifts the first/last-only keyframe restriction; moves pinned audio onto the clip timeline, including after existing R2V refs; keeps everything aligned when references shift the layout. Self-tests at startup. |
 | `patch_payload.py` | Lets pinned video and pinned audio coexist (stock code let one overwrite the other). |
 | `nodes.py` | The four nodes: Motion Context, Trim, and the latent Save/Load pair. |
+| `chain_nodes.py` | The eight MiniMax-specific plan, recursive loop, segment/checkpoint, resume/manifest recovery, and assembly nodes. |
 | `tests/seam_probe.py` | Measures whether a join's audio is a true continuation, a sound-alike, or drifting. |
-| `tests/` | Standalone tests for the patches and the node; run without ComfyUI (numpy only). |
+| `tests/` | Standalone patch/node tests plus the CPU chain integration test. |
 
 The `example_workflows/` folder contains both the original compact FL2VA demo
 and seitanism's six-clip Ref2VA/global-reference chain. See its README for the
