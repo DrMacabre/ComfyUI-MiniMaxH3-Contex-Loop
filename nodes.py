@@ -35,6 +35,7 @@ import os
 import comfy.utils
 import folder_paths
 import node_helpers
+import torch
 
 try:
     from safetensors.torch import load_file as _st_load, save_file as _st_save
@@ -182,13 +183,12 @@ def _audio_tail_from_latent(latent, a_frames):
     generated H3 latent, skipping the decode -> re-encode round trip.
 
     Returns (tail latent [1, C, 2, rt], rt, overhang) where rt counts
-    40 Hz latent steps and overhang is the fraction of a step by which the
-    clip's audio grid extends past its last pixel frame. H3 rounds the
-    audio grid UP (124 frames want 206.67 steps, the layout allocates
-    207), so the latent's final step reaches ~overhang/40 s beyond the
-    last frame. The decoded-audio path never sees this because match_tail
-    cuts it; on this path the caller compensates the placement with it,
-    so the pinned content lands exactly where its samples actually sit.
+    40 Hz latent steps and overhang is the signed fraction of a step between
+    the clip's audio grid and its last pixel frame. H3 rounds to the NEAREST
+    audio step: 124 frames want 206.67 and become 207 (+0.33), while 260
+    frames want 433.33 and become 433 (-0.33). The caller compensates the
+    placement with this signed offset so the pinned content lands exactly
+    where its samples actually sit.
     """
     parts = _streams_from_latent(latent)
     if len(parts) < 2:
@@ -206,7 +206,7 @@ def _audio_tail_from_latent(latent, a_frames):
     total_t = int(audio.shape[-1])
     frames = _pixel_frames(int(video.shape[2]))
     overhang = total_t - FRAME_RESCALE * frames
-    if not (0.0 <= overhang < 1.0):
+    if not (-0.5 < overhang < 0.5):
         _LOG.warning(
             "h3_motion_context: context_latent audio grid is unexpected "
             "(%d steps for %d frames); assuming no overhang.", total_t, frames)
@@ -479,14 +479,12 @@ class MiniMaxH3MotionContextTrim:
     follows whatever the encoder actually produced.
 
     The tail needs the same treatment for a different reason. H3's audio
-    latent runs at 40 Hz against 24 fps picture, and FRAME_RESCALE is 5/3,
-    so a 124 frame clip wants 206.67 audio steps and the layout rounds up
-    to 207. Every clip therefore ships about 8.3 ms more sound than
-    picture. Concatenate two and the second seam is out by 16.7 ms, three
-    and it is 25 ms, and the error grows without bound down a chain. It
-    reads as a faint dampening at the first join and a short click at
-    later ones. Truncating the tail to exactly frames/fps stops it
-    accumulating.
+    latent runs at 40 Hz against 24 fps picture, and FRAME_RESCALE is 5/3.
+    ComfyUI rounds the required audio steps to the nearest integer, so some
+    valid H3 lengths decode about 8.3 ms long (124 frames) and others about
+    8.3 ms short (260 frames). Either error accumulates down a chain. Match
+    Tail truncates excess samples or zero-pads a short decode so every
+    delivered stream is exactly frames/fps long.
     """
 
     @classmethod
@@ -508,10 +506,10 @@ class MiniMaxH3MotionContextTrim:
                                "Create Video."}),
                 "match_tail": ("BOOLEAN", {
                     "default": True,
-                    "tooltip": "Truncate the audio so its duration equals "
-                               "frames/fps exactly. H3 rounds its audio grid up, "
-                               "so each clip carries about 8ms of extra sound "
-                               "that accumulates at every join in a chain."}),
+                    "tooltip": "Truncate or zero-pad audio so its duration "
+                               "equals frames/fps exactly. H3 rounds its 40 Hz "
+                               "audio grid to the nearest step, producing about "
+                               "8ms of excess or shortage on some lengths."}),
             },
         }
 
@@ -556,9 +554,11 @@ class MiniMaxH3MotionContextTrim:
                               "(%.2fms) so audio matches %d frames exactly",
                               over, over / sr * 1000.0, frames_left)
                 elif have < want:
-                    _LOG.warning("h3_motion_context: audio is %.2fms shorter than "
-                                 "%d frames; leaving the tail alone",
-                                 (want - have) / sr * 1000.0, frames_left)
+                    missing = want - have
+                    waveform = torch.nn.functional.pad(waveform, (0, missing))
+                    _LOG.info("h3_motion_context: tail padded %d zero samples "
+                              "(%.2fms) so audio matches %d frames exactly",
+                              missing, missing / sr * 1000.0, frames_left)
 
             out_audio = {"waveform": waveform, "sample_rate": sr}
             _LOG.info("h3_motion_context: %d frames / %.4fs picture, %.4fs sound, "

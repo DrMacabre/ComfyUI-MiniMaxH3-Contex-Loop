@@ -190,6 +190,16 @@ def main():
         T(np.arange(1 * 32 * 2 * audio_t, dtype=np.float32
                     ).reshape(1, 32, 2, audio_t)),
     ])}
+    # 260 valid H3 frames use 77 video steps and round 433.33 audio steps
+    # down to 433. The signed grid offset must remain -1/3 rather than being
+    # discarded, or generated-audio context lands 0.2 video frames late.
+    underhang_latent = {"samples": Nested([
+        T(np.zeros((1, 16, 77, 2, 2), dtype=np.float32)),
+        T(np.zeros((1, 32, 2, 433), dtype=np.float32)),
+    ])}
+    _, _, signed_offset = nodes._audio_tail_from_latent(underhang_latent, 22)
+    assert abs(signed_offset + 1.0 / 3.0) < 1e-9, signed_offset
+    print("audio grid: 260-frame signed underhang preserved at -1/3 step")
     context = T(np.zeros((124, 480, 864, 3), dtype=np.float32))
 
     class VAE:

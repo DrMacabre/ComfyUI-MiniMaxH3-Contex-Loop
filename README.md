@@ -269,9 +269,10 @@ how far back the sound reaches. **Use 22** to overlay the video window
 exactly; that's the tested config. Longer windows (44, 96) are legal and
 land in safe coordinate space, but nobody has rendered one yet.
 
-The Trim node also has `match_tail` (default on). Leave it on: H3 rounds
-its audio grid up, so every clip carries ~8 ms more sound than picture, and
-without the trim that error grows at every join in a chain.
+The Trim node also has `match_tail` (default on). Leave it on: H3 rounds its
+40 Hz audio grid to the nearest step, so some frame lengths decode about 8 ms
+long and others about 8 ms short. Match Tail truncates or zero-pads that
+fractional-step difference so drift cannot grow at every join.
 
 ## The audio story
 

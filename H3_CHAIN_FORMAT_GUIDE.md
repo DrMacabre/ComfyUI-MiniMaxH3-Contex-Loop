@@ -419,5 +419,4 @@ node, so the chain cannot inspect them directly. Record them in
 | Unexpected scene duration | Remember that seconds round up and later `head` clips lose the repeated context after trimming. Inspect Current Shot's `raw` and `delivered` status. |
 | Resume rejected | Restore the prior completed-scene settings and source track, or start a new run from clip 1 with a new `run_name`. |
 | Source audio too short | Use a longer song, shorten the plan, or choose a non-source audio mode. |
-| Final audio/video drift | Wire both decoded streams through Motion Context Trim and leave `match_tail` enabled. |
-
+| Final audio/video drift | Wire both decoded streams through Motion Context Trim and leave `match_tail` enabled. It truncates excess audio or zero-pads a fractional-step shortage. |

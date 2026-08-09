@@ -86,6 +86,31 @@ def main():
     }
     assert required <= set(package.NODE_CLASS_MAPPINGS)
 
+    # ComfyUI rounds H3's 40 Hz audio grid to the nearest step. Depending on
+    # frame length, the decoded stream can land 1/3 step above or below the
+    # exact 24 fps picture duration. Match Tail must frame-lock both cases.
+    trim_node = package.NODE_CLASS_MAPPINGS["MiniMaxH3MotionContextTrim"]()
+    short_images = torch.zeros((260, 1, 1, 3), dtype=torch.float32)
+    short_samples = 346400  # 433 audio steps; exact 260f target is 346667
+    short_audio = {
+        "waveform": torch.ones((1, 2, short_samples), dtype=torch.float32),
+        "sample_rate": 32000,
+    }
+    _, padded = trim_node.trim(short_images, 0, short_audio, 24.0, True)
+    assert int(padded["waveform"].shape[-1]) == 346667
+    assert torch.count_nonzero(padded["waveform"][..., short_samples:]) == 0
+    chain._validate_audio(padded, "260-frame regression", expected_frames=260)
+
+    long_images = torch.zeros((124, 1, 1, 3), dtype=torch.float32)
+    long_samples = 165600  # 207 audio steps; exact 124f target is 165333
+    long_audio = {
+        "waveform": torch.ones((1, 2, long_samples), dtype=torch.float32),
+        "sample_rate": 32000,
+    }
+    _, truncated = trim_node.trim(long_images, 0, long_audio, 24.0, True)
+    assert int(truncated["waveform"].shape[-1]) == 165333
+    print("trim: 260-frame shortage padded and 124-frame excess truncated")
+
     giant_plan = chain._normalize_plan(
         json.dumps({
             "shots": [
