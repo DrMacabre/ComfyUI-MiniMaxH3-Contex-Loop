@@ -4,6 +4,7 @@ import {
     applyReviewEdit,
     checkpointResumeOptions,
     reviewCountdown,
+    reviewLocalDeadline,
     reviewSeed,
 } from "../web/h3_chain_review_core.mjs";
 
@@ -32,6 +33,10 @@ assert.throws(
 assert.deepEqual(reviewCountdown(130, 100_000), {seconds: 30, text: "0:30"});
 assert.deepEqual(reviewCountdown(100, 100_001), {seconds: 0, text: "0:00"});
 assert.equal(reviewCountdown(null, 0), null);
+assert.equal(reviewLocalDeadline(null, 100, 100_000), null);
+assert.equal(reviewLocalDeadline(undefined, 100, 100_000), null);
+assert.equal(reviewLocalDeadline("", 100, 100_000), null);
+assert.equal(reviewLocalDeadline(130, 100, 100_000), 130);
 
 assert.deepEqual(checkpointResumeOptions([
     {scene: 2, resume_scene: 3, scene_id: "second", ready: true,

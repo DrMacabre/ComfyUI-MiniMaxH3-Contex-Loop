@@ -40,6 +40,20 @@ export function reviewCountdown(deadlineSeconds, nowMilliseconds = Date.now()) {
     return {seconds, text: `${minutes}:${remainder}`};
 }
 
+export function reviewLocalDeadline(
+    deadlineSeconds,
+    serverNowSeconds,
+    clientNowMilliseconds = Date.now(),
+) {
+    if (deadlineSeconds === null || deadlineSeconds === undefined || deadlineSeconds === "") {
+        return null;
+    }
+    const deadline = Number(deadlineSeconds);
+    const serverNow = Number(serverNowSeconds);
+    if (!Number.isFinite(deadline) || !Number.isFinite(serverNow)) return null;
+    return Number(clientNowMilliseconds) / 1000 + Math.max(0, deadline - serverNow);
+}
+
 export function checkpointResumeOptions(checkpoints, clipCount) {
     const total = Number(clipCount);
     if (!Number.isInteger(total) || total < 1) return [];

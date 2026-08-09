@@ -5,6 +5,7 @@ import {
     applyReviewEdit,
     checkpointResumeOptions,
     reviewCountdown,
+    reviewLocalDeadline,
     reviewSeed,
 } from "./h3_chain_review_core.mjs";
 
@@ -558,17 +559,15 @@ function mount(node) {
         const previousRevision = Number(current?.preview_revision ?? 0);
         const incomingRevision = Number(data?.preview_revision ?? 0);
         if (sameToken && incomingRevision <= previousRevision) return;
-        const remaining = sameToken ? null :
-            Number.isFinite(Number(data.deadline)) &&
-            Number.isFinite(Number(data.server_now)) ?
-                Math.max(0, Number(data.deadline) - Number(data.server_now)) : null;
+        const localDeadline = sameToken ? current.local_deadline :
+            reviewLocalDeadline(data?.deadline, data?.server_now);
         current = sameToken ? {
             ...current,
             ...data,
             local_deadline: current.local_deadline,
         } : {
             ...data,
-            local_deadline: remaining == null ? null : Date.now() / 1000 + remaining,
+            local_deadline: localDeadline,
         };
         if (!sameToken) {
             root.classList.remove("h3r-busy");
