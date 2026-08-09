@@ -85,6 +85,9 @@ def main():
         "MiniMaxH3ChainManifestLoad", "MiniMaxH3ChainAssemble",
     }
     assert required <= set(package.NODE_CLASS_MAPPINGS)
+    assert package.WEB_DIRECTORY == "./web"
+    assert (ROOT / "web" / "h3_chain_plan_editor.js").is_file()
+    assert (ROOT / "web" / "h3_chain_plan_core.mjs").is_file()
 
     readable_prompts = chain._normalize_plan(
         json.dumps({
@@ -108,6 +111,18 @@ def main():
         "Throughout every scene S1 wears the same dress.\n"
         "<Subject 2> enters from camera right."
     )
+    numeric_seed_plan = chain._normalize_plan(
+        '{"shots":[{"prompt":"seed test","seed":18446744073709551615}]}',
+        "numeric_seed", 32, 32, 22, "video", "head", "disabled",
+        "source_track", 0, 15, 2, 1, 30,
+    )
+    string_seed_plan = chain._normalize_plan(
+        '{"shots":[{"prompt":"seed test","seed":"18446744073709551615"}]}',
+        "numeric_seed", 32, 32, 22, "video", "head", "disabled",
+        "source_track", 0, 15, 2, 1, 30,
+    )
+    assert numeric_seed_plan["shots"][0]["seed"] == chain.MAX_SEED
+    assert numeric_seed_plan["plan_hash"] == string_seed_plan["plan_hash"]
     try:
         chain._normalize_plan(
             json.dumps({"shots": [{"prompt": ["valid", 42]}]}),

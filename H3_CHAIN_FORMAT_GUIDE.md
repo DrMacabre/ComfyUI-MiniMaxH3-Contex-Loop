@@ -3,6 +3,24 @@
 This guide describes the JSON accepted by `H3 Chain Plan`, including scene
 lengths, prompts, seeds, steps, audio timing, and resume-safe settings.
 
+## Visual editor or raw JSON
+
+`H3 Chain Plan` includes a scene-card editor. Write shared continuity text and
+scene prompts as normal multiline text; the editor stores them as readable
+JSON line arrays automatically. Drag scenes to reorder them, duplicate or
+delete cards, and choose inherited duration, seconds, or exact H3 frames. The
+timing label on every card shows raw and delivered frames, while the header
+shows total delivered runtime.
+
+Inside a prompt, type `@` or click **@ Reference** to insert a MiniMax
+`<Picture N>`, `<Video N>`, or `<Audio N>` tag. Select dialogue text and type
+`#`, or click **# Dialogue**, to wrap it in `<d>...</d>`. These interactions
+are authoring shortcuts only; they produce ordinary MiniMax prompt text.
+
+Use the editor's **JSON** button when you need to inspect, paste, import, or
+export the underlying plan. The JSON format below remains the runtime contract
+and existing plans are backward compatible.
+
 ## Copy/paste workflow note
 
 The following block is intentionally compact enough to paste into a ComfyUI
@@ -11,8 +29,8 @@ Note node:
 ```text
 H3 LOOP PLAN — QUICK FORMAT
 
-Put valid JSON in H3 Chain Plan → plan_json. Use double quotes, no comments,
-and no trailing commas.
+Use the built-in H3 Chain Plan scene editor, or open its JSON panel and paste
+valid JSON. Use double quotes, no comments, and no trailing commas.
 
 {
   "prompt_prefix": "Global subject, wardrobe, style and continuity rules.",
@@ -121,7 +139,7 @@ Shot = string | {
   "length"?: integer,
   "frames"?: integer,             // alias of length
   "steps"?: integer,
-  "seed"?: integer
+  "seed"?: integer | digit string
 }
 ```
 
@@ -160,7 +178,7 @@ per-shot value > JSON defaults > H3 Chain Plan node value
 | `length` | No | Exact raw frame count. Must be between 5 and 3592 and satisfy `length % 17 == 5`. |
 | `frames` | No | Alias for `length`. `length` wins when both are present. |
 | `steps` | No | Sampler steps for this scene, from 1 to 10000. |
-| `seed` | No | Fixed unsigned 64-bit seed, from 0 to 18446744073709551615. When omitted, the seed is derived deterministically from `base_seed`, scene index, and scene `id`. |
+| `seed` | No | Fixed unsigned 64-bit seed, from 0 to 18446744073709551615. A decimal digit string is also accepted and lets browsers preserve values above JavaScript's exact integer range. When omitted, the seed is derived deterministically from `base_seed`, scene index, and scene `id`. |
 
 A shot can also be only a prompt string:
 

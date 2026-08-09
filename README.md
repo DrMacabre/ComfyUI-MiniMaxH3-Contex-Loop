@@ -167,6 +167,33 @@ For easier human editing, both `prompt_prefix` and per-shot `prompt` may be
 arrays of strings. The node joins the entries with real newlines; use an empty
 string entry for a blank line. Ordinary string prompts remain supported.
 
+### Built-in scene editor
+
+`H3 Chain Plan` now opens its plan as a visual, multiline scene editor. It is
+only a frontend for the existing `plan_json` input: edits serialize back to
+the same JSON contract, so existing workflows load unchanged and workflows
+without this node are unaffected.
+
+The editor provides:
+
+- a shared prompt for identity, wardrobe, style, and continuity rules;
+- multiline prompt boxes with no visible escaped `\n` text;
+- draggable scene cards with duplicate, delete, and arrow reordering;
+- seconds, exact-frame, or inherited duration controls per scene;
+- live raw/delivered frame and total-runtime calculations using this pack's
+  exact H3 round-up and continuation-overlap rules;
+- `@` reference-tag insertion for `<Picture N>`, `<Video N>`, and `<Audio N>`;
+- `#` dialogue insertion using MiniMax `<d>...</d>` markup;
+- optional per-scene steps and uint64 seeds; and
+- a raw JSON escape hatch with copy, import, and export.
+
+The `@` reference and `#` dialogue interaction ideas were inspired by
+[ComfyUI-MiniMaxH3-Easy](https://github.com/nkxx188/ComfyUI-MiniMaxH3-Easy)
+by **nkxx188**, with credit and its MIT notice recorded in
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md). This pack intentionally
+keeps its own MiniMax chain timing, checkpoint, and resume model instead of
+adopting Easy's loader/sampler architecture.
+
 For the complete copy/paste format reference—including scene lengths, exact
 frame rules, seeds, steps, audio modes, and resume behavior—see
 [`H3_CHAIN_FORMAT_GUIDE.md`](H3_CHAIN_FORMAT_GUIDE.md).
@@ -382,9 +409,10 @@ integration test against an adjacent ComfyUI checkout:
 python tests/_mock_harness.py       # patch logic against a faithful stock model
 python tests/_node_smoke_test.py    # the node end to end, R2V refs + save/load
 python tests/_chain_smoke_test.py   # timing, recursion, segments, resume, assemble
+node tests/_plan_editor_js_test.mjs # scene-editor parsing and exact timing
 ```
 
-All three should print their checks and finish with a pass line.
+All four should print their checks and finish with a pass line.
 
 ## Files
 
@@ -394,6 +422,7 @@ All three should print their checks and finish with a pass line.
 | `patch_payload.py` | Marker-gated wrapper that lets Motion Context video and refs coexist while leaving unmarked H3 payloads stock. |
 | `nodes.py` | The four nodes: Motion Context, Trim, and the latent Save/Load pair. |
 | `chain_nodes.py` | The eight MiniMax-specific plan, recursive loop, segment/checkpoint, resume/manifest recovery, and assembly nodes. |
+| `web/` | Opt-in H3 Chain Plan scene editor and its testable plan/timing core. |
 | `tests/seam_probe.py` | Measures whether a join's audio is a true continuation, a sound-alike, or drifting. |
 | `tests/` | Standalone patch/node tests plus the CPU chain integration test. |
 
