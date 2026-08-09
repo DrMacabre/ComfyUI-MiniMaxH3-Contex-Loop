@@ -19,6 +19,13 @@ applyReviewEdit(plan, 2, "New two.\n\nCAMERA: Close-up.", "9007199254740993");
 assert.deepEqual(plan.shots[0].prompt, ["Old one."]);
 assert.deepEqual(plan.shots[1].prompt, ["New two.", "", "CAMERA: Close-up."]);
 assert.equal(plan.shots[1].seed, "9007199254740993");
+applyReviewEdit(plan, 1, "", "3");
+assert.deepEqual(plan.shots[0].prompt, [""]);
+assert.equal(plan.shots[0].seed, "3");
+assert.throws(
+    () => applyReviewEdit({shots: [{prompt: [""]}]}, 1, "", "4"),
+    /scene prompt or shared prompt/i,
+);
 
 assert.deepEqual(reviewCountdown(130, 100_000), {seconds: 30, text: "0:30"});
 assert.deepEqual(reviewCountdown(100, 100_001), {seconds: 0, text: "0:00"});

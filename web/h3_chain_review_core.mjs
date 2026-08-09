@@ -1,4 +1,4 @@
-import {MAX_SEED, promptTextToLines} from "./h3_chain_plan_core.mjs";
+import {MAX_SEED, promptTextToLines, sharedPrompt} from "./h3_chain_plan_core.mjs";
 
 export function reviewSeed(value) {
     let seed;
@@ -19,7 +19,9 @@ export function applyReviewEdit(plan, oneBasedIndex, scenePrompt, seed) {
         throw new Error("The reviewed scene does not exist in the plan.");
     }
     const prompt = String(scenePrompt ?? "").replace(/\r\n?/g, "\n").trim();
-    if (!prompt) throw new Error("The retry prompt cannot be empty.");
+    if (!prompt && !sharedPrompt(plan).text.trim()) {
+        throw new Error("Retry requires a scene prompt or shared prompt.");
+    }
     const normalizedSeed = reviewSeed(seed);
     plan.shots[index].prompt = promptTextToLines(prompt);
     plan.shots[index].seed = normalizedSeed;

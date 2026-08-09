@@ -196,7 +196,8 @@ events originating under an H3 Chain Loop End. Ordinary KJ previews and
 workflows without the H3 loop are unchanged.
 
 The plan is compact JSON. Global prompt text can live in `prompt_prefix`; each
-shot supplies only what changes:
+shot supplies only what changes. A shot may omit or leave `prompt` blank when
+the shared prompt is non-empty; plans where both are blank are rejected.
 
 For easier human editing, both `prompt_prefix` and per-shot `prompt` may be
 arrays of strings. The node joins the entries with real newlines; use an empty

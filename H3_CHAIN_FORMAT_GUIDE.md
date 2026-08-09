@@ -85,7 +85,8 @@ SCENE OVERRIDES
 - steps: sampler steps for this scene, 1–10000.
 - seed: fixed uint64 seed. Omit it for a deterministic seed from base_seed.
 - id: unique scene name used by checkpoints. Changing it can change an auto seed.
-- prompt: required scene prompt. prompt_prefix is prepended automatically.
+- prompt: scene-specific text. It may be blank or omitted when prompt_prefix
+  (or global_prompt) is non-empty; otherwise a prompt is required.
 
 LENGTH AT 24 FPS, context=22, anchor=head
 - 5 seconds  -> raw 124 frames; clip 1 delivers 124, later clips deliver 102.
@@ -137,7 +138,7 @@ Plan = {
 
 Shot = string | {
   "id"?: string,
-  "prompt": string | string[],
+  "prompt"?: string | string[],
   "duration_seconds"?: number,
   "length"?: integer,
   "frames"?: integer,             // alias of length
@@ -175,7 +176,7 @@ per-shot value > JSON defaults > H3 Chain Plan node value
 
 | Field | Required | Rules and behavior |
 |---|---:|---|
-| `prompt` | Yes | Non-empty string or array of strings. Array entries are joined with real newlines; use `""` for a blank line. The shared prefix is prepended automatically. |
+| `prompt` | Conditional | Scene-specific string or array of strings. It may be blank or omitted when `prompt_prefix`/`global_prompt` is non-empty. Array entries are joined with real newlines; use `""` for a blank line. The shared prefix is prepended automatically. |
 | `id` | No | Unique checkpoint identifier. Defaults to `clip_0001`, `clip_0002`, etc. Unsupported filename characters become `_`; the result is limited to 96 characters. |
 | `duration_seconds` | No | Positive requested raw generation duration. It is rounded up to a valid H3 frame count. Ignored when `length` or `frames` is present. |
 | `length` | No | Exact raw frame count. Must be between 5 and 3592 and satisfy `length % 17 == 5`. |
@@ -335,6 +336,19 @@ each `prompt`; both fields accept the same readable array format:
 }
 ```
 
+When the same complete prompt should drive every scene, scene prompts can be
+empty or omitted:
+
+```json
+{
+  "prompt_prefix": "The complete shared MiniMax prompt used for every scene.",
+  "shots": [
+    {"id": "scene_01", "length": 362},
+    {"id": "scene_02", "length": 362}
+  ]
+}
+```
+
 For seamless results, each continuation prompt should explicitly preserve the
 incoming action, camera direction, subject pose, lighting, and unfinished
 movement. End each scene with an action still in progress, then begin the next
@@ -483,7 +497,7 @@ node, so the chain cannot inspect them directly. Record them in
 | Error | Fix |
 |---|---|
 | Invalid JSON | Use double quotes, remove comments, and remove trailing commas. |
-| Empty prompt | Give every scene a non-empty `prompt`, or use a non-empty string shot. |
+| Empty prompt | Provide a non-empty scene `prompt`, or provide a non-empty `prompt_prefix`/`global_prompt` that the scene can use alone. |
 | Duplicate ID | Give every scene a unique `id`. |
 | Invalid exact length | Use a value from the `17k+5` grid, such as `124`, `243`, or `362`. |
 | Continuation is too short | Make its raw length greater than `context_length`; every non-final scene must also deliver enough frames for the next context. |

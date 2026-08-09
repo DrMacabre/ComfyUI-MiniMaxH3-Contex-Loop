@@ -573,7 +573,7 @@ function mountEditor(node) {
 
         const prompt = element("textarea", "h3c-prompt");
         prompt.value = promptValueToText(shot.prompt, `Scene ${index + 1} prompt`);
-        prompt.placeholder = "Describe the scene and explicitly continue the incoming motion…";
+        prompt.placeholder = "Optional with a shared prompt; otherwise describe this scene…";
         prompt.spellcheck = true;
         prompt.addEventListener("input", () => {
             shot.prompt = promptTextToLines(prompt.value);
@@ -599,7 +599,7 @@ function mountEditor(node) {
             syncPlan();
         });
         advanced.append(field("Steps (blank = default)", steps), field("Seed (blank = automatic)", seed));
-        card.append(head, lengthRow, field("Scene prompt", prompt), promptTools(prompt), advanced);
+        card.append(head, lengthRow, field("Scene prompt (optional with shared prompt)", prompt), promptTools(prompt), advanced);
         return card;
     }
 

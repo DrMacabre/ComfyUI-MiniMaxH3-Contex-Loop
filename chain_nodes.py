@@ -259,8 +259,10 @@ def _plan_with_review_revision(plan: dict[str, Any], index: int,
     if index < 1 or index > len(plan["shots"]):
         raise ValueError("H3 review revision index is outside the plan.")
     scene_prompt = str(scene_prompt or "").replace("\r\n", "\n").replace("\r", "\n").strip()
-    if not scene_prompt:
-        raise ValueError("H3 review retry prompt cannot be empty.")
+    prefix = str(plan.get("prompt_prefix") or "").strip()
+    if not scene_prompt and not prefix:
+        raise ValueError(
+            "H3 review retry requires a scene prompt or shared prompt.")
     seed = int(seed)
     if seed < 0 or seed > MAX_SEED:
         raise ValueError("H3 review retry seed is outside the uint64 range.")
@@ -268,8 +270,7 @@ def _plan_with_review_revision(plan: dict[str, Any], index: int,
     revised = dict(plan)
     revised["shots"] = [dict(shot) for shot in plan["shots"]]
     shot = revised["shots"][index - 1]
-    prefix = str(revised.get("prompt_prefix") or "").strip()
-    full_prompt = (prefix + "\n\n" + scene_prompt) if prefix else scene_prompt
+    full_prompt = "\n\n".join(part for part in (prefix, scene_prompt) if part)
     shot["scene_prompt"] = scene_prompt
     shot["prompt"] = full_prompt
     shot["prompt_hash"] = hashlib.sha256(
@@ -375,11 +376,13 @@ def _normalize_plan(
 
         prompt = _prompt_text(item.get("prompt", ""),
                               "Shot %d (%s) prompt" % (index, shot_id))
-        if not prompt:
-            raise ValueError("Shot %d (%s) has an empty prompt." % (index, shot_id))
+        if not prompt and not prompt_prefix:
+            raise ValueError(
+                "Shot %d (%s) requires a scene prompt or shared prompt." %
+                (index, shot_id))
         scene_prompt = prompt
-        if prompt_prefix:
-            prompt = prompt_prefix + "\n\n" + prompt
+        prompt = "\n\n".join(
+            part for part in (prompt_prefix, scene_prompt) if part)
 
         explicit_length = item.get("length", item.get("frames"))
         if explicit_length is None:
@@ -1812,9 +1815,12 @@ async def _submit_review_decision(request):
     decision: dict[str, Any] = {"action": action}
     if action in ("retry", "reroll"):
         scene_prompt = str(body.get("scene_prompt") or "").strip()
-        if not scene_prompt:
+        prompt_prefix = str(
+            pending.get("public", {}).get("prompt_prefix") or "").strip()
+        if not scene_prompt and not prompt_prefix:
             return web.json_response(
-                {"error": "The retry prompt cannot be empty."}, status=400)
+                {"error": "Retry requires a scene prompt or shared prompt."},
+                status=400)
         if len(scene_prompt) > 200000:
             return web.json_response(
                 {"error": "The retry prompt is too large."}, status=400)

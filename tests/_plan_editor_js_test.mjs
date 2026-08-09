@@ -68,6 +68,29 @@ assert.equal(timing.shots[1].generationStartFrame, 340);
 assert.equal(timing.totalFrames, 600);
 assert.deepEqual(timing.errors, []);
 
+const sharedOnlyPlan = parsePlanJson(JSON.stringify({
+    prompt_prefix: "Shared identity and direction.",
+    shots: [{id: "shared_only", prompt: ""}],
+}));
+const sharedOnlyTiming = calculatePlanTiming(sharedOnlyPlan, {
+    contextLength: 22,
+    anchorMode: "head",
+    defaultDurationSeconds: 5,
+    defaultSteps: 10,
+});
+assert.deepEqual(sharedOnlyTiming.errors, []);
+
+const fullyEmptyPlan = parsePlanJson(JSON.stringify({
+    shots: [{id: "empty", prompt: ""}],
+}));
+const fullyEmptyTiming = calculatePlanTiming(fullyEmptyPlan, {
+    contextLength: 22,
+    anchorMode: "head",
+    defaultDurationSeconds: 5,
+    defaultSteps: 10,
+});
+assert.match(fullyEmptyTiming.errors.join("\n"), /scene and shared prompts are both empty/i);
+
 const longPlan = parsePlanJson(JSON.stringify({
     defaults: {duration_seconds: 15, steps: 5},
     shots: Array.from({length: 14}, (_, index) => ({

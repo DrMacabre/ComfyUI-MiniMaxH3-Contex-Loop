@@ -254,6 +254,7 @@ export function calculatePlanTiming(plan, settings = {}) {
     const nodeDefaultDuration = Number(settings.defaultDurationSeconds ?? 15);
     const planDefaultDuration = Number(plan?.defaults?.duration_seconds ?? nodeDefaultDuration);
     const defaultSteps = Number(plan?.defaults?.steps ?? settings.defaultSteps ?? 20);
+    const hasSharedPrompt = sharedPrompt(plan ?? {}).text.trim().length > 0;
 
     if (![1, 5, 22, 39].includes(contextLength)) {
         errors.push("Context length must be 1, 5, 22, or 39.");
@@ -275,8 +276,9 @@ export function calculatePlanTiming(plan, settings = {}) {
         const rowErrors = [];
         if (ids.has(id)) rowErrors.push(`Duplicate normalized scene id “${id}”.`);
         ids.add(id);
-        if (!promptValueToText(shot.prompt, `Scene ${index} prompt`).trim()) {
-            rowErrors.push("Prompt is empty.");
+        if (!promptValueToText(shot.prompt, `Scene ${index} prompt`).trim()
+            && !hasSharedPrompt) {
+            rowErrors.push("Scene and shared prompts are both empty.");
         }
 
         const steps = Number(shot.steps ?? defaultSteps);

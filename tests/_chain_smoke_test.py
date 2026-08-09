@@ -88,7 +88,7 @@ def main():
         chain._PENDING_REVIEWS[token] = {
             "future": future,
             "loop": asyncio.get_running_loop(),
-            "public": {"token": token},
+            "public": {"token": token, "prompt_prefix": "Shared only."},
             "current_seed": 7,
         }
 
@@ -97,7 +97,7 @@ def main():
                 return {
                     "token": token,
                     "action": "retry",
-                    "scene_prompt": "Edited after review.",
+                    "scene_prompt": "",
                     "seed": "18446744073709551615",
                 }
 
@@ -106,7 +106,7 @@ def main():
             assert response.status == 200
             decision = await future
             assert decision["action"] == "retry"
-            assert decision["scene_prompt"] == "Edited after review."
+            assert decision["scene_prompt"] == ""
             assert decision["seed"] == 18446744073709551615
         finally:
             chain._PENDING_REVIEWS.pop(token, None)
@@ -146,6 +146,32 @@ def main():
         "Throughout every scene S1 wears the same dress.\n"
         "<Subject 2> enters from camera right."
     )
+    shared_only = chain._normalize_plan(
+        json.dumps({
+            "prompt_prefix": ["Shared identity.", "", "Shared direction."],
+            "shots": [{"id": "shared_only", "prompt": "", "length": 39}],
+        }),
+        "shared_only", 32, 32, 22, "video", "head", "disabled",
+        "source_track", 0, 15, 2, 1, 30,
+    )
+    assert shared_only["shots"][0]["scene_prompt"] == ""
+    assert shared_only["shots"][0]["prompt"] == (
+        "Shared identity.\n\nShared direction.")
+    shared_only_revision = chain._plan_with_review_revision(
+        shared_only, 1, "", 123)
+    assert shared_only_revision["shots"][0]["scene_prompt"] == ""
+    assert shared_only_revision["shots"][0]["prompt"] == (
+        "Shared identity.\n\nShared direction.")
+    try:
+        chain._normalize_plan(
+            json.dumps({"shots": [{"id": "empty", "prompt": ""}]}),
+            "empty", 32, 32, 22, "video", "head", "disabled",
+            "source_track", 0, 15, 2, 1, 30,
+        )
+    except ValueError as exc:
+        assert "scene prompt or shared prompt" in str(exc)
+    else:
+        raise AssertionError("plan accepted an empty scene and shared prompt")
     numeric_seed_plan = chain._normalize_plan(
         '{"shots":[{"prompt":"seed test","seed":18446744073709551615}]}',
         "numeric_seed", 32, 32, 22, "video", "head", "disabled",
@@ -168,7 +194,7 @@ def main():
         assert "only strings" in str(exc)
     else:
         raise AssertionError("prompt line array accepted a non-string item")
-    print("prompts: string arrays become real newlines; invalid lines rejected")
+    print("prompts: multiline and shared-only scenes pass; fully empty prompts fail")
 
     # ComfyUI rounds H3's 40 Hz audio grid to the nearest step. Depending on
     # frame length, the decoded stream can land 1/3 step above or below the
