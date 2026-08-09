@@ -204,6 +204,28 @@ def _validate_audio(audio: dict[str, Any], label: str,
     return waveform, sample_rate
 
 
+def _audio_is_silent(waveform: Any) -> bool:
+    if torch is None:
+        return False
+    return float(waveform.detach().abs().max().item()) <= 1e-6
+
+
+def _pad_audio_to_samples(audio: dict[str, Any], samples: int,
+                          label: str) -> dict[str, Any]:
+    waveform, sample_rate = _validate_audio(audio, label)
+    target = int(samples)
+    current = int(waveform.shape[-1])
+    if current >= target:
+        return {"waveform": waveform[..., :target], "sample_rate": sample_rate}
+    shape = list(waveform.shape)
+    shape[-1] = target - current
+    padding = torch.zeros(shape, dtype=waveform.dtype, device=waveform.device)
+    return {
+        "waveform": torch.cat((waveform, padding), dim=-1),
+        "sample_rate": sample_rate,
+    }
+
+
 def _validate_source_audio_hash(compatibility: dict[str, Any],
                                 source_audio: dict[str, Any] | None,
                                 usage: str) -> None:
@@ -231,20 +253,27 @@ def _plan_with_source_audio(plan: dict[str, Any],
             source_audio, "H3 Chain Loop Start source audio")
         required_samples = int(round(
             int(plan["total_delivered_frames"]) / float(FPS) * sample_rate))
+        silent_padding = False
         if int(waveform.shape[-1]) < required_samples:
-            raise ValueError(
-                "H3 Chain Loop Start source audio is too short: it contains %d "
-                "samples at %d Hz, but this plan requires at least %d samples "
-                "for %d delivered frames." %
-                (int(waveform.shape[-1]), sample_rate, required_samples,
-                 int(plan["total_delivered_frames"])))
+            if _audio_is_silent(waveform):
+                silent_padding = True
+            else:
+                raise ValueError(
+                    "H3 Chain Loop Start source audio is too short: it contains %d "
+                    "samples at %d Hz, but this plan requires at least %d samples "
+                    "for %d delivered frames. Only silent placeholder audio is "
+                    "automatically padded." %
+                    (int(waveform.shape[-1]), sample_rate, required_samples,
+                     int(plan["total_delivered_frames"])))
         source_hash = _audio_fingerprint(source_audio)
     else:
         source_hash = "none"
+        silent_padding = False
     prepared = dict(plan)
     prepared["base_plan_hash"] = plan["plan_hash"]
     prepared["compatibility"] = dict(plan["compatibility"])
     prepared["compatibility"]["source_audio_hash"] = source_hash
+    prepared["compatibility"]["source_audio_silent_padding"] = silent_padding
     prepared["plan_hash"] = _fingerprint({
         "base_plan_hash": plan["plan_hash"],
         "source_audio_hash": source_hash,
@@ -727,13 +756,21 @@ def _initial_state(plan: dict[str, Any], start_clip: int) -> dict[str, Any]:
 
 
 def _slice_audio(audio: dict[str, Any], start_seconds: float,
-                 duration_seconds: float) -> dict[str, Any]:
+                 duration_seconds: float,
+                 pad_silence: bool = False) -> dict[str, Any]:
     waveform, sample_rate = _validate_audio(audio, "H3 source audio")
     total = int(waveform.shape[-1])
     start = max(0, int(round(float(start_seconds) * sample_rate)))
     end = max(start + 1, int(round(
         (float(start_seconds) + float(duration_seconds)) * sample_rate)))
     wanted = end - start
+    if pad_silence and end > total:
+        padded = _pad_audio_to_samples(
+            audio, end, "H3 silent placeholder audio")
+        return {
+            "waveform": padded["waveform"][..., start:end],
+            "sample_rate": sample_rate,
+        }
     if start >= total:
         raise ValueError(
             "H3 source audio ends at %.3fs, before this clip's %.3fs start." %
@@ -915,6 +952,8 @@ class MiniMaxH3ChainLoopStart:
                                   len(prepared_plan["shots"]))
         if state.get("resumed_from"):
             status += "; resumed from clip %d" % state["resumed_from"]
+        if prepared_plan["compatibility"].get("source_audio_silent_padding"):
+            status += "; silent source audio will be padded to the plan duration"
         return ("h3_chain", state, status)
 
 
@@ -953,7 +992,9 @@ class MiniMaxH3ChainCurrent:
                 plan["compatibility"], source_audio, "H3 Chain Current Shot")
             audio_slice = _slice_audio(
                 source_audio, shot["audio_start_seconds"],
-                shot["audio_duration_seconds"])
+                shot["audio_duration_seconds"],
+                pad_silence=bool(plan["compatibility"].get(
+                    "source_audio_silent_padding")))
         status = ("clip %d/%d %s; raw=%df delivered=%df; song %.3f..%.3fs; "
                   "seed=%d" %
                   (index, len(plan["shots"]), shot["id"], shot["raw_frames"],
@@ -1805,12 +1846,19 @@ class MiniMaxH3ChainAssemble:
                 int(manifest["total_delivered_frames"]) /
                 float(FPS) * sample_rate))
             if int(waveform.shape[-1]) < required_samples:
-                raise ValueError(
-                    "H3 Chain Assemble source audio has %d samples; at least "
-                    "%d are required for %d video frames." %
-                    (int(waveform.shape[-1]), required_samples,
-                     int(manifest["total_delivered_frames"])))
-            audio = source_audio
+                if manifest["compatibility"].get(
+                        "source_audio_silent_padding") and _audio_is_silent(waveform):
+                    audio = _pad_audio_to_samples(
+                        source_audio, required_samples,
+                        "H3 Chain Assemble silent placeholder audio")
+                else:
+                    raise ValueError(
+                        "H3 Chain Assemble source audio has %d samples; at least "
+                        "%d are required for %d video frames." %
+                        (int(waveform.shape[-1]), required_samples,
+                         int(manifest["total_delivered_frames"])))
+            else:
+                audio = source_audio
         elif selected == "generated":
             audio = _generated_audio(manifest)
         elif selected != "none":

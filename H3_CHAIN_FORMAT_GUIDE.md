@@ -415,6 +415,8 @@ Recommended for a music video driven by one song.
 - Motion Context carries picture context only.
 - Assemble muxes the original source track over the stitched video.
 - The song must be at least as long as the total delivered video.
+- A genuinely silent placeholder may be shorter; Loop Start detects it and
+  zero-pads scene slices and final assembly to the required duration.
 - The waveform is hashed; changing or miswiring the song is rejected.
 
 ### `generated_audio`
@@ -517,5 +519,5 @@ node, so the chain cannot inspect them directly. Record them in
 | Continuation is too short | Make its raw length greater than `context_length`; every non-final scene must also deliver enough frames for the next context. |
 | Unexpected scene duration | Remember that seconds round up and later `head` clips lose the repeated context after trimming. Inspect Current Shot's `raw` and `delivered` status. |
 | Resume rejected | Restore the prior completed-scene settings and source track, or start a new run from clip 1 with a new `run_name`. |
-| Source audio too short | Use a longer song, shorten the plan, or choose a non-source audio mode. |
+| Source audio too short | Use a longer song, shorten the plan, or choose a non-source audio mode. Truly silent placeholder audio is padded automatically; non-silent audio is never padded. |
 | Final audio/video drift | Wire both decoded streams through Motion Context Trim and leave `match_tail` enabled. It truncates excess audio or zero-pads a fractional-step shortage. |

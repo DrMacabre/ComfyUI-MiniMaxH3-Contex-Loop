@@ -314,7 +314,8 @@ Assemble without sampling the last clip again.
 
 - `source_track`: Current Shot slices the uploaded song for every Ref2VA clip;
   Motion Context carries video only; Assemble muxes the original song. This is
-  the recommended music-video mode.
+  the recommended music-video mode. Real source audio must cover the full plan;
+  a short genuinely silent placeholder is detected and zero-padded safely.
 - `generated_audio`: no source reference is needed; Chain Context carries the
   previous raw audio latent on the timeline and Assemble concatenates the
   checkpointed generated audio. Segment + Checkpoint requires trimmed decoded

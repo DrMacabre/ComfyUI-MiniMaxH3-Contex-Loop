@@ -394,17 +394,29 @@ def main():
             else:
                 raise AssertionError("Current Shot accepted a different source song")
             short_source = audio_for_frames(4)
+            short_started = chain.MiniMaxH3ChainLoopStart().start(
+                plan, 1, short_source)
+            assert short_started[1]["plan"]["compatibility"][
+                "source_audio_silent_padding"]
+            short_current = chain.MiniMaxH3ChainCurrent().current(
+                short_started[1], short_source)
+            assert int(short_current[12]["waveform"].shape[-1]) == round(
+                5 / 24 * 8000)
+            assert not torch.count_nonzero(short_current[12]["waveform"])
+            short_non_silent = audio_for_frames(4)
+            short_non_silent["waveform"][..., 0] = 0.25
             try:
-                chain.MiniMaxH3ChainLoopStart().start(plan, 1, short_source)
+                chain.MiniMaxH3ChainLoopStart().start(
+                    plan, 1, short_non_silent)
             except ValueError as exc:
-                assert "too short" in str(exc)
+                assert "Only silent placeholder audio" in str(exc)
             else:
-                raise AssertionError("Loop Start accepted a short source song")
+                raise AssertionError("Loop Start accepted a short non-silent song")
             conditioning = [["cond", {}]]
             bypass = chain.MiniMaxH3ChainContext().apply(
                 started[1], conditioning, None, av_latent())
             assert bypass == (conditioning, 0, False)
-            print("current/context: source window exact; clip 1 bypasses context")
+            print("current/context: source window exact; short silence pads safely")
             saver = chain.MiniMaxH3ChainSegmentSave()
             generated_state = chain._initial_state(
                 chain._plan_with_source_audio(before_plan, None), 1)
@@ -756,6 +768,14 @@ def main():
                 "-of", "default=nw=1:nk=1", str(source_path),
             ], text=True).strip())
             assert abs(duration - 9 / 24) < 0.05
+            short_silent_manifest = dict(manifest)
+            short_silent_manifest["compatibility"] = dict(
+                short_started[1]["plan"]["compatibility"])
+            short_silent_result = assembler.assemble(
+                short_silent_manifest, "source", "short_silent_final", 96,
+                short_source)
+            short_silent_path = pathlib.Path(short_silent_result["result"][0])
+            assert short_silent_path.is_file() and short_silent_path.stat().st_size > 0
             try:
                 assembler.assemble(
                     manifest, "source", "wrong_source", 96, changed_source)
