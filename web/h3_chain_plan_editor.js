@@ -21,7 +21,7 @@ import {
 // # dialogue interactions are inspired by nkxx188/ComfyUI-MiniMaxH3-Easy,
 // distributed under the MIT License. See THIRD_PARTY_NOTICES.md.
 
-const EXTENSION = "h3_motion_context.chain_plan_editor";
+const EXTENSION = "minimax_h3_context_loop.chain_plan_editor";
 const NODE_NAME = "MiniMaxH3ChainPlan";
 const MIN_WIDTH = 700;
 const EDITOR_HEIGHT = 650;
@@ -282,6 +282,7 @@ function mountEditor(node) {
 
     injectStyles();
     const root = element("div", "h3c-editor");
+    root.title = "Build an ordered MiniMax H3 scene plan. Hover individual controls for wiring, timing, and formatting guidance.";
     const state = {
         plan: null,
         advanced: false,
@@ -477,7 +478,7 @@ function mountEditor(node) {
         id.type = "text";
         id.placeholder = `clip_${String(index + 1).padStart(4, "0")}`;
         id.value = shot.id ?? "";
-        id.title = "Unique checkpoint ID";
+        id.title = "Stable scene ID used in checkpoint filenames and resume validation. Keep it unique and avoid changing it after rendering.";
         id.addEventListener("input", () => {
             const previousKey = sceneColorKey(shot, index);
             if (id.value) shot.id = id.value;
@@ -523,6 +524,7 @@ function mountEditor(node) {
 
         const lengthRow = element("div", "h3c-length-row");
         const mode = element("select");
+        mode.title = "Choose whether this scene inherits the plan duration, requests seconds that are rounded up, or specifies an exact H3-valid frame count.";
         for (const [value, label] of [["default", "Plan default"], ["seconds", "Seconds"], ["frames", "Exact frames"]]) {
             const option = element("option", "", label);
             option.value = value;
@@ -541,15 +543,18 @@ function mountEditor(node) {
                 value.step = "0.01";
                 value.value = shot.duration_seconds ?? "";
                 lengthHelp.textContent = "Rounded up to 17k+5.";
+                value.title = "Requested seconds. The backend rounds up to the next H3-valid 17k+5 frame length at 24 fps.";
             } else if (selected === "frames") {
                 value.min = "5";
                 value.max = "3592";
                 value.step = "17";
                 value.value = shot.length ?? shot.frames ?? "";
                 lengthHelp.textContent = "Must satisfy length % 17 = 5.";
+                value.title = "Exact raw generation frames. Valid values satisfy frames % 17 = 5 and range from 5 to 3592.";
             } else {
                 value.value = "";
                 lengthHelp.textContent = "Uses JSON defaults, then node defaults.";
+                value.title = "Disabled because this scene inherits the JSON default duration, then the Plan node default.";
             }
         }
         mode.addEventListener("change", () => {
@@ -574,6 +579,7 @@ function mountEditor(node) {
         const prompt = element("textarea", "h3c-prompt");
         prompt.value = promptValueToText(shot.prompt, `Scene ${index + 1} prompt`);
         prompt.placeholder = "Optional with a shared prompt; otherwise describe this scene…";
+        prompt.title = "Scene-specific action, camera, performance, dialogue, and ending continuity. The shared prompt is automatically prepended; at least one of the two must contain text.";
         prompt.spellcheck = true;
         prompt.addEventListener("input", () => {
             shot.prompt = promptTextToLines(prompt.value);
@@ -583,6 +589,7 @@ function mountEditor(node) {
         const advanced = element("div", "h3c-advanced-fields");
         const steps = numberInput(shot.steps ?? "", {min: "1", max: "10000", step: "1"});
         steps.placeholder = String(state.plan.defaults?.steps ?? widgetValue(node, "default_steps", 20));
+        steps.title = "Optional sampler-step override for only this scene. Leave blank to inherit the JSON default, then the Plan node default.";
         steps.addEventListener("input", () => {
             if (steps.value) shot.steps = Number(steps.value);
             else delete shot.steps;
@@ -593,6 +600,7 @@ function mountEditor(node) {
         seed.inputMode = "numeric";
         seed.placeholder = "Automatic deterministic seed";
         seed.value = shot.seed ?? "";
+        seed.title = "Optional unsigned 64-bit seed for this scene. Leave blank for a stable seed derived from base_seed, scene index, and scene ID.";
         seed.addEventListener("input", () => {
             if (seed.value.trim()) shot.seed = seed.value.trim();
             else delete shot.seed;
@@ -614,6 +622,7 @@ function mountEditor(node) {
         const prefix = element("textarea", "h3c-prefix");
         prefix.value = sharedPrompt(state.plan).text;
         prefix.placeholder = "Identity, wardrobe, style and continuity rules shared by every scene…";
+        prefix.title = "Text automatically prepended to every scene prompt. Put identity, wardrobe, reference definitions, audio rules, style, and global continuity here instead of repeating them.";
         prefix.spellcheck = true;
         prefix.addEventListener("input", () => {
             setSharedPrompt(state.plan, prefix.value);
@@ -630,6 +639,7 @@ function mountEditor(node) {
             min: "0.01", max: String(3592 / 24), step: "0.01",
         });
         defaultDuration.placeholder = String(widgetValue(node, "default_duration_seconds", 15));
+        defaultDuration.title = "Optional JSON-level default duration for scenes that use Plan default. Leave blank to use the Plan node's default_duration_seconds widget.";
         defaultDuration.addEventListener("input", () => {
             if (defaultDuration.value) state.plan.defaults.duration_seconds = Number(defaultDuration.value);
             else delete state.plan.defaults.duration_seconds;
@@ -637,6 +647,7 @@ function mountEditor(node) {
         });
         const defaultSteps = numberInput(state.plan.defaults.steps ?? "", {min: "1", max: "10000", step: "1"});
         defaultSteps.placeholder = String(widgetValue(node, "default_steps", 20));
+        defaultSteps.title = "Optional JSON-level sampler-step default. Leave blank to use the Plan node's default_steps widget.";
         defaultSteps.addEventListener("input", () => {
             if (defaultSteps.value) state.plan.defaults.steps = Number(defaultSteps.value);
             else delete state.plan.defaults.steps;
@@ -675,6 +686,7 @@ function mountEditor(node) {
         const jsonArea = element("textarea", "h3c-json");
         jsonArea.value = planToJson(state.plan);
         jsonArea.spellcheck = false;
+        jsonArea.title = "Canonical plan JSON. Apply JSON replaces the visual editor contents after validation; saving the workflow also serializes this value.";
         const jsonStatus = element("span", "h3c-json-status", "Raw JSON escape hatch");
         const apply = button("Apply JSON", "Validate and load this JSON into the scene editor", () => {
             try {

@@ -65,7 +65,7 @@ except ImportError:
 from .nodes import MiniMaxH3MotionContext, _streams_from_latent
 
 
-_LOG = logging.getLogger("h3_motion_context.chain")
+_LOG = logging.getLogger("minimax_h3_context_loop.chain")
 
 FPS = 24
 PLAN_VERSION = 2
@@ -199,7 +199,7 @@ def _validate_audio(audio: dict[str, Any], label: str,
             raise ValueError(
                 "%s contains %d samples at %d Hz; expected exactly %d samples "
                 "for %d delivered frames at %d fps. Wire decoded audio through "
-                "H3 Motion Context Trim with match_tail enabled." %
+                "MiniMax H3 Contex Loop Trim with match_tail enabled." %
                 (label, samples, sample_rate, expected, int(expected_frames), FPS))
     return waveform, sample_rate
 
@@ -854,43 +854,106 @@ class MiniMaxH3ChainPlan:
         }, indent=2)
         return {
             "required": {
-                "plan_json": ("STRING", {"default": sample, "multiline": True,
-                                           "dynamicPrompts": False}),
-                "run_name": ("STRING", {"default": "h3_chain"}),
+                "plan_json": ("STRING", {
+                    "default": sample, "multiline": True,
+                    "dynamicPrompts": False,
+                    "tooltip": "JSON source for the visual Scene Plan editor. "
+                               "It stores the shared prompt, ordered scenes, "
+                               "optional scene lengths, steps, and seeds. Use "
+                               "Raw JSON in the editor to import or export it."}),
+                "run_name": ("STRING", {
+                    "default": "h3_chain",
+                    "tooltip": "Stable name for this chain's checkpoint folder "
+                               "under ComfyUI output/h3_chain. Keep it unchanged "
+                               "when resuming; change it to start an independent "
+                               "render without reusing old checkpoints."}),
                 "generation_fingerprint": ("STRING", {
                     "default": "",
                     "tooltip": "Change this tag whenever the model, VAE, global "
                                "references, CFG, scheduler, or other external "
                                "generation settings change. It is enforced when "
                                "resuming checkpoints."}),
-                "width": ("INT", {"default": 960, "min": 32, "max": 4096,
-                                    "step": 32}),
-                "height": ("INT", {"default": 544, "min": 32, "max": 4096,
-                                     "step": 32}),
-                "context_length": (list(H3_CONTEXT_LENGTHS), {"default": 22}),
-                "encode_mode": (["video", "frames"], {"default": "video"}),
-                "anchor_mode": (["head", "before"], {"default": "head"}),
-                "crop": (["disabled", "center"], {"default": "disabled"}),
-                "audio_mode": (list(AUDIO_MODES), {"default": "source_track"}),
-                "audio_context_length": ("INT", {"default": 22, "min": 0,
-                                                    "max": 240}),
-                "default_duration_seconds": ("FLOAT", {"default": 15.0,
-                                                         "min": 0.1,
-                                                         "max": MAX_H3_FRAMES / FPS,
-                                                         "step": 0.01}),
-                "default_steps": ("INT", {"default": 20, "min": 1,
-                                            "max": 10000}),
-                "base_seed": ("INT", {"default": 0, "min": 0,
-                                        "max": MAX_SEED}),
-                "segment_crf": ("INT", {"default": 18, "min": 0,
-                                          "max": 51}),
+                "width": ("INT", {
+                    "default": 960, "min": 32, "max": 4096, "step": 32,
+                    "tooltip": "Generation width for every scene. Connect the "
+                               "Plan width output to the stock Ref2VA/I2V node "
+                               "so its latent always matches the plan."}),
+                "height": ("INT", {
+                    "default": 544, "min": 32, "max": 4096, "step": 32,
+                    "tooltip": "Generation height for every scene. Connect the "
+                               "Plan height output to the stock Ref2VA/I2V node "
+                               "so its latent always matches the plan."}),
+                "context_length": (list(H3_CONTEXT_LENGTHS), {
+                    "default": 22,
+                    "tooltip": "Previous-scene frames carried into each "
+                               "continuation. In the recommended head mode they "
+                               "are regenerated at the start, then removed by "
+                               "Trim. Larger values preserve more motion but "
+                               "reduce each scene's new delivered frames."}),
+                "encode_mode": (["video", "frames"], {
+                    "default": "video",
+                    "tooltip": "video encodes the overlap as one motion-bearing "
+                               "clip and is recommended. frames encodes separate "
+                               "still anchors and is heavier."}),
+                "anchor_mode": (["head", "before"], {
+                    "default": "head",
+                    "tooltip": "head places the overlap at the beginning of the "
+                               "new clip and requires Trim; it is the tested "
+                               "default. before uses negative-time anchors and "
+                               "returns no repeated frames."}),
+                "crop": (["disabled", "center"], {
+                    "default": "disabled",
+                    "tooltip": "How saved context frames fit the generation "
+                               "canvas. disabled stretches; center preserves "
+                               "aspect ratio and center-crops."}),
+                "audio_mode": (list(AUDIO_MODES), {
+                    "default": "source_track",
+                    "tooltip": "source_track slices one external track per "
+                               "scene; generated_audio continues H3's generated "
+                               "sound through latent context; "
+                               "source_plus_timeline supplies both the source "
+                               "slice and previous generated-audio context."}),
+                "audio_context_length": ("INT", {
+                    "default": 22, "min": 0, "max": 240,
+                    "tooltip": "Previous generated-audio tail length in video "
+                               "frames. 0 follows context_length. Used only by "
+                               "generated_audio and source_plus_timeline; it is "
+                               "ignored by source_track."}),
+                "default_duration_seconds": ("FLOAT", {
+                    "default": 15.0, "min": 0.1,
+                    "max": MAX_H3_FRAMES / FPS, "step": 0.01,
+                    "tooltip": "Scene duration used when neither the scene nor "
+                               "JSON defaults specify one. It rounds UP to the "
+                               "next H3-valid 17k+5 frame length."}),
+                "default_steps": ("INT", {
+                    "default": 20, "min": 1, "max": 10000,
+                    "tooltip": "Sampler step count emitted for scenes without a "
+                               "per-scene or JSON-default steps value."}),
+                "base_seed": ("INT", {
+                    "default": 0, "min": 0, "max": MAX_SEED,
+                    "tooltip": "Base for deterministic per-scene seeds. A scene "
+                               "with its own seed overrides this derived value."}),
+                "segment_crf": ("INT", {
+                    "default": 18, "min": 0, "max": 51,
+                    "tooltip": "H.264 checkpoint quality: lower is higher "
+                               "quality and larger files. 18 is visually high "
+                               "quality; 0 is lossless and 51 is lowest quality."}),
             }
         }
 
     RETURN_TYPES = (PLAN_TYPE, "STRING", "INT", "INT", "INT")
     RETURN_NAMES = ("plan", "summary", "clip_count", "width", "height")
+    OUTPUT_TOOLTIPS = (
+        "Validated chain plan. Connect it to Loop Start and, for recovery, "
+        "Manifest Load.",
+        "Human-readable scene count, delivered duration, and compatibility "
+        "summary.",
+        "Number of scenes in the plan.",
+        "Validated generation width; connect to the stock H3 conditioning node.",
+        "Validated generation height; connect to the stock H3 conditioning node.",
+    )
     FUNCTION = "build"
-    CATEGORY = "conditioning/minimax/chain"
+    CATEGORY = "conditioning/minimax/contex_loop"
     DESCRIPTION = ("Parse and validate a frame-exact MiniMax H3 shot plan. "
                    "The plan computes valid lengths, overlaps, audio windows, "
                    "seeds, and checkpoint compatibility hashes.")
@@ -915,12 +978,21 @@ class MiniMaxH3ChainLoopStart:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "plan": (PLAN_TYPE,),
-                "start_clip": ("INT", {"default": 1, "min": 1,
-                                         "max": MAX_SHOTS}),
+                "plan": (PLAN_TYPE, {
+                    "tooltip": "Validated output from H3 Chain Plan."}),
+                "start_clip": ("INT", {
+                    "default": 1, "min": 1, "max": MAX_SHOTS,
+                    "tooltip": "Scene to render next. Use 1 for a new chain. "
+                               "A value above 1 loads and validates the saved "
+                               "checkpoint for the preceding scene before "
+                               "resuming."}),
             },
             "optional": {
-                "source_audio": ("AUDIO",),
+                "source_audio": ("AUDIO", {
+                    "tooltip": "Full external soundtrack. Required by "
+                               "source_track and source_plus_timeline. Current "
+                               "Shot slices the exact window for each scene. A "
+                               "short, completely silent placeholder is padded."}),
             },
             "hidden": {
                 "initial_state": (STATE_TYPE,),
@@ -929,8 +1001,14 @@ class MiniMaxH3ChainLoopStart:
 
     RETURN_TYPES = (FLOW_TYPE, STATE_TYPE, "STRING")
     RETURN_NAMES = ("flow", "state", "status")
+    OUTPUT_TOOLTIPS = (
+        "Recursion control link. Connect directly to H3 Chain Loop End's flow "
+        "input; do not route it through other nodes.",
+        "Current chain state for Current Shot and the recursive body.",
+        "Starting scene, total scene count, and resume/padding status.",
+    )
     FUNCTION = "start"
-    CATEGORY = "conditioning/minimax/chain"
+    CATEGORY = "conditioning/minimax/contex_loop"
     DESCRIPTION = ("Start or resume a sequential H3 chain. start_clip > 1 "
                    "loads and validates the preceding segment checkpoint.")
 
@@ -962,10 +1040,14 @@ class MiniMaxH3ChainCurrent:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "state": (STATE_TYPE,),
+                "state": (STATE_TYPE, {
+                    "tooltip": "Current state from H3 Chain Loop Start."}),
             },
             "optional": {
-                "source_audio": ("AUDIO",),
+                "source_audio": ("AUDIO", {
+                    "tooltip": "The same full source track connected to Loop "
+                               "Start. It is sliced frame-exactly for the current "
+                               "scene in source-track modes."}),
             },
         }
 
@@ -976,8 +1058,29 @@ class MiniMaxH3ChainCurrent:
                     "noise_seed", "length", "steps", "width", "height",
                     "audio_start", "audio_duration", "source_audio_slice",
                     "status")
+    OUTPUT_TOOLTIPS = (
+        "Unchanged current state for Chain Context, Segment Save, Review, and "
+        "Loop End.",
+        "One-based scene number currently being generated.",
+        "Total scenes in the plan.",
+        "Stable scene identifier used in checkpoints and status messages.",
+        "Shared prompt followed by the current scene prompt. Connect to the "
+        "stock H3 conditioning node's prompt input.",
+        "Resolved unsigned 64-bit seed for the current scene. Connect to the "
+        "sampler noise seed.",
+        "H3-valid RAW frame count, including the repeated head overlap on "
+        "continuations. Connect to the stock H3 conditioning node's length.",
+        "Resolved sampler steps for this scene.",
+        "Plan generation width.",
+        "Plan generation height.",
+        "Start time in seconds of this scene's source-track window.",
+        "Raw source-track window duration in seconds.",
+        "Frame-exact current source-audio window for Ref2VA. It is empty in "
+        "generated_audio mode.",
+        "Current scene timing, delivered frames, source window, and seed.",
+    )
     FUNCTION = "current"
-    CATEGORY = "conditioning/minimax/chain"
+    CATEGORY = "conditioning/minimax/contex_loop"
     DESCRIPTION = ("Expose the current shot's prompt, seed, dimensions, valid "
                    "length, steps, and frame-exact source-audio window.")
 
@@ -1013,17 +1116,32 @@ class MiniMaxH3ChainContext:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "state": (STATE_TYPE,),
-                "conditioning": ("CONDITIONING",),
-                "vae": ("VAE",),
-                "latent": ("LATENT",),
+                "state": (STATE_TYPE, {
+                    "tooltip": "Current state from H3 Chain Current Shot."}),
+                "conditioning": ("CONDITIONING", {
+                    "tooltip": "Conditioning from the stock MiniMax H3 "
+                               "Ref2VA/I2V node. Scene 1 passes unchanged; later "
+                               "scenes receive the saved motion context."}),
+                "vae": ("VAE", {
+                    "tooltip": "MiniMax H3 video VAE used to encode saved "
+                               "context frames for continuation scenes."}),
+                "latent": ("LATENT", {
+                    "tooltip": "The CURRENT scene's empty AV latent from the "
+                               "stock H3 conditioning node."}),
             }
         }
 
     RETURN_TYPES = ("CONDITIONING", "INT", "BOOLEAN")
     RETURN_NAMES = ("conditioning", "trim_frames", "is_continuation")
+    OUTPUT_TOOLTIPS = (
+        "Conditioning ready for the H3 guider/sampler: unchanged for scene 1, "
+        "motion-context enhanced thereafter.",
+        "Repeated leading frames to remove after decoding. Connect to "
+        "MiniMax H3 Contex Loop Trim.",
+        "True for resumed/continued scenes, false for the first scene.",
+    )
     FUNCTION = "apply"
-    CATEGORY = "conditioning/minimax/chain"
+    CATEGORY = "conditioning/minimax/contex_loop"
     DESCRIPTION = ("Pass clip 1 through unchanged; apply H3 Motion Context "
                    "automatically to every continuation using loop state.")
 
@@ -1062,20 +1180,36 @@ class MiniMaxH3ChainSegmentSave:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "state": (STATE_TYPE,),
-                "images": ("IMAGE",),
-                "sampled_latent": ("LATENT",),
+                "state": (STATE_TYPE, {
+                    "tooltip": "Current state from H3 Chain Current Shot."}),
+                "images": ("IMAGE", {
+                    "tooltip": "Delivered images AFTER MiniMax H3 Contex "
+                               "Loop Trim. "
+                               "The frame count must exactly match this scene's "
+                               "planned delivered length."}),
+                "sampled_latent": ("LATENT", {
+                    "tooltip": "Raw sampler output for the current scene, "
+                               "before VAE decoding. Its compact AV streams are "
+                               "saved for checkpoint resume and audio context."}),
             },
             "optional": {
-                "audio": ("AUDIO",),
+                "audio": ("AUDIO", {
+                    "tooltip": "Delivered decoded audio AFTER MiniMax H3 "
+                               "Contex Loop Trim with match_tail enabled. "
+                               "Required for "
+                               "generated_audio and synchronized review."}),
             },
         }
 
     RETURN_TYPES = (SEGMENT_TYPE, "STRING")
     RETURN_NAMES = ("segment", "status")
+    OUTPUT_TOOLTIPS = (
+        "Persisted scene record for Review Gate and Loop End.",
+        "Saved scene number, video/checkpoint paths, frame count, and duration.",
+    )
     FUNCTION = "save"
     OUTPUT_NODE = True
-    CATEGORY = "conditioning/minimax/chain"
+    CATEGORY = "conditioning/minimax/contex_loop"
     DESCRIPTION = ("Immediately save one delivered H3 clip as an H.264 segment "
                    "plus a safetensors resume checkpoint.")
 
@@ -1094,14 +1228,14 @@ class MiniMaxH3ChainSegmentSave:
         if actual_frames != expected_frames:
             raise ValueError(
                 "H3 chain clip %d produced %d delivered frames; expected %d. "
-                "Wire decoded images through H3 Motion Context Trim before "
+                "Wire decoded images through MiniMax H3 Contex Loop Trim before "
                 "Segment Save." % (index, actual_frames, expected_frames))
 
         mode = plan["compatibility"]["audio_mode"]
         if mode == "generated_audio" and audio is None:
             raise ValueError(
                 "H3 chain generated_audio mode requires decoded audio on Segment "
-                "Save. Wire it through H3 Motion Context Trim first.")
+                "Save. Wire it through MiniMax H3 Contex Loop Trim first.")
         compact = _compact_latent(sampled_latent)
         context_length = int(plan["compatibility"]["context_length"])
         context_frames = _tensor_cpu_clone(images[-context_length:])
@@ -1293,8 +1427,14 @@ class MiniMaxH3ChainReview:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "state": (STATE_TYPE,),
-                "segment": (SEGMENT_TYPE,),
+                "state": (STATE_TYPE, {
+                    "tooltip": "Current state from H3 Chain Current Shot. It "
+                               "identifies the scene whose saved segment is "
+                               "being reviewed."}),
+                "segment": (SEGMENT_TYPE, {
+                    "tooltip": "Persisted scene output from H3 Chain Segment "
+                               "Save. Saving before review makes every accepted "
+                               "scene recoverable."}),
                 "enabled": ("BOOLEAN", {
                     "default": True,
                     "tooltip": "Pause after every saved segment for approval."}),
@@ -1327,7 +1467,8 @@ class MiniMaxH3ChainReview:
             "optional": {
                 "audio": ("AUDIO", {
                     "tooltip": "Wire frame-exact delivered audio from H3 "
-                               "Motion Context Trim for synchronized review."}),
+                               "MiniMax H3 Contex Loop Trim for synchronized "
+                               "review."}),
                 "source_audio": ("AUDIO", {
                     "tooltip": "Optional full source track used only when partial "
                                "audio source is source."}),
@@ -1340,9 +1481,14 @@ class MiniMaxH3ChainReview:
 
     RETURN_TYPES = (SEGMENT_TYPE, "STRING")
     RETURN_NAMES = ("segment", "status")
+    OUTPUT_TOOLTIPS = (
+        "The approved segment, or the same segment after review is disabled. "
+        "Connect to Loop End.",
+        "Review decision, retry seed, timeout, stop, or partial-assembly status.",
+    )
     FUNCTION = "review"
     OUTPUT_NODE = True
-    CATEGORY = "conditioning/minimax/chain"
+    CATEGORY = "conditioning/minimax/contex_loop"
     DESCRIPTION = ("Pause after a checkpointed H3 segment for synchronized "
                    "video/audio review. Approve, stop, retry an edited scene "
                    "prompt, or reroll its seed from the node UI.")
@@ -1407,7 +1553,8 @@ class MiniMaxH3ChainReview:
             "current_seed": int(shot["seed"]),
         }
         PromptServer.instance.send_sync(
-            "h3_chain_review", payload, PromptServer.instance.client_id)
+            "minimax_h3_context_loop_review", payload,
+            PromptServer.instance.client_id)
 
         if unload_models_while_waiting:
             try:
@@ -1431,7 +1578,7 @@ class MiniMaxH3ChainReview:
                           index, len(plan["shots"]))
             if timed_out:
                 PromptServer.instance.send_sync(
-                    "h3_chain_review_resolved",
+                    "minimax_h3_context_loop_review_resolved",
                     {"token": token, "node_id": payload["node_id"],
                      "action": "timeout_approve", "status": status},
                     PromptServer.instance.client_id)
@@ -1461,7 +1608,7 @@ class MiniMaxH3ChainReview:
             if partial_item is not None:
                 resolved["partial_video"] = partial_item
             PromptServer.instance.send_sync(
-                "h3_chain_review_resolved", resolved,
+                "minimax_h3_context_loop_review_resolved", resolved,
                 PromptServer.instance.client_id)
             return {
                 "ui": {"text": [status]},
@@ -1539,11 +1686,27 @@ class MiniMaxH3ChainLoopEnd:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "flow": (FLOW_TYPE, {"rawLink": True}),
-                "state": (STATE_TYPE,),
-                "images": ("IMAGE",),
-                "sampled_latent": ("LATENT",),
-                "segment": (SEGMENT_TYPE,),
+                "flow": (FLOW_TYPE, {
+                    "rawLink": True,
+                    "tooltip": "Connect DIRECTLY from Loop Start's flow "
+                               "output. This raw link defines the recursive body "
+                               "that Loop End clones for later scenes."}),
+                "state": (STATE_TYPE, {
+                    "tooltip": "Current state from Current Shot. Loop End adds "
+                               "the accepted segment and advances its scene "
+                               "index."}),
+                "images": ("IMAGE", {
+                    "tooltip": "Delivered current-scene images after Motion "
+                               "Context Trim. Their tail becomes the next "
+                               "scene's visual context."}),
+                "sampled_latent": ("LATENT", {
+                    "tooltip": "Current sampler output. Its AV streams become "
+                               "the next scene's generated-audio context when "
+                               "the selected audio mode requires it."}),
+                "segment": (SEGMENT_TYPE, {
+                    "tooltip": "Approved persisted segment from Review Gate, "
+                               "or directly from Segment Save when no review is "
+                               "wanted."}),
             },
             "hidden": {
                 "dynprompt": "DYNPROMPT",
@@ -1554,8 +1717,16 @@ class MiniMaxH3ChainLoopEnd:
     RETURN_TYPES = (MANIFEST_TYPE, "STRING", "IMAGE", "LATENT")
     RETURN_NAMES = ("manifest", "manifest_json", "last_context_frames",
                     "last_context_latent")
+    OUTPUT_TOOLTIPS = (
+        "Completed chain manifest for H3 Chain Assemble. Produced only when "
+        "the final scene is accepted.",
+        "Human-readable JSON form of the completed manifest.",
+        "Delivered tail frames from the final scene for optional chaining into "
+        "another workflow.",
+        "Final sampled H3 AV latent for optional continuation outside this loop.",
+    )
     FUNCTION = "end"
-    CATEGORY = "conditioning/minimax/chain"
+    CATEGORY = "conditioning/minimax/contex_loop"
     DESCRIPTION = ("Finish one persisted clip, carry only its context tail and "
                    "AV latent, then recursively execute the next shot.")
 
@@ -1705,17 +1876,30 @@ class MiniMaxH3ChainManifestLoad:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "plan": (PLAN_TYPE,),
+                "plan": (PLAN_TYPE, {
+                    "tooltip": "The same validated H3 Chain Plan used for the "
+                               "original render. Plan and generation "
+                               "fingerprints are checked against every saved "
+                               "scene."}),
             },
             "optional": {
-                "source_audio": ("AUDIO",),
+                "source_audio": ("AUDIO", {
+                    "tooltip": "The original full source track when the plan "
+                               "uses source_track or source_plus_timeline. Its "
+                               "fingerprint must match the saved checkpoints."}),
             },
         }
 
     RETURN_TYPES = (MANIFEST_TYPE, "STRING", "STRING")
     RETURN_NAMES = ("manifest", "manifest_json", "status")
+    OUTPUT_TOOLTIPS = (
+        "Verified completed manifest reconstructed from saved scene "
+        "checkpoints; connect to H3 Chain Assemble.",
+        "Human-readable JSON form of the reconstructed manifest.",
+        "Number of verified scenes and checkpoint directory used.",
+    )
     FUNCTION = "load"
-    CATEGORY = "conditioning/minimax/chain"
+    CATEGORY = "conditioning/minimax/contex_loop"
     DESCRIPTION = ("Validate every saved clip and rebuild a completed chain "
                    "manifest without rerendering the final clip.")
 
@@ -1802,23 +1986,45 @@ class MiniMaxH3ChainAssemble:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "manifest": (MANIFEST_TYPE,),
+                "manifest": (MANIFEST_TYPE, {
+                    "tooltip": "Completed manifest from Loop End or Manifest "
+                               "Load. Every segment file is verified before "
+                               "joining."}),
                 "audio_source": (["plan", "source", "generated", "none"],
-                                 {"default": "plan"}),
-                "filename": ("STRING", {"default": "final"}),
-                "audio_bitrate": ("INT", {"default": 256, "min": 64,
-                                            "max": 512}),
+                                 {
+                                     "default": "plan",
+                                     "tooltip": "plan follows the plan's audio "
+                                                "mode; source muxes the external "
+                                                "track; generated joins saved "
+                                                "delivered scene audio; none "
+                                                "creates a silent MP4."}),
+                "filename": ("STRING", {
+                    "default": "final",
+                    "tooltip": "Final MP4 basename inside this chain's output "
+                               "folder. The .mp4 extension is added "
+                               "automatically."}),
+                "audio_bitrate": ("INT", {
+                    "default": 256, "min": 64, "max": 512,
+                    "tooltip": "AAC bitrate in kilobits per second for the "
+                               "final mux. It does not re-encode the saved H.264 "
+                               "video segments."}),
             },
             "optional": {
-                "source_audio": ("AUDIO",),
+                "source_audio": ("AUDIO", {
+                    "tooltip": "Full original source track. Required when "
+                               "audio_source resolves to source; it is trimmed "
+                               "or safely silent-padded to the final duration."}),
             },
         }
 
     RETURN_TYPES = ("STRING",)
     RETURN_NAMES = ("video_path",)
+    OUTPUT_TOOLTIPS = (
+        "Absolute path of the assembled final MP4.",
+    )
     FUNCTION = "assemble"
     OUTPUT_NODE = True
-    CATEGORY = "conditioning/minimax/chain"
+    CATEGORY = "conditioning/minimax/contex_loop"
     DESCRIPTION = ("Stream-copy saved H3 segments into one MP4 and mux either "
                    "the original source track or checkpointed generated audio.")
 
@@ -2090,11 +2296,11 @@ async def _list_saved_checkpoints(request):
 if (PromptServer is not None and web is not None and
         getattr(PromptServer, "instance", None) is not None):
     PromptServer.instance.routes.post(
-        "/h3_motion_context/review")(_submit_review_decision)
+        "/minimax_h3_context_loop/review")(_submit_review_decision)
     PromptServer.instance.routes.get(
-        "/h3_motion_context/reviews")(_list_pending_reviews)
+        "/minimax_h3_context_loop/reviews")(_list_pending_reviews)
     PromptServer.instance.routes.get(
-        "/h3_motion_context/checkpoints")(_list_saved_checkpoints)
+        "/minimax_h3_context_loop/checkpoints")(_list_saved_checkpoints)
 
 
 CHAIN_NODE_CLASS_MAPPINGS = {
@@ -2110,13 +2316,13 @@ CHAIN_NODE_CLASS_MAPPINGS = {
 }
 
 CHAIN_NODE_DISPLAY_NAME_MAPPINGS = {
-    "MiniMaxH3ChainPlan": "H3 Chain Plan",
-    "MiniMaxH3ChainLoopStart": "H3 Chain Loop Start",
-    "MiniMaxH3ChainCurrent": "H3 Chain Current Shot",
-    "MiniMaxH3ChainContext": "H3 Chain Context",
-    "MiniMaxH3ChainSegmentSave": "H3 Chain Segment + Checkpoint",
-    "MiniMaxH3ChainReview": "H3 Chain Review Gate",
-    "MiniMaxH3ChainLoopEnd": "H3 Chain Loop End",
-    "MiniMaxH3ChainManifestLoad": "H3 Chain Load Completed Manifest",
-    "MiniMaxH3ChainAssemble": "H3 Chain Assemble",
+    "MiniMaxH3ChainPlan": "MiniMax H3 Contex Loop Plan",
+    "MiniMaxH3ChainLoopStart": "MiniMax H3 Contex Loop Start",
+    "MiniMaxH3ChainCurrent": "MiniMax H3 Contex Loop Current Shot",
+    "MiniMaxH3ChainContext": "MiniMax H3 Contex Loop Context",
+    "MiniMaxH3ChainSegmentSave": "MiniMax H3 Contex Loop Segment + Checkpoint",
+    "MiniMaxH3ChainReview": "MiniMax H3 Contex Loop Review Gate",
+    "MiniMaxH3ChainLoopEnd": "MiniMax H3 Contex Loop End",
+    "MiniMaxH3ChainManifestLoad": "MiniMax H3 Contex Loop Load Manifest",
+    "MiniMaxH3ChainAssemble": "MiniMax H3 Contex Loop Assemble",
 }

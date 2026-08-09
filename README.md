@@ -1,120 +1,97 @@
-# H3 Motion Context
+# ComfyUI MiniMax H3 Contex Loop
 
-Chain MiniMax H3 clips together so that motion **and sound** continue across
-the joins, instead of every clip re-deciding what's happening from a single
-still frame.
+Render an ordered MiniMax H3 scene plan through one recursive ComfyUI sampling
+body. Every accepted scene is checkpointed before the next begins, allowing
+prompt/seed review, rejection, partial assembly, interruption recovery, and
+resume from the first unfinished scene. Motion and optional generated audio
+continue across scene boundaries instead of restarting from a still image.
 
-Generate clip A. Feed its last frames and audio into this node. Generate
-clip B. B picks up exactly where A left off: same motion, same direction and
-speed, and the same audio - not similar audio, the *same waveform*,
-continued. Repeat down a chain as long as you like.
+The spelling **Contex** is the repository's chosen public name:
+`ComfyUI-MiniMaxH3-Contex-Loop`.
 
-This is done with inline, marker-gated runtime patches. No ComfyUI files are
-edited on disk, and importing this node pack does not patch ComfyUI. The first
-`H3 Motion Context` execution validates and activates the hooks; H3 workflows
-that do not use Motion Context remain on stock behavior, including workflows
-queued later in the same ComfyUI process. If a future ComfyUI update changes
-something underneath, the opted-in node refuses to run rather than quietly
-rendering something wrong.
+## Relationship to H3 Motion Context
 
-## How is this different from LTX motion context?
+This repository grew from **NikoDemon80's** original
+[ComfyUI-H3-Motion-Context](https://github.com/NikoDemon80/ComfyUI-H3-Motion-Context),
+whose initial implementation, research, and commit history remain credited
+here. Niko's upstream project continues as the focused manual Motion Context
+pack. This project is the independently namespaced, specialized loop pack.
 
-LTX ships clip-chaining as a built-in feature: you pin frames from the
-previous clip into the latent and the model continues them. H3 has no such
-feature - but it turns out the machinery was already there. H3's keyframe
-system tags frames with a time coordinate and re-injects them at every
-sampling step. The only thing preventing a *run* of consecutive frames was
-a single check in ComfyUI that rejected any keyframe that wasn't the first
-or last frame. Mathematically, the position formula already worked for every
-frame in between. This project lifts that restriction (and verifies its own
-math against ComfyUI's when Motion Context first opts in).
+Both packs may be installed at the same time:
 
-The bigger difference is audio. H3 generates picture and sound together,
-and this carries **both** streams across the join. Getting audio to
-genuinely continue - rather than the model playing a sound-alike - turned
-out to be the hard part, and the fix is the most interesting thing in the
-repo (see "The audio story" below).
+- upstream exclusively owns `MiniMaxH3MotionContext`,
+  `MiniMaxH3MotionContextTrim`, `MiniMaxH3MotionContextSaveLatent`, and
+  `MiniMaxH3MotionContextLoadLatent`;
+- this pack exports the unique `MiniMaxH3LoopTrim` node plus the nine existing
+  `MiniMaxH3Chain*` loop nodes;
+- the internal ComfyUI runtime wrappers vendor upstream's shared marker and
+  ownership ABI. Whichever pack activates first installs the same compatible
+  wrapper; the second recognizes it and stands down instead of wrapping
+  ComfyUI twice; and
+- browser extensions, review events, and HTTP routes also use this pack's own
+  namespace.
+
+The loop remains self-contained; installing upstream is optional. Install
+upstream as well when you want its manual Motion Context, Save Latent, and Load
+Latent workflow. Existing checkpoints remain under
+`output/h3_chains/<run_name>/` and retain their previous format, so the rename
+does not invalidate resumable renders.
+
+The Ref2VA multi-reference/audio compatibility fix and original global-ref
+demonstration were contributed by **seitanism** in the Banodoco MiniMax H3
+seamless-extension thread. The visual editor's quick reference/dialogue ideas
+were inspired by **nkxx188's** ComfyUI-MiniMaxH3-Easy under its MIT license; see
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
 
 ## Install
 
-Drop the folder into `ComfyUI/custom_nodes/` and restart. Merely loading the
-pack only registers its nodes. The first time a workflow executes
-`H3 Motion Context`, watch the console for:
+Clone or place the folder at:
 
-```
-h3_motion_context: interior keyframe anchors enabled
-h3_motion_context: keyframe/ref coexistence enabled
+```text
+ComfyUI/custom_nodes/ComfyUI-MiniMaxH3-Contex-Loop
 ```
 
-If a self-test fails instead, the reason is logged and that opted-in node
-refuses to run. That's deliberate: a loud failure beats a subtly wrong render.
+Restart ComfyUI and hard-refresh the browser. Merely importing the pack only
+registers its nodes and routes. The internal marker-gated patches self-test and
+activate only when `MiniMax H3 Contex Loop Context` executes. They share their
+runtime ABI with Niko's upstream pack; workflows that use neither
+implementation remain unchanged.
 
-## Wiring
+## Loop graph
 
+```text
+Contex Loop Plan -> Loop Start -> Current Shot
+                                  | prompt / seed / length / audio slice
+                                  v
+                       MiniMaxH3ReferenceToVideo
+                                  v
+                         Contex Loop Context
+                                  v
+                       guider / sampler / decode
+                                  v
+                         Contex Loop Trim
+                           |             |
+                           v             v
+                  Segment + Checkpoint -> Review Gate
+                                             |
+                                             v
+                                          Loop End
+                                             | recurse
+                                             v
+                                     next planned scene
+
+Loop End.manifest -> Contex Loop Assemble
 ```
-MiniMaxH3ImageToVideo / MiniMaxH3ReferenceToVideo (or the t2v path)
-  -> H3 Motion Context      <- previous clip's frames + audio
-  -> guider / sampler
-  ...
-  decoded IMAGE + AUDIO
-  -> H3 Motion Context Trim         <- wire trim_frames across
-  -> Create Video / save
-```
 
-Feed `context_frames` the decoded frames of the previous clip. For audio,
-the best source is the previous clip's latent - but note you **cannot**
-wire the sampler's output directly into `context_latent`; ComfyUI will
-flag a circular connection, correctly, because the latent you need is from
-the previous *run*, not the current one. Two helper nodes carry it across
-runs the same way you already carry frames and audio through saved files:
-
-```
-this run:   SamplerCustomAdvanced -> H3 Motion Context Save Latent
-next run:   H3 Motion Context Load Latent -> context_latent
-```
-
-Both nodes have a `clip_index`, and the numbers mean exactly what they
-say: on the Load node, the clip to CONTINUE FROM; on the Save node, the
-clip THIS is. Generating clip 2 from clip 1: Load 1, Save 2. Don't like
-the result? Queue again and change nothing - the retry reloads clip 1 and
-overwrites clip 2's reject. Accept it, bump both numbers, move on. Files
-get the natural names (`clip_00002.safetensors` is clip 2). At the
-default of 0 the loader instead takes the newest file in the folder,
-which is NOT retry-safe - a re-roll loads its own rejected audio - and
-auto-saved files are numbered by RUN, not clip, marked by a trailing
-underscore (`clip_00002_.safetensors`) so indexed loading never confuses
-them for real slots. Leave context unwired for clip 1. The loader can
-also point straight at a specific file, which ignores the index. (Stock Save/Load
-Latent won't work here; it can't handle H3's paired video/audio latent.)
-The loader's output is only for `context_latent`; don't wire it into a
-decode node. The older path - decoded audio into `context_audio` with the
-H3 audio VAE in `audio_vae` - still works and is used when no latent is
-wired; it costs one extra lossy VAE round trip per link (see Limitations).
-Wire the `trim_frames` output into the Trim node so the duplicated head -
-picture and sound together, in sync - comes off before you concatenate.
-
-For **Ref2VA/R2V**, connect the conditioning and latent from the stock
-`MiniMaxH3ReferenceToVideo` node exactly the same way. Motion Context preserves
-its existing image, video, and audio references, then appends the continuation
-audio as the final reference block. This ordering matters: older versions of
-this repo replaced `minimax_refs`, which silently dropped the R2V references,
-and the layout patch rejected the resulting multi-reference audio setup. Both
-paths are now handled inside the Motion Context node; no separate patch script
-or ComfyUI-core edit is required.
-
-The Ref2VA multi-reference/audio compatibility
-[fix](https://discord.com/channels/1076117621407223829/1535700117452226560/1535771676158206032)
-and [six-clip global-ref demo workflow](https://discord.com/channels/1076117621407223829/1535700117452226560/1535771814452793474)
-were contributed by **seitanism** in the Banodoco MiniMax H3
-seamless-extension thread.
-They are included here with attribution; this repo activates the shared
-compatibility behavior inline when Motion Context executes, so users do not
-have to run its external patching script and unrelated H3 workflows stay stock.
+The loop context engine preserves existing Ref2VA image, video, and audio
+references, then appends the previous scene's marked continuation audio block.
+No external patch script or ComfyUI-core edit is required.
 
 ## Automated disk-backed chains
 
-The `H3 Chain` nodes turn a repeated Ref2VA graph into one recursive sampling
-body. They are specialized for MiniMax rather than generic carry-value loop
+The `MiniMax H3 Contex Loop` nodes (internally `MiniMaxH3Chain*`) turn a
+repeated Ref2VA graph into one recursive sampling body. They are specialized
+for MiniMax rather than generic carry-value loop
 nodes: shot lengths are placed on H3's `17k+5` frame grid, source-song windows
 are computed from the delivered frame timeline, clip 1 bypasses Motion Context,
 and every later clip receives the preceding frame tail and optional AV latent.
@@ -133,7 +110,7 @@ H3 Chain Plan -> H3 Chain Loop Start -> H3 Chain Current Shot
                                          v
                               guider / sampler / decode
                                          v
-                               H3 Motion Context Trim
+                               MiniMax H3 Contex Loop Trim
                                   |                |
                                   v                v
                      H3 Chain Segment +       H3 Chain Review Gate
@@ -433,8 +410,8 @@ self-tested on first inline activation; the perceptual results are one person's
 renders.
 
 **ComfyUI's H3 support is young and moving.** The patches depend on the
-current shape of ComfyUI's H3 code. They verify those assumptions when an
-H3 Motion Context path first opts in and shut down loudly if anything changed,
+current shape of ComfyUI's H3 code. They verify those assumptions when a
+Contex Loop Context path first opts in and shut down loudly if anything changed,
 so the failure mode is
 "the node refuses to run after an update," not corrupted output.
 
@@ -459,7 +436,7 @@ sound with `match_tail` on, Spectrum off. That is the configuration every
 Built and verified against ComfyUI master as of early August 2026, while
 H3 support was days old. Registering the pack does not patch ComfyUI's model
 runtime; the math patches self-test against the live ComfyUI code on first
-Motion Context execution, and remain behaviorally gated to its private
+Contex Loop Context execution, and remain behaviorally gated to its private
 conditioning markers. The review routes remain idle until a Review Gate runs.
 An upstream change surfaces as a clear refusal, not a bad render. The repo also
 ships two standalone patch/node tests
@@ -483,12 +460,13 @@ All six should print their checks and finish with a pass line.
 |---|---|
 | `patch_layout.py` | Marker-gated wrapper that lifts the first/last-only keyframe restriction, moves pinned audio onto the clip timeline, and keeps R2V refs aligned. Self-tests on first inline activation. |
 | `patch_payload.py` | Marker-gated wrapper that lets Motion Context video and refs coexist while leaving unmarked H3 payloads stock. |
-| `nodes.py` | The four nodes: Motion Context, Trim, and the latent Save/Load pair. |
+| `nodes.py` | Internal loop context engine and public frame-exact `MiniMaxH3LoopTrim`. The upstream node ids are deliberately not registered. |
 | `chain_nodes.py` | The nine MiniMax-specific plan, recursive loop, review gate, segment/checkpoint, resume/manifest recovery, and assembly nodes. |
 | `web/` | Opt-in H3 Chain Plan editor, audiovisual review gate, H3-loop/KJ preview bridge, and testable cores. |
 | `tests/seam_probe.py` | Measures whether a join's audio is a true continuation, a sound-alike, or drifting. |
 | `tests/` | Standalone patch/node tests plus the CPU chain integration test. |
 
-The `example_workflows/` folder contains both the original compact FL2VA demo
-and seitanism's six-clip Ref2VA/global-reference chain. See its README for the
-additional workflow dependencies.
+The primary workflow in `example_workflows/` is the disk-backed recursive
+Ref2VA loop. Legacy manual demonstrations are retained as credited historical
+references and require NikoDemon80's upstream pack for its original node ids;
+see the folder README.

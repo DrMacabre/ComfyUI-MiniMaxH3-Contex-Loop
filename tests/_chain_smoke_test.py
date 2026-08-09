@@ -118,11 +118,62 @@ def main():
         "MiniMaxH3ChainCurrent", "MiniMaxH3ChainContext",
         "MiniMaxH3ChainSegmentSave", "MiniMaxH3ChainLoopEnd",
         "MiniMaxH3ChainManifestLoad", "MiniMaxH3ChainAssemble",
+        "MiniMaxH3LoopTrim",
     }
     assert required <= set(package.NODE_CLASS_MAPPINGS)
+    upstream_ids = {
+        "MiniMaxH3MotionContext",
+        "MiniMaxH3MotionContextTrim",
+        "MiniMaxH3MotionContextSaveLatent",
+        "MiniMaxH3MotionContextLoadLatent",
+    }
+    assert not upstream_ids.intersection(package.NODE_CLASS_MAPPINGS)
+    layout_patch = sys.modules[package.__name__ + ".patch_layout"]
+    payload_patch = sys.modules[package.__name__ + ".patch_payload"]
+    for module in (layout_patch, payload_patch):
+        assert module.MC_KEY == "motion_context_index"
+        assert module.MC_AUDIO_KEY == "motion_context_audio_end_frame"
+    assert layout_patch.PATCH_MARKER == "_h3_motion_context_layout_patch"
+    assert payload_patch.PATCH_MARKER == "_h3_motion_context_payload_patch"
+    print("coexistence: node ids are disjoint and runtime patch ABI is shared")
     assert package.WEB_DIRECTORY == "./web"
     assert (ROOT / "web" / "h3_chain_plan_editor.js").is_file()
     assert (ROOT / "web" / "h3_chain_plan_core.mjs").is_file()
+    workflow_path = (ROOT / "example_workflows" /
+                     "Looping MiniMax H3 Seamless Chain Global Refs Example.json")
+    workflow = json.loads(workflow_path.read_text(encoding="utf-8"))
+    workflow_types = {node.get("type") for node in workflow["nodes"]}
+    assert "MiniMaxH3LoopTrim" in workflow_types
+    assert not upstream_ids.intersection(workflow_types)
+    loop_nodes = [
+        node for node in workflow["nodes"]
+        if node.get("type") == "MiniMaxH3LoopTrim"
+        or str(node.get("type", "")).startswith("MiniMaxH3Chain")
+    ]
+    assert loop_nodes and all(
+        node.get("properties", {}).get("aux_id") ==
+        "ethanfel/ComfyUI-MiniMaxH3-Contex-Loop"
+        for node in loop_nodes)
+    print("workflow: loop node ids and package metadata use the new namespace")
+
+    # Every public socket/widget should explain its role in the graph, and
+    # every output should describe what it carries. This keeps newly added
+    # controls from silently regressing to opaque ComfyUI labels.
+    for node_name, node_class in package.NODE_CLASS_MAPPINGS.items():
+        schema = node_class.INPUT_TYPES()
+        for section in ("required", "optional"):
+            for input_name, input_spec in schema.get(section, {}).items():
+                options = input_spec[1] if len(input_spec) > 1 else {}
+                assert isinstance(options, dict) and str(
+                    options.get("tooltip", "")).strip(), (
+                        "%s.%s has no tooltip" % (node_name, input_name))
+        output_tooltips = getattr(node_class, "OUTPUT_TOOLTIPS", ())
+        assert len(output_tooltips) == len(node_class.RETURN_TYPES), (
+            "%s output tooltip count is %d; expected %d" %
+            (node_name, len(output_tooltips), len(node_class.RETURN_TYPES)))
+        assert all(str(value).strip() for value in output_tooltips), (
+            "%s has an empty output tooltip" % node_name)
+    print("tooltips: every public input and output is documented")
 
     readable_prompts = chain._normalize_plan(
         json.dumps({
@@ -199,7 +250,7 @@ def main():
     # ComfyUI rounds H3's 40 Hz audio grid to the nearest step. Depending on
     # frame length, the decoded stream can land 1/3 step above or below the
     # exact 24 fps picture duration. Match Tail must frame-lock both cases.
-    trim_node = package.NODE_CLASS_MAPPINGS["MiniMaxH3MotionContextTrim"]()
+    trim_node = package.NODE_CLASS_MAPPINGS["MiniMaxH3LoopTrim"]()
     short_images = torch.zeros((260, 1, 1, 3), dtype=torch.float32)
     short_samples = 346400  # 433 audio steps; exact 260f target is 346667
     short_audio = {
@@ -542,7 +593,7 @@ def main():
                     timeout_result = await asyncio.wait_for(
                         timeout_task, timeout=2.0)
                     assert "timed out" in timeout_result["result"][1]
-                    assert any(event == "h3_chain_review_resolved"
+                    assert any(event == "minimax_h3_context_loop_review_resolved"
                                for event, _payload, _client in sent)
                     assert not chain._PENDING_REVIEWS
                 finally:
@@ -708,7 +759,7 @@ def main():
                     result = await asyncio.wait_for(task, timeout=10.0)
                     assert "partial video" in result["result"][1]
                     resolved = [payload for event, payload, _client in sent
-                                if event == "h3_chain_review_resolved"]
+                                if event == "minimax_h3_context_loop_review_resolved"]
                     assert resolved and resolved[-1]["partial_video"]
                     item = resolved[-1]["partial_video"]
                     partial_path = pathlib.Path(

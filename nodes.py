@@ -58,7 +58,7 @@ try:
 except ImportError:
     torchaudio = None
 
-_LOG = logging.getLogger("h3_motion_context")
+_LOG = logging.getLogger("minimax_h3_context_loop")
 
 FRAME_PER_TOKEN = (1, 4, 4, 4, 4)
 FPS = 24  # H3's native rate; audio latents run at 40 Hz, hence FRAME_RESCALE 5/3
@@ -227,10 +227,23 @@ class MiniMaxH3MotionContext:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "conditioning": ("CONDITIONING",),
-                "vae": ("VAE",),
-                "latent": ("LATENT",),
-                "context_frames": ("IMAGE",),
+                "conditioning": ("CONDITIONING", {
+                    "tooltip": "Conditioning from the stock MiniMax H3 Image "
+                               "to Video or Reference to Video node. Motion "
+                               "Context preserves existing Ref2VA references "
+                               "and appends its continuation data."}),
+                "vae": ("VAE", {
+                    "tooltip": "MiniMax H3 video VAE used to encode the "
+                               "previous clip's context frames."}),
+                "latent": ("LATENT", {
+                    "tooltip": "The NEW clip's empty H3 AV latent from the "
+                               "stock conditioning node. Do not connect the "
+                               "previous sampled latent here; that belongs on "
+                               "the optional context_latent input."}),
+                "context_frames": ("IMAGE", {
+                    "tooltip": "Decoded, delivered frames from the PREVIOUS "
+                               "clip. Supplying the whole clip is safe: only "
+                               "the requested tail is used."}),
                 "context_length": ("INT", {
                     "default": 5, "min": 1, "max": 39,
                     "tooltip": "Frames of the previous clip to carry over. In "
@@ -249,7 +262,12 @@ class MiniMaxH3MotionContext:
                                "come back in the output, so trim them. before: "
                                "negative indices, nothing wasted, but the "
                                "coordinates overlap the text rows."}),
-                "crop": (["disabled", "center"], {"default": "disabled"}),
+                "crop": (["disabled", "center"], {
+                    "default": "disabled",
+                    "tooltip": "How context frames are fitted to the new "
+                               "latent canvas. disabled stretches to the "
+                               "target size; center preserves aspect ratio "
+                               "and center-crops."}),
                 "audio_context_length": ("INT", {
                     "default": 22, "min": 0, "max": 240,
                     "tooltip": "Frames of tail audio to pin, independent of the "
@@ -293,6 +311,12 @@ class MiniMaxH3MotionContext:
 
     RETURN_TYPES = ("CONDITIONING", "INT")
     RETURN_NAMES = ("conditioning", "trim_frames")
+    OUTPUT_TOOLTIPS = (
+        "Conditioning with the previous clip's motion and optional timeline "
+        "audio appended. Connect this to the guider/sampler path.",
+        "Number of pinned leading frames reproduced in head mode. Connect to "
+        "MiniMax H3 Contex Loop Trim; before mode returns 0.",
+    )
     FUNCTION = "apply"
     CATEGORY = "conditioning/minimax"
     DESCRIPTION = ("Pin a run of consecutive frames from a previous clip as "
@@ -463,7 +487,7 @@ class MiniMaxH3MotionContext:
         return (out, trim)
 
 
-class MiniMaxH3MotionContextTrim:
+class MiniMaxH3LoopTrim:
     """Drop the pinned head off a decoded clip, picture and sound together.
 
     The pinned frames occupy the start of the delivered timeline, so they
@@ -491,8 +515,14 @@ class MiniMaxH3MotionContextTrim:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "images": ("IMAGE",),
-                "trim_frames": ("INT", {"default": 0, "min": 0, "max": 4096}),
+                "images": ("IMAGE", {
+                    "tooltip": "Decoded images from the CURRENT H3 sample. "
+                               "The leading pinned overlap is removed."}),
+                "trim_frames": ("INT", {
+                    "default": 0, "min": 0, "max": 4096,
+                    "tooltip": "Connect trim_frames from MiniMax H3 Contex "
+                               "Loop Context. In head mode this removes the "
+                               "repeated overlap; before mode supplies 0."}),
             },
             "optional": {
                 "audio": ("AUDIO", {
@@ -515,8 +545,13 @@ class MiniMaxH3MotionContextTrim:
 
     RETURN_TYPES = ("IMAGE", "AUDIO")
     RETURN_NAMES = ("images", "audio")
+    OUTPUT_TOOLTIPS = (
+        "Delivered frames with the repeated leading context removed.",
+        "Audio trimmed by the same duration and, when match_tail is enabled, "
+        "fitted exactly to the delivered image duration.",
+    )
     FUNCTION = "trim"
-    CATEGORY = "conditioning/minimax"
+    CATEGORY = "conditioning/minimax/contex_loop"
     DESCRIPTION = ("Remove the leading pinned frames from a decoded H3 clip, "
                    "trimming picture and sound by the same duration.")
 
@@ -678,6 +713,9 @@ class MiniMaxH3MotionContextSaveLatent:
 
     RETURN_TYPES = ("STRING",)
     RETURN_NAMES = ("latent_path",)
+    OUTPUT_TOOLTIPS = (
+        "Absolute path of the saved H3 AV safetensors checkpoint.",
+    )
     FUNCTION = "save"
     OUTPUT_NODE = True
     CATEGORY = "conditioning/minimax"
@@ -756,6 +794,11 @@ class MiniMaxH3MotionContextLoadLatent:
         }
 
     RETURN_TYPES = ("LATENT",)
+    RETURN_NAMES = ("context_latent",)
+    OUTPUT_TOOLTIPS = (
+        "Saved previous-clip AV latent for Motion Context's context_latent "
+        "input. Do not send it to VAE Decode.",
+    )
     FUNCTION = "load"
     CATEGORY = "conditioning/minimax"
     DESCRIPTION = ("Load a latent saved by H3 Motion Context Save Latent, "
@@ -791,15 +834,13 @@ class MiniMaxH3MotionContextLoadLatent:
         return ({"samples": [data["video"], data["audio"]]},)
 
 
+# The original public Motion Context / Save / Load ids belong to
+# NikoDemon80's upstream pack.  This specialized loop pack keeps its context
+# engine internal and exports only the stricter loop trim under a distinct id,
+# allowing both custom-node folders to be installed at the same time.
 NODE_CLASS_MAPPINGS = {
-    "MiniMaxH3MotionContext": MiniMaxH3MotionContext,
-    "MiniMaxH3MotionContextTrim": MiniMaxH3MotionContextTrim,
-    "MiniMaxH3MotionContextSaveLatent": MiniMaxH3MotionContextSaveLatent,
-    "MiniMaxH3MotionContextLoadLatent": MiniMaxH3MotionContextLoadLatent,
+    "MiniMaxH3LoopTrim": MiniMaxH3LoopTrim,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "MiniMaxH3MotionContext": "H3 Motion Context",
-    "MiniMaxH3MotionContextTrim": "H3 Motion Context Trim",
-    "MiniMaxH3MotionContextSaveLatent": "H3 Motion Context Save Latent",
-    "MiniMaxH3MotionContextLoadLatent": "H3 Motion Context Load Latent",
+    "MiniMaxH3LoopTrim": "MiniMax H3 Contex Loop Trim",
 }

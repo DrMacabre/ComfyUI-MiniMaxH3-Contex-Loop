@@ -1,7 +1,8 @@
 # MiniMax H3 Loop Plan Formatting Guide
 
-This guide describes the JSON accepted by `H3 Chain Plan`, including scene
-lengths, prompts, seeds, steps, audio timing, and resume-safe settings.
+This guide belongs to `ComfyUI-MiniMaxH3-Contex-Loop` and describes the JSON
+accepted by `MiniMax H3 Contex Loop Plan` (`MiniMaxH3ChainPlan`), including
+scene lengths, prompts, seeds, steps, audio timing, and resume-safe settings.
 
 ## Visual editor or raw JSON
 
@@ -264,7 +265,7 @@ Use `length` when exact H3 timing matters. Invalid examples include `120`,
 ### Raw length versus delivered length
 
 With the recommended `anchor_mode: head`, the beginning of every continuation
-contains the previous scene's repeated context. `H3 Motion Context Trim`
+contains the previous scene's repeated context. `MiniMax H3 Contex Loop Trim`
 removes that overlap:
 
 ```text
@@ -395,7 +396,7 @@ ID or moving it to another position changes its derived seed.
 | `width`, `height` | Positive multiples of 32, UI range 32–4096 | `960 × 544` is the supplied long-form workflow setting. |
 | `context_length` | `1`, `5`, `22`, or `39` | Use `22` for the tested balance of continuity and delivered footage. |
 | `encode_mode` | `video` or `frames` | Use `video`. It preserves motion inside the VAE latent and is more efficient. |
-| `anchor_mode` | `head` or `before` | Use `head`; wire `trim_frames` into Motion Context Trim. |
+| `anchor_mode` | `head` or `before` | Use `head`; wire `trim_frames` into MiniMax H3 Contex Loop Trim. |
 | `crop` | `disabled` or `center` | Use `disabled` when references and output already share the intended framing. |
 | `audio_mode` | `source_track`, `generated_audio`, or `source_plus_timeline` | Use `source_track` for music videos. |
 | `audio_context_length` | `0`–`240` frames | In generated-audio modes, `0` follows the video context length; `22` is the tested explicit value. It is unused for video-only context in `source_track`. |
@@ -425,7 +426,7 @@ Recommended for a music video driven by one song.
 - Chain Context carries the preceding H3 audio latent on the timeline.
 - Wire trimmed decoded audio into Segment Save.
 - Assemble concatenates the checkpointed generated audio.
-- Motion Context Trim must keep `match_tail` enabled for exact sample counts.
+- MiniMax H3 Contex Loop Trim must keep `match_tail` enabled for exact sample counts.
 
 ### `source_plus_timeline`
 
@@ -520,4 +521,4 @@ node, so the chain cannot inspect them directly. Record them in
 | Unexpected scene duration | Remember that seconds round up and later `head` clips lose the repeated context after trimming. Inspect Current Shot's `raw` and `delivered` status. |
 | Resume rejected | Restore the prior completed-scene settings and source track, or start a new run from clip 1 with a new `run_name`. |
 | Source audio too short | Use a longer song, shorten the plan, or choose a non-source audio mode. Truly silent placeholder audio is padded automatically; non-silent audio is never padded. |
-| Final audio/video drift | Wire both decoded streams through Motion Context Trim and leave `match_tail` enabled. It truncates excess audio or zero-pads a fractional-step shortage. |
+| Final audio/video drift | Wire both decoded streams through MiniMax H3 Contex Loop Trim and leave `match_tail` enabled. It truncates excess audio or zero-pads a fractional-step shortage. |

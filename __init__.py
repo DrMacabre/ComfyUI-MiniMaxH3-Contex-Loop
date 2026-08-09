@@ -1,10 +1,18 @@
-"""H3 Motion Context.
+"""ComfyUI MiniMax H3 Contex Loop.
 
-Clip chaining for MiniMax H3: pin the tail of the previous clip (picture
-and sound) so the next clip genuinely continues it.
+Disk-backed recursive MiniMax H3 scene loops with frame-exact picture/audio
+continuation, review gates, checkpoint resume, and final assembly.
 
-Registers the nodes without changing ComfyUI's runtime behavior. The Motion
-Context node activates both patches inline on first execution:
+This project continues the looping work that grew from NikoDemon80's original
+ComfyUI-H3-Motion-Context. It intentionally uses distinct public node ids and
+vendors upstream's shared runtime-patch ABI so both packs can be installed
+together without wrapping ComfyUI twice. The
+original Motion Context, Save Latent, and Load Latent ids remain exclusively
+owned by Niko's upstream pack; this pack exports its stricter Loop Trim and the
+specialized H3 Chain nodes.
+
+Registers the loop nodes without changing ComfyUI's runtime behavior. Chain
+Context activates both internal patches inline on first execution:
 
   patch_layout   lifts the first/last-only keyframe anchor restriction,
                  moves pinned audio onto the clip's own timeline, and
@@ -13,11 +21,11 @@ Context node activates both patches inline on first execution:
   patch_payload  stops the refs branch clobbering keyframe cond latents,
                  so pinned video and pinned audio can be used together
 
-Both wrappers are marker-gated, so H3 workflows that do not pass through a
-Motion Context node keep stock behavior even after an opted-in workflow has
-run. If either self-test fails the nodes still load but refuse to run the
-affected path, so an upstream ComfyUI change produces a clear message rather
-than a silently wrong render.
+Both wrappers are marker-gated. Niko's upstream copy and this vendored copy
+recognize the same patch-ownership markers; whichever activates second stands
+down. H3 workflows that use neither pack remain stock. If either self-test
+fails the nodes still load but refuse the affected path, so an upstream
+ComfyUI change produces a clear message rather than a silently wrong render.
 """
 
 from .nodes import (

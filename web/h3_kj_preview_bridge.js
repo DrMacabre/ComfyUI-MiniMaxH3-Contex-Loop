@@ -60,7 +60,7 @@ function resolvePreviewNode(executionId) {
 }
 
 app.registerExtension({
-    name: "h3_motion_context.kj_preview_loop_bridge",
+    name: "minimax_h3_context_loop.kj_preview_loop_bridge",
     setup() {
         api.addEventListener("execution_start", () => executionToDisplay.clear());
         api.addEventListener("executing", (event) => rememberDisplayMapping(event.detail));

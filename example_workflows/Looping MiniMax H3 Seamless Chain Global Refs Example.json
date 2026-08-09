@@ -99,7 +99,7 @@
     },
     {
       "id": 132,
-      "type": "MiniMaxH3MotionContextTrim",
+      "type": "MiniMaxH3LoopTrim",
       "pos": [
         2912,
         -256
@@ -151,9 +151,9 @@
       ],
       "title": "Trim overlap + frame-lock audio",
       "properties": {
-        "aux_id": "NikoDemon80/ComfyUI-H3-Motion-Context",
+        "aux_id": "ethanfel/ComfyUI-MiniMaxH3-Contex-Loop",
         "ver": "15fc6a7bf7b78efb27f33d7eef3818e7ed0e118a",
-        "Node name for S&R": "MiniMaxH3MotionContextTrim"
+        "Node name for S&R": "MiniMaxH3LoopTrim"
       },
       "widgets_values": [
         0,
@@ -216,7 +216,7 @@
       ],
       "title": "SAVE SEGMENT + TRANSACTIONAL CHECKPOINT",
       "properties": {
-        "aux_id": "NikoDemon80/ComfyUI-H3-Motion-Context",
+        "aux_id": "ethanfel/ComfyUI-MiniMaxH3-Contex-Loop",
         "ver": "3a744122ce4cf2a2e611a6f2fd90ac8ec7318070",
         "Node name for S&R": "MiniMaxH3ChainSegmentSave"
       },
@@ -291,7 +291,7 @@
       ],
       "title": "H3 LOOP END — recurse until segment 8",
       "properties": {
-        "aux_id": "NikoDemon80/ComfyUI-H3-Motion-Context",
+        "aux_id": "ethanfel/ComfyUI-MiniMaxH3-Contex-Loop",
         "ver": "3a744122ce4cf2a2e611a6f2fd90ac8ec7318070",
         "Node name for S&R": "MiniMaxH3ChainLoopEnd"
       },
@@ -347,7 +347,7 @@
       ],
       "title": "RECOVERY: LOAD ALL SAVED CLIPS",
       "properties": {
-        "aux_id": "NikoDemon80/ComfyUI-H3-Motion-Context",
+        "aux_id": "ethanfel/ComfyUI-MiniMaxH3-Contex-Loop",
         "ver": "3a744122ce4cf2a2e611a6f2fd90ac8ec7318070",
         "Node name for S&R": "MiniMaxH3ChainManifestLoad"
       },
@@ -391,7 +391,7 @@
       ],
       "title": "RECOVERY: ASSEMBLE OPENING WITHOUT RENDERING",
       "properties": {
-        "aux_id": "NikoDemon80/ComfyUI-H3-Motion-Context",
+        "aux_id": "ethanfel/ComfyUI-MiniMaxH3-Contex-Loop",
         "ver": "3a744122ce4cf2a2e611a6f2fd90ac8ec7318070",
         "Node name for S&R": "MiniMaxH3ChainAssemble"
       },
@@ -708,7 +708,7 @@
       ],
       "title": "H3 LOOP START / RESUME — 8 SEGMENTS",
       "properties": {
-        "aux_id": "NikoDemon80/ComfyUI-H3-Motion-Context",
+        "aux_id": "ethanfel/ComfyUI-MiniMaxH3-Contex-Loop",
         "ver": "3a744122ce4cf2a2e611a6f2fd90ac8ec7318070",
         "Node name for S&R": "MiniMaxH3ChainLoopStart"
       },
@@ -837,7 +837,7 @@
       ],
       "title": "CURRENT SHOT — prompt / seed / timing",
       "properties": {
-        "aux_id": "NikoDemon80/ComfyUI-H3-Motion-Context",
+        "aux_id": "ethanfel/ComfyUI-MiniMaxH3-Contex-Loop",
         "ver": "3a744122ce4cf2a2e611a6f2fd90ac8ec7318070",
         "Node name for S&R": "MiniMaxH3ChainCurrent"
       },
@@ -1042,7 +1042,7 @@
       ],
       "title": "AUTO CONTEXT — clip 1 bypass / continuation",
       "properties": {
-        "aux_id": "NikoDemon80/ComfyUI-H3-Motion-Context",
+        "aux_id": "ethanfel/ComfyUI-MiniMaxH3-Contex-Loop",
         "ver": "3a744122ce4cf2a2e611a6f2fd90ac8ec7318070",
         "Node name for S&R": "MiniMaxH3ChainContext"
       },
@@ -1409,7 +1409,7 @@
       ],
       "title": "ASSEMBLE OPENING — SOURCE SONG",
       "properties": {
-        "aux_id": "NikoDemon80/ComfyUI-H3-Motion-Context",
+        "aux_id": "ethanfel/ComfyUI-MiniMaxH3-Contex-Loop",
         "ver": "3a744122ce4cf2a2e611a6f2fd90ac8ec7318070",
         "Node name for S&R": "MiniMaxH3ChainAssemble"
       },
@@ -1825,7 +1825,7 @@
       ],
       "title": "H3 CHAIN PLAN — TIMED SEGMENTS",
       "properties": {
-        "aux_id": "NikoDemon80/ComfyUI-H3-Motion-Context",
+        "aux_id": "ethanfel/ComfyUI-MiniMaxH3-Contex-Loop",
         "ver": "3a744122ce4cf2a2e611a6f2fd90ac8ec7318070",
         "Node name for S&R": "MiniMaxH3ChainPlan",
         "h3_chain_scene_colors": {}

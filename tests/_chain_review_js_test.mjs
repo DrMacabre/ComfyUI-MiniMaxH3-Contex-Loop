@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import {
     applyReviewEdit,
     checkpointResumeOptions,
@@ -45,5 +46,13 @@ assert.deepEqual(checkpointResumeOptions([
     {savedScene: 2, resumeScene: 3, sceneId: "second",
         video: {filename: "second.mp4"}, partialVideo: null},
 ]);
+
+const reviewSource = fs.readFileSync(
+    new URL("../web/h3_chain_review.js", import.meta.url),
+    "utf8",
+);
+assert.match(reviewSource, /minimax_h3_context_loop\/review/);
+assert.match(reviewSource, /minimax_h3_context_loop_review_resolved/);
+assert.doesNotMatch(reviewSource, /\/h3_motion_context\/review/);
 
 console.log("H3 Chain Review editor helpers: ok");

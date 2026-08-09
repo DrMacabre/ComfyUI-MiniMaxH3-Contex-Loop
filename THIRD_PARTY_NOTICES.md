@@ -1,5 +1,23 @@
 # Third-party notices
 
+## ComfyUI-H3-Motion-Context
+
+This repository grew from the original H3 Motion Context implementation by
+**NikoDemon80**:
+
+https://github.com/NikoDemon80/ComfyUI-H3-Motion-Context
+
+The shared initial implementation and research remain under this repository's
+GPL-3.0 license and are preserved in its Git history. Niko's project owns the
+original `MiniMaxH3MotionContext*` public node ids. This specialized loop pack
+uses separate registrations while vendoring upstream's shared marker and
+patch-ownership ABI, allowing both projects to be installed without registering
+the same nodes or double-wrapping ComfyUI.
+
+`patch_layout.py` and `patch_payload.py` are synchronized byte-for-byte with
+upstream revision `c140ae99b8c3` (`0.2.0`, 2026-08-09). Keeping these two files
+on upstream's ABI is required for safe co-installation.
+
 ## ComfyUI-MiniMaxH3-Easy
 
 The H3 Chain Plan scene editor's quick `@` reference-tag and `#` dialogue-tag
@@ -33,4 +51,3 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
-

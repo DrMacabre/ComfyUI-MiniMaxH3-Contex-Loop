@@ -198,7 +198,7 @@ function prepareResume(reviewNode, nextIndex) {
 
 async function fetchPending() {
     try {
-        const response = await api.fetchApi("/h3_motion_context/reviews");
+        const response = await api.fetchApi("/minimax_h3_context_loop/reviews");
         if (!response.ok) return;
         const body = await response.json();
         for (const review of body.reviews ?? []) routeReview(review);
@@ -219,6 +219,7 @@ function mount(node) {
 
     const root = document.createElement("div");
     root.className = "h3r-root";
+    root.title = "Review each persisted H3 scene with synchronized sound, then approve, retry, reroll, stop, or arm a saved checkpoint for resume.";
     root.addEventListener("mousedown", (event) => event.stopPropagation());
     root.addEventListener("wheel", (event) => event.stopPropagation());
 
@@ -237,16 +238,19 @@ function mount(node) {
     video.controls = true;
     video.preload = "metadata";
     video.playsInline = true;
+    video.title = "Saved delivered scene preview. Review motion, continuity, and synchronized audio before choosing an action.";
 
     const prefix = document.createElement("pre");
     prefix.className = "h3r-prefix";
     prefix.hidden = true;
+    prefix.title = "Shared prompt prepended to every scene. It is shown for context and is not changed by retrying this scene.";
 
     const promptLabel = document.createElement("label");
     promptLabel.className = "h3r-label";
     promptLabel.append("Scene prompt (used when retrying)");
     const prompt = document.createElement("textarea");
     prompt.className = "h3r-prompt";
+    prompt.title = "Edit only the current scene prompt. Retry writes it back into the Scene Plan and regenerates this scene from the same accepted predecessor.";
     promptLabel.append(prompt);
 
     const seedRow = document.createElement("label");
@@ -255,6 +259,7 @@ function mount(node) {
     const seed = document.createElement("input");
     seed.className = "h3r-seed";
     seed.inputMode = "numeric";
+    seed.title = "Unsigned 64-bit seed for the current scene. Edit it before Retry, or use Reroll seed to generate a new value automatically.";
     seedRow.append(seed);
 
     const actions = document.createElement("div");
@@ -264,6 +269,12 @@ function mount(node) {
         button.className = `h3r-button ${className}`;
         button.textContent = label;
         button.type = "button";
+        button.title = {
+            approve: "Accept this saved scene and continue the loop with the next scene.",
+            retry: "Reject this attempt and regenerate the same scene using the edited scene prompt and seed.",
+            reroll: "Reject this attempt, assign a new random seed, and regenerate the same scene with the displayed prompt.",
+            stop: "Accept this scene but stop before the next one. Optionally assemble a partial joined MP4 and arm the next scene for resume.",
+        }[action] ?? "Submit this review decision.";
         button.addEventListener("click", () => submit(action));
         actions.append(button);
         return button;
@@ -286,14 +297,17 @@ function mount(node) {
     resumeRow.className = "h3r-resume-row";
     const resumeSelect = document.createElement("select");
     resumeSelect.className = "h3r-resume-select";
+    resumeSelect.title = "Choose the next scene to render. Its immediately preceding saved checkpoint supplies the visual and AV continuation state.";
     const refreshResume = document.createElement("button");
     refreshResume.type = "button";
     refreshResume.className = "h3r-button";
     refreshResume.textContent = "Refresh";
+    refreshResume.title = "Scan this run's checkpoint folder again and list valid resume positions.";
     const loadResume = document.createElement("button");
     loadResume.type = "button";
     loadResume.className = "h3r-button h3r-approve";
     loadResume.textContent = "Load checkpoint";
+    loadResume.title = "Preview the selected predecessor checkpoint and set H3 Chain Loop Start to the chosen resume scene. Queue the workflow afterward to actually resume.";
     const resumeStatus = document.createElement("div");
     resumeStatus.className = "h3r-resume-status";
     resumeStatus.textContent = "Refresh to discover saved scenes for this run.";
@@ -314,7 +328,7 @@ function mount(node) {
             const context = planResumeContext(node);
             const query = new URLSearchParams({run_name: context.runName});
             const response = await api.fetchApi(
-                `/h3_motion_context/checkpoints?${query.toString()}`,
+                `/minimax_h3_context_loop/checkpoints?${query.toString()}`,
             );
             const body = await response.json();
             if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
@@ -397,7 +411,7 @@ function mount(node) {
             status.className = "h3r-status";
             status.textContent = action === "approve" ? "Sending approval…" :
                 action === "stop" ? "Sending stop decision…" : "Sending retry decision…";
-            const response = await api.fetchApi("/h3_motion_context/review", {
+            const response = await api.fetchApi("/minimax_h3_context_loop/review", {
                 method: "POST",
                 headers: {"Content-Type": "application/json"},
                 body: JSON.stringify({
@@ -492,14 +506,14 @@ function mount(node) {
     setTimeout(refreshResumeOptions, 0);
 }
 
-api.addEventListener("h3_chain_review", (event) => routeReview(event.detail));
-api.addEventListener("h3_chain_review_resolved", (event) => {
+api.addEventListener("minimax_h3_context_loop_review", (event) => routeReview(event.detail));
+api.addEventListener("minimax_h3_context_loop_review_resolved", (event) => {
     const data = event.detail;
     findNodeByQualifiedId(data?.node_id)?._h3ReviewResolvedHandler?.(data);
 });
 
 app.registerExtension({
-    name: "h3_motion_context.chain_review",
+    name: "minimax_h3_context_loop.chain_review",
     async beforeRegisterNodeDef(nodeType, nodeData) {
         if (nodeData.name !== NODE_NAME) return;
         const created = nodeType.prototype.onNodeCreated;
