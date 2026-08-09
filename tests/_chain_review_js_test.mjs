@@ -61,6 +61,8 @@ assert.match(reviewSource, /addEventListener\("status", fetchPending\)/);
 assert.match(reviewSource, /async nodeCreated\(node\)/);
 assert.match(reviewSource, /gates\.length === 1/);
 assert.match(reviewSource, /"pointerdown", "pointerup", "mousedown", "mouseup", "click"/);
+assert.match(reviewSource, /preview_revision/);
+assert.match(reviewSource, /sameToken/);
 assert.doesNotMatch(reviewSource, /\/h3_motion_context\/review/);
 
 console.log("H3 Chain Review editor helpers: ok");

@@ -554,29 +554,44 @@ function mount(node) {
     }
 
     node._h3ReviewHandler = (data) => {
-        if (current?.token === data?.token) return;
-        const remaining = Number.isFinite(Number(data.deadline)) &&
+        const sameToken = Boolean(current?.token) && current.token === data?.token;
+        const previousRevision = Number(current?.preview_revision ?? 0);
+        const incomingRevision = Number(data?.preview_revision ?? 0);
+        if (sameToken && incomingRevision <= previousRevision) return;
+        const remaining = sameToken ? null :
+            Number.isFinite(Number(data.deadline)) &&
             Number.isFinite(Number(data.server_now)) ?
-            Math.max(0, Number(data.deadline) - Number(data.server_now)) : null;
-        current = {
+                Math.max(0, Number(data.deadline) - Number(data.server_now)) : null;
+        current = sameToken ? {
+            ...current,
+            ...data,
+            local_deadline: current.local_deadline,
+        } : {
             ...data,
             local_deadline: remaining == null ? null : Date.now() / 1000 + remaining,
         };
-        root.classList.remove("h3r-busy");
-        setActionsEnabled(true);
+        if (!sameToken) {
+            root.classList.remove("h3r-busy");
+            setActionsEnabled(true);
+        }
         badge.textContent = `clip ${data.clip_index}/${data.clip_count} · ${data.shot_id}`;
         video.src = videoUrl(data.video);
         video.load();
-        prompt.value = data.scene_prompt ?? "";
-        seed.value = data.seed ?? "";
-        prefix.textContent = data.prompt_prefix ? `Shared prompt (unchanged)\n${data.prompt_prefix}` : "";
-        prefix.hidden = !data.prompt_prefix;
-        startCountdown();
-        if (data.play_notification_sound && !notifiedTokens.has(data.token)) {
-            notifiedTokens.add(data.token);
-            playReviewChime().catch((error) => {
-                console.warn("[H3 Chain Review] Browser blocked notification sound:", error);
-            });
+        if (!sameToken) {
+            prompt.value = data.scene_prompt ?? "";
+            seed.value = data.seed ?? "";
+            prefix.textContent = data.prompt_prefix ?
+                `Shared prompt (unchanged)\n${data.prompt_prefix}` : "";
+            prefix.hidden = !data.prompt_prefix;
+            startCountdown();
+            if (data.play_notification_sound && !notifiedTokens.has(data.token)) {
+                notifiedTokens.add(data.token);
+                playReviewChime().catch((error) => {
+                    console.warn("[H3 Chain Review] Browser blocked notification sound:", error);
+                });
+            }
+        } else if (!root.classList.contains("h3r-busy")) {
+            renderWaitingStatus();
         }
     };
 

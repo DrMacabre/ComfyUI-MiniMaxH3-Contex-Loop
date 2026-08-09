@@ -1425,7 +1425,7 @@ def _review_video(plan: dict[str, Any], segment: dict[str, Any],
                 "-c:a", "aac", "-b:a", "192k",
                 "-t", "%.9f" % (expected_frames / float(FPS)),
                 "-movflags", "+faststart", video_tmp,
-            ])
+            ], timeout_seconds=60.0)
             os.replace(video_tmp, review_path)
         finally:
             _safe_unlink(wav_tmp)
@@ -1576,11 +1576,14 @@ class MiniMaxH3ChainReview:
         if PromptServer is None or web is None:
             raise RuntimeError("H3 Chain Review requires ComfyUI's prompt server.")
 
-        # Keep tensor-to-WAV conversion on Comfy's execution thread. Some
-        # PyTorch builds can deadlock when their CPU tensor pools are first
-        # entered from asyncio.to_thread; the short ffmpeg stream-copy is a
-        # predictable boundary before the actual asynchronous wait begins.
-        video, has_audio, warning = _review_video(plan, segment, audio)
+        # Publish the persisted video and pending token BEFORE preparing the
+        # optional audiovisual preview. Firefox/proxy websocket differences
+        # made this ordering bug look like a dead button: a slow or stuck audio
+        # mux meant the browser never received a token at all. Review audio is
+        # a convenience, not part of checkpoint validity, so it must never hold
+        # the gate controls hostage.
+        video, _has_audio, no_audio_warning = _review_video(
+            plan, segment, None)
         shot = plan["shots"][index - 1]
         timeout_seconds = _review_timeout_seconds(
             auto_continue_timeout_minutes)
@@ -1600,8 +1603,11 @@ class MiniMaxH3ChainReview:
             "prompt_prefix": str(plan.get("prompt_prefix") or ""),
             "seed": str(shot["seed"]),
             "video": video,
-            "has_audio": has_audio,
-            "warning": warning,
+            "has_audio": False,
+            "warning": ("Preparing synchronized audio preview…"
+                        if audio is not None else no_audio_warning),
+            "preview_pending": audio is not None,
+            "preview_revision": 0,
             "play_notification_sound": bool(play_notification_sound),
             "unload_models_while_waiting": bool(unload_models_while_waiting),
             "assemble_partial_on_stop": bool(assemble_partial_on_stop),
@@ -1616,8 +1622,34 @@ class MiniMaxH3ChainReview:
             "current_seed": int(shot["seed"]),
         }
         PromptServer.instance.send_sync(
-            "minimax_h3_context_loop_review", payload,
+            "minimax_h3_context_loop_review", dict(payload),
             PromptServer.instance.client_id)
+
+        if audio is not None:
+            # Keep tensor-to-WAV conversion on Comfy's execution thread. Some
+            # PyTorch builds can deadlock when their CPU tensor pools are first
+            # entered from asyncio.to_thread. The token is already public, and
+            # ffmpeg itself is time-bounded below, so failure degrades to a
+            # silent review instead of an unresolvable workflow hang.
+            try:
+                video, has_audio, warning = _review_video(plan, segment, audio)
+            except Exception as exc:
+                _LOG.exception("H3 Chain synchronized review preview failed")
+                has_audio = False
+                warning = (
+                    "Synchronized review audio is unavailable (%s). The saved "
+                    "segment/checkpoint is valid; this review is silent." % exc)
+            payload.update({
+                "video": video,
+                "has_audio": has_audio,
+                "warning": warning,
+                "preview_pending": False,
+                "preview_revision": 1,
+                "server_now": time.time(),
+            })
+            PromptServer.instance.send_sync(
+                "minimax_h3_context_loop_review", dict(payload),
+                PromptServer.instance.client_id)
 
         if unload_models_while_waiting:
             try:
@@ -2050,9 +2082,14 @@ def _validate_manifest(manifest: dict[str, Any]) -> list[dict[str, Any]]:
     return segments
 
 
-def _run_ffmpeg(command: list[str]) -> None:
-    result = subprocess.run(command, stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE, text=True)
+def _run_ffmpeg(command: list[str], timeout_seconds: float | None = None) -> None:
+    try:
+        result = subprocess.run(
+            command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            timeout=timeout_seconds)
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            "ffmpeg timed out after %.1f seconds" % float(timeout_seconds)) from exc
     if result.returncode:
         tail = "\n".join(result.stderr.splitlines()[-20:])
         raise RuntimeError("ffmpeg failed (%d):\n%s" % (result.returncode, tail))

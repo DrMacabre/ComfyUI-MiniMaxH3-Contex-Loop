@@ -592,7 +592,15 @@ def main():
                             break
                         await asyncio.sleep(0.01)
                     assert chain._PENDING_REVIEWS and sent
-                    token = sent[-1][1]["token"]
+                    review_events = [
+                        payload for event, payload, _client in sent
+                        if event == "minimax_h3_context_loop_review"]
+                    assert review_events[0]["preview_pending"]
+                    assert review_events[0]["preview_revision"] == 0
+                    assert not review_events[-1]["preview_pending"]
+                    assert review_events[-1]["preview_revision"] == 1
+                    assert review_events[-1]["has_audio"]
+                    token = review_events[-1]["token"]
 
                     class ApproveRequest:
                         async def json(self):
@@ -616,6 +624,54 @@ def main():
                     assert "timed out" in timeout_result["result"][1]
                     assert any(event == "minimax_h3_context_loop_review_resolved"
                                for event, _payload, _client in sent)
+                    assert not chain._PENDING_REVIEWS
+
+                    # Review muxing is UI-only. Publish the pending token first
+                    # and fall back to a silent, actionable review if audio
+                    # preview preparation fails.
+                    real_review_video = chain._review_video
+
+                    def fail_audio_preview(plan_arg, segment_arg, audio_arg):
+                        if audio_arg is None:
+                            return real_review_video(
+                                plan_arg, segment_arg, audio_arg)
+                        raise RuntimeError("simulated review audio failure")
+
+                    chain._review_video = fail_audio_preview
+                    event_offset = len(sent)
+                    try:
+                        fallback_task = asyncio.create_task(
+                            chain.MiniMaxH3ChainReview().review(
+                                state1, segment1, True, False, 0.0,
+                                False, False, "none",
+                                audio_for_frames(5), unique_id="review-node"))
+                        for _ in range(100):
+                            if chain._PENDING_REVIEWS:
+                                break
+                            await asyncio.sleep(0.01)
+                        assert chain._PENDING_REVIEWS
+                        fallback_events = [
+                            payload for event, payload, _client in sent[event_offset:]
+                            if event == "minimax_h3_context_loop_review"]
+                        assert fallback_events[0]["preview_pending"]
+                        assert not fallback_events[-1]["preview_pending"]
+                        assert not fallback_events[-1]["has_audio"]
+                        assert "review is silent" in fallback_events[-1]["warning"]
+                        fallback_token = fallback_events[-1]["token"]
+
+                        class FallbackApproveRequest:
+                            async def json(self):
+                                return {"token": fallback_token,
+                                        "action": "approve"}
+
+                        fallback_response = await chain._submit_review_decision(
+                            FallbackApproveRequest())
+                        assert fallback_response.status == 200
+                        fallback_result = await asyncio.wait_for(
+                            fallback_task, timeout=5.0)
+                        assert "approved clip" in fallback_result["result"][1]
+                    finally:
+                        chain._review_video = real_review_video
                     assert not chain._PENDING_REVIEWS
                 finally:
                     chain.PromptServer = original_server
@@ -672,7 +728,8 @@ def main():
             approve_cross_thread_review()
             assert chain._review_timeout_seconds(0) == 0
             assert chain._review_timeout_seconds(1.5) == 90
-            print("review: same-loop, cross-thread, and timeout approvals resume")
+            print("review: same-loop, cross-thread, timeout, and silent-preview "
+                  "fallback approvals resume")
 
             revised = chain._plan_with_review_revision(
                 prepared_plan, 2, "Revised second scene.", 999)
