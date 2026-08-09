@@ -179,6 +179,7 @@ The editor provides:
 - a shared prompt for identity, wardrobe, style, and continuity rules;
 - multiline prompt boxes with no visible escaped `\n` text;
 - draggable scene cards with duplicate, delete, and arrow reordering;
+- distinct automatic scene-border colors with persistent per-scene pickers;
 - seconds, exact-frame, or inherited duration controls per scene;
 - live raw/delivered frame and total-runtime calculations using this pack's
   exact H3 round-up and continuation-overlap rules;
@@ -186,6 +187,9 @@ The editor provides:
 - `#` dialogue insertion using MiniMax `<d>...</d>` markup;
 - optional per-scene steps and uint64 seeds; and
 - a raw JSON escape hatch with copy, import, and export.
+
+Scene colors are stored as editor-only node properties. Changing them does not
+alter `plan_json`, generation hashes, rendered output, or resume compatibility.
 
 The `@` reference and `#` dialogue interaction ideas were inspired by
 [ComfyUI-MiniMaxH3-Easy](https://github.com/nkxx188/ComfyUI-MiniMaxH3-Easy)

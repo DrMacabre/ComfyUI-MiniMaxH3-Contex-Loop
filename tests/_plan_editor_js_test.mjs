@@ -3,6 +3,8 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import {
+    AUTO_SCENE_COLORS,
+    automaticSceneColor,
     calculatePlanTiming,
     duplicateShot,
     h3FrameLength,
@@ -14,6 +16,12 @@ import {
     sharedPrompt,
     validateH3Length,
 } from "../web/h3_chain_plan_core.mjs";
+
+assert.equal(AUTO_SCENE_COLORS.length, 12);
+assert.equal(new Set(AUTO_SCENE_COLORS).size, AUTO_SCENE_COLORS.length);
+assert.equal(automaticSceneColor(0), AUTO_SCENE_COLORS[0]);
+assert.equal(automaticSceneColor(12), AUTO_SCENE_COLORS[0]);
+assert.equal(automaticSceneColor(-1), AUTO_SCENE_COLORS.at(-1));
 
 const plan = parsePlanJson(JSON.stringify({
     prompt_prefix: ["Identity.", "", "Wardrobe."],
@@ -98,5 +106,7 @@ assert.match(editorSource, /onGraphConfigured/);
 assert.match(editorSource, /scheduleResponsiveSize\(\)/);
 assert.doesNotMatch(editorSource, /height: \$\{EDITOR_HEIGHT\}px/);
 assert.match(editorSource, /node\.size\?\.\[1\][^\n]+0,/);
+assert.match(editorSource, /h3_chain_scene_colors/);
+assert.match(editorSource, /type = "color"/);
 
 console.log("H3 Chain Plan editor core: parsing, uint64 seeds, timing and edits pass");

@@ -5,6 +5,17 @@ export const FPS = 24;
 export const MAX_SHOTS = 128;
 export const MAX_H3_FRAMES = 3592;
 export const MAX_SEED = 18446744073709551615n;
+export const AUTO_SCENE_COLORS = Object.freeze([
+    "#6ea8fe", "#ffb86b", "#63d69f", "#c493ff",
+    "#ff7fa6", "#55d6e8", "#e6cb65", "#ff7878",
+    "#83c5ff", "#b7db68", "#d991ff", "#72d4c2",
+]);
+
+export function automaticSceneColor(index) {
+    const ordinal = Number.isFinite(Number(index)) ? Math.trunc(Number(index)) : 0;
+    return AUTO_SCENE_COLORS[((ordinal % AUTO_SCENE_COLORS.length)
+        + AUTO_SCENE_COLORS.length) % AUTO_SCENE_COLORS.length];
+}
 
 function clone(value) {
     return JSON.parse(JSON.stringify(value));
@@ -337,4 +348,3 @@ export function formatClock(seconds) {
         ? `${wholeMinutes}:${remainder.toFixed(3).padStart(6, "0")}`
         : `${remainder.toFixed(3)}s`;
 }
-

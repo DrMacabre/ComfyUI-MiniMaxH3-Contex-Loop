@@ -10,7 +10,10 @@ scene prompts as normal multiline text; the editor stores them as readable
 JSON line arrays automatically. Drag scenes to reorder them, duplicate or
 delete cards, and choose inherited duration, seconds, or exact H3 frames. The
 timing label on every card shows raw and delivered frames, while the header
-shows total delivered runtime.
+shows total delivered runtime. Scene cards receive distinct colors
+automatically; use the small header swatch to customize one, or double-click
+the swatch to restore its automatic color. Colors are UI-only and do not alter
+the plan or checkpoint compatibility.
 
 Inside a prompt, type `@` or click **@ Reference** to insert a MiniMax
 `<Picture N>`, `<Video N>`, or `<Audio N>` tag. Select dialogue text and type

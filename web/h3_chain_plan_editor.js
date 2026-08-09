@@ -1,6 +1,7 @@
 import {app} from "/scripts/app.js";
 import {
     MAX_SHOTS,
+    automaticSceneColor,
     calculatePlanTiming,
     duplicateShot,
     formatClock,
@@ -11,6 +12,7 @@ import {
     planToJson,
     promptTextToLines,
     promptValueToText,
+    safeShotId,
     setSharedPrompt,
     sharedPrompt,
 } from "./h3_chain_plan_core.mjs";
@@ -23,6 +25,7 @@ const EXTENSION = "h3_motion_context.chain_plan_editor";
 const NODE_NAME = "MiniMaxH3ChainPlan";
 const MIN_WIDTH = 700;
 const EDITOR_HEIGHT = 650;
+const SCENE_COLOR_PROPERTY = "h3_chain_scene_colors";
 
 function injectStyles() {
     if (document.getElementById("h3-chain-plan-editor-style")) return;
@@ -90,18 +93,32 @@ function injectStyles() {
         .h3c-toolbar { position: sticky; top: -10px; z-index: 4; padding: 7px 0; background: var(--h3c-bg); }
         .h3c-toolbar .h3c-spacer { flex: 1; }
         .h3c-card {
+            --h3c-scene-color: var(--h3c-accent);
             margin-bottom: 9px;
             padding: 8px;
-            border: 1px solid var(--h3c-border);
-            border-left: 3px solid var(--h3c-accent);
+            border: 1px solid color-mix(in srgb, var(--h3c-scene-color) 58%, var(--h3c-border));
+            border-left: 4px solid var(--h3c-scene-color);
             border-radius: 7px;
-            background: var(--h3c-panel);
+            background:
+                linear-gradient(90deg, color-mix(in srgb, var(--h3c-scene-color) 7%, transparent), transparent 140px),
+                var(--h3c-panel);
         }
         .h3c-card.h3c-invalid { border-left-color: #ff6b72; }
         .h3c-card.h3c-drag-over { outline: 2px solid var(--h3c-accent); }
         .h3c-card-head { margin-bottom: 7px; }
         .h3c-drag { cursor: grab; user-select: none; padding: 4px 3px; color: var(--h3c-muted); }
         .h3c-index { min-width: 58px; font-weight: 700; }
+        .h3c-color {
+            width: 23px !important;
+            min-width: 23px !important;
+            height: 23px;
+            padding: 1px !important;
+            border-radius: 50% !important;
+            cursor: pointer;
+        }
+        .h3c-color::-webkit-color-swatch-wrapper { padding: 1px; }
+        .h3c-color::-webkit-color-swatch { border: 0; border-radius: 50%; }
+        .h3c-color::-moz-color-swatch { border: 0; border-radius: 50%; }
         .h3c-id { flex: 1; }
         .h3c-timing { color: var(--h3c-muted); white-space: nowrap; }
         .h3c-length-row { display: grid; grid-template-columns: 115px minmax(120px, 1fr) 190px; gap: 7px; align-items: center; margin-bottom: 7px; }
@@ -192,6 +209,26 @@ function collapseWidget(widget) {
     }
 }
 
+function colorOverrides(node) {
+    node.properties ??= {};
+    const current = node.properties[SCENE_COLOR_PROPERTY];
+    if (!current || typeof current !== "object" || Array.isArray(current)) {
+        node.properties[SCENE_COLOR_PROPERTY] = {};
+    }
+    return node.properties[SCENE_COLOR_PROPERTY];
+}
+
+function sceneColorKey(shot, index) {
+    return safeShotId(shot?.id, `clip_${String(index + 1).padStart(4, "0")}`);
+}
+
+function sceneColor(node, shot, index) {
+    const override = colorOverrides(node)[sceneColorKey(shot, index)];
+    return /^#[0-9a-f]{6}$/i.test(String(override || ""))
+        ? String(override).toLowerCase()
+        : automaticSceneColor(index);
+}
+
 function insertText(textarea, text, selectionOffset = text.length) {
     const start = textarea.selectionStart ?? textarea.value.length;
     const end = textarea.selectionEnd ?? start;
@@ -267,6 +304,14 @@ function mountEditor(node) {
     function graphDirty() {
         node.graph?.setDirtyCanvas?.(true, true);
         app.graph?.setDirtyCanvas?.(true, true);
+    }
+
+    function saveSceneColor(key, value) {
+        const colors = colorOverrides(node);
+        if (value) colors[key] = value.toLowerCase();
+        else delete colors[key];
+        node.properties[SCENE_COLOR_PROPERTY] = {...colors};
+        graphDirty();
     }
 
     function applyResponsiveSize() {
@@ -383,6 +428,7 @@ function mountEditor(node) {
     function renderCard(shot, index) {
         const card = element("section", "h3c-card");
         card.dataset.index = String(index);
+        card.style.setProperty("--h3c-scene-color", sceneColor(node, shot, index));
         card.addEventListener("dragover", (event) => {
             event.preventDefault();
             card.classList.add("h3c-drag-over");
@@ -412,14 +458,37 @@ function mountEditor(node) {
             root.querySelectorAll(".h3c-drag-over").forEach((item) => item.classList.remove("h3c-drag-over"));
         });
         const ordinal = element("span", "h3c-index", `Scene ${index + 1}`);
+        const color = element("input", "h3c-color");
+        color.type = "color";
+        color.value = sceneColor(node, shot, index);
+        color.title = "Scene border color. Double-click to restore the automatic color.";
+        color.setAttribute("aria-label", `Scene ${index + 1} border color`);
+        color.addEventListener("input", () => {
+            saveSceneColor(sceneColorKey(shot, index), color.value);
+            card.style.setProperty("--h3c-scene-color", color.value);
+        });
+        color.addEventListener("dblclick", (event) => {
+            event.preventDefault();
+            saveSceneColor(sceneColorKey(shot, index), null);
+            color.value = automaticSceneColor(index);
+            card.style.setProperty("--h3c-scene-color", color.value);
+        });
         const id = element("input", "h3c-id");
         id.type = "text";
         id.placeholder = `clip_${String(index + 1).padStart(4, "0")}`;
         id.value = shot.id ?? "";
         id.title = "Unique checkpoint ID";
         id.addEventListener("input", () => {
+            const previousKey = sceneColorKey(shot, index);
             if (id.value) shot.id = id.value;
             else delete shot.id;
+            const nextKey = sceneColorKey(shot, index);
+            const colors = colorOverrides(node);
+            if (previousKey !== nextKey && colors[previousKey]) {
+                colors[nextKey] = colors[previousKey];
+                delete colors[previousKey];
+                node.properties[SCENE_COLOR_PROPERTY] = {...colors};
+            }
             syncPlan();
         });
         const timingLabel = element("span", "h3c-timing");
@@ -444,12 +513,13 @@ function mountEditor(node) {
         const remove = button("Delete", "Delete this scene", () => {
             if (state.plan.shots.length <= 1) return;
             if (!window.confirm(`Delete scene ${index + 1}?`)) return;
+            saveSceneColor(sceneColorKey(shot, index), null);
             state.plan.shots.splice(index, 1);
             syncPlan();
             render();
         });
         remove.disabled = state.plan.shots.length <= 1;
-        head.append(drag, ordinal, id, timingLabel, up, down, copy, remove);
+        head.append(drag, color, ordinal, id, timingLabel, up, down, copy, remove);
 
         const lengthRow = element("div", "h3c-length-row");
         const mode = element("select");
