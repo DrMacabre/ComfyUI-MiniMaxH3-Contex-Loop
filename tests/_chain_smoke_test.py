@@ -467,7 +467,7 @@ def main():
                 try:
                     task = asyncio.create_task(
                         chain.MiniMaxH3ChainReview().review(
-                            state1, segment1, True, False,
+                            state1, segment1, True, False, 0.0,
                             audio_for_frames(5), unique_id="review-node"))
                     for _ in range(100):
                         if chain._PENDING_REVIEWS:
@@ -486,11 +486,24 @@ def main():
                     result = await asyncio.wait_for(task, timeout=5.0)
                     assert result["result"][0]["segment"] == segment1["segment"]
                     assert not chain._PENDING_REVIEWS
+
+                    timeout_task = asyncio.create_task(
+                        chain.MiniMaxH3ChainReview().review(
+                            state1, segment1, True, True, 0.001,
+                            audio_for_frames(5), unique_id="review-node"))
+                    timeout_result = await asyncio.wait_for(
+                        timeout_task, timeout=2.0)
+                    assert "timed out" in timeout_result["result"][1]
+                    assert any(event == "h3_chain_review_resolved"
+                               for event, _payload, _client in sent)
+                    assert not chain._PENDING_REVIEWS
                 finally:
                     chain.PromptServer = original_server
 
             asyncio.run(approve_live_review())
-            print("review: live async gate pauses and resumes on approval")
+            assert chain._review_timeout_seconds(0) == 0
+            assert chain._review_timeout_seconds(1.5) == 90
+            print("review: live gate approves manually or after its timeout")
 
             revised = chain._plan_with_review_revision(
                 prepared_plan, 2, "Revised second scene.", 999)

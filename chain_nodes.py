@@ -23,6 +23,7 @@ import re
 import secrets
 import shutil
 import subprocess
+import time
 import uuid
 import wave
 from fractions import Fraction
@@ -1204,6 +1205,13 @@ def _review_display_id(unique_id: Any, dynprompt: Any) -> str:
     return execution_id
 
 
+def _review_timeout_seconds(minutes: Any) -> float:
+    value = float(minutes)
+    if not math.isfinite(value) or value < 0:
+        raise ValueError("H3 review timeout must be a finite non-negative value.")
+    return min(1440.0, value) * 60.0
+
+
 class MiniMaxH3ChainReview:
     @classmethod
     def INPUT_TYPES(cls):
@@ -1214,10 +1222,17 @@ class MiniMaxH3ChainReview:
                 "enabled": ("BOOLEAN", {
                     "default": True,
                     "tooltip": "Pause after every saved segment for approval."}),
-                "unload_models_while_waiting": ("BOOLEAN", {
-                    "default": True,
-                    "tooltip": "Release model weights from VRAM while waiting; "
-                               "the next retry/segment reloads them."}),
+                "play_notification_sound": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Play a browser chime when a segment becomes "
+                               "ready for review."}),
+                "auto_continue_timeout_minutes": ("FLOAT", {
+                    "default": 0.0,
+                    "min": 0.0,
+                    "max": 1440.0,
+                    "step": 0.5,
+                    "tooltip": "Automatically approve and continue after this "
+                               "many minutes. 0 waits indefinitely."}),
             },
             "optional": {
                 "audio": ("AUDIO", {
@@ -1243,8 +1258,8 @@ class MiniMaxH3ChainReview:
     def IS_CHANGED(cls, *args, **kwargs):
         return float("NaN")
 
-    async def review(self, state, segment, enabled,
-                     unload_models_while_waiting, audio=None,
+    async def review(self, state, segment, enabled, play_notification_sound,
+                     auto_continue_timeout_minutes, audio=None,
                      dynprompt=None, unique_id=None):
         plan = state["plan"]
         index = int(state["index"])
@@ -1263,6 +1278,10 @@ class MiniMaxH3ChainReview:
         # predictable boundary before the actual asynchronous wait begins.
         video, has_audio, warning = _review_video(plan, segment, audio)
         shot = plan["shots"][index - 1]
+        timeout_seconds = _review_timeout_seconds(
+            auto_continue_timeout_minutes)
+        server_now = time.time()
+        deadline = server_now + timeout_seconds if timeout_seconds > 0 else None
         token = uuid.uuid4().hex
         loop = asyncio.get_running_loop()
         future = loop.create_future()
@@ -1279,6 +1298,10 @@ class MiniMaxH3ChainReview:
             "video": video,
             "has_audio": has_audio,
             "warning": warning,
+            "play_notification_sound": bool(play_notification_sound),
+            "timeout_seconds": timeout_seconds,
+            "deadline": deadline,
+            "server_now": server_now,
         }
         _PENDING_REVIEWS[token] = {
             "future": future,
@@ -1288,23 +1311,30 @@ class MiniMaxH3ChainReview:
         PromptServer.instance.send_sync(
             "h3_chain_review", payload, PromptServer.instance.client_id)
 
-        if unload_models_while_waiting:
-            try:
-                import comfy.model_management as model_management
-                model_management.unload_all_models()
-                model_management.soft_empty_cache()
-            except Exception as exc:
-                _LOG.warning("H3 Chain Review could not unload models: %s", exc)
-
         try:
-            decision = await future
+            if timeout_seconds > 0:
+                try:
+                    decision = await asyncio.wait_for(
+                        future, timeout=timeout_seconds)
+                except asyncio.TimeoutError:
+                    decision = {"action": "approve", "timed_out": True}
+            else:
+                decision = await future
         finally:
             _PENDING_REVIEWS.pop(token, None)
 
         action = decision["action"]
         if action == "approve":
-            status = "approved clip %d/%d; continuing" % (
-                index, len(plan["shots"]))
+            timed_out = bool(decision.get("timed_out"))
+            status = (("review timed out; auto-approved clip %d/%d; continuing")
+                      if timed_out else ("approved clip %d/%d; continuing")) % (
+                          index, len(plan["shots"]))
+            if timed_out:
+                PromptServer.instance.send_sync(
+                    "h3_chain_review_resolved",
+                    {"token": token, "node_id": payload["node_id"],
+                     "action": "timeout_approve", "status": status},
+                    PromptServer.instance.client_id)
             return {"ui": {"text": [status]}, "result": (segment, status)}
         if action == "stop":
             if ExecutionBlocker is None:
@@ -1793,10 +1823,13 @@ async def _submit_review_decision(request):
 
 
 async def _list_pending_reviews(_request):
-    reviews = [
-        item["public"] for item in _PENDING_REVIEWS.values()
-        if not item["future"].done()
-    ]
+    reviews = []
+    for item in _PENDING_REVIEWS.values():
+        if item["future"].done():
+            continue
+        payload = dict(item["public"])
+        payload["server_now"] = time.time()
+        reviews.append(payload)
     return web.json_response({"reviews": reviews})
 
 

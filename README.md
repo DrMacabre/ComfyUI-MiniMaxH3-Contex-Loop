@@ -174,6 +174,15 @@ the clip with synchronized sound. Its controls provide:
 - **Reroll seed** — retain the edited prompt, choose a new uint64 seed, and retry;
 - **Approve & stop** — keep the checkpoint and end this run for later resume.
 
+`play_notification_sound` is off by default; enable it for a short local browser chime when a review is
+ready. Browsers may require one prior interaction with the ComfyUI page before
+allowing notification audio. `auto_continue_timeout_minutes` shows a live
+countdown and automatically approves the clip when it expires; leave it at
+`0` to wait indefinitely.
+
+To release VRAM for a long break, choose **Approve & stop**, restart or free the
+models after execution ends, then resume from the saved chain checkpoint.
+
 Prompt and seed retries remain at the same clip index and retain only the last
 accepted predecessor as motion/audio context. The rejected artifacts are
 replaced by Segment Save's normal transaction. Runtime edits are also copied

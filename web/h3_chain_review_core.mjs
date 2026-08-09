@@ -25,3 +25,15 @@ export function applyReviewEdit(plan, oneBasedIndex, scenePrompt, seed) {
     plan.shots[index].seed = normalizedSeed;
     return plan;
 }
+
+export function reviewCountdown(deadlineSeconds, nowMilliseconds = Date.now()) {
+    if (deadlineSeconds === null || deadlineSeconds === undefined || deadlineSeconds === "") {
+        return null;
+    }
+    const deadline = Number(deadlineSeconds);
+    if (!Number.isFinite(deadline)) return null;
+    const seconds = Math.max(0, Math.ceil(deadline - Number(nowMilliseconds) / 1000));
+    const minutes = Math.floor(seconds / 60);
+    const remainder = String(seconds % 60).padStart(2, "0");
+    return {seconds, text: `${minutes}:${remainder}`};
+}

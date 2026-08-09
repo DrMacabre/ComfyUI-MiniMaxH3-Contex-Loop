@@ -1,10 +1,51 @@
 import {app} from "/scripts/app.js";
 import {api} from "/scripts/api.js";
 import {parsePlanJson, planToJson} from "./h3_chain_plan_core.mjs";
-import {applyReviewEdit, reviewSeed} from "./h3_chain_review_core.mjs";
+import {applyReviewEdit, reviewCountdown, reviewSeed} from "./h3_chain_review_core.mjs";
 
 const NODE_NAME = "MiniMaxH3ChainReview";
 const PLAN_NAME = "MiniMaxH3ChainPlan";
+const notifiedTokens = new Set();
+let notificationAudioContext = null;
+
+function ensureNotificationAudioContext() {
+    const AudioContext = window.AudioContext ?? window.webkitAudioContext;
+    if (!AudioContext) return null;
+    notificationAudioContext ??= new AudioContext();
+    return notificationAudioContext;
+}
+
+function unlockNotificationAudio() {
+    ensureNotificationAudioContext()?.resume?.().catch(() => {});
+}
+
+// Queueing a workflow is normally the needed user gesture. Prime WebAudio on
+// the first interaction so a much later review notification is not rejected by
+// browser autoplay policy.
+window.addEventListener("pointerdown", unlockNotificationAudio, {once: true, capture: true});
+window.addEventListener("keydown", unlockNotificationAudio, {once: true, capture: true});
+
+async function playReviewChime() {
+    const context = ensureNotificationAudioContext();
+    if (!context) return;
+    if (context.state === "suspended") {
+        await context.resume();
+    }
+    const now = context.currentTime;
+    const gain = context.createGain();
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(0.12, now + 0.015);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.55);
+    gain.connect(context.destination);
+    for (const [frequency, delay] of [[660, 0], [880, 0.16]]) {
+        const oscillator = context.createOscillator();
+        oscillator.type = "sine";
+        oscillator.frequency.value = frequency;
+        oscillator.connect(gain);
+        oscillator.start(now + delay);
+        oscillator.stop(now + delay + 0.28);
+    }
+}
 
 function injectStyles() {
     if (document.getElementById("h3-chain-review-style")) return;
@@ -205,14 +246,45 @@ function mount(node) {
     root.append(head, video, prefix, promptLabel, seedRow, actions, status);
 
     let current = null;
+    let countdownTimer = null;
+
+    function stopCountdown() {
+        if (countdownTimer != null) clearInterval(countdownTimer);
+        countdownTimer = null;
+    }
+
+    function renderWaitingStatus() {
+        if (!current) return;
+        const message = current.warning ||
+            "Review the synchronized picture and sound, then choose an action.";
+        const countdown = reviewCountdown(current.local_deadline);
+        status.className = `h3r-status${current.warning ? " h3r-warning" : ""}`;
+        status.textContent = countdown ?
+            `${message}\nAuto-continue in ${countdown.text}.` : message;
+        if (countdown?.seconds === 0) {
+            root.classList.add("h3r-busy");
+            status.textContent = `${message}\nTimeout reached — continuing…`;
+            stopCountdown();
+        }
+    }
+
+    function startCountdown() {
+        stopCountdown();
+        renderWaitingStatus();
+        if (reviewCountdown(current?.local_deadline)?.seconds > 0) {
+            countdownTimer = setInterval(renderWaitingStatus, 250);
+        }
+    }
+
     async function submit(action) {
         if (!current?.token) return;
         try {
             const normalizedSeed = action === "retry" ? reviewSeed(seed.value) : seed.value;
+            stopCountdown();
             root.classList.add("h3r-busy");
             status.className = "h3r-status";
-            status.textContent = action === "approve" ? "Continuing…" :
-                action === "stop" ? "Stopping at the saved checkpoint…" : "Preparing retry…";
+            status.textContent = action === "approve" ? "Sending approval…" :
+                action === "stop" ? "Sending stop decision…" : "Sending retry decision…";
             const response = await api.fetchApi("/h3_motion_context/review", {
                 method: "POST",
                 headers: {"Content-Type": "application/json"},
@@ -225,7 +297,9 @@ function mount(node) {
             });
             const body = await response.json();
             if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
-            if (action === "retry" || action === "reroll") {
+            if (action === "approve") {
+                status.textContent = "Approval received — workflow resumed.";
+            } else if (action === "retry" || action === "reroll") {
                 seed.value = body.seed;
                 const saved = updatePlan(node, current.clip_index, prompt.value, body.seed);
                 status.textContent = `Retrying scene with seed ${body.seed}.` +
@@ -240,11 +314,20 @@ function mount(node) {
             root.classList.remove("h3r-busy");
             status.className = "h3r-status h3r-warning";
             status.textContent = error.message;
+            if (reviewCountdown(current?.local_deadline)?.seconds > 0) {
+                countdownTimer = setInterval(renderWaitingStatus, 250);
+            }
         }
     }
 
     node._h3ReviewHandler = (data) => {
-        current = data;
+        const remaining = Number.isFinite(Number(data.deadline)) &&
+            Number.isFinite(Number(data.server_now)) ?
+            Math.max(0, Number(data.deadline) - Number(data.server_now)) : null;
+        current = {
+            ...data,
+            local_deadline: remaining == null ? null : Date.now() / 1000 + remaining,
+        };
         root.classList.remove("h3r-busy");
         badge.textContent = `clip ${data.clip_index}/${data.clip_count} · ${data.shot_id}`;
         video.src = videoUrl(data.video);
@@ -253,8 +336,21 @@ function mount(node) {
         seed.value = data.seed ?? "";
         prefix.textContent = data.prompt_prefix ? `Shared prompt (unchanged)\n${data.prompt_prefix}` : "";
         prefix.hidden = !data.prompt_prefix;
-        status.className = `h3r-status${data.warning ? " h3r-warning" : ""}`;
-        status.textContent = data.warning || "Review the synchronized picture and sound, then choose an action.";
+        startCountdown();
+        if (data.play_notification_sound && !notifiedTokens.has(data.token)) {
+            notifiedTokens.add(data.token);
+            playReviewChime().catch((error) => {
+                console.warn("[H3 Chain Review] Browser blocked notification sound:", error);
+            });
+        }
+    };
+
+    node._h3ReviewResolvedHandler = (data) => {
+        if (!current || data?.token !== current.token) return;
+        stopCountdown();
+        root.classList.add("h3r-busy");
+        status.className = "h3r-status";
+        status.textContent = data.status || "Review resolved; continuing…";
     };
 
     const widget = node.addDOMWidget("h3_chain_review", "h3-chain-review", root, {
@@ -263,11 +359,20 @@ function mount(node) {
         getMinHeight: () => 500,
     });
     widget.serialize = false;
+    const removed = node.onRemoved;
+    node.onRemoved = function () {
+        stopCountdown();
+        return removed?.apply(this, arguments);
+    };
     node.setSize?.([Math.max(node.size?.[0] ?? 540, 540), Math.max(node.size?.[1] ?? 650, 650)]);
     setTimeout(fetchPending, 0);
 }
 
 api.addEventListener("h3_chain_review", (event) => routeReview(event.detail));
+api.addEventListener("h3_chain_review_resolved", (event) => {
+    const data = event.detail;
+    findNodeByQualifiedId(data?.node_id)?._h3ReviewResolvedHandler?.(data);
+});
 
 app.registerExtension({
     name: "h3_motion_context.chain_review",
