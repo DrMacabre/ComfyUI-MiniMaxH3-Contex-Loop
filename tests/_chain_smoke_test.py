@@ -14,6 +14,8 @@ import pathlib
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -85,6 +87,7 @@ def main():
         future = asyncio.get_running_loop().create_future()
         chain._PENDING_REVIEWS[token] = {
             "future": future,
+            "loop": asyncio.get_running_loop(),
             "public": {"token": token},
             "current_seed": 7,
         }
@@ -501,9 +504,56 @@ def main():
                     chain.PromptServer = original_server
 
             asyncio.run(approve_live_review())
+
+            def approve_cross_thread_review():
+                sent = []
+                result = []
+
+                class ReviewServerInstance:
+                    client_id = "cross-thread-smoke-client"
+
+                    def send_sync(self, event, payload, client_id):
+                        sent.append((event, payload, client_id))
+
+                class ReviewServer:
+                    instance = ReviewServerInstance()
+
+                original_server = chain.PromptServer
+                chain.PromptServer = ReviewServer
+                try:
+                    def execute_review():
+                        result.append(asyncio.run(
+                            chain.MiniMaxH3ChainReview().review(
+                                state1, segment1, True, False, 0.0,
+                                audio_for_frames(5), unique_id="review-node")))
+
+                    worker = threading.Thread(target=execute_review, daemon=True)
+                    worker.start()
+                    for _ in range(200):
+                        if chain._PENDING_REVIEWS:
+                            break
+                        time.sleep(0.01)
+                    assert chain._PENDING_REVIEWS and sent
+                    token = sent[-1][1]["token"]
+
+                    class ApproveRequest:
+                        async def json(self):
+                            return {"token": token, "action": "approve"}
+
+                    response = asyncio.run(
+                        chain._submit_review_decision(ApproveRequest()))
+                    assert response.status == 200
+                    worker.join(timeout=5.0)
+                    assert not worker.is_alive()
+                    assert result and "approved clip" in result[0]["result"][1]
+                    assert not chain._PENDING_REVIEWS
+                finally:
+                    chain.PromptServer = original_server
+
+            approve_cross_thread_review()
             assert chain._review_timeout_seconds(0) == 0
             assert chain._review_timeout_seconds(1.5) == 90
-            print("review: live gate approves manually or after its timeout")
+            print("review: same-loop, cross-thread, and timeout approvals resume")
 
             revised = chain._plan_with_review_revision(
                 prepared_plan, 2, "Revised second scene.", 999)

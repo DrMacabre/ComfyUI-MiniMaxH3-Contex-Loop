@@ -1212,6 +1212,34 @@ def _review_timeout_seconds(minutes: Any) -> float:
     return min(1440.0, value) * 60.0
 
 
+async def _await_review_decision(future: asyncio.Future,
+                                 timeout_seconds: float) -> dict[str, Any]:
+    """Wait with a heartbeat so cross-thread HTTP decisions always wake up.
+
+    ComfyUI executes prompts on a worker thread and serves HTTP on another
+    asyncio loop. Some loop/selector combinations queue call_soon_threadsafe
+    callbacks without waking an otherwise idle selector. A short shielded wait
+    keeps the execution loop responsive without cancelling its decision future.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout_seconds if timeout_seconds > 0 else None
+    while True:
+        if future.done():
+            return future.result()
+        wait_seconds = 0.25
+        if deadline is not None:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                return {"action": "approve", "timed_out": True}
+            wait_seconds = min(wait_seconds, remaining)
+        try:
+            return await asyncio.wait_for(
+                asyncio.shield(future), timeout=wait_seconds)
+        except asyncio.TimeoutError:
+            if deadline is not None and loop.time() >= deadline:
+                return {"action": "approve", "timed_out": True}
+
+
 class MiniMaxH3ChainReview:
     @classmethod
     def INPUT_TYPES(cls):
@@ -1305,6 +1333,7 @@ class MiniMaxH3ChainReview:
         }
         _PENDING_REVIEWS[token] = {
             "future": future,
+            "loop": loop,
             "public": payload,
             "current_seed": int(shot["seed"]),
         }
@@ -1312,16 +1341,11 @@ class MiniMaxH3ChainReview:
             "h3_chain_review", payload, PromptServer.instance.client_id)
 
         try:
-            if timeout_seconds > 0:
-                try:
-                    decision = await asyncio.wait_for(
-                        future, timeout=timeout_seconds)
-                except asyncio.TimeoutError:
-                    decision = {"action": "approve", "timed_out": True}
-            else:
-                decision = await future
+            decision = await _await_review_decision(future, timeout_seconds)
         finally:
             _PENDING_REVIEWS.pop(token, None)
+            if not future.done():
+                future.cancel()
 
         action = decision["action"]
         if action == "approve":
@@ -1814,7 +1838,16 @@ async def _submit_review_decision(request):
             "seed": seed,
         }
 
-    future.set_result(decision)
+    def resolve_on_execution_loop():
+        if not future.done():
+            future.set_result(decision)
+
+    try:
+        pending["loop"].call_soon_threadsafe(resolve_on_execution_loop)
+    except RuntimeError:
+        return web.json_response(
+            {"error": "This H3 review execution loop is no longer running."},
+            status=409)
     return web.json_response({
         "ok": True,
         "action": decision["action"],
