@@ -136,8 +136,10 @@ H3 Chain Plan -> H3 Chain Loop Start -> H3 Chain Current Shot
                                H3 Motion Context Trim
                                   |                |
                                   v                v
-                     H3 Chain Segment +       H3 Chain Loop End
+                     H3 Chain Segment +       H3 Chain Review Gate
                          Checkpoint  ---------->    |
+                                                   v
+                                            H3 Chain Loop End
                                                    | recurse
                                                    v
                                           next planned clip
@@ -159,6 +161,30 @@ first standalone audio-reference socket. `noise_seed` goes to Random Noise and
 `steps` goes to Basic Scheduler. The sampler's raw output goes to both decode
 nodes, Segment + Checkpoint, and Loop End. Trimmed images go to Segment +
 Checkpoint and Loop End; trimmed audio goes to Segment + Checkpoint.
+
+For human validation after every iteration, insert `H3 Chain Review Gate`
+between Segment + Checkpoint and Loop End, and wire the same frame-exact
+trimmed audio into its optional `audio` input. The checkpoint is committed
+before review begins. The gate then muxes a temporary review MP4, unloads model
+weights from VRAM by default, and waits asynchronously while its node UI plays
+the clip with synchronized sound. Its controls provide:
+
+- **Approve & continue** — accept this clip and render the next scene;
+- **Retry prompt / seed** — edit the scene prompt or seed and replace this clip;
+- **Reroll seed** — retain the edited prompt, choose a new uint64 seed, and retry;
+- **Approve & stop** — keep the checkpoint and end this run for later resume.
+
+Prompt and seed retries remain at the same clip index and retain only the last
+accepted predecessor as motion/audio context. The rejected artifacts are
+replaced by Segment Save's normal transaction. Runtime edits are also copied
+back into the visual Plan editor so saving the workflow preserves them. A
+browser refresh recovers a pending review instead of releasing the gate.
+
+KJNodes' optional `Model Preview Override` is supported inside the recursive
+body. Comfy gives cloned nodes generated execution IDs while KJ's preview
+widget lives on the original canvas ID; this pack bridges those IDs only for
+events originating under an H3 Chain Loop End. Ordinary KJ previews and
+workflows without the H3 loop are unchanged.
 
 The plan is compact JSON. Global prompt text can live in `prompt_prefix`; each
 shot supplies only what changes:
@@ -401,22 +427,25 @@ sound with `match_tail` on, Spectrum off. That is the configuration every
 ## Status and testing
 
 Built and verified against ComfyUI master as of early August 2026, while
-H3 support was days old. Importing the pack is side-effect free; the math
-patches self-test against the live ComfyUI code on first Motion Context
-execution, and remain behaviorally gated to its private conditioning markers.
+H3 support was days old. Registering the pack does not patch ComfyUI's model
+runtime; the math patches self-test against the live ComfyUI code on first
+Motion Context execution, and remain behaviorally gated to its private
+conditioning markers. The review routes remain idle until a Review Gate runs.
 An upstream change surfaces as a clear refusal, not a bad render. The repo also
 ships two standalone patch/node tests
 that run without ComfyUI or a GPU (only numpy needed), plus a CPU chain
-integration test against an adjacent ComfyUI checkout:
+integration test against an adjacent ComfyUI checkout and frontend tests:
 
 ```
 python tests/_mock_harness.py       # patch logic against a faithful stock model
 python tests/_node_smoke_test.py    # the node end to end, R2V refs + save/load
 python tests/_chain_smoke_test.py   # timing, recursion, segments, resume, assemble
 node tests/_plan_editor_js_test.mjs # scene-editor parsing and exact timing
+node tests/_kj_preview_bridge_js_test.mjs # recursive KJ preview ID mapping
+node tests/_chain_review_js_test.mjs # review prompt/uint64 edit handling
 ```
 
-All four should print their checks and finish with a pass line.
+All six should print their checks and finish with a pass line.
 
 ## Files
 
@@ -425,8 +454,8 @@ All four should print their checks and finish with a pass line.
 | `patch_layout.py` | Marker-gated wrapper that lifts the first/last-only keyframe restriction, moves pinned audio onto the clip timeline, and keeps R2V refs aligned. Self-tests on first inline activation. |
 | `patch_payload.py` | Marker-gated wrapper that lets Motion Context video and refs coexist while leaving unmarked H3 payloads stock. |
 | `nodes.py` | The four nodes: Motion Context, Trim, and the latent Save/Load pair. |
-| `chain_nodes.py` | The eight MiniMax-specific plan, recursive loop, segment/checkpoint, resume/manifest recovery, and assembly nodes. |
-| `web/` | Opt-in H3 Chain Plan scene editor and its testable plan/timing core. |
+| `chain_nodes.py` | The nine MiniMax-specific plan, recursive loop, review gate, segment/checkpoint, resume/manifest recovery, and assembly nodes. |
+| `web/` | Opt-in H3 Chain Plan editor, audiovisual review gate, H3-loop/KJ preview bridge, and testable cores. |
 | `tests/seam_probe.py` | Measures whether a join's audio is a true continuation, a sound-alike, or drifting. |
 | `tests/` | Standalone patch/node tests plus the CPU chain integration test. |
 

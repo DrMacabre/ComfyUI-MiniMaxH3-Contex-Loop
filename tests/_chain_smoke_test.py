@@ -7,6 +7,7 @@ safetensors checkpoint, and assembles both source-track and generated-audio
 outputs with ffmpeg.
 """
 
+import asyncio
 import importlib.util
 import json
 import pathlib
@@ -78,6 +79,37 @@ class FakeDynamicPrompt:
 
 def main():
     package, chain = load_package()
+
+    async def review_route_check():
+        token = "review-route-smoke"
+        future = asyncio.get_running_loop().create_future()
+        chain._PENDING_REVIEWS[token] = {
+            "future": future,
+            "public": {"token": token},
+            "current_seed": 7,
+        }
+
+        class Request:
+            async def json(self):
+                return {
+                    "token": token,
+                    "action": "retry",
+                    "scene_prompt": "Edited after review.",
+                    "seed": "18446744073709551615",
+                }
+
+        try:
+            response = await chain._submit_review_decision(Request())
+            assert response.status == 200
+            decision = await future
+            assert decision["action"] == "retry"
+            assert decision["scene_prompt"] == "Edited after review."
+            assert decision["seed"] == 18446744073709551615
+        finally:
+            chain._PENDING_REVIEWS.pop(token, None)
+
+    asyncio.run(review_route_check())
+    print("review: async decision route preserves exact uint64 seeds")
     required = {
         "MiniMaxH3ChainPlan", "MiniMaxH3ChainLoopStart",
         "MiniMaxH3ChainCurrent", "MiniMaxH3ChainContext",
@@ -406,6 +438,71 @@ def main():
             segment1 = replacement
             print("atomic save: interruption preserved old pair; retry switched + cleaned")
 
+            review_item, has_audio, warning = chain._review_video(
+                prepared_plan, segment1, audio_for_frames(5))
+            review_path = pathlib.Path(
+                tempdir, review_item["subfolder"], review_item["filename"])
+            assert has_audio and not warning and review_path.is_file()
+            streams = subprocess.check_output([
+                "ffprobe", "-v", "error", "-show_entries", "stream=codec_type",
+                "-of", "csv=p=0", str(review_path),
+            ], text=True).splitlines()
+            assert "video" in streams and "audio" in streams
+            print("review: persisted segment muxed with frame-exact audio")
+
+            async def approve_live_review():
+                sent = []
+
+                class ReviewServerInstance:
+                    client_id = "smoke-client"
+
+                    def send_sync(self, event, payload, client_id):
+                        sent.append((event, payload, client_id))
+
+                class ReviewServer:
+                    instance = ReviewServerInstance()
+
+                original_server = chain.PromptServer
+                chain.PromptServer = ReviewServer
+                try:
+                    task = asyncio.create_task(
+                        chain.MiniMaxH3ChainReview().review(
+                            state1, segment1, True, False,
+                            audio_for_frames(5), unique_id="review-node"))
+                    for _ in range(100):
+                        if chain._PENDING_REVIEWS:
+                            break
+                        await asyncio.sleep(0.01)
+                    assert chain._PENDING_REVIEWS and sent
+                    token = sent[-1][1]["token"]
+
+                    class ApproveRequest:
+                        async def json(self):
+                            return {"token": token, "action": "approve"}
+
+                    response = await chain._submit_review_decision(
+                        ApproveRequest())
+                    assert response.status == 200
+                    result = await asyncio.wait_for(task, timeout=5.0)
+                    assert result["result"][0]["segment"] == segment1["segment"]
+                    assert not chain._PENDING_REVIEWS
+                finally:
+                    chain.PromptServer = original_server
+
+            asyncio.run(approve_live_review())
+            print("review: live async gate pauses and resumes on approval")
+
+            revised = chain._plan_with_review_revision(
+                prepared_plan, 2, "Revised second scene.", 999)
+            assert revised["base_plan_hash"] == prepared_plan["base_plan_hash"]
+            assert revised["shots"][1]["prompt"] == "Revised second scene."
+            assert revised["shots"][1]["seed"] == 999
+            assert (chain._history_hash(revised, 1) ==
+                    chain._history_hash(prepared_plan, 1))
+            assert (chain._history_hash(revised, 2) !=
+                    chain._history_hash(prepared_plan, 2))
+            print("review: prompt/seed retry preserves accepted predecessor history")
+
             fake_prompt = {
                 "1": {"class_type": "MiniMaxH3ChainLoopStart", "inputs": {
                     "plan": plan, "start_clip": 1, "source_audio": source,
@@ -432,6 +529,26 @@ def main():
             assert cloned_starts[0]["inputs"]["initial_state"]["index"] == 2
             assert all(isinstance(link, list) for link in expanded["result"])
             print("recursion: GraphBuilder cloned the typed H3 body for clip 2")
+
+            retry_segment = dict(segment1)
+            retry_segment["_h3_review_decision"] = {
+                "action": "retry",
+                "scene_prompt": "Try the opening again.",
+                "seed": 1234,
+            }
+            retried = chain.MiniMaxH3ChainLoopEnd().end(
+                ["1", 0], state1, images1, av_latent(), retry_segment,
+                dynprompt=FakeDynamicPrompt(fake_prompt), unique_id="4")
+            retried_starts = [
+                node for node in retried["expand"].values()
+                if node["class_type"] == "MiniMaxH3ChainLoopStart"
+            ]
+            retry_state = retried_starts[0]["inputs"]["initial_state"]
+            assert retry_state["index"] == 1
+            assert retry_state["segments"] == []
+            assert retry_state["plan"]["shots"][0]["seed"] == 1234
+            assert retry_state["plan"]["shots"][0]["prompt"] == "Try the opening again."
+            print("review: rejected clip recurses at the same index")
 
             state2 = chain._initial_state(prepared_plan, 2)
             assert state2["resumed_from"] == 1

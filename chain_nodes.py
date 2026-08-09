@@ -13,12 +13,14 @@ typed MiniMax chain state rather than arbitrary carry sockets.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
 import math
 import os
 import re
+import secrets
 import shutil
 import subprocess
 import uuid
@@ -44,12 +46,20 @@ except ImportError:
     _st_load = _st_save = None
 
 try:
-    from comfy_execution.graph_utils import GraphBuilder, is_link
+    from comfy_execution.graph_utils import GraphBuilder, ExecutionBlocker, is_link
 except ImportError:
     GraphBuilder = None
+    ExecutionBlocker = None
 
     def is_link(value):
         return isinstance(value, list) and len(value) == 2
+
+try:
+    from aiohttp import web
+    from server import PromptServer
+except ImportError:
+    web = None
+    PromptServer = None
 
 from .nodes import MiniMaxH3MotionContext, _streams_from_latent
 
@@ -69,6 +79,8 @@ STATE_TYPE = "H3_CHAIN_STATE"
 FLOW_TYPE = "H3_CHAIN_FLOW"
 SEGMENT_TYPE = "H3_CHAIN_SEGMENT"
 MANIFEST_TYPE = "H3_CHAIN_MANIFEST"
+
+_PENDING_REVIEWS: dict[str, dict[str, Any]] = {}
 
 
 def _canonical_json(value: Any) -> str:
@@ -239,6 +251,48 @@ def _plan_with_source_audio(plan: dict[str, Any],
     return prepared
 
 
+def _plan_with_review_revision(plan: dict[str, Any], index: int,
+                               scene_prompt: str, seed: int) -> dict[str, Any]:
+    """Revise the current scene while preserving the accepted history contract."""
+    index = int(index)
+    if index < 1 or index > len(plan["shots"]):
+        raise ValueError("H3 review revision index is outside the plan.")
+    scene_prompt = str(scene_prompt or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not scene_prompt:
+        raise ValueError("H3 review retry prompt cannot be empty.")
+    seed = int(seed)
+    if seed < 0 or seed > MAX_SEED:
+        raise ValueError("H3 review retry seed is outside the uint64 range.")
+
+    revised = dict(plan)
+    revised["shots"] = [dict(shot) for shot in plan["shots"]]
+    shot = revised["shots"][index - 1]
+    prefix = str(revised.get("prompt_prefix") or "").strip()
+    full_prompt = (prefix + "\n\n" + scene_prompt) if prefix else scene_prompt
+    shot["scene_prompt"] = scene_prompt
+    shot["prompt"] = full_prompt
+    shot["prompt_hash"] = hashlib.sha256(
+        full_prompt.encode("utf-8")).hexdigest()
+    shot["seed"] = seed
+
+    overrides = dict(revised.get("review_overrides") or {})
+    overrides[str(index)] = {
+        "scene_prompt": scene_prompt,
+        "prompt_hash": shot["prompt_hash"],
+        "seed": seed,
+    }
+    revised["review_overrides"] = overrides
+    base_plan_hash = str(revised.get("base_plan_hash") or revised["plan_hash"])
+    source_hash = str(
+        revised.get("compatibility", {}).get("source_audio_hash") or "none")
+    revised["plan_hash"] = _fingerprint({
+        "base_plan_hash": base_plan_hash,
+        "source_audio_hash": source_hash,
+        "review_overrides": overrides,
+    })
+    return revised
+
+
 def _normalize_plan(
     plan_json: str,
     run_name: str,
@@ -322,6 +376,7 @@ def _normalize_plan(
                               "Shot %d (%s) prompt" % (index, shot_id))
         if not prompt:
             raise ValueError("Shot %d (%s) has an empty prompt." % (index, shot_id))
+        scene_prompt = prompt
         if prompt_prefix:
             prompt = prompt_prefix + "\n\n" + prompt
 
@@ -365,6 +420,9 @@ def _normalize_plan(
         shot = {
             "index": index,
             "id": shot_id,
+            # Kept separately so the review gate can edit only this scene
+            # without duplicating the shared prompt prefix.
+            "scene_prompt": scene_prompt,
             "prompt": prompt,
             "prompt_hash": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
             "seed": seed,
@@ -406,6 +464,7 @@ def _normalize_plan(
     plan = {
         "version": PLAN_VERSION,
         "run_name": _safe_name(run_name, "h3_chain"),
+        "prompt_prefix": prompt_prefix,
         "shots": shots,
         "compatibility": compatibility,
         "segment_crf": segment_crf,
@@ -413,7 +472,8 @@ def _normalize_plan(
     }
     plan["plan_hash"] = _fingerprint({
         "compatibility": compatibility,
-        "shots": [{k: v for k, v in shot.items() if k != "prompt"}
+        "shots": [{k: v for k, v in shot.items()
+                   if k not in ("prompt", "scene_prompt")}
                   for shot in shots],
     })
     plan["summary"] = (
@@ -1075,6 +1135,200 @@ class MiniMaxH3ChainSegmentSave:
         return {"ui": {"text": [status]}, "result": (segment, status)}
 
 
+def _review_video(plan: dict[str, Any], segment: dict[str, Any],
+                  audio: dict[str, Any] | None) -> tuple[dict[str, str], bool, str]:
+    source = _absolute_output_path(segment["segment"])
+    relative_source = _relative_output_path(source)
+    if audio is None:
+        return ({
+            "filename": os.path.basename(relative_source),
+            "subfolder": os.path.dirname(relative_source),
+            "type": "output",
+        }, False, "No audio is connected; this review is silent.")
+
+    expected_frames = int(segment["delivered_frames"])
+    waveform, sample_rate = _validate_audio(
+        audio, "H3 Chain Review audio", expected_frames=expected_frames)
+    audio_value = {"waveform": waveform, "sample_rate": sample_rate}
+    audio_hash = _audio_fingerprint(audio_value)
+    video_hash = str(segment.get("segment_sha256") or _file_sha256(source))
+    index = int(segment["index"])
+    review_dir = os.path.join(_run_dir(plan), "reviews")
+    os.makedirs(review_dir, exist_ok=True)
+    name = "clip_%04d.%s.%s.review.mp4" % (
+        index, video_hash[:12], audio_hash[:12])
+    review_path = os.path.join(review_dir, name)
+
+    if not os.path.isfile(review_path):
+        ffmpeg = shutil.which("ffmpeg")
+        if not ffmpeg:
+            raise RuntimeError("ffmpeg is required for H3 Chain Review audio playback.")
+        transaction = uuid.uuid4().hex
+        wav_tmp = os.path.join(review_dir, ".review.%s.wav" % transaction)
+        video_tmp = os.path.join(review_dir, ".review.%s.mp4" % transaction)
+        try:
+            _write_wav(audio_value, wav_tmp)
+            _run_ffmpeg([
+                ffmpeg, "-y", "-i", source, "-i", wav_tmp,
+                "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy",
+                "-c:a", "aac", "-b:a", "192k",
+                "-t", "%.9f" % (expected_frames / float(FPS)),
+                "-movflags", "+faststart", video_tmp,
+            ])
+            os.replace(video_tmp, review_path)
+        finally:
+            _safe_unlink(wav_tmp)
+            _safe_unlink(video_tmp)
+
+        prefix = "clip_%04d." % index
+        for filename in os.listdir(review_dir):
+            if (filename != name and filename.startswith(prefix) and
+                    filename.endswith(".review.mp4")):
+                _safe_unlink(os.path.join(review_dir, filename))
+
+    relative = _relative_output_path(review_path)
+    return ({
+        "filename": os.path.basename(relative),
+        "subfolder": os.path.dirname(relative),
+        "type": "output",
+    }, True, "")
+
+
+def _review_display_id(unique_id: Any, dynprompt: Any) -> str:
+    execution_id = str(unique_id)
+    if dynprompt is not None:
+        try:
+            return str(dynprompt.get_display_node_id(execution_id))
+        except Exception:
+            pass
+    return execution_id
+
+
+class MiniMaxH3ChainReview:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "state": (STATE_TYPE,),
+                "segment": (SEGMENT_TYPE,),
+                "enabled": ("BOOLEAN", {
+                    "default": True,
+                    "tooltip": "Pause after every saved segment for approval."}),
+                "unload_models_while_waiting": ("BOOLEAN", {
+                    "default": True,
+                    "tooltip": "Release model weights from VRAM while waiting; "
+                               "the next retry/segment reloads them."}),
+            },
+            "optional": {
+                "audio": ("AUDIO", {
+                    "tooltip": "Wire frame-exact delivered audio from H3 "
+                               "Motion Context Trim for synchronized review."}),
+            },
+            "hidden": {
+                "dynprompt": "DYNPROMPT",
+                "unique_id": "UNIQUE_ID",
+            },
+        }
+
+    RETURN_TYPES = (SEGMENT_TYPE, "STRING")
+    RETURN_NAMES = ("segment", "status")
+    FUNCTION = "review"
+    OUTPUT_NODE = True
+    CATEGORY = "conditioning/minimax/chain"
+    DESCRIPTION = ("Pause after a checkpointed H3 segment for synchronized "
+                   "video/audio review. Approve, stop, retry an edited scene "
+                   "prompt, or reroll its seed from the node UI.")
+
+    @classmethod
+    def IS_CHANGED(cls, *args, **kwargs):
+        return float("NaN")
+
+    async def review(self, state, segment, enabled,
+                     unload_models_while_waiting, audio=None,
+                     dynprompt=None, unique_id=None):
+        plan = state["plan"]
+        index = int(state["index"])
+        if int(segment.get("index", -1)) != index:
+            raise ValueError(
+                "H3 Chain Review received the wrong segment for clip %d." % index)
+        if not enabled:
+            status = "review bypassed for clip %d" % index
+            return {"ui": {"text": [status]}, "result": (segment, status)}
+        if PromptServer is None or web is None:
+            raise RuntimeError("H3 Chain Review requires ComfyUI's prompt server.")
+
+        # Keep tensor-to-WAV conversion on Comfy's execution thread. Some
+        # PyTorch builds can deadlock when their CPU tensor pools are first
+        # entered from asyncio.to_thread; the short ffmpeg stream-copy is a
+        # predictable boundary before the actual asynchronous wait begins.
+        video, has_audio, warning = _review_video(plan, segment, audio)
+        shot = plan["shots"][index - 1]
+        token = uuid.uuid4().hex
+        loop = asyncio.get_running_loop()
+        future = loop.create_future()
+        payload = {
+            "token": token,
+            "node_id": _review_display_id(unique_id, dynprompt),
+            "execution_id": str(unique_id),
+            "clip_index": index,
+            "clip_count": len(plan["shots"]),
+            "shot_id": shot["id"],
+            "scene_prompt": shot.get("scene_prompt", shot["prompt"]),
+            "prompt_prefix": str(plan.get("prompt_prefix") or ""),
+            "seed": str(shot["seed"]),
+            "video": video,
+            "has_audio": has_audio,
+            "warning": warning,
+        }
+        _PENDING_REVIEWS[token] = {
+            "future": future,
+            "public": payload,
+            "current_seed": int(shot["seed"]),
+        }
+        PromptServer.instance.send_sync(
+            "h3_chain_review", payload, PromptServer.instance.client_id)
+
+        if unload_models_while_waiting:
+            try:
+                import comfy.model_management as model_management
+                model_management.unload_all_models()
+                model_management.soft_empty_cache()
+            except Exception as exc:
+                _LOG.warning("H3 Chain Review could not unload models: %s", exc)
+
+        try:
+            decision = await future
+        finally:
+            _PENDING_REVIEWS.pop(token, None)
+
+        action = decision["action"]
+        if action == "approve":
+            status = "approved clip %d/%d; continuing" % (
+                index, len(plan["shots"]))
+            return {"ui": {"text": [status]}, "result": (segment, status)}
+        if action == "stop":
+            if ExecutionBlocker is None:
+                raise RuntimeError("This ComfyUI build does not support review blocking.")
+            status = "approved clip %d and stopped at its checkpoint" % index
+            return {
+                "ui": {"text": [status]},
+                "result": (ExecutionBlocker(None), status),
+            }
+        if action != "retry":
+            raise RuntimeError("Unknown H3 review decision %r." % action)
+
+        revised_segment = dict(segment)
+        revised_segment["_h3_review_decision"] = {
+            "action": "retry",
+            "scene_prompt": decision["scene_prompt"],
+            "seed": int(decision["seed"]),
+        }
+        status = "retrying clip %d with seed %d" % (
+            index, int(decision["seed"]))
+        return {"ui": {"text": [status]},
+                "result": (revised_segment, status)}
+
+
 def _manifest_from_state(state: dict[str, Any]) -> dict[str, Any]:
     plan = state["plan"]
     segments = [_public_segment(item) for item in state["segments"]]
@@ -1231,6 +1485,17 @@ class MiniMaxH3ChainLoopEnd:
         if int(segment.get("index", -1)) != index:
             raise ValueError("H3 Chain End received the wrong segment for clip %d."
                              % index)
+        review = segment.get("_h3_review_decision")
+        if isinstance(review, dict) and review.get("action") == "retry":
+            revised_plan = _plan_with_review_revision(
+                plan, index, review.get("scene_prompt", ""),
+                int(review.get("seed", plan["shots"][index - 1]["seed"])))
+            retry_state = dict(state)
+            retry_state["plan"] = revised_plan
+            # Keep the predecessor context and accepted segment list unchanged;
+            # the just-saved rejected artifact is transactionally replaced by
+            # Segment Save when this same index completes again.
+            return self._recurse(flow, retry_state, dynprompt, unique_id)
         context_length = int(plan["compatibility"]["context_length"])
         next_state = {
             "plan": plan,
@@ -1470,12 +1735,86 @@ class MiniMaxH3ChainAssemble:
         return {"ui": {"text": [status]}, "result": (final_path,)}
 
 
+async def _submit_review_decision(request):
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Expected a JSON request body."},
+                                 status=400)
+    token = str(body.get("token") or "")
+    pending = _PENDING_REVIEWS.get(token)
+    if pending is None:
+        return web.json_response(
+            {"error": "This H3 review is no longer pending."}, status=404)
+    future = pending["future"]
+    if future.done():
+        return web.json_response(
+            {"error": "This H3 review already has a decision."}, status=409)
+
+    action = str(body.get("action") or "")
+    if action not in ("approve", "retry", "reroll", "stop"):
+        return web.json_response({"error": "Unknown review action."}, status=400)
+
+    decision: dict[str, Any] = {"action": action}
+    if action in ("retry", "reroll"):
+        scene_prompt = str(body.get("scene_prompt") or "").strip()
+        if not scene_prompt:
+            return web.json_response(
+                {"error": "The retry prompt cannot be empty."}, status=400)
+        if len(scene_prompt) > 200000:
+            return web.json_response(
+                {"error": "The retry prompt is too large."}, status=400)
+        if action == "reroll":
+            seed = secrets.randbits(64)
+            while seed == int(pending["current_seed"]):
+                seed = secrets.randbits(64)
+        else:
+            try:
+                seed = int(str(body.get("seed")))
+            except (TypeError, ValueError):
+                return web.json_response(
+                    {"error": "The retry seed must be an integer."}, status=400)
+            if seed < 0 or seed > MAX_SEED:
+                return web.json_response(
+                    {"error": "The retry seed is outside the uint64 range."},
+                    status=400)
+        decision = {
+            "action": "retry",
+            "scene_prompt": scene_prompt,
+            "seed": seed,
+        }
+
+    future.set_result(decision)
+    return web.json_response({
+        "ok": True,
+        "action": decision["action"],
+        "seed": str(decision.get("seed", pending["current_seed"])),
+    })
+
+
+async def _list_pending_reviews(_request):
+    reviews = [
+        item["public"] for item in _PENDING_REVIEWS.values()
+        if not item["future"].done()
+    ]
+    return web.json_response({"reviews": reviews})
+
+
+if (PromptServer is not None and web is not None and
+        getattr(PromptServer, "instance", None) is not None):
+    PromptServer.instance.routes.post(
+        "/h3_motion_context/review")(_submit_review_decision)
+    PromptServer.instance.routes.get(
+        "/h3_motion_context/reviews")(_list_pending_reviews)
+
+
 CHAIN_NODE_CLASS_MAPPINGS = {
     "MiniMaxH3ChainPlan": MiniMaxH3ChainPlan,
     "MiniMaxH3ChainLoopStart": MiniMaxH3ChainLoopStart,
     "MiniMaxH3ChainCurrent": MiniMaxH3ChainCurrent,
     "MiniMaxH3ChainContext": MiniMaxH3ChainContext,
     "MiniMaxH3ChainSegmentSave": MiniMaxH3ChainSegmentSave,
+    "MiniMaxH3ChainReview": MiniMaxH3ChainReview,
     "MiniMaxH3ChainLoopEnd": MiniMaxH3ChainLoopEnd,
     "MiniMaxH3ChainManifestLoad": MiniMaxH3ChainManifestLoad,
     "MiniMaxH3ChainAssemble": MiniMaxH3ChainAssemble,
@@ -1487,6 +1826,7 @@ CHAIN_NODE_DISPLAY_NAME_MAPPINGS = {
     "MiniMaxH3ChainCurrent": "H3 Chain Current Shot",
     "MiniMaxH3ChainContext": "H3 Chain Context",
     "MiniMaxH3ChainSegmentSave": "H3 Chain Segment + Checkpoint",
+    "MiniMaxH3ChainReview": "H3 Chain Review Gate",
     "MiniMaxH3ChainLoopEnd": "H3 Chain Loop End",
     "MiniMaxH3ChainManifestLoad": "H3 Chain Load Completed Manifest",
     "MiniMaxH3ChainAssemble": "H3 Chain Assemble",
