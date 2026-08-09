@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import {
     calculatePlanTiming,
     duplicateShot,
@@ -86,5 +87,12 @@ assert.equal(plan.shots[2].id, "one_copy");
 const readable = JSON.parse(planToJson(plan));
 assert.deepEqual(readable.prompt_prefix, ["New identity.", "", "New wardrobe."]);
 assert.deepEqual(readable.shots[0].prompt, ["Opening.", "Keep moving."]);
+
+const editorSource = fs.readFileSync(
+    new URL("../web/h3_chain_plan_editor.js", import.meta.url),
+    "utf8",
+);
+assert.match(editorSource, /collapseWidget\(planWidget\)/);
+assert.match(editorSource, /display[^\n]+none[^\n]+important/);
 
 console.log("H3 Chain Plan editor core: parsing, uint64 seeds, timing and edits pass");

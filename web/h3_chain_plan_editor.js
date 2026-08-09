@@ -174,6 +174,24 @@ function widgetValue(node, name, fallback) {
     return widget?.value ?? fallback;
 }
 
+function collapseWidget(widget) {
+    widget._h3OriginalType ??= widget.type;
+    widget._h3OriginalComputeSize ??= widget.computeSize;
+    widget.type = "hidden";
+    widget.computeSize = () => [0, -4];
+
+    // Multiline STRING widgets are real DOM textareas in current ComfyUI.
+    // Collapsing only the LiteGraph geometry leaves that textarea floating at
+    // its previous coordinates, over the scene editor. Hide both possible DOM
+    // handles while retaining widget.value for workflow serialization.
+    const elements = new Set([widget.inputEl, widget.element]);
+    for (const item of elements) {
+        if (!item?.style) continue;
+        item.style.setProperty("display", "none", "important");
+        item.setAttribute?.("aria-hidden", "true");
+    }
+}
+
 function insertText(textarea, text, selectionOffset = text.length) {
     const start = textarea.selectionStart ?? textarea.value.length;
     const end = textarea.selectionEnd ?? start;
@@ -237,10 +255,7 @@ function mountEditor(node) {
     };
     node._h3ChainEditor = state;
 
-    planWidget._h3OriginalType ??= planWidget.type;
-    planWidget._h3OriginalComputeSize ??= planWidget.computeSize;
-    planWidget.type = "hidden";
-    planWidget.computeSize = () => [0, -4];
+    collapseWidget(planWidget);
 
     const domWidget = node.addDOMWidget("h3_chain_scene_editor", "h3-chain-editor", root, {
         serialize: false,
@@ -551,7 +566,7 @@ function mountEditor(node) {
             state.advanced = !state.advanced;
             render();
         });
-        const json = button(state.jsonOpen ? "Hide JSON" : "JSON", "View, import, export, or directly edit plan JSON", () => {
+        const json = button(state.jsonOpen ? "Hide raw JSON" : "Raw JSON", "Expand the raw plan JSON for direct editing, import, or export", () => {
             state.jsonOpen = !state.jsonOpen;
             render();
         });
@@ -664,9 +679,10 @@ function mountEditor(node) {
     node._h3ChainEditorRefresh = () => loadFromWidget(true);
     loadFromWidget(true);
     setTimeout(() => {
+        collapseWidget(planWidget);
         node.setSize?.([
             Math.max(node.size?.[0] || 0, MIN_WIDTH),
-            Math.max(node.computeSize?.()[1] || node.size?.[1] || 0, node.size?.[1] || 0),
+            Math.max(node.computeSize?.()[1] || 0, EDITOR_HEIGHT + 120),
         ]);
     }, 50);
 }
