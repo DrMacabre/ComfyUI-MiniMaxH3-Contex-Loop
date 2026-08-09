@@ -154,6 +154,11 @@ def main():
         node.get("properties", {}).get("aux_id") ==
         "ethanfel/ComfyUI-MiniMaxH3-Contex-Loop"
         for node in loop_nodes)
+    workflow_start = next(
+        node for node in workflow["nodes"]
+        if node.get("type") == "MiniMaxH3ChainLoopStart")
+    assert workflow_start.get("widgets_values") == [1, ""]
+    assert "SEGMENT" not in str(workflow_start.get("title", "")).upper()
     print("workflow: loop node ids and package metadata use the new namespace")
 
     # Every public socket/widget should explain its role in the graph, and
@@ -246,6 +251,19 @@ def main():
     else:
         raise AssertionError("prompt line array accepted a non-string item")
     print("prompts: multiline and shared-only scenes pass; fully empty prompts fail")
+
+    assert chain._parse_scene_range("", 8, 1) == (1, 8)
+    assert chain._parse_scene_range("3", 8, 1) == (3, 3)
+    assert chain._parse_scene_range(" 3 : 8 ", 8, 1) == (3, 8)
+    assert chain._parse_scene_range("", 8, 4) == (4, 8)
+    for invalid in ("1,3", "3:2", "0:2", "2:9", "abc"):
+        try:
+            chain._parse_scene_range(invalid, 8, 1)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("scene_range accepted %r" % invalid)
+    print("scene range: blank, single scene, and one inclusive range validated")
 
     # ComfyUI rounds H3's 40 Hz audio grid to the nearest step. Depending on
     # frame length, the decoded stream can land 1/3 step above or below the
@@ -393,6 +411,7 @@ def main():
             "1": {"class_type": "H3ChainSmokePlan", "inputs": {}},
             "2": {"class_type": "MiniMaxH3ChainLoopStart", "inputs": {
                 "plan": ["1", 0], "start_clip": 1,
+                "scene_range": "1:2",
             }},
             "3": {"class_type": "H3ChainSmokeBody", "inputs": {
                 "state": ["2", 1],
@@ -413,9 +432,11 @@ def main():
         )
         executor.execute(prompt, "h3-chain-recursion-smoke", execute_outputs=["5"])
         assert executor.success
-        assert observed["manifest"]["clip_count"] == 4
-        assert len(observed["manifest"]["segments"]) == 4
-        print("runtime recursion: real Comfy PromptExecutor completed 4 clips")
+        assert observed["manifest"]["clip_count"] == 2
+        assert len(observed["manifest"]["segments"]) == 2
+        assert observed["manifest"]["format"] == "h3_chain_partial_manifest_v2"
+        assert observed["manifest"]["planned_clip_count"] == 4
+        print("runtime recursion: scene_range 1:2 stopped a four-clip plan at 2")
     finally:
         for name, previous in previous_nodes.items():
             if previous is None:

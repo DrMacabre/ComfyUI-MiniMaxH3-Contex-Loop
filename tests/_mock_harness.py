@@ -50,6 +50,9 @@ Checks:
      way is recognised too, and refused rather than stacked on. Several
      H3 packs lift the same restriction independently and they cannot
      both own the constructor.
+ 10. SolAttn's H3 Morton layout observer composes when it loads first.
+ 11. When this patch loads first and SolAttn wraps it, a second vendored copy
+     sees the matching patch through SolAttn and stands down.
 """
 
 import importlib
@@ -405,6 +408,78 @@ def main():
     assert not ours2.apply_patch()
     print("9. an unrelated pack's wrapper is detected and refused, whether "
           "it hides behind functools.wraps or not")
+
+    # 10. Kijai's SolAttn Morton hook wraps the constructor only to observe
+    # and retain the final video span. Our position fix can safely wrap it:
+    # SolAttn receives the same layout object and sees our in-place changes.
+    mm11 = make_mm()
+    stock11 = mm11.PackedLayout.__init__
+    observed11 = {}
+
+    def install_solattn_first():
+        original_init = stock11
+
+        def __init__(self, *args, **kwargs):
+            original_init(self, *args, **kwargs)
+            observed11[id(self.position_ids)] = self
+
+        __init__.__module__ = "ComfyUI-SolAttn_triton._morton_h3"
+        mm11.PackedLayout.__init__ = __init__
+
+    install_solattn_first()
+    solattn11 = mm11.PackedLayout.__init__
+    ours3 = load_patch(mm11)
+    assert ours3._already_patched() == "solattn", ours3._already_patched()
+    assert ours3.apply_patch(), "failed to compose outside SolAttn"
+    assert mm11.PackedLayout.__init__ is not solattn11
+    lay11 = mm11.PackedLayout(
+        TEXT_LEN, LATENT_T, LH, LW, AUDIO_T,
+        keyframes=run, refs=[dict(marked)], frame_count=FC)
+    assert observed11[id(lay11.position_ids)] is lay11
+    origin11 = ours3._target_origin(lay11)
+    assert np.allclose(
+        _cond_ts(lay11),
+        [origin11 + FRAME_RESCALE * i for i in range(4)])
+    print("10. SolAttn first: its observer and the interior-anchor patch "
+          "compose and see the same corrected layout")
+
+    # 11. Reverse order. This is also the case where another node pack owns
+    # the shared H3 patch before SolAttn loads: look through the known wrapper
+    # and stand down instead of wrapping both a second time.
+    mm12 = make_mm()
+    first12 = load_patch(mm12)
+    assert first12.apply_patch()
+    patched12 = mm12.PackedLayout.__init__
+    observed12 = {}
+
+    def install_solattn_second():
+        original_init = patched12
+
+        def __init__(self, *args, **kwargs):
+            original_init(self, *args, **kwargs)
+            observed12[id(self.position_ids)] = self
+
+        __init__.__module__ = "ComfyUI-SolAttn_triton._morton_h3"
+        mm12.PackedLayout.__init__ = __init__
+
+    install_solattn_second()
+    solattn12 = mm12.PackedLayout.__init__
+    sys.modules.pop("patch_layout", None)
+    second12 = importlib.import_module("patch_layout")
+    assert second12._already_patched() == "same", second12._already_patched()
+    assert second12.apply_patch()
+    assert second12.is_applied()
+    assert mm12.PackedLayout.__init__ is solattn12
+    lay12 = mm12.PackedLayout(
+        TEXT_LEN, LATENT_T, LH, LW, AUDIO_T,
+        keyframes=run, refs=[dict(marked)], frame_count=FC)
+    assert observed12[id(lay12.position_ids)] is lay12
+    origin12 = first12._target_origin(lay12)
+    assert np.allclose(
+        _cond_ts(lay12),
+        [origin12 + FRAME_RESCALE * i for i in range(4)])
+    print("11. interior-anchor patch first: SolAttn composes outside it and a "
+          "second vendored copy stands down through the known wrapper")
 
     print("all checks passed")
 

@@ -192,6 +192,13 @@ function prepareResume(reviewNode, nextIndex) {
     if (!widget) return false;
     widget.value = nextIndex;
     widget.callback?.(nextIndex);
+    // An explicit range overrides start_clip in the backend. Clear it so the
+    // checkpoint browser's selected resume scene is always authoritative.
+    const rangeWidget = startNode.widgets?.find((item) => item.name === "scene_range");
+    if (rangeWidget) {
+        rangeWidget.value = "";
+        rangeWidget.callback?.("");
+    }
     startNode.graph?.setDirtyCanvas?.(true, true);
     return true;
 }

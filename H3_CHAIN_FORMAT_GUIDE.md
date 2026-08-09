@@ -112,6 +112,8 @@ RECOMMENDED PLAN SETTINGS
 RUN / RESUME
 - New run: unique run_name and Loop Start start_clip=1.
 - Resume at scene N: keep the same settings and run_name; set start_clip=N.
+- Optional bounded run: set scene_range to `N` or inclusive `N:M`. A
+  non-empty range overrides start_clip and must remain contiguous.
 - The Review Gate can discover saved checkpoints and set start_clip for you:
   Refresh, select Resume scene N, then press Load checkpoint.
 - Approve & stop can join all accepted scenes into a partial MP4. Checkpointed
@@ -442,6 +444,7 @@ For a fresh render:
 ```text
 run_name: choose a new name
 start_clip: 1
+scene_range: leave blank
 ```
 
 To resume from scene N:
@@ -449,6 +452,7 @@ To resume from scene N:
 ```text
 run_name: keep the original name
 start_clip: N
+scene_range: leave blank
 ```
 
 The Start node loads the checkpoint from scene `N - 1` and validates every
@@ -467,6 +471,24 @@ execution. Loading previews the joined partial through that checkpoint when
 available, or the saved predecessor scene otherwise. **Approve & stop** also
 writes a partial joined video through the accepted scene when
 `assemble_partial_on_stop` is enabled.
+
+### Generate a bounded scene range
+
+`scene_range` is inclusive and overrides `start_clip` when non-empty:
+
+```text
+scene_range: 3       # generate only scene 3
+scene_range: 3:8     # generate scenes 3 through 8
+```
+
+Whitespace is allowed. A range starting above 1 loads and validates the
+checkpoint for the preceding scene. A range ending before the final planned
+scene emits a partial manifest containing every verified predecessor through
+the selected end, so Assemble can create the chain through that point.
+
+Disjoint syntax such as `1,3,5:8` is intentionally rejected. Scene 5 depends
+on scene 4, and rerendering an earlier selected scene would invalidate a
+skipped descendant checkpoint.
 
 Model, VAE, LoRA, references, CFG, sampler, and scheduler sit outside the Plan
 node, so the chain cannot inspect them directly. Record them in

@@ -54,6 +54,13 @@ _LOG = logging.getLogger("h3_motion_context")
 _orig_init = None
 _applied = False
 
+# SolAttn's H3 Morton hook wraps PackedLayout only to record the final video
+# span. It calls the constructor it captured, does not mutate the layout, and
+# keeps the layout object alive so later in-place position fixes remain visible.
+# That makes it safe to compose with this patch in either load order. Keep this
+# recognition deliberately narrow: unknown wrappers still fail closed.
+SOLATTN_LAYOUT_MODULE_SUFFIX = "._morton_h3"
+
 
 REF_SEGMENT_KINDS = ("ref_img", "ref_audio")
 
@@ -454,10 +461,35 @@ def _check_move(before, after, refs, idx, label):
 setattr(_patched_init, PATCH_MARKER, True)
 
 
+def _solattn_wrapped_init(init):
+    """Return the constructor captured by Kijai's H3 Morton wrapper.
+
+    The upstream wrapper is a nested ``__init__`` in ``_patch_packed_layout``
+    and captures the previous constructor in a closure named
+    ``original_init``. Checking both the module and that exact closure name is
+    intentionally stricter than accepting any wrapper from a similarly named
+    module.
+    """
+    if not getattr(init, "__module__", "").endswith(
+            SOLATTN_LAYOUT_MODULE_SUFFIX):
+        return None
+    closure = getattr(init, "__closure__", None) or ()
+    freevars = getattr(getattr(init, "__code__", None), "co_freevars", ())
+    for name, cell in zip(freevars, closure):
+        if name != "original_init":
+            continue
+        try:
+            original = cell.cell_contents
+        except ValueError:
+            return None
+        return original if callable(original) else None
+    return None
+
+
 def _already_patched():
     """Has another copy of this file already wrapped the constructor?
 
-    Returns None, "same" or "other".
+    Returns None, "same", "other", "solattn", or "foreign".
 
     Two copies of this patch in one ComfyUI is normal enough: several
     packs vendor it, and forks of this repo carry their own. Whichever
@@ -475,6 +507,11 @@ def _already_patched():
     A wrapper merely NAMED like ours is an older copy of this code, or a
     fork. We stand down and say so, because whichever one loaded first is
     the one deciding what the patch supports.
+
+    SolAttn's narrowly identified Morton wrapper is safe to compose: it only
+    observes the layout and records its video span. If it captured a copy of
+    this patch, we stand down for that copy; if it captured stock, we install
+    outside it so both features remain active.
 
     Anything else sitting where the stock constructor should be is a
     DIFFERENT pack patching the same thing. Several H3 packs lift the
@@ -494,6 +531,18 @@ def _already_patched():
         return "same"
     if getattr(init, "__name__", "") == "_patched_init":
         return "other"
+    solattn_original = _solattn_wrapped_init(init)
+    if solattn_original is not None:
+        if getattr(solattn_original, PATCH_MARKER, False):
+            return "same"
+        if getattr(solattn_original, "__name__", "") == "_patched_init":
+            return "other"
+        home = getattr(cls, "__module__", None)
+        where = getattr(solattn_original, "__module__", None)
+        if home and where and where == home and not hasattr(
+                solattn_original, "__wrapped__"):
+            return "solattn"
+        return "foreign"
     if hasattr(init, "__wrapped__"):
         return "foreign"
     home = getattr(cls, "__module__", None)
@@ -519,7 +568,7 @@ def apply_patch():
             getattr(getattr(getattr(mm, "PackedLayout", None), "__init__",
                             None), "__module__", "?"))
         return False
-    if who:
+    if who and who != "solattn":
         # report success: the patch IS active, just not ours, and the
         # calling pack's nodes check is_applied() before they will run
         _applied = True
@@ -536,6 +585,10 @@ def apply_patch():
                 "custom_nodes, keep one and remove the rest. Renaming a "
                 "folder does not stop ComfyUI loading it.")
         return True
+    if who == "solattn":
+        _LOG.info(
+            "h3_motion_context: composing with SolAttn's H3 Morton layout "
+            "observer; interior anchors and Morton ordering remain enabled")
     if not hasattr(mm, "PackedLayout") or not hasattr(mm, "FRAME_RESCALE"):
         _LOG.warning("h3_motion_context: MiniMax H3 model module missing expected "
                      "attributes, patch not applied")

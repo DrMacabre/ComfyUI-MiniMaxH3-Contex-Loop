@@ -53,6 +53,8 @@ const reviewSource = fs.readFileSync(
 );
 assert.match(reviewSource, /minimax_h3_context_loop\/review/);
 assert.match(reviewSource, /minimax_h3_context_loop_review_resolved/);
+assert.match(reviewSource, /item\.name === "scene_range"/);
+assert.match(reviewSource, /rangeWidget\.value = ""/);
 assert.doesNotMatch(reviewSource, /\/h3_motion_context\/review/);
 
 console.log("H3 Chain Review editor helpers: ok");

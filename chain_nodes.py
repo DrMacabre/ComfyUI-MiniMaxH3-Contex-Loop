@@ -135,6 +135,43 @@ def _validate_h3_length(length: Any, label: str) -> int:
     return length
 
 
+def _parse_scene_range(value: Any, total: int,
+                       fallback_start: int) -> tuple[int, int]:
+    """Parse one inclusive, contiguous scene selection.
+
+    Disjoint selections are deliberately rejected: every H3 scene depends on
+    its immediate predecessor, so skipping a scene inside a render selection
+    would either break continuity or silently reuse an invalid checkpoint.
+    """
+    total = int(total)
+    fallback_start = int(fallback_start)
+    text = str(value or "").strip()
+    if not text:
+        start, end = fallback_start, total
+    else:
+        compact = re.sub(r"\s+", "", text)
+        if "," in compact:
+            raise ValueError(
+                "scene_range supports one contiguous inclusive range only, "
+                "such as '3' or '3:8'. Comma selections are not safe for a "
+                "seamless chain.")
+        match = re.fullmatch(r"(\d+)(?::(\d+))?", compact)
+        if match is None:
+            raise ValueError(
+                "scene_range must be blank, one scene like '3', or one "
+                "inclusive range like '3:8'.")
+        start = int(match.group(1))
+        end = int(match.group(2) or start)
+    if start < 1 or start > total:
+        raise ValueError("scene_range start must be between 1 and %d." % total)
+    if end < start:
+        raise ValueError("scene_range end must be greater than or equal to start.")
+    if end > total:
+        raise ValueError("scene_range end must be between %d and %d." %
+                         (start, total))
+    return start, end
+
+
 def _derived_seed(base_seed: int, index: int, shot_id: str) -> int:
     payload = "%d:%d:%s" % (int(base_seed), int(index), shot_id)
     return int.from_bytes(hashlib.sha256(payload.encode("utf-8")).digest()[:8],
@@ -738,21 +775,31 @@ def _load_resume_state(plan: dict[str, Any], start_clip: int) -> dict[str, Any]:
     }
 
 
-def _initial_state(plan: dict[str, Any], start_clip: int) -> dict[str, Any]:
+def _initial_state(plan: dict[str, Any], start_clip: int,
+                   end_clip: int | None = None) -> dict[str, Any]:
     total = len(plan["shots"])
     start_clip = int(start_clip)
     if start_clip < 1 or start_clip > total:
         raise ValueError("start_clip must be between 1 and %d." % total)
+    end_clip = total if end_clip is None else int(end_clip)
+    if end_clip < start_clip or end_clip > total:
+        raise ValueError(
+            "end_clip must be between start_clip %d and %d." %
+            (start_clip, total))
     if start_clip > 1:
-        return _load_resume_state(plan, start_clip)
-    return {
-        "plan": plan,
-        "index": 1,
-        "previous_frames": None,
-        "previous_latent": None,
-        "segments": [],
-        "resumed_from": 0,
-    }
+        state = _load_resume_state(plan, start_clip)
+    else:
+        state = {
+            "plan": plan,
+            "index": 1,
+            "previous_frames": None,
+            "previous_latent": None,
+            "segments": [],
+            "resumed_from": 0,
+        }
+    state["range_start"] = start_clip
+    state["end_clip"] = end_clip
+    return state
 
 
 def _slice_audio(audio: dict[str, Any], start_seconds: float,
@@ -982,12 +1029,22 @@ class MiniMaxH3ChainLoopStart:
                     "tooltip": "Validated output from H3 Chain Plan."}),
                 "start_clip": ("INT", {
                     "default": 1, "min": 1, "max": MAX_SHOTS,
-                    "tooltip": "Scene to render next. Use 1 for a new chain. "
+                    "tooltip": "Legacy/resume scene to render next. Use 1 for "
+                               "a new chain. A non-empty scene_range overrides "
+                               "this value. "
                                "A value above 1 loads and validates the saved "
                                "checkpoint for the preceding scene before "
                                "resuming."}),
             },
             "optional": {
+                "scene_range": ("STRING", {
+                    "default": "",
+                    "tooltip": "Inclusive contiguous scenes to generate. "
+                               "Leave blank to run from start_clip through the "
+                               "end; use 3 for only scene 3 or 3:8 for scenes "
+                               "3 through 8. A start above 1 requires the "
+                               "preceding checkpoint. Disjoint comma selections "
+                               "are rejected because they break continuity."}),
                 "source_audio": ("AUDIO", {
                     "tooltip": "Full external soundtrack. Required by "
                                "source_track and source_plus_timeline. Current "
@@ -1009,25 +1066,31 @@ class MiniMaxH3ChainLoopStart:
     )
     FUNCTION = "start"
     CATEGORY = "conditioning/minimax/contex_loop"
-    DESCRIPTION = ("Start or resume a sequential H3 chain. start_clip > 1 "
-                   "loads and validates the preceding segment checkpoint.")
+    DESCRIPTION = ("Start or resume a contiguous range of a sequential H3 "
+                   "chain. Ranges beginning above 1 load and validate the "
+                   "preceding segment checkpoint.")
 
     @classmethod
     def IS_CHANGED(cls, *args, **kwargs):
         return float("NaN")
 
-    def start(self, plan, start_clip, source_audio=None, initial_state=None):
+    def start(self, plan, start_clip, source_audio=None, scene_range="",
+              initial_state=None):
         if initial_state is None:
             prepared_plan = _plan_with_source_audio(plan, source_audio)
-            state = _initial_state(prepared_plan, start_clip)
+            range_start, range_end = _parse_scene_range(
+                scene_range, len(prepared_plan["shots"]), start_clip)
+            state = _initial_state(prepared_plan, range_start, range_end)
         else:
             state = dict(initial_state)
             prepared_plan = state["plan"]
             if prepared_plan.get("base_plan_hash") != plan.get("plan_hash"):
                 raise ValueError("H3 chain plan changed during recursive execution.")
             state["plan"] = prepared_plan
-        status = "clip %d/%d" % (state["index"],
-                                  len(prepared_plan["shots"]))
+        end_clip = int(state.get("end_clip", len(prepared_plan["shots"])))
+        status = "clip %d/%d; selected range %d:%d" % (
+            state["index"], len(prepared_plan["shots"]),
+            int(state.get("range_start", state["index"])), end_clip)
         if state.get("resumed_from"):
             status += "; resumed from clip %d" % state["resumed_from"]
         if prepared_plan["compatibility"].get("source_audio_silent_padding"):
@@ -1642,8 +1705,11 @@ def _manifest_from_segments(plan: dict[str, Any], values: list[dict[str, Any]],
     indexes = [int(item.get("index", -1)) for item in segments]
     if indexes != list(range(1, expected_count + 1)):
         raise ValueError("H3 chain manifest segment indexes are not contiguous.")
-    total_frames = (int(plan["total_delivered_frames"]) if complete else
-                    sum(int(item["delivered_frames"]) for item in segments))
+    total_frames = int(plan["total_delivered_frames"]) if complete else sum(
+        int(item.get(
+            "delivered_frames",
+            plan["shots"][int(item["index"]) - 1]["delivered_frames"]))
+        for item in segments)
     manifest = {
         "format": ("h3_chain_manifest_v2" if complete
                    else "h3_chain_partial_manifest_v2"),
@@ -1849,6 +1915,8 @@ class MiniMaxH3ChainLoopEnd:
         next_state = {
             "plan": plan,
             "index": index + 1,
+            "range_start": int(state.get("range_start", 1)),
+            "end_clip": int(state.get("end_clip", len(plan["shots"]))),
             # clone: a tensor view would retain the entire decoded clip
             "previous_frames": _tensor_cpu_clone(images[-context_length:]),
             "previous_latent": _compact_latent(sampled_latent),
@@ -1856,15 +1924,24 @@ class MiniMaxH3ChainLoopEnd:
                         [_public_segment(segment)],
             "resumed_from": state.get("resumed_from", 0),
         }
-        if index < len(plan["shots"]):
+        end_clip = int(next_state["end_clip"])
+        if index < end_clip:
             return self._recurse(flow, next_state, dynprompt, unique_id)
 
-        manifest = _manifest_from_state(next_state)
+        complete = end_clip == len(plan["shots"])
+        manifest = _manifest_from_segments(
+            plan, next_state["segments"], complete=complete)
         # A normal chain has already created its run directory in Segment Save.
         # Keeping this conditional also permits lightweight/custom segment sinks
         # that deliberately do not use the disk-backed saver.
         if os.path.isdir(_run_dir(plan)):
-            _atomic_json(_manifest_path(plan), manifest)
+            if complete:
+                manifest_path = _manifest_path(plan)
+            else:
+                manifest_path = os.path.join(
+                    _run_dir(plan), "partial",
+                    "through_clip_%04d.manifest.json" % end_clip)
+            _atomic_json(manifest_path, manifest)
         manifest_json = json.dumps(manifest, ensure_ascii=False, indent=2,
                                    sort_keys=True)
         return (manifest, manifest_json, next_state["previous_frames"],

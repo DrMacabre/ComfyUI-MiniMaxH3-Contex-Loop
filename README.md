@@ -282,6 +282,14 @@ segment/checkpoint slot, so rejected attempts do not accumulate.
 The Review Gate's checkpoint browser performs this `start_clip` setup without
 manually editing Loop Start; the validation rules are identical.
 
+Loop Start also accepts an optional inclusive `scene_range`. Leave it blank to
+keep the existing `start_clip`-through-end behavior, enter `3` to generate only
+scene 3, or enter `3:8` to generate scenes 3 through 8. A range beginning above
+1 requires a valid checkpoint for its immediate predecessor. Ending before the
+last planned scene produces an assemblable partial manifest through that scene.
+Comma-separated/disjoint selections are rejected because skipped scenes would
+break the continuity dependency.
+
 If all clips were saved but the browser, Loop End, or final assembly stopped,
 connect the same Plan (and source song when applicable) to `H3 Chain Load
 Completed Manifest`. It validates every artifact and rebuilds the manifest for

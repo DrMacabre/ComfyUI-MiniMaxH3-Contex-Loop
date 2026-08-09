@@ -706,14 +706,15 @@
           "links": null
         }
       ],
-      "title": "H3 LOOP START / RESUME — 8 SEGMENTS",
+      "title": "H3 LOOP START / RESUME",
       "properties": {
         "aux_id": "ethanfel/ComfyUI-MiniMaxH3-Contex-Loop",
         "ver": "3a744122ce4cf2a2e611a6f2fd90ac8ec7318070",
         "Node name for S&R": "MiniMaxH3ChainLoopStart"
       },
       "widgets_values": [
-        1
+        1,
+        ""
       ],
       "color": "#1f1f48",
       "bgcolor": "rgba(24,24,27,.9)"
