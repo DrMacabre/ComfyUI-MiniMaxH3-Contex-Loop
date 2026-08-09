@@ -2313,7 +2313,10 @@ async def _submit_review_decision(request):
 
 async def _list_pending_reviews(_request):
     reviews = []
-    for item in _PENDING_REVIEWS.values():
+    # HTTP and execution can run on different threads/loops. Snapshot first so
+    # a review resolving during recovery cannot invalidate this iteration and
+    # turn a browser's reconnect GET into an intermittent 500 response.
+    for item in list(_PENDING_REVIEWS.values()):
         if item["future"].done():
             continue
         payload = dict(item["public"])

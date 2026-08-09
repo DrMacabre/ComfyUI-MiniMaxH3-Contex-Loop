@@ -55,6 +55,12 @@ assert.match(reviewSource, /minimax_h3_context_loop\/review/);
 assert.match(reviewSource, /minimax_h3_context_loop_review_resolved/);
 assert.match(reviewSource, /item\.name === "scene_range"/);
 assert.match(reviewSource, /rangeWidget\.value = ""/);
+assert.match(reviewSource, /_h3QueuedReview/);
+assert.match(reviewSource, /setInterval[\s\S]*fetchPending/);
+assert.match(reviewSource, /addEventListener\("status", fetchPending\)/);
+assert.match(reviewSource, /async nodeCreated\(node\)/);
+assert.match(reviewSource, /gates\.length === 1/);
+assert.match(reviewSource, /"pointerdown", "pointerup", "mousedown", "mouseup", "click"/);
 assert.doesNotMatch(reviewSource, /\/h3_motion_context\/review/);
 
 console.log("H3 Chain Review editor helpers: ok");

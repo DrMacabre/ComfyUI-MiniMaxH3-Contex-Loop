@@ -11,7 +11,10 @@ import {
 const NODE_NAME = "MiniMaxH3ChainReview";
 const PLAN_NAME = "MiniMaxH3ChainPlan";
 const notifiedTokens = new Set();
+const mountedReviewNodes = new Set();
 let notificationAudioContext = null;
+let pendingFetchPromise = null;
+let pendingPollTimer = null;
 
 function ensureNotificationAudioContext() {
     const AudioContext = window.AudioContext ?? window.webkitAudioContext;
@@ -76,6 +79,8 @@ function injectStyles() {
         .h3r-button { padding:7px; border:1px solid #63708b; border-radius:5px;
             background:#292e3a; color:#eef1f7; cursor:pointer; }
         .h3r-button:hover { background:#343b4b; }
+        .h3r-button:disabled { opacity:.42; cursor:not-allowed; }
+        .h3r-button:disabled:hover { background:#292e3a; }
         .h3r-approve { border-color:#4b9d72; background:#204332; }
         .h3r-retry { border-color:#b58b45; background:#4a3820; }
         .h3r-stop { border-color:#8a6171; background:#3b252d; }
@@ -203,20 +208,84 @@ function prepareResume(reviewNode, nextIndex) {
     return true;
 }
 
-async function fetchPending() {
-    try {
-        const response = await api.fetchApi("/minimax_h3_context_loop/reviews");
-        if (!response.ok) return;
-        const body = await response.json();
-        for (const review of body.reviews ?? []) routeReview(review);
-    } catch (error) {
-        console.warn("[H3 Chain Review] Could not recover pending reviews:", error);
+function fetchPending() {
+    if (pendingFetchPromise) return pendingFetchPromise;
+    pendingFetchPromise = (async () => {
+        try {
+            const response = await api.fetchApi("/minimax_h3_context_loop/reviews");
+            if (!response.ok) return 0;
+            const body = await response.json();
+            const reviews = body.reviews ?? [];
+            for (const review of reviews) routeReview(review);
+            return reviews.length;
+        } catch (error) {
+            console.warn("[H3 Chain Review] Could not recover pending reviews:", error);
+            return 0;
+        } finally {
+            pendingFetchPromise = null;
+        }
+    })();
+    return pendingFetchPromise;
+}
+
+function deliverReview(node, data) {
+    if (!node || nodeType(node) !== NODE_NAME) return false;
+    if (typeof node._h3ReviewHandler === "function") {
+        node._h3ReviewHandler(data);
+    } else {
+        // A websocket event can arrive between node creation and the DOM
+        // widget's deferred mount. Preserve it instead of leaving a live
+        // backend future with no token in the browser.
+        node._h3QueuedReview = data;
     }
+    return true;
+}
+
+function reviewFallbackNode(data) {
+    const gates = allNodes(app.graph).filter((item) => nodeType(item) === NODE_NAME);
+    const leaf = String(data?.node_id ?? "").split(":").at(-1);
+    const matchingLeaf = gates.filter((item) => String(item.id) === leaf);
+    if (matchingLeaf.length === 1) return matchingLeaf[0];
+    return gates.length === 1 ? gates[0] : null;
 }
 
 function routeReview(data) {
-    const node = findNodeByQualifiedId(data?.node_id);
-    node?._h3ReviewHandler?.(data);
+    const exact = findNodeByQualifiedId(data?.node_id);
+    if (deliverReview(exact, data)) return true;
+    const fallback = reviewFallbackNode(data);
+    if (deliverReview(fallback, data)) {
+        console.warn(
+            `[H3 Chain Review] Display node ${data?.node_id} was not directly ` +
+            "resolvable; routed the pending review to the only matching gate.",
+        );
+        return true;
+    }
+    console.warn(
+        `[H3 Chain Review] Pending token ${data?.token ?? "?"} could not be ` +
+        `routed to display node ${data?.node_id ?? "?"}.`,
+    );
+    return false;
+}
+
+function routeReviewResolved(data) {
+    const exact = findNodeByQualifiedId(data?.node_id);
+    const node = nodeType(exact) === NODE_NAME ? exact : reviewFallbackNode(data);
+    node?._h3ReviewResolvedHandler?.(data);
+}
+
+function updatePendingPolling() {
+    if (mountedReviewNodes.size > 0 && pendingPollTimer == null) {
+        // send_sync targets the browser session that queued the prompt. A
+        // reconnect, reverse proxy, sleeping tab, or websocket race can miss
+        // that event even though the backend review remains healthy. Polling
+        // this tiny in-memory endpoint makes the pending token recoverable.
+        pendingPollTimer = window.setInterval(() => {
+            if (document.visibilityState !== "hidden") fetchPending();
+        }, 2000);
+    } else if (mountedReviewNodes.size === 0 && pendingPollTimer != null) {
+        window.clearInterval(pendingPollTimer);
+        pendingPollTimer = null;
+    }
 }
 
 function mount(node) {
@@ -227,7 +296,14 @@ function mount(node) {
     const root = document.createElement("div");
     root.className = "h3r-root";
     root.title = "Review each persisted H3 scene with synchronized sound, then approve, retry, reroll, stop, or arm a saved checkpoint for resume.";
-    root.addEventListener("mousedown", (event) => event.stopPropagation());
+    // LiteGraph listens to pointer events on the canvas. Shield the complete
+    // pointer sequence, not only mousedown: Firefox can otherwise let the
+    // canvas capture pointerdown before a DOM-widget button receives click.
+    for (const eventName of [
+        "pointerdown", "pointerup", "mousedown", "mouseup", "click", "dblclick",
+    ]) {
+        root.addEventListener(eventName, (event) => event.stopPropagation());
+    }
     root.addEventListener("wheel", (event) => event.stopPropagation());
 
     const head = document.createElement("div");
@@ -271,6 +347,7 @@ function mount(node) {
 
     const actions = document.createElement("div");
     actions.className = "h3r-actions";
+    const actionButtons = [];
     function actionButton(label, className, action) {
         const button = document.createElement("button");
         button.className = `h3r-button ${className}`;
@@ -282,8 +359,14 @@ function mount(node) {
             reroll: "Reject this attempt, assign a new random seed, and regenerate the same scene with the displayed prompt.",
             stop: "Accept this scene but stop before the next one. Optionally assemble a partial joined MP4 and arm the next scene for resume.",
         }[action] ?? "Submit this review decision.";
-        button.addEventListener("click", () => submit(action));
+        button.disabled = true;
+        button.addEventListener("click", (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            void submit(action);
+        });
         actions.append(button);
+        actionButtons.push(button);
         return button;
     }
     actionButton("Approve & continue", "h3r-approve", "approve");
@@ -326,6 +409,10 @@ function mount(node) {
     let current = null;
     let countdownTimer = null;
     let resumeChoices = [];
+
+    function setActionsEnabled(enabled) {
+        for (const button of actionButtons) button.disabled = !enabled;
+    }
 
     async function refreshResumeOptions() {
         resumeSelect.replaceChildren();
@@ -396,6 +483,7 @@ function mount(node) {
             `${message}\nAuto-continue in ${countdown.text}.` : message;
         if (countdown?.seconds === 0) {
             root.classList.add("h3r-busy");
+            setActionsEnabled(false);
             status.textContent = `${message}\nTimeout reached — continuing…`;
             stopCountdown();
         }
@@ -410,11 +498,17 @@ function mount(node) {
     }
 
     async function submit(action) {
-        if (!current?.token) return;
+        if (!current?.token) {
+            status.className = "h3r-status h3r-warning";
+            status.textContent = "No live review token is attached. Checking the server…";
+            await fetchPending();
+            return;
+        }
         try {
             const normalizedSeed = action === "retry" ? reviewSeed(seed.value) : seed.value;
             stopCountdown();
             root.classList.add("h3r-busy");
+            setActionsEnabled(false);
             status.className = "h3r-status";
             status.textContent = action === "approve" ? "Sending approval…" :
                 action === "stop" ? "Sending stop decision…" : "Sending retry decision…";
@@ -450,6 +544,7 @@ function mount(node) {
             }
         } catch (error) {
             root.classList.remove("h3r-busy");
+            setActionsEnabled(Boolean(current?.token));
             status.className = "h3r-status h3r-warning";
             status.textContent = error.message;
             if (reviewCountdown(current?.local_deadline)?.seconds > 0) {
@@ -459,6 +554,7 @@ function mount(node) {
     }
 
     node._h3ReviewHandler = (data) => {
+        if (current?.token === data?.token) return;
         const remaining = Number.isFinite(Number(data.deadline)) &&
             Number.isFinite(Number(data.server_now)) ?
             Math.max(0, Number(data.deadline) - Number(data.server_now)) : null;
@@ -467,6 +563,7 @@ function mount(node) {
             local_deadline: remaining == null ? null : Date.now() / 1000 + remaining,
         };
         root.classList.remove("h3r-busy");
+        setActionsEnabled(true);
         badge.textContent = `clip ${data.clip_index}/${data.clip_count} · ${data.shot_id}`;
         video.src = videoUrl(data.video);
         video.load();
@@ -487,6 +584,7 @@ function mount(node) {
         if (!current || data?.token !== current.token) return;
         stopCountdown();
         root.classList.add("h3r-busy");
+        setActionsEnabled(false);
         status.className = "h3r-status";
         status.textContent = data.status || "Review resolved; continuing…";
         if (data.partial_video) {
@@ -503,20 +601,31 @@ function mount(node) {
         getMinHeight: () => 500,
     });
     widget.serialize = false;
+    mountedReviewNodes.add(node);
+    updatePendingPolling();
     const removed = node.onRemoved;
     node.onRemoved = function () {
         stopCountdown();
+        mountedReviewNodes.delete(this);
+        updatePendingPolling();
         return removed?.apply(this, arguments);
     };
     node.setSize?.([Math.max(node.size?.[0] ?? 540, 540), Math.max(node.size?.[1] ?? 650, 650)]);
+    const queuedReview = node._h3QueuedReview;
+    delete node._h3QueuedReview;
+    if (queuedReview) node._h3ReviewHandler(queuedReview);
     setTimeout(fetchPending, 0);
     setTimeout(refreshResumeOptions, 0);
 }
 
 api.addEventListener("minimax_h3_context_loop_review", (event) => routeReview(event.detail));
-api.addEventListener("minimax_h3_context_loop_review_resolved", (event) => {
-    const data = event.detail;
-    findNodeByQualifiedId(data?.node_id)?._h3ReviewResolvedHandler?.(data);
+api.addEventListener("minimax_h3_context_loop_review_resolved", (event) =>
+    routeReviewResolved(event.detail));
+// A status event is sent when ComfyUI's websocket connects or reconnects.
+api.addEventListener("status", fetchPending);
+window.addEventListener("focus", fetchPending);
+document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState !== "hidden") fetchPending();
 });
 
 app.registerExtension({
@@ -529,6 +638,12 @@ app.registerExtension({
             setTimeout(() => mount(this), 0);
             return result;
         };
+    },
+    async nodeCreated(node) {
+        // Official per-instance hook. Keep the prototype hook above for older
+        // frontends; mount() is idempotent, so supporting both closes the
+        // timing gap without creating two widgets.
+        if (nodeType(node) === NODE_NAME) mount(node);
     },
     async afterConfigureGraph() {
         await fetchPending();
