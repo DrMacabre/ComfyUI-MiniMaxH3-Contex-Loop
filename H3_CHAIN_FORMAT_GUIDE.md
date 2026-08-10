@@ -16,6 +16,13 @@ automatically; use the small header swatch to customize one, or double-click
 the swatch to restore its automatic color. Colors are UI-only and do not alter
 the plan or checkpoint compatibility.
 
+The optional **MiniMax H3 Scene Prompt Editor** companion connects to the Plan
+and provides a larger, adjustable-font view of one scene prompt at a time. Its
+textarea is bidirectionally synchronized with the active
+`plan_json.shots[n].prompt`; only the active scene and font-size preferences are
+stored on the companion itself. Arrow buttons and `Alt+Left/Right` navigate
+scenes, while `@` opens reference tags and `#` inserts dialogue markup.
+
 Inside a prompt, type `@` or click **@ Reference** to insert a MiniMax
 `<Picture N>`, `<Video N>`, or `<Audio N>` tag. Select dialogue text and type
 `#`, or click **# Dialogue**, to wrap it in `<d>...</d>`. These interactions

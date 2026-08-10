@@ -1240,6 +1240,36 @@ class MiniMaxH3ChainPlan:
                 plan["compatibility"]["height"])
 
 
+class MiniMaxH3ChainScenePromptEditor:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "plan": (PLAN_TYPE, {
+                    "tooltip": "Connect the H3 Chain Plan output. The companion "
+                               "editor modifies that Plan node's active scene "
+                               "prompt directly; this socket passes the "
+                               "validated plan through unchanged."}),
+            }
+        }
+
+    RETURN_TYPES = (PLAN_TYPE,)
+    RETURN_NAMES = ("plan",)
+    OUTPUT_TOOLTIPS = (
+        "The connected validated plan, unchanged at execution time. You may "
+        "insert this companion between Plan and Loop Start or connect it as "
+        "an editor-only branch.",
+    )
+    FUNCTION = "passthrough"
+    CATEGORY = "conditioning/minimax/contex_loop"
+    DESCRIPTION = ("Large, keyboard-friendly companion editor synchronized "
+                   "bidirectionally with each scene prompt in the connected "
+                   "H3 Chain Plan.")
+
+    def passthrough(self, plan):
+        return (plan,)
+
+
 class MiniMaxH3ChainLoopStart:
     @classmethod
     def INPUT_TYPES(cls):
@@ -2988,6 +3018,7 @@ if (PromptServer is not None and web is not None and
 
 CHAIN_NODE_CLASS_MAPPINGS = {
     "MiniMaxH3ChainPlan": MiniMaxH3ChainPlan,
+    "MiniMaxH3ChainScenePromptEditor": MiniMaxH3ChainScenePromptEditor,
     "MiniMaxH3ChainLoopStart": MiniMaxH3ChainLoopStart,
     "MiniMaxH3ChainCurrent": MiniMaxH3ChainCurrent,
     "MiniMaxH3ChainContext": MiniMaxH3ChainContext,
@@ -3001,6 +3032,7 @@ CHAIN_NODE_CLASS_MAPPINGS = {
 
 CHAIN_NODE_DISPLAY_NAME_MAPPINGS = {
     "MiniMaxH3ChainPlan": "MiniMax H3 Contex Loop Plan",
+    "MiniMaxH3ChainScenePromptEditor": "MiniMax H3 Scene Prompt Editor",
     "MiniMaxH3ChainLoopStart": "MiniMax H3 Contex Loop Start",
     "MiniMaxH3ChainCurrent": "MiniMax H3 Contex Loop Current Shot",
     "MiniMaxH3ChainContext": "MiniMax H3 Contex Loop Context",

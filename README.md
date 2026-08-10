@@ -122,6 +122,13 @@ Prompts may be multiline strings or arrays of lines. Using seconds lets the Plan
 node handle H3’s `17k+5` frame grid; raw JSON remains available for
 copy/import/export.
 
+For long-form writing, connect the Plan output to **MiniMax H3 Scene Prompt
+Editor**. Its large textarea edits the selected scene's real `shots[n].prompt`
+inside the connected Plan—there is no duplicate prompt storage. Use the arrow
+buttons or `Alt+Left/Right` to move between scenes, `@` for Picture/Video/Audio
+reference tags, `#` for dialogue tags, and `A−`/`A+` for a persistent font size.
+The node may sit inline before Loop Start or on an editor-only branch.
+
 `scene_range` on Loop Start is continuity-safe:
 
 | Value | Result |

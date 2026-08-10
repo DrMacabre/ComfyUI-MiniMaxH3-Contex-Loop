@@ -117,7 +117,8 @@ def main():
     asyncio.run(review_route_check())
     print("review: async decision route preserves exact uint64 seeds")
     required = {
-        "MiniMaxH3ChainPlan", "MiniMaxH3ChainLoopStart",
+        "MiniMaxH3ChainPlan", "MiniMaxH3ChainScenePromptEditor",
+        "MiniMaxH3ChainLoopStart",
         "MiniMaxH3ChainCurrent", "MiniMaxH3ChainContext",
         "MiniMaxH3ChainSegmentSave", "MiniMaxH3ChainLoopEnd",
         "MiniMaxH3ChainManifestLoad", "MiniMaxH3ChainExportPNG",
@@ -143,6 +144,7 @@ def main():
     assert package.WEB_DIRECTORY == "./web"
     assert (ROOT / "web" / "h3_chain_plan_editor.js").is_file()
     assert (ROOT / "web" / "h3_chain_plan_core.mjs").is_file()
+    assert (ROOT / "web" / "h3_chain_scene_prompt_editor.js").is_file()
     workflow_path = (ROOT / "example_workflows" /
                      "Looping MiniMax H3 Seamless Chain Global Refs Example.json")
     workflow = json.loads(workflow_path.read_text(encoding="utf-8"))
@@ -206,6 +208,9 @@ def main():
         "Throughout every scene S1 wears the same dress.\n"
         "<Subject 2> enters from camera right."
     )
+    prompt_editor = package.NODE_CLASS_MAPPINGS[
+        "MiniMaxH3ChainScenePromptEditor"]()
+    assert prompt_editor.passthrough(readable_prompts)[0] is readable_prompts
     shared_only = chain._normalize_plan(
         json.dumps({
             "prompt_prefix": ["Shared identity.", "", "Shared direction."],
