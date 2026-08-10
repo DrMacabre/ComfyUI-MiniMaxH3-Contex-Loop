@@ -1736,7 +1736,7 @@
           "links": null
         }
       ],
-      "title": "H3 PLAN — EXTEND THE IMPORTED VIDEO",
+      "title": "EXPERIMENTAL — H3 PLAN / EXTEND IMPORTED VIDEO",
       "properties": {
         "aux_id": "ethanfel/ComfyUI-MiniMaxH3-Contex-Loop",
         "ver": "3a744122ce4cf2a2e611a6f2fd90ac8ec7318070",
@@ -1805,10 +1805,10 @@
       "mode": 0,
       "inputs": [],
       "outputs": [],
-      "title": "HOW TO EXTEND AN EXISTING VIDEO",
+      "title": "EXPERIMENTAL WORKFLOW — READ BEFORE RUNNING",
       "properties": {},
       "widgets_values": [
-        "1. Choose the source MP4 in Load Video. Get Video Components sends its frames, sound and exact FPS to Existing Video Context.\n2. Keep prepend_original enabled to place the complete source before the generated extension. Disable it for extension-only output.\n3. Edit the two scene prompts in H3 Plan and use a unique run_name.\n4. Queue. Every generated scene is saved before Review Gate pauses. Approve, retry the prompt, reroll the seed, or approve and stop.\n5. Generated-audio mode carries the imported audio tail into scene 1. For a silent source, the visual continuation still works."
+        "EXPERIMENTAL: this existing-video continuation path is new and needs broader real-world validation. Keep the source file and use a unique run_name.\n\n1. Choose the source MP4 in Load Video. Get Video Components sends its frames, sound and exact FPS to Existing Video Context.\n2. Keep prepend_original enabled to place the complete source before the generated extension. Disable it for extension-only output.\n3. Edit the two scene prompts in H3 Plan and use a unique run_name.\n4. Queue. Every generated scene is saved before Review Gate pauses. Approve, retry the prompt, reroll the seed, or approve and stop.\n5. Generated-audio mode carries the imported audio tail into scene 1. For a silent source, the visual continuation still works."
       ],
       "color": "#432",
       "bgcolor": "#653"
@@ -1957,7 +1957,7 @@
           "links": null
         }
       ],
-      "title": "STEP 3 — BUILD IMPORTED VIDEO CONTEXT",
+      "title": "EXPERIMENTAL — BUILD IMPORTED VIDEO CONTEXT",
       "properties": {
         "aux_id": "ethanfel/ComfyUI-MiniMaxH3-Contex-Loop",
         "ver": "0.3.6",
@@ -2570,7 +2570,7 @@
     },
     {
       "id": 2,
-      "title": "SOURCE VIDEO → IMPORTED CONTEXT",
+      "title": "EXPERIMENTAL — SOURCE VIDEO → IMPORTED CONTEXT",
       "bounding": [
         -2144,
         -352,

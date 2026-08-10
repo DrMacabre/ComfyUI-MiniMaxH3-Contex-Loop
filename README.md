@@ -150,10 +150,11 @@ Loop End manifest → Assemble
 To extend an existing video, add **MiniMax H3 Existing Video Context**:
 
 The ready-to-run wiring is included separately in the
-[existing-video model workflow](<example_workflows/MiniMax H3 Extend Existing Video Model Workflow.json>).
+[experimental existing-video model workflow](<example_workflows/MiniMax H3 Extend Existing Video Model Workflow.json>).
 It uses core Load Video/Get Video Components nodes, generated-audio continuity,
 optional original-video prepend, and a Review Gate between every saved scene
-and Loop End. The earlier examples are unchanged.
+and Loop End. This path is new and should be treated as experimental while it
+receives broader real-world validation. The earlier examples are unchanged.
 
 ```text
 Load Video → Get Video Components ─→ Existing Video Context ─→ Loop Start

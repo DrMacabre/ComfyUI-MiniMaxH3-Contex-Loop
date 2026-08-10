@@ -1,6 +1,6 @@
 # Example workflows
 
-## MiniMax H3 Extend Existing Video Model Workflow
+## Experimental: MiniMax H3 Extend Existing Video Model Workflow
 
 A compact two-scene model for extending an existing MP4. Core **Load Video**
 and **Get Video Components** feed the decoded frames, optional soundtrack, and
@@ -12,6 +12,8 @@ The Review Gate is fully wired between **Segment Save** and **Loop End**, with
 frame-locked preview audio from Loop Trim. Its recovery branch is muted by
 default. Select your own source video and model files before queueing. This is a
 new standalone example; none of the earlier workflow JSON files were changed.
+Treat it as experimental until the imported video/audio continuation path has
+received broader testing across source codecs, frame rates, and H3 setups.
 
 ## Looping MiniMax H3 Seamless Chain Global Refs Example
 

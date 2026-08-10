@@ -426,8 +426,10 @@ video rather than begin from an empty timeline.
 Open
 [`MiniMax H3 Extend Existing Video Model Workflow.json`](<example_workflows/MiniMax H3 Extend Existing Video Model Workflow.json>)
 for a complete two-scene model with generated-audio continuity, original-video
-prepend, review/retry controls, and a muted recovery branch. It is a separate
-example; the existing looping and historical workflows are not modified.
+prepend, review/retry controls, and a muted recovery branch. This workflow is
+**experimental** while the imported AV continuation path receives broader
+real-world validation. It is a separate example; the existing looping and
+historical workflows are not modified.
 
 ```text
 Chain Plan ───────────────────────────┐
