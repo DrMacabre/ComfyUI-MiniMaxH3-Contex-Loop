@@ -47,6 +47,7 @@ from .patch_layout import (
     MC_AUDIO_KEY,
     apply_patch as apply_layout_patch,
     is_applied,
+    native_guides_active,
 )
 from .patch_payload import (
     apply_patch as apply_payload_patch,
@@ -67,25 +68,53 @@ AUDIO_HZ = 40.0
 
 
 def _activate_inline_patches():
-    """Opt this execution path into the two marker-gated H3 patches.
+    """Select native guides or opt into the legacy marker-gated patches.
 
     Importing the node pack only registers nodes. Activation happens here,
-    immediately before Motion Context produces marked conditioning. Both
-    wrappers call the original implementation unchanged for unmarked graphs,
-    including H3 jobs queued after an opted-in one in the same process.
+    immediately before Motion Context produces marked conditioning. Wrappers
+    call the original implementation unchanged for unmarked graphs, including
+    H3 jobs queued after an opted-in one in the same process.
     """
     layout_ok = apply_layout_patch()
-    payload_ok = apply_payload_patch()
     if not layout_ok or not is_applied():
         raise RuntimeError(
             "h3_motion_context: the inline layout patch could not be enabled, "
-            "so interior anchors would be rejected by ComfyUI. Check the log "
+            "so continuation guides cannot be placed safely. Check the log "
             "for the self-test failure reason.")
+    if native_guides_active():
+        # PR #15439 natively accepts arbitrary video/audio guides and merges
+        # their payload with Ref2VA. The layout wrapper active in this mode is
+        # only a marker-gated target-origin alignment for this pack's guide
+        # set; the legacy payload wrapper must not be stacked on core.
+        return "native"
+    payload_ok = apply_payload_patch()
     if not payload_ok or not payload_patch_applied():
         raise RuntimeError(
             "h3_motion_context: the inline payload patch could not be enabled. "
             "Ref2VA refs could overwrite the motion-context video latents. "
             "Check the log for the compatibility failure reason.")
+    return "legacy"
+
+
+def _prepare_native_guide_conditioning(conditioning):
+    """Mark a pass-through scene for native guides chained downstream.
+
+    Scene 1 has no motion-context payload, but a core Add Guide placed after
+    Loop Context still needs target-relative Ref2VA alignment. PR #15439 ignores
+    keyframe entries with neither a video nor audio latent, so one marker-only
+    record opts that later guide set into the layout correction without adding
+    conditioning rows. Legacy core must never receive this sentinel.
+    """
+    if _activate_inline_patches() != "native":
+        return conditioning
+    for _value, metadata in conditioning:
+        for item in metadata.get("minimax_keyframes", []) or []:
+            if (MC_KEY in item and item.get("latent") is None
+                    and item.get("audio_latent") is None):
+                return conditioning
+    sentinel = {"resolved_frame_index": 0, MC_KEY: 0}
+    return node_helpers.conditioning_set_values(
+        conditioning, {"minimax_keyframes": [sentinel]}, append=True)
 
 # Run lengths the video VAE's downscale formula max(1, (n - 5) // 17 * 5 + 2)
 # actually distinguishes. Anything between two grid points encodes to the same
@@ -327,7 +356,8 @@ class MiniMaxH3MotionContext:
               encode_mode, anchor_mode, crop, audio_context_length=22,
               audio_mode="timeline", context_latent=None, audio_vae=None,
               context_audio=None):
-        _activate_inline_patches()
+        guide_api = _activate_inline_patches()
+        native_guides = guide_api == "native"
 
         video = _video_from_latent(latent)
         latent_t = int(video.shape[2])
@@ -386,7 +416,14 @@ class MiniMaxH3MotionContext:
                     "covering %d frames; the VAE grid no longer matches "
                     "VIDEO_RUN_GRID. Upstream VAE change, refusing to run."
                     % (n, steps, covered))
-            blocks = [enc[:, :, k:k + 1] for k in range(steps)]
+            if native_guides:
+                # Core Add Guide accepts one multi-frame latent and lays out
+                # all of its video steps. Keeping the encoded run intact is
+                # both cheaper and exactly the API PR #15439 intends.
+                blocks = [enc]
+                offsets = [0]
+            else:
+                blocks = [enc[:, :, k:k + 1] for k in range(steps)]
             span = covered
         else:
             blocks, offsets = [], []
@@ -402,21 +439,26 @@ class MiniMaxH3MotionContext:
 
         keyframes = []
         for p, blk in zip(indices, blocks):
-            keyframes.append({
-                # stock code accepts only 0 or frame_count-1 here; the real
-                # position rides under MC_KEY and the layout patch applies it
-                "resolved_frame_index": 0,
-                MC_KEY: p,
-                "latent": blk,
-            })
-
-        values = {
-            "minimax_keyframes": keyframes,
-            "minimax_frame_count": frame_count,
-        }
+            if native_guides:
+                keyframes.append({
+                    "resolved_frame_index": p,
+                    # The marker opts this complete guide set into the small
+                    # Ref2VA target-origin correction in patch_layout.
+                    MC_KEY: p,
+                    "latent": blk,
+                })
+            else:
+                keyframes.append({
+                    # Legacy core accepts only the first/last frame here; the
+                    # real position rides under MC_KEY for the layout patch.
+                    "resolved_frame_index": 0,
+                    MC_KEY: p,
+                    "latent": blk,
+                })
 
         ref_audio_t = 0
         motion_context_audio_ref = None
+        timeline_end_frame = None
         a_frames = 0
         audio_src = "off"
         if context_latent is not None or context_audio is not None:
@@ -441,11 +483,6 @@ class MiniMaxH3MotionContext:
                     audio_vae, context_audio, a_frames / float(FPS))
                 overhang = 0.0  # decoded audio was match_tail-cut at the frame
                 audio_src = "vae"
-            ref = {
-                "kind": "audio",
-                "ref_audio_t": ref_audio_t,
-                "audio_latent": audio_latent,
-            }
             if audio_mode == "timeline":
                 # end-align the audio window with the pinned video: both are
                 # the tail of clip A, so both must end at the same instant
@@ -455,21 +492,43 @@ class MiniMaxH3MotionContext:
                 # step past A's last frame (H3 rounds its audio grid up),
                 # so the end coordinate moves by exactly that much; the
                 # layout patch takes a fractional frame index.
-                end_frame = float(span if anchor_mode == "head" else 0)
-                end_frame += overhang / FRAME_RESCALE
-                ref[MC_AUDIO_KEY] = end_frame
-            # Ref2VA multi-ref compatibility design contributed by seitanism
-            # in the Banodoco MiniMax H3 seamless-extension thread.
-            # Keep this separate until after the keyframe values are applied.
-            # ReferenceToVideo conditioning may already contain image, video,
-            # and/or audio refs; assigning minimax_refs in `values` would
-            # replace all of them. Appending also guarantees that the marked
-            # Motion Context audio block is last, which _fixup_audio relies on
-            # to locate its slot in a multi-ref layout.
-            motion_context_audio_ref = ref
+                timeline_end_frame = float(
+                    span if anchor_mode == "head" else 0)
+                timeline_end_frame += overhang / FRAME_RESCALE
+                if native_guides:
+                    # Native audio guides are start-anchored in units of video
+                    # frames. Convert our end-aligned continuation window to
+                    # its exact (occasionally fractional) start position.
+                    audio_start = (timeline_end_frame
+                                   - ref_audio_t / FRAME_RESCALE)
+                    keyframes.append({
+                        "resolved_frame_index": audio_start,
+                        MC_KEY: audio_start,
+                        "audio_latent": audio_latent,
+                    })
+                else:
+                    motion_context_audio_ref = {
+                        "kind": "audio",
+                        "ref_audio_t": ref_audio_t,
+                        "audio_latent": audio_latent,
+                        MC_AUDIO_KEY: timeline_end_frame,
+                    }
+            else:
+                motion_context_audio_ref = {
+                    "kind": "audio",
+                    "ref_audio_t": ref_audio_t,
+                    "audio_latent": audio_latent,
+                }
+
+        values = {"minimax_keyframes": keyframes}
+        if not native_guides:
+            values["minimax_frame_count"] = frame_count
 
         out = node_helpers.conditioning_set_values(conditioning, values)
         if motion_context_audio_ref is not None:
+            # Ref2VA multi-reference coexistence design contributed by
+            # seitanism in the Banodoco seamless-extension thread. Append so
+            # existing image/video/audio refs remain intact.
             out = node_helpers.conditioning_set_values(
                 out, {"minimax_refs": [motion_context_audio_ref]}, append=True)
 
@@ -481,7 +540,7 @@ class MiniMaxH3MotionContext:
                   ("%d frames -> %d latent steps (%.3fs) from %s, %s"
                    % (a_frames, ref_audio_t, ref_audio_t / AUDIO_HZ, audio_src,
                       "on the timeline ending at frame %.3f"
-                      % float(ref.get(MC_AUDIO_KEY))
+                      % float(timeline_end_frame)
                       if audio_mode == "timeline" else "stock ref placement"))
                   if ref_audio_t else "off")
         return (out, trim)

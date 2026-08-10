@@ -12,7 +12,8 @@ owned by Niko's upstream pack; this pack exports its stricter Loop Trim and the
 specialized H3 Chain nodes.
 
 Registers the loop nodes without changing ComfyUI's runtime behavior. Chain
-Context activates both internal patches inline on first execution:
+On current ComfyUI, Context activates both internal patches inline on first
+execution:
 
   patch_layout   lifts the first/last-only keyframe anchor restriction,
                  moves pinned audio onto the clip's own timeline, and
@@ -26,6 +27,11 @@ recognize the same patch-ownership markers; whichever activates second stands
 down. H3 workflows that use neither pack remain stock. If either self-test
 fails the nodes still load but refuse the affected path, so an upstream
 ComfyUI change produces a clear message rather than a silently wrong render.
+
+When ComfyUI's native MiniMax H3 Add Guide API is available, core owns
+arbitrary-position video/audio guides and keyframe/ref payload merging. This
+pack switches automatically to native guide records and retains only a small,
+marker-gated Ref2VA target-origin alignment wrapper.
 """
 
 from .nodes import (

@@ -20,6 +20,10 @@ huge cumulative image tensor.
 Newest first. Recent additions stay visible; older milestones are folded away
 so this page remains a useful starting point rather than a changelog wall.
 
+- **v0.3.5 — Native guides and portable assembly.** Automatically uses
+  ComfyUI’s native arbitrary-position AV guides when PR #15439 (or its merged
+  equivalent) is present, retains the guarded legacy path, and falls back to
+  PyAV review and stream-copy assembly when no `ffmpeg` executable is available.
 - **v0.3.4 — Scene Prompt Editor.** A synchronized, large-format companion for
   editing each scene’s real Plan prompt, with scene navigation, reference and
   dialogue shortcuts, and adjustable type size.
@@ -114,7 +118,10 @@ install it alongside this one if you also want its manual Motion Context,
 Save Latent, and Load Latent nodes. H3-Multishot can also remain installed; its
 AV-bank payload merge is detected and reused without stacking another wrapper.
 
-Final assembly needs `ffmpeg` on `PATH`.
+An `ffmpeg` executable on `PATH` is preferred for review and final assembly.
+When it is unavailable, Review Gate and Assemble automatically use ComfyUI’s
+bundled PyAV: saved H.264 video packets are stream-copied without quality loss
+and selected audio is encoded to AAC.
 
 ## Start here
 
@@ -244,6 +251,10 @@ also use ComfyUI's standard embedded `workflow` and `prompt` tags.
 
 - Upstream H3 Motion Context and this pack share patch-ownership markers; the
   second compatible copy stands down.
+- ComfyUI’s native **MiniMax H3 Add Guide** API is detected automatically. On
+  that API, core owns arbitrary video/audio guides and payload merging; this
+  pack keeps only a marker-gated Ref2VA target-alignment correction. Put an
+  official Add Guide node after Loop Context to add scene-local anchors.
 - Kijai’s SolAttn H3 Morton observer composes safely in either activation order.
 - Ref2VA refs remain intact; unknown wrappers and changed layout assumptions
   fail loudly instead of producing a subtly broken join.

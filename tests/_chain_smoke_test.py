@@ -670,7 +670,29 @@ def main():
                 "-of", "csv=p=0", str(review_path),
             ], text=True).splitlines()
             assert "video" in streams and "audio" in streams
-            print("review: persisted segment muxed with frame-exact audio")
+
+            fallback_review_audio = audio_for_frames(5)
+            fallback_review_audio["waveform"][..., 0] = 0.25
+            original_which = chain.shutil.which
+            chain.shutil.which = lambda executable: (
+                None if executable == "ffmpeg" else original_which(executable))
+            try:
+                fallback_review, fallback_has_audio, fallback_warning = (
+                    chain._review_video(
+                        prepared_plan, segment1, fallback_review_audio))
+            finally:
+                chain.shutil.which = original_which
+            fallback_review_path = pathlib.Path(
+                tempdir, fallback_review["subfolder"],
+                fallback_review["filename"])
+            assert (fallback_has_audio and not fallback_warning and
+                    fallback_review_path.is_file())
+            with chain.av.open(
+                    str(fallback_review_path), mode="r") as fallback_media:
+                assert len(fallback_media.streams.video) == 1
+                assert len(fallback_media.streams.audio) == 1
+            print("review: persisted segment muxed with frame-exact audio via "
+                  "ffmpeg and the PyAV fallback")
 
             async def approve_live_review():
                 sent = []
@@ -1085,7 +1107,29 @@ def main():
                 manifest, "generated", "generated_final", 96)
             generated_path = pathlib.Path(generated_result["result"][0])
             assert generated_path.is_file() and generated_path.stat().st_size > 0
-            print("segments: H.264 save + source/generated audio assembly pass")
+
+            original_which = chain.shutil.which
+            chain.shutil.which = lambda executable: (
+                None if executable == "ffmpeg" else original_which(executable))
+            try:
+                fallback_result = assembler.assemble(
+                    manifest, "generated", "pyav_fallback_final", 96)
+            finally:
+                chain.shutil.which = original_which
+            fallback_path = pathlib.Path(fallback_result["result"][0])
+            assert fallback_path.is_file() and fallback_path.stat().st_size > 0
+            assert "PyAV fallback" in fallback_result["ui"]["text"][0]
+            with chain.av.open(str(fallback_path), mode="r") as fallback_media:
+                assert len(fallback_media.streams.video) == 1
+                assert len(fallback_media.streams.audio) == 1
+                assert json.loads(fallback_media.metadata["h3_manifest"])[
+                    "clip_count"] == 2
+                fallback_duration = (
+                    float(fallback_media.duration) / float(chain.av.time_base))
+                assert abs(fallback_duration - 9 / 24) < 0.05
+                assert sum(1 for _frame in fallback_media.decode(video=0)) == 9
+            print("segments: H.264 save + source/generated audio assembly and "
+                  "ffmpeg-free PyAV fallback pass")
 
             changed = json.loads(json.dumps({"shots": [
                 {"id": "one", "prompt": "changed", "length": 5, "seed": 1},

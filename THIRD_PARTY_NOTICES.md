@@ -14,9 +14,19 @@ uses separate registrations while vendoring upstream's shared marker and
 patch-ownership ABI, allowing both projects to be installed without registering
 the same nodes or double-wrapping ComfyUI.
 
-`patch_layout.py` and `patch_payload.py` are synchronized byte-for-byte with
-upstream revision `c140ae99b8c3` (`0.2.0`, 2026-08-09). Keeping these two files
-on upstream's ABI is required for safe co-installation.
+`patch_layout.py` and `patch_payload.py` retain the shared ownership markers
+from upstream revision `c140ae99b8c3` (`0.2.0`, 2026-08-09). This loop fork
+extends the layout implementation with native-guide capability detection while
+preserving that ownership ABI for safe co-installation on legacy ComfyUI.
+
+## ComfyUI MiniMax H3 Add Guide
+
+Native-guide compatibility targets
+[ComfyUI PR #15439](https://github.com/Comfy-Org/ComfyUI/pull/15439), authored
+by **drozbay**. That contribution introduces arbitrary-position image, video,
+and audio guides plus native keyframe/reference payload merging in ComfyUI.
+This repository does not copy its node implementation; it detects the exposed
+core layout API and emits compatible guide records from Loop Context.
 
 ## ComfyUI-MiniMaxH3-Easy
 

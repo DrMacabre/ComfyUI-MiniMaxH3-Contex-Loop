@@ -448,6 +448,20 @@ Recommended for a music video driven by one song.
 - This mode is experimental.
 - Assemble selects the source track when `audio_source` is `plan`.
 
+## Native MiniMax H3 guides
+
+When ComfyUI exposes **MiniMax H3 Add Guide** (introduced by
+[ComfyUI PR #15439](https://github.com/Comfy-Org/ComfyUI/pull/15439)), Loop
+Context automatically emits core video/audio guide records instead of the
+legacy keyframe/ref representation. Existing ComfyUI releases continue through
+the guarded compatibility path, so workflows do not need a version switch.
+
+To add a scene-local still, clip, or audio anchor, place the official Add Guide
+node **after Loop Context**. It appends its guide to the continuation anchors.
+When Ref2VA references are present, the loop's marker-gated alignment keeps the
+complete guide set on the target scene timeline rather than the preceding
+reference cursor. Core remains responsible for guide layout and payload merging.
+
 ## Starting, resuming, and changing a plan
 
 For a fresh render:

@@ -67,7 +67,11 @@ except ImportError:
     web = None
     PromptServer = None
 
-from .nodes import MiniMaxH3MotionContext, _streams_from_latent
+from .nodes import (
+    MiniMaxH3MotionContext,
+    _prepare_native_guide_conditioning,
+    _streams_from_latent,
+)
 
 
 _LOG = logging.getLogger("minimax_h3_context_loop.chain")
@@ -1433,8 +1437,9 @@ class MiniMaxH3ChainContext:
                     "tooltip": "Current state from H3 Chain Current Shot."}),
                 "conditioning": ("CONDITIONING", {
                     "tooltip": "Conditioning from the stock MiniMax H3 "
-                               "Ref2VA/I2V node. Scene 1 passes unchanged; later "
-                               "scenes receive the saved motion context."}),
+                               "Ref2VA/I2V node. Scene 1 passes through without "
+                               "motion context; later scenes receive the saved "
+                               "continuation context."}),
                 "vae": ("VAE", {
                     "tooltip": "MiniMax H3 video VAE used to encode saved "
                                "context frames for continuation scenes."}),
@@ -1447,21 +1452,21 @@ class MiniMaxH3ChainContext:
     RETURN_TYPES = ("CONDITIONING", "INT", "BOOLEAN")
     RETURN_NAMES = ("conditioning", "trim_frames", "is_continuation")
     OUTPUT_TOOLTIPS = (
-        "Conditioning ready for the H3 guider/sampler: unchanged for scene 1, "
-        "motion-context enhanced thereafter.",
+        "Conditioning ready for the H3 guider/sampler: no motion context on "
+        "scene 1, motion-context enhanced thereafter.",
         "Repeated leading frames to remove after decoding. Connect to "
         "MiniMax H3 Contex Loop Trim.",
         "True for resumed/continued scenes, false for the first scene.",
     )
     FUNCTION = "apply"
     CATEGORY = "conditioning/minimax/contex_loop"
-    DESCRIPTION = ("Pass clip 1 through unchanged; apply H3 Motion Context "
-                   "automatically to every continuation using loop state.")
+    DESCRIPTION = ("Pass clip 1 through without continuation context; apply "
+                   "H3 Motion Context automatically to every later scene.")
 
     def apply(self, state, conditioning, vae, latent):
         index = int(state["index"])
         if index == 1:
-            return (conditioning, 0, False)
+            return (_prepare_native_guide_conditioning(conditioning), 0, False)
         previous_frames = state.get("previous_frames")
         if previous_frames is None:
             raise ValueError("H3 chain continuation has no previous frame checkpoint.")
@@ -1691,20 +1696,25 @@ def _review_video(plan: dict[str, Any], segment: dict[str, Any],
 
     if not os.path.isfile(review_path):
         ffmpeg = shutil.which("ffmpeg")
-        if not ffmpeg:
-            raise RuntimeError("ffmpeg is required for H3 Chain Review audio playback.")
         transaction = uuid.uuid4().hex
         wav_tmp = os.path.join(review_dir, ".review.%s.wav" % transaction)
         video_tmp = os.path.join(review_dir, ".review.%s.mp4" % transaction)
         try:
-            _write_wav(audio_value, wav_tmp)
-            _run_ffmpeg([
-                ffmpeg, "-y", "-i", source, "-i", wav_tmp,
-                "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy",
-                "-c:a", "aac", "-b:a", "192k",
-                "-t", "%.9f" % (expected_frames / float(FPS)),
-                "-movflags", "+faststart", video_tmp,
-            ], timeout_seconds=60.0)
+            if ffmpeg:
+                _write_wav(audio_value, wav_tmp)
+                _run_ffmpeg([
+                    ffmpeg, "-y", "-i", source, "-i", wav_tmp,
+                    "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy",
+                    "-c:a", "aac", "-b:a", "192k",
+                    "-t", "%.9f" % (expected_frames / float(FPS)),
+                    "-movflags", "+faststart", video_tmp,
+                ], timeout_seconds=60.0)
+            else:
+                _LOG.warning(
+                    "H3 Chain ffmpeg executable not found; preparing review "
+                    "audio with the built-in PyAV fallback")
+                _pyav_mux_audio(
+                    source, audio_value, video_tmp, 192, expected_frames)
             os.replace(video_tmp, review_path)
         finally:
             _safe_unlink(wav_tmp)
@@ -1908,8 +1918,9 @@ class MiniMaxH3ChainReview:
             # Keep tensor-to-WAV conversion on Comfy's execution thread. Some
             # PyTorch builds can deadlock when their CPU tensor pools are first
             # entered from asyncio.to_thread. The token is already public, and
-            # ffmpeg itself is time-bounded below, so failure degrades to a
-            # silent review instead of an unresolvable workflow hang.
+            # The external ffmpeg path is time-bounded, and either media backend
+            # can fail into a silent review instead of an unresolvable workflow
+            # hang.
             try:
                 video, has_audio, warning = _review_video(plan, segment, audio)
             except Exception as exc:
@@ -2387,6 +2398,169 @@ def _run_ffmpeg(command: list[str], timeout_seconds: float | None = None) -> Non
         raise RuntimeError("ffmpeg failed (%d):\n%s" % (result.returncode, tail))
 
 
+def _pyav_video_signature(stream: Any) -> tuple[Any, ...]:
+    codec = stream.codec_context
+    return (
+        str(codec.name or ""),
+        int(codec.width),
+        int(codec.height),
+        str(codec.format.name if codec.format is not None else ""),
+    )
+
+
+def _pyav_shift_packet(packet: Any, stream: Any,
+                        offset_seconds: Fraction) -> None:
+    """Move one remuxed segment packet onto the joined video timeline."""
+    time_base = packet.time_base or stream.time_base
+    if time_base is None:
+        raise RuntimeError(
+            "PyAV could not determine an H3 segment video time base.")
+    time_base = Fraction(time_base)
+    start_time = int(stream.start_time or 0)
+    start_seconds = Fraction(start_time) * Fraction(stream.time_base)
+    shift = round((offset_seconds - start_seconds) / time_base)
+    if packet.pts is not None:
+        packet.pts = int(packet.pts) + shift
+    if packet.dts is not None:
+        packet.dts = int(packet.dts) + shift
+
+
+def _pyav_concat_video(segment_paths: list[str], delivered_frames: list[int],
+                        path: str, metadata: dict[str, Any]) -> None:
+    """Stream-copy compatible H.264 segments without an ffmpeg executable."""
+    if av is None:
+        raise RuntimeError(
+            "H3 Chain Assemble found neither an ffmpeg executable nor PyAV.")
+    if len(segment_paths) != len(delivered_frames) or not segment_paths:
+        raise ValueError("PyAV H3 assembly requires one duration per segment.")
+
+    output = None
+    try:
+        output = av.open(
+            path, mode="w",
+            options={"movflags": "use_metadata_tags+faststart"})
+        for key, value in metadata.items():
+            if value is not None:
+                output.metadata[str(key)] = str(value)
+
+        output_stream = None
+        expected_signature = None
+        frame_offset = 0
+        for index, (source, frames) in enumerate(
+                zip(segment_paths, delivered_frames), start=1):
+            with av.open(source, mode="r") as current:
+                streams = list(current.streams.video)
+                if len(streams) != 1:
+                    raise ValueError(
+                        "H3 chain clip %d contains %d video streams; expected 1."
+                        % (index, len(streams)))
+                input_stream = streams[0]
+                signature = _pyav_video_signature(input_stream)
+                if output_stream is None:
+                    output_stream = output.add_stream_from_template(input_stream)
+                    expected_signature = signature
+                elif signature != expected_signature:
+                    raise ValueError(
+                        "H3 chain clip %d has incompatible video parameters %r; "
+                        "the first clip uses %r." %
+                        (index, signature, expected_signature))
+
+                offset = Fraction(frame_offset, FPS)
+                for packet in current.demux(input_stream):
+                    if packet.dts is None:
+                        continue
+                    _pyav_shift_packet(packet, input_stream, offset)
+                    packet.stream = output_stream
+                    output.mux(packet)
+            frame_offset += int(frames)
+        output.close()
+        output = None
+    except Exception:
+        if output is not None:
+            output.close()
+        _safe_unlink(path)
+        raise
+
+
+def _pyav_mux_audio(video_path: str, audio: dict[str, Any], path: str,
+                     bitrate_kbps: int, total_frames: int) -> None:
+    """Stream-copy joined video and encode frame-locked AAC through PyAV."""
+    if av is None or torch is None:
+        raise RuntimeError("PyAV H3 audio muxing requires PyAV and torch.")
+    waveform, sample_rate = _validate_audio(
+        audio, "PyAV H3 Chain Assemble audio")
+    if waveform.ndim == 3:
+        waveform = waveform[0]
+    elif waveform.ndim == 1:
+        waveform = waveform.unsqueeze(0)
+    if waveform.ndim != 2:
+        raise ValueError("H3 chain audio must be [batch,channels,samples].")
+    channels = int(waveform.shape[0])
+    if channels not in (1, 2):
+        raise ValueError(
+            "PyAV H3 assembly supports mono or stereo audio; got %d channels."
+            % channels)
+    required_samples = int(round(
+        int(total_frames) / float(FPS) * sample_rate))
+    if int(waveform.shape[-1]) < required_samples:
+        raise ValueError(
+            "PyAV H3 assembly audio contains %d samples; %d are required."
+            % (int(waveform.shape[-1]), required_samples))
+    waveform = (torch.clamp(waveform[..., :required_samples], -1.0, 1.0)
+                .to(device="cpu", dtype=torch.float32).contiguous().numpy())
+    layout = "mono" if channels == 1 else "stereo"
+
+    source = output = None
+    try:
+        source = av.open(video_path, mode="r")
+        streams = list(source.streams.video)
+        if len(streams) != 1:
+            raise ValueError(
+                "Joined H3 video contains %d video streams; expected 1."
+                % len(streams))
+        input_video = streams[0]
+        output = av.open(
+            path, mode="w",
+            options={"movflags": "use_metadata_tags+faststart"})
+        for key, value in source.metadata.items():
+            output.metadata[str(key)] = str(value)
+        output_video = output.add_stream_from_template(input_video)
+        output_audio = output.add_stream("aac", rate=sample_rate)
+        output_audio.bit_rate = int(bitrate_kbps) * 1000
+        output_audio.layout = layout
+
+        for packet in source.demux(input_video):
+            if packet.dts is None:
+                continue
+            packet.stream = output_video
+            output.mux(packet)
+
+        chunk_size = 1024
+        for start in range(0, required_samples, chunk_size):
+            stop = min(required_samples, start + chunk_size)
+            frame = av.AudioFrame.from_ndarray(
+                waveform[:, start:stop], format="fltp", layout=layout)
+            frame.sample_rate = sample_rate
+            frame.pts = start
+            frame.time_base = Fraction(1, sample_rate)
+            for packet in output_audio.encode(frame):
+                output.mux(packet)
+        for packet in output_audio.encode():
+            output.mux(packet)
+
+        output.close()
+        output = None
+        source.close()
+        source = None
+    except Exception:
+        if output is not None:
+            output.close()
+        if source is not None:
+            source.close()
+        _safe_unlink(path)
+        raise
+
+
 def _write_ffmetadata(path: str, metadata: dict[str, Any]) -> None:
     def escape(value: Any) -> str:
         text = str(value).replace("\\", "\\\\")
@@ -2793,27 +2967,43 @@ class MiniMaxH3ChainAssemble:
                 raise FileNotFoundError("H3 chain segment is missing: %s" % path)
             segment_paths.append(path)
         ffmpeg = shutil.which("ffmpeg")
-        if not ffmpeg:
-            raise RuntimeError("ffmpeg is required to assemble H3 chain segments.")
-        with open(concat_path, "w", encoding="utf-8") as handle:
-            for path in segment_paths:
-                escaped = path.replace("\\", "\\\\").replace("'", "'\\''")
-                handle.write("file '%s'\n" % escaped)
+        if not ffmpeg and av is None:
+            raise RuntimeError(
+                "H3 Chain Assemble found neither an ffmpeg executable nor "
+                "PyAV. Install ffmpeg or restore ComfyUI's av package.")
 
         for temporary in (video_tmp, final_tmp, wav_tmp, metadata_tmp):
             if os.path.exists(temporary):
                 os.unlink(temporary)
+        backend = "ffmpeg"
         try:
-            _write_ffmetadata(
-                metadata_tmp, _manifest_media_metadata(manifest))
-            _run_ffmpeg([ffmpeg, "-y", "-f", "concat", "-safe", "0", "-i",
-                         concat_path, "-f", "ffmetadata", "-i", metadata_tmp,
-                         "-map", "0:v:0", "-map_metadata", "1", "-c", "copy",
-                         "-movflags", "use_metadata_tags+faststart", video_tmp])
+            media_metadata = _manifest_media_metadata(manifest)
+            if ffmpeg:
+                with open(concat_path, "w", encoding="utf-8") as handle:
+                    for path in segment_paths:
+                        escaped = path.replace("\\", "\\\\").replace(
+                            "'", "'\\''")
+                        handle.write("file '%s'\n" % escaped)
+                _write_ffmetadata(metadata_tmp, media_metadata)
+                _run_ffmpeg([
+                    ffmpeg, "-y", "-f", "concat", "-safe", "0", "-i",
+                    concat_path, "-f", "ffmetadata", "-i", metadata_tmp,
+                    "-map", "0:v:0", "-map_metadata", "1", "-c", "copy",
+                    "-movflags", "use_metadata_tags+faststart", video_tmp,
+                ])
+            else:
+                backend = "PyAV fallback"
+                _LOG.warning(
+                    "H3 Chain ffmpeg executable not found; assembling with "
+                    "the built-in PyAV stream-copy fallback")
+                _pyav_concat_video(
+                    segment_paths,
+                    [int(item["delivered_frames"]) for item in segments],
+                    video_tmp, media_metadata)
 
             if audio is None:
                 os.replace(video_tmp, final_tmp)
-            else:
+            elif ffmpeg:
                 _write_wav(audio, wav_tmp)
                 _run_ffmpeg([
                     ffmpeg, "-y", "-i", video_tmp, "-i", wav_tmp,
@@ -2824,6 +3014,10 @@ class MiniMaxH3ChainAssemble:
                     "-map_metadata", "0",
                     "-movflags", "use_metadata_tags+faststart", final_tmp,
                 ])
+            else:
+                _pyav_mux_audio(
+                    video_tmp, audio, final_tmp, int(audio_bitrate),
+                    int(manifest["total_delivered_frames"]))
             os.replace(final_tmp, final_path)
         finally:
             for temporary in (concat_path, video_tmp, final_tmp, wav_tmp,
@@ -2831,7 +3025,8 @@ class MiniMaxH3ChainAssemble:
                 if os.path.exists(temporary):
                     os.unlink(temporary)
 
-        status = "assembled %d clips -> %s" % (len(segments), final_path)
+        status = "assembled %d clips with %s -> %s" % (
+            len(segments), backend, final_path)
         _LOG.info("H3 Chain %s", status)
         return {"ui": {"text": [status]}, "result": (final_path,)}
 
