@@ -157,8 +157,12 @@ validates the plan, audio hash, fingerprint, and predecessor artifacts first.
 
 `source_track` is recommended for music video. Generated audio remains coherent
 at joins but may lose high-frequency detail over long chains. Artifacts live in
-`output/h3_chains/<run_name>/`; each fixed JSON slot atomically commits its MP4
-and safetensors pair.
+`output/h3_chains/<run_name>/`. Every segment keeps its exact prompt in the MP4
+metadata, a matching `.prompt.txt`, its checkpoint JSON, and the safetensors
+metadata. The run also stores `plan.json`, loadable `workflow.json`, and
+`api_prompt.json`; review-gate prompt or seed retries update these recovery
+copies before the replacement segment is committed. Segment and assembled MP4s
+also use ComfyUI's standard embedded `workflow` and `prompt` tags.
 
 ## Compatibility and guardrails
 

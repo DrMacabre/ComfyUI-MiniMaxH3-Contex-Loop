@@ -494,6 +494,38 @@ Model, VAE, LoRA, references, CFG, sampler, and scheduler sit outside the Plan
 node, so the chain cannot inspect them directly. Record them in
 `generation_fingerprint` and change that string whenever they change.
 
+## Saved prompts and workflow recovery
+
+Segment Save preserves the actual effective prompt and seed used for every
+accepted render. A run under `output/h3_chains/<run_name>/` contains:
+
+```text
+plan.json                         normalized effective plan for this run
+workflow.json                     loadable frontend ComfyUI workflow
+api_prompt.json                   queued API-format graph fallback
+manifest.json                     completed segment manifest
+segments/clip_0001.<id>.mp4       video with the full prompt in MP4 metadata
+segments/clip_0001.<id>.prompt.txt
+checkpoints/clip_0001.json        structured prompt, seed, paths and hashes
+checkpoints/clip_0001.<id>.safetensors
+final/<filename>.mp4              workflow, API graph and manifest embedded
+```
+
+The segment record and manifest store `prompt_prefix`, `scene_prompt`, the
+combined `prompt`, `prompt_hash`, `seed`, and paths to the recovery archives.
+The same prompt fields are also stored in the safetensors metadata. Review Gate
+retries rewrite `plan.json`, `workflow.json`, and `api_prompt.json` with the
+effective scene prompt and exact uint64 seed before saving the replacement.
+Both segment and assembled MP4 files use ComfyUI's standard `workflow` and
+`prompt` tags, so metadata-aware ComfyUI loaders can recover the graph directly;
+assembled files additionally embed the completed `h3_manifest`.
+
+`workflow.json` is the file to drag back into ComfyUI. `plan.json` remains the
+authoritative record of what the loop actually rendered if an external API
+queued the job without frontend workflow metadata. As with ordinary ComfyUI
+workflow metadata, connected node widget values are archived too; keep the run
+folder private if a workflow contains credentials or other sensitive values.
+
 ## Complete music-video template
 
 ```json

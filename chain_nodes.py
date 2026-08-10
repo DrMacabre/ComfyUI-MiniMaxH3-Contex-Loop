@@ -601,6 +601,15 @@ def _artifact_paths(plan: dict[str, Any], index: int) -> dict[str, str]:
     }
 
 
+def _run_archive_paths(plan: dict[str, Any]) -> dict[str, str]:
+    run_dir = _run_dir(plan)
+    return {
+        "plan": os.path.join(run_dir, "plan.json"),
+        "workflow": os.path.join(run_dir, "workflow.json"),
+        "api_prompt": os.path.join(run_dir, "api_prompt.json"),
+    }
+
+
 def _versioned_path(path: str, transaction: str) -> str:
     stem, extension = os.path.splitext(path)
     return "%s.%s%s" % (stem, transaction, extension)
@@ -624,6 +633,17 @@ def _safe_unlink(path: str) -> None:
         pass
 
 
+def _atomic_text(path: str, value: str) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    temporary = "%s.%s.tmp" % (path, uuid.uuid4().hex)
+    try:
+        with open(temporary, "w", encoding="utf-8") as handle:
+            handle.write(str(value))
+        os.replace(temporary, path)
+    finally:
+        _safe_unlink(temporary)
+
+
 def _cleanup_previous_artifacts(plan: dict[str, Any], index: int,
                                 previous_metadata: Any,
                                 keep: set[str]) -> None:
@@ -636,9 +656,10 @@ def _cleanup_previous_artifacts(plan: dict[str, Any], index: int,
     allowed = {
         "segment": os.path.dirname(canonical["segment"]),
         "checkpoint": os.path.dirname(canonical["checkpoint"]),
+        "prompt_file": os.path.dirname(canonical["segment"]),
     }
     prefix = "clip_%04d" % index
-    for key in ("segment", "checkpoint"):
+    for key in ("segment", "checkpoint", "prompt_file"):
         value = previous.get(key)
         if not isinstance(value, str):
             continue
@@ -673,6 +694,163 @@ def _read_json(path: str) -> Any:
         return json.load(handle)
 
 
+def _effective_editor_plan(plan: dict[str, Any]) -> dict[str, Any]:
+    """Return an exact, editable plan source for this execution revision."""
+    return {
+        "prompt_prefix": str(plan.get("prompt_prefix") or ""),
+        "shots": [{
+            "id": shot["id"],
+            "prompt": shot.get("scene_prompt", ""),
+            "length": int(shot["raw_frames"]),
+            "steps": int(shot["steps"]),
+            # A decimal string remains exact when the workflow passes through
+            # JavaScript, including uint64 values above Number.MAX_SAFE_INTEGER.
+            "seed": str(int(shot["seed"])),
+        } for shot in plan["shots"]],
+    }
+
+
+def _json_document(value: Any) -> Any:
+    """Clone one JSON document, accepting ComfyUI's occasional string form."""
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            return None
+    if not isinstance(value, (dict, list)):
+        return None
+    try:
+        return json.loads(json.dumps(value, ensure_ascii=False))
+    except (TypeError, ValueError):
+        return None
+
+
+def _matching_plan_node_ids(api_prompt: Any,
+                            plan: dict[str, Any]) -> tuple[Any, set[str]]:
+    document = _json_document(api_prompt)
+    if not isinstance(document, dict):
+        return None, set()
+    effective_json = json.dumps(
+        _effective_editor_plan(plan), ensure_ascii=False, indent=2)
+    candidates: list[tuple[str, dict[str, Any]]] = []
+    exact: list[tuple[str, dict[str, Any]]] = []
+    for node_id, node in document.items():
+        if not isinstance(node, dict) or node.get("class_type") != "MiniMaxH3ChainPlan":
+            continue
+        inputs = node.get("inputs")
+        if not isinstance(inputs, dict):
+            continue
+        candidate = (str(node_id), inputs)
+        candidates.append(candidate)
+        run_name = inputs.get("run_name")
+        if (isinstance(run_name, str) and
+                _safe_name(run_name, "h3_chain") == plan["run_name"]):
+            exact.append(candidate)
+    selected = exact or (candidates if len(candidates) == 1 else [])
+    for _node_id, inputs in selected:
+        inputs["plan_json"] = effective_json
+    return document, {node_id for node_id, _inputs in selected}
+
+
+def _patched_workflow(workflow: Any, plan: dict[str, Any],
+                      plan_node_ids: set[str]) -> Any:
+    document = _json_document(workflow)
+    if not isinstance(document, dict):
+        return None
+    nodes = document.get("nodes")
+    if not isinstance(nodes, list):
+        return document
+    effective_json = json.dumps(
+        _effective_editor_plan(plan), ensure_ascii=False, indent=2)
+    candidates = [node for node in nodes if isinstance(node, dict) and
+                  node.get("type") == "MiniMaxH3ChainPlan"]
+    selected = []
+    for node in candidates:
+        widgets = node.get("widgets_values")
+        node_id = str(node.get("id"))
+        run_name = (widgets[1] if isinstance(widgets, list) and len(widgets) > 1
+                    else None)
+        if (node_id in plan_node_ids or
+                (isinstance(run_name, str) and
+                 _safe_name(run_name, "h3_chain") == plan["run_name"])):
+            selected.append(node)
+    if not selected and len(candidates) == 1:
+        selected = candidates
+    for node in selected:
+        widgets = node.get("widgets_values")
+        if isinstance(widgets, list) and widgets:
+            widgets[0] = effective_json
+    return document
+
+
+def _write_run_archives(plan: dict[str, Any], api_prompt: Any = None,
+                        extra_pnginfo: Any = None) -> dict[str, str]:
+    """Persist recovery documents and return output-relative paths.
+
+    `plan.json` is always written and represents the exact effective revision,
+    including review-gate prompt/seed changes. The frontend workflow and API
+    prompt are written when ComfyUI supplies their standard hidden metadata.
+    Existing workflow archives are retained if a non-Comfy caller later saves
+    another segment without hidden metadata.
+    """
+    paths = _run_archive_paths(plan)
+    archived_plan = dict(plan)
+    archived_plan["format"] = "h3_chain_plan_archive_v1"
+    archived_plan["editor_plan"] = _effective_editor_plan(plan)
+    _atomic_json(paths["plan"], archived_plan)
+
+    patched_prompt, plan_node_ids = _matching_plan_node_ids(api_prompt, plan)
+    if patched_prompt is not None:
+        _atomic_json(paths["api_prompt"], patched_prompt)
+
+    workflow = None
+    if isinstance(extra_pnginfo, dict):
+        workflow = extra_pnginfo.get("workflow")
+    patched_workflow = _patched_workflow(workflow, plan, plan_node_ids)
+    if patched_workflow is not None:
+        _atomic_json(paths["workflow"], patched_workflow)
+
+    return _available_run_archives(plan)
+
+
+def _available_run_archives(plan: dict[str, Any]) -> dict[str, str]:
+    paths = _run_archive_paths(plan)
+    return {key: _relative_output_path(path) for key, path in paths.items()
+            if os.path.isfile(path)}
+
+
+def _archive_media_metadata(archives: Any) -> dict[str, str]:
+    """Load ComfyUI-compatible video tags from persisted run archives."""
+    if not isinstance(archives, dict):
+        return {}
+    metadata = {}
+    for archive_key, tag in (("api_prompt", "prompt"),
+                             ("workflow", "workflow"),
+                             ("plan", "h3_plan")):
+        value = archives.get(archive_key)
+        if not isinstance(value, str):
+            continue
+        try:
+            document = _read_json(_absolute_output_path(value))
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            _LOG.warning("H3 Chain could not embed %s metadata: %s",
+                         archive_key, exc)
+            continue
+        metadata[tag] = json.dumps(document, ensure_ascii=False,
+                                   separators=(",", ":"))
+    return metadata
+
+
+def _prompt_fields(plan: dict[str, Any], index: int) -> dict[str, Any]:
+    shot = plan["shots"][int(index) - 1]
+    return {
+        "prompt_prefix": str(plan.get("prompt_prefix") or ""),
+        "scene_prompt": str(shot.get("scene_prompt") or ""),
+        "prompt": str(shot.get("prompt") or ""),
+        "prompt_hash": str(shot["prompt_hash"]),
+    }
+
+
 def _tensor_cpu_clone(value: Any) -> Any:
     if torch is not None and torch.is_tensor(value):
         return value.detach().cpu().contiguous().clone()
@@ -690,7 +868,8 @@ def _compact_latent(latent: dict[str, Any]) -> dict[str, Any]:
 def _public_segment(value: dict[str, Any]) -> dict[str, Any]:
     return {key: value[key] for key in (
         "index", "id", "segment", "checkpoint", "metadata",
-        "raw_frames", "delivered_frames", "history_hash", "prompt_hash",
+        "prompt_file", "raw_frames", "delivered_frames", "history_hash",
+        "prompt_prefix", "scene_prompt", "prompt", "prompt_hash", "archives",
         "seed", "steps", "sample_rate", "segment_sha256",
         "checkpoint_sha256") if key in value}
 
@@ -718,6 +897,17 @@ def _verify_segment_artifacts(segment: dict[str, Any], index: int) -> None:
             raise ValueError(
                 "H3 chain clip %d %s failed its SHA-256 integrity check." %
                 (index, key))
+    prompt_file = segment.get("prompt_file")
+    if isinstance(prompt_file, str):
+        prompt_path = _absolute_output_path(prompt_file)
+        if not os.path.isfile(prompt_path):
+            raise FileNotFoundError(
+                "H3 chain clip %d prompt sidecar is missing: %s" %
+                (index, prompt_path))
+        if _file_sha256(prompt_path) != str(segment.get("prompt_hash") or ""):
+            raise ValueError(
+                "H3 chain clip %d prompt sidecar failed its SHA-256 integrity "
+                "check." % index)
 
 
 def _load_resume_state(plan: dict[str, Any], start_clip: int) -> dict[str, Any]:
@@ -746,7 +936,10 @@ def _load_resume_state(plan: dict[str, Any], start_clip: int) -> dict[str, Any]:
                 "Checkpoint segment record for clip %d has a mismatched history."
                 % index)
         _verify_segment_artifacts(segment, index)
-        segments.append(_public_segment(segment))
+        restored = _public_segment(segment)
+        for key, value in _prompt_fields(plan, index).items():
+            restored.setdefault(key, value)
+        segments.append(restored)
         previous_meta = metadata
 
     if previous_meta is None:
@@ -832,7 +1025,8 @@ def _slice_audio(audio: dict[str, Any], start_seconds: float,
     return {"waveform": waveform[..., start:end], "sample_rate": sample_rate}
 
 
-def _write_segment_video(images: Any, path: str, fps: int, crf: int) -> None:
+def _write_segment_video(images: Any, path: str, fps: int, crf: int,
+                         metadata: dict[str, Any] | None = None) -> None:
     if av is None or torch is None:
         raise RuntimeError("H3 segment saving requires PyAV and torch.")
     if len(images.shape) != 4 or int(images.shape[0]) < 1:
@@ -846,7 +1040,13 @@ def _write_segment_video(images: Any, path: str, fps: int, crf: int) -> None:
         os.unlink(temporary)
     container = None
     try:
-        container = av.open(temporary, mode="w")
+        container = av.open(
+            temporary, mode="w",
+            options={"movflags": "use_metadata_tags+faststart"})
+        if metadata:
+            for key, value in metadata.items():
+                if value is not None:
+                    container.metadata[str(key)] = str(value)
         stream = container.add_stream("libx264", rate=Fraction(int(fps), 1))
         stream.width = width
         stream.height = height
@@ -1262,6 +1462,10 @@ class MiniMaxH3ChainSegmentSave:
                                "Required for "
                                "generated_audio and synchronized review."}),
             },
+            "hidden": {
+                "prompt": "PROMPT",
+                "extra_pnginfo": "EXTRA_PNGINFO",
+            },
         }
 
     RETURN_TYPES = (SEGMENT_TYPE, "STRING")
@@ -1274,13 +1478,15 @@ class MiniMaxH3ChainSegmentSave:
     OUTPUT_NODE = True
     CATEGORY = "conditioning/minimax/contex_loop"
     DESCRIPTION = ("Immediately save one delivered H3 clip as an H.264 segment "
-                   "plus a safetensors resume checkpoint.")
+                   "plus a safetensors resume checkpoint, exact prompt metadata, "
+                   "and workflow recovery sidecars.")
 
     @classmethod
     def IS_CHANGED(cls, *args, **kwargs):
         return float("NaN")
 
-    def save(self, state, images, sampled_latent, audio=None):
+    def save(self, state, images, sampled_latent, audio=None, prompt=None,
+             extra_pnginfo=None):
         if _st_save is None:
             raise RuntimeError("safetensors is required for H3 chain checkpoints.")
         plan = state["plan"]
@@ -1318,6 +1524,7 @@ class MiniMaxH3ChainSegmentSave:
         paths = _artifact_paths(plan, index)
         os.makedirs(os.path.dirname(paths["segment"]), exist_ok=True)
         os.makedirs(os.path.dirname(paths["checkpoint"]), exist_ok=True)
+        archives = _write_run_archives(plan, prompt, extra_pnginfo)
         previous_metadata = None
         if os.path.isfile(paths["metadata"]):
             try:
@@ -1329,15 +1536,32 @@ class MiniMaxH3ChainSegmentSave:
         transaction = uuid.uuid4().hex
         published_segment = _versioned_path(paths["segment"], transaction)
         published_checkpoint = _versioned_path(paths["checkpoint"], transaction)
+        published_prompt = os.path.splitext(published_segment)[0] + ".prompt.txt"
         checkpoint_tmp = "%s.%s.tmp" % (published_checkpoint, uuid.uuid4().hex)
         committed = False
         try:
+            video_metadata = _archive_media_metadata(archives)
+            video_metadata.update({
+                "title": "H3 scene %d - %s" % (index, shot["id"]),
+                "comment": shot["prompt"],
+                "description": shot.get("scene_prompt", ""),
+                "synopsis": shot["prompt_hash"],
+                "h3_prompt": shot["prompt"],
+                "h3_seed": str(shot["seed"]),
+            })
             _write_segment_video(
-                images, published_segment, FPS, plan["segment_crf"])
+                images, published_segment, FPS, plan["segment_crf"],
+                metadata=video_metadata)
+            _atomic_text(published_prompt, shot["prompt"])
             _st_save(tensors, checkpoint_tmp, metadata={
-                "format": "h3_chain_checkpoint_v2",
+                "format": "h3_chain_checkpoint_v3",
                 "index": str(index),
                 "history_hash": _history_hash(plan, index),
+                "prompt_prefix": str(plan.get("prompt_prefix") or ""),
+                "scene_prompt": str(shot.get("scene_prompt") or ""),
+                "prompt": str(shot["prompt"]),
+                "prompt_hash": str(shot["prompt_hash"]),
+                "seed": str(shot["seed"]),
                 "sample_rate": str(sample_rate),
             })
             os.replace(checkpoint_tmp, published_checkpoint)
@@ -1348,10 +1572,12 @@ class MiniMaxH3ChainSegmentSave:
                 "segment": _relative_output_path(published_segment),
                 "checkpoint": _relative_output_path(published_checkpoint),
                 "metadata": _relative_output_path(paths["metadata"]),
+                "prompt_file": _relative_output_path(published_prompt),
                 "raw_frames": shot["raw_frames"],
                 "delivered_frames": shot["delivered_frames"],
                 "history_hash": _history_hash(plan, index),
-                "prompt_hash": shot["prompt_hash"],
+                **_prompt_fields(plan, index),
+                "archives": archives,
                 "seed": shot["seed"],
                 "steps": shot["steps"],
                 "sample_rate": sample_rate,
@@ -1359,11 +1585,12 @@ class MiniMaxH3ChainSegmentSave:
                 "checkpoint_sha256": _file_sha256(published_checkpoint),
             }
             metadata = {
-                "format": "h3_chain_segment_v2",
+                "format": "h3_chain_segment_v3",
                 "run_name": plan["run_name"],
                 "plan_hash": plan["plan_hash"],
                 "history_hash": segment["history_hash"],
                 "compatibility": plan["compatibility"],
+                "archives": archives,
                 "segment": segment,
             }
             # This metadata replacement is the transaction's commit point. Until
@@ -1375,10 +1602,11 @@ class MiniMaxH3ChainSegmentSave:
             if not committed:
                 _safe_unlink(published_segment)
                 _safe_unlink(published_checkpoint)
+                _safe_unlink(published_prompt)
 
         _cleanup_previous_artifacts(
             plan, index, previous_metadata,
-            {published_segment, published_checkpoint})
+            {published_segment, published_checkpoint, published_prompt})
         status = ("saved clip %d/%d: %s + checkpoint %s" %
                   (index, len(plan["shots"]), published_segment,
                    published_checkpoint))
@@ -1726,7 +1954,17 @@ class MiniMaxH3ChainReview:
 
 def _manifest_from_segments(plan: dict[str, Any], values: list[dict[str, Any]],
                             complete: bool) -> dict[str, Any]:
-    segments = [_public_segment(item) for item in values]
+    segments = []
+    archives = _available_run_archives(plan)
+    for item in values:
+        segment = _public_segment(item)
+        index = int(segment.get("index", -1))
+        if 1 <= index <= len(plan["shots"]):
+            for key, value in _prompt_fields(plan, index).items():
+                segment.setdefault(key, value)
+        if archives:
+            segment.setdefault("archives", archives)
+        segments.append(segment)
     expected_count = len(plan["shots"]) if complete else len(segments)
     if expected_count < 1:
         raise ValueError("H3 chain manifest requires at least one saved clip.")
@@ -1743,16 +1981,19 @@ def _manifest_from_segments(plan: dict[str, Any], values: list[dict[str, Any]],
             plan["shots"][int(item["index"]) - 1]["delivered_frames"]))
         for item in segments)
     manifest = {
-        "format": ("h3_chain_manifest_v2" if complete
-                   else "h3_chain_partial_manifest_v2"),
+        "format": ("h3_chain_manifest_v3" if complete
+                   else "h3_chain_partial_manifest_v3"),
         "run_name": plan["run_name"],
         "plan_hash": plan["plan_hash"],
+        "prompt_prefix": str(plan.get("prompt_prefix") or ""),
         "compatibility": plan["compatibility"],
         "clip_count": expected_count,
         "total_delivered_frames": total_frames,
         "duration_seconds": total_frames / float(FPS),
         "segments": segments,
     }
+    if archives:
+        manifest["archives"] = archives
     if not complete:
         manifest["planned_clip_count"] = len(plan["shots"])
         manifest["last_completed_clip"] = len(segments)
@@ -2095,6 +2336,31 @@ def _run_ffmpeg(command: list[str], timeout_seconds: float | None = None) -> Non
         raise RuntimeError("ffmpeg failed (%d):\n%s" % (result.returncode, tail))
 
 
+def _write_ffmetadata(path: str, metadata: dict[str, Any]) -> None:
+    def escape(value: Any) -> str:
+        text = str(value).replace("\\", "\\\\")
+        for character in ("=", ";", "#"):
+            text = text.replace(character, "\\" + character)
+        return text.replace("\n", "\\\n")
+
+    lines = [";FFMETADATA1"]
+    lines.extend("%s=%s" % (escape(key), escape(value))
+                 for key, value in metadata.items() if value is not None)
+    _atomic_text(path, "\n".join(lines) + "\n")
+
+
+def _manifest_media_metadata(manifest: dict[str, Any]) -> dict[str, str]:
+    metadata = _archive_media_metadata(manifest.get("archives"))
+    metadata.update({
+        "title": "MiniMax H3 chain - %s" % manifest.get("run_name", "h3_chain"),
+        "comment": "%d H3 scenes; prompts and recovery workflow embedded" %
+                   int(manifest.get("clip_count", 0)),
+        "h3_manifest": json.dumps(
+            manifest, ensure_ascii=False, separators=(",", ":")),
+    })
+    return metadata
+
+
 class MiniMaxH3ChainAssemble:
     @classmethod
     def INPUT_TYPES(cls):
@@ -2195,6 +2461,7 @@ class MiniMaxH3ChainAssemble:
         video_tmp = os.path.join(final_dir, ".video.tmp.mp4")
         final_tmp = os.path.join(final_dir, ".final.tmp.mp4")
         wav_tmp = os.path.join(final_dir, ".audio.tmp.wav")
+        metadata_tmp = os.path.join(final_dir, ".metadata.tmp.txt")
 
         segment_paths = []
         for item in segments:
@@ -2210,12 +2477,16 @@ class MiniMaxH3ChainAssemble:
                 escaped = path.replace("\\", "\\\\").replace("'", "'\\''")
                 handle.write("file '%s'\n" % escaped)
 
-        for temporary in (video_tmp, final_tmp, wav_tmp):
+        for temporary in (video_tmp, final_tmp, wav_tmp, metadata_tmp):
             if os.path.exists(temporary):
                 os.unlink(temporary)
         try:
+            _write_ffmetadata(
+                metadata_tmp, _manifest_media_metadata(manifest))
             _run_ffmpeg([ffmpeg, "-y", "-f", "concat", "-safe", "0", "-i",
-                         concat_path, "-c", "copy", video_tmp])
+                         concat_path, "-f", "ffmetadata", "-i", metadata_tmp,
+                         "-map", "0:v:0", "-map_metadata", "1", "-c", "copy",
+                         "-movflags", "use_metadata_tags+faststart", video_tmp])
 
             if audio is None:
                 os.replace(video_tmp, final_tmp)
@@ -2227,11 +2498,13 @@ class MiniMaxH3ChainAssemble:
                     "-c:a", "aac", "-b:a", "%dk" % int(audio_bitrate),
                     "-t", "%.9f" % (int(manifest["total_delivered_frames"]) /
                                       float(FPS)),
-                    "-movflags", "+faststart", final_tmp,
+                    "-map_metadata", "0",
+                    "-movflags", "use_metadata_tags+faststart", final_tmp,
                 ])
             os.replace(final_tmp, final_path)
         finally:
-            for temporary in (concat_path, video_tmp, final_tmp, wav_tmp):
+            for temporary in (concat_path, video_tmp, final_tmp, wav_tmp,
+                              metadata_tmp):
                 if os.path.exists(temporary):
                     os.unlink(temporary)
 

@@ -34,6 +34,7 @@ import folder_paths  # noqa: E402
 import torch  # noqa: E402
 import execution  # noqa: E402
 import nodes as comfy_nodes  # noqa: E402
+from safetensors import safe_open  # noqa: E402
 
 
 def load_package():
@@ -434,7 +435,7 @@ def main():
         assert executor.success
         assert observed["manifest"]["clip_count"] == 2
         assert len(observed["manifest"]["segments"]) == 2
-        assert observed["manifest"]["format"] == "h3_chain_partial_manifest_v2"
+        assert observed["manifest"]["format"] == "h3_chain_partial_manifest_v3"
         assert observed["manifest"]["planned_clip_count"] == 4
         print("runtime recursion: scene_range 1:2 stopped a four-clip plan at 2")
     finally:
@@ -512,16 +513,85 @@ def main():
                 raise AssertionError("Segment Save accepted mistimed audio")
             state1 = chain._initial_state(prepared_plan, 1)
             images1 = torch.zeros((5, 32, 32, 3), dtype=torch.float32)
+            queued_prompt = {
+                "1700": {
+                    "class_type": "MiniMaxH3ChainPlan",
+                    "inputs": {
+                        "plan_json": '{"shots":["stale"]}',
+                        "run_name": "smoke",
+                    },
+                },
+            }
+            queued_workflow = {
+                "nodes": [{
+                    "id": 1700,
+                    "type": "MiniMaxH3ChainPlan",
+                    "widgets_values": [
+                        '{"shots":["stale"]}', "smoke", "fingerprint",
+                    ],
+                }],
+            }
             result1 = saver.save(
-                state1, images1, av_latent(), audio_for_frames(5))
+                state1, images1, av_latent(), audio_for_frames(5),
+                prompt=queued_prompt,
+                extra_pnginfo={"workflow": queued_workflow})
             segment1 = result1["result"][0]
             assert pathlib.Path(chain._absolute_output_path(
                 segment1["segment"])).is_file()
+
+            assert segment1["prompt_prefix"] == ""
+            assert segment1["scene_prompt"] == "first"
+            assert segment1["prompt"] == "first"
+            prompt_path = pathlib.Path(chain._absolute_output_path(
+                segment1["prompt_file"]))
+            assert prompt_path.read_text(encoding="utf-8") == "first"
+            segment_metadata = json.loads(pathlib.Path(
+                chain._absolute_output_path(segment1["metadata"])
+            ).read_text(encoding="utf-8"))
+            assert segment_metadata["format"] == "h3_chain_segment_v3"
+            assert segment_metadata["segment"]["prompt"] == "first"
+            assert segment_metadata["archives"] == segment1["archives"]
+
+            run_dir = pathlib.Path(tempdir, "h3_chains", "smoke")
+            archived_plan = json.loads(
+                (run_dir / "plan.json").read_text(encoding="utf-8"))
+            archived_api = json.loads(
+                (run_dir / "api_prompt.json").read_text(encoding="utf-8"))
+            archived_workflow = json.loads(
+                (run_dir / "workflow.json").read_text(encoding="utf-8"))
+            assert archived_plan["format"] == "h3_chain_plan_archive_v1"
+            assert archived_plan["shots"][0]["prompt"] == "first"
+            assert json.loads(
+                archived_api["1700"]["inputs"]["plan_json"]
+            )["shots"][0]["prompt"] == "first"
+            assert json.loads(
+                archived_workflow["nodes"][0]["widgets_values"][0]
+            )["shots"][0]["prompt"] == "first"
+            embedded_tags = json.loads(subprocess.check_output([
+                "ffprobe", "-v", "error", "-show_entries", "format_tags",
+                "-of", "json",
+                str(chain._absolute_output_path(segment1["segment"])),
+            ], text=True))["format"]["tags"]
+            assert embedded_tags["comment"] == "first"
+            assert embedded_tags["h3_prompt"] == "first"
+            assert json.loads(embedded_tags["workflow"])["nodes"][0][
+                "type"] == "MiniMaxH3ChainPlan"
+            assert json.loads(embedded_tags["prompt"])["1700"][
+                "class_type"] == "MiniMaxH3ChainPlan"
+            assert json.loads(embedded_tags["h3_plan"])["shots"][0][
+                "prompt"] == "first"
+            print("recovery metadata: MP4, prompt sidecar, plan, API prompt, "
+                  "and workflow archive exact inputs")
 
             segment1_path = pathlib.Path(
                 chain._absolute_output_path(segment1["segment"]))
             checkpoint1_path = pathlib.Path(
                 chain._absolute_output_path(segment1["checkpoint"]))
+            with safe_open(checkpoint1_path, framework="pt", device="cpu") as saved:
+                checkpoint_metadata = saved.metadata()
+            assert checkpoint_metadata["format"] == "h3_chain_checkpoint_v3"
+            assert checkpoint_metadata["prompt"] == "first"
+            assert checkpoint_metadata["seed"] == "1"
             before_interruption = (
                 segment1_path.read_bytes(), checkpoint1_path.read_bytes())
             real_st_save = chain._st_save
@@ -858,8 +928,12 @@ def main():
                 "through_clip_0002.manifest.json")
             assert partial_manifest.is_file()
             partial_data = json.loads(partial_manifest.read_text())
-            assert partial_data["format"] == "h3_chain_partial_manifest_v2"
+            assert partial_data["format"] == "h3_chain_partial_manifest_v3"
             assert partial_data["clip_count"] == 2
+            assert partial_data["segments"][0]["prompt"] == "first"
+            assert partial_data["segments"][1]["prompt"] == "second"
+            assert partial_data["archives"]["workflow"].endswith(
+                "/workflow.json")
             print("review stop: joined partial AV video and checkpoint manifest")
 
             class CheckpointRequest:
@@ -892,6 +966,13 @@ def main():
                 manifest, "source", "source_final", 96, source)
             source_path = pathlib.Path(source_result["result"][0])
             assert source_path.is_file() and source_path.stat().st_size > 0
+            source_tags = json.loads(subprocess.check_output([
+                "ffprobe", "-v", "error", "-show_entries", "format_tags",
+                "-of", "json", str(source_path),
+            ], text=True))["format"]["tags"]
+            assert json.loads(source_tags["workflow"])["nodes"][0][
+                "type"] == "MiniMaxH3ChainPlan"
+            assert json.loads(source_tags["h3_manifest"])["clip_count"] == 2
             duration = float(subprocess.check_output([
                 "ffprobe", "-v", "error", "-show_entries", "format=duration",
                 "-of", "default=nw=1:nk=1", str(source_path),
