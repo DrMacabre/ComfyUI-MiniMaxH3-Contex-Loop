@@ -11,6 +11,10 @@ import {
 
 const NODE_NAME = "MiniMaxH3ChainReview";
 const PLAN_NAME = "MiniMaxH3ChainPlan";
+const VIDEO_HEIGHT_PROPERTY = "h3_chain_review_video_height";
+const DEFAULT_VIDEO_HEIGHT = 300;
+const MIN_VIDEO_HEIGHT = 140;
+const MAX_VIDEO_HEIGHT = 1200;
 const notifiedTokens = new Set();
 const mountedReviewNodes = new Set();
 let notificationAudioContext = null;
@@ -68,8 +72,18 @@ function injectStyles() {
         .h3r-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
         .h3r-title { font-weight:750; color:#a9c2ff; }
         .h3r-badge { color:#d5d9e3; opacity:.75; }
-        .h3r-video { width:100%; min-height:220px; max-height:420px; border-radius:6px;
-            background:#08090c; object-fit:contain; }
+        .h3r-video-panel { width:100%; height:300px; min-height:140px; max-height:1200px;
+            flex:0 0 auto; display:flex; flex-direction:column; overflow:hidden;
+            border:1px solid #343b4b; border-radius:6px; background:#08090c; }
+        .h3r-video { width:100%; height:calc(100% - 11px); min-height:0; display:block;
+            flex:1 1 auto; background:#08090c; object-fit:contain; }
+        .h3r-video-grip { height:11px; flex:0 0 11px; cursor:ns-resize;
+            border-top:1px solid #343b4b; background:linear-gradient(180deg,#252a35,#171a21);
+            position:relative; touch-action:none; }
+        .h3r-video-grip::after { content:""; position:absolute; left:calc(50% - 20px); top:4px;
+            width:40px; height:2px; border-top:1px solid #7e899f;
+            border-bottom:1px solid #4f586b; }
+        .h3r-video-grip:hover { background:linear-gradient(180deg,#313848,#1d212b); }
         .h3r-label { display:flex; flex-direction:column; gap:4px; color:#aeb5c5; }
         .h3r-prompt { width:100%; min-height:120px; resize:vertical; padding:7px;
             border:1px solid #56637e; border-radius:5px; background:#101218; color:#eef1f7; }
@@ -323,6 +337,65 @@ function mount(node) {
     video.preload = "metadata";
     video.playsInline = true;
     video.title = "Saved delivered scene preview. Review motion, continuity, and synchronized audio before choosing an action.";
+    const videoPanel = document.createElement("div");
+    videoPanel.className = "h3r-video-panel";
+    videoPanel.title = "Resizable saved-scene preview.";
+    const videoGrip = document.createElement("div");
+    videoGrip.className = "h3r-video-grip";
+    videoGrip.title = "Drag vertically to resize the video preview. Double-click to reset.";
+    videoGrip.setAttribute("role", "separator");
+    videoGrip.setAttribute("aria-label", "Resize video preview");
+    videoGrip.setAttribute("aria-orientation", "horizontal");
+    videoPanel.append(video, videoGrip);
+
+    node.properties ??= {};
+    const savedVideoHeight = Number(node.properties[VIDEO_HEIGHT_PROPERTY]);
+    const initialVideoHeight = Number.isFinite(savedVideoHeight)
+        ? Math.max(MIN_VIDEO_HEIGHT, Math.min(MAX_VIDEO_HEIGHT, savedVideoHeight))
+        : DEFAULT_VIDEO_HEIGHT;
+    videoPanel.style.height = `${initialVideoHeight}px`;
+
+    let videoResize = null;
+    function setVideoHeight(height, persist = false) {
+        const next = Math.round(Math.max(
+            MIN_VIDEO_HEIGHT,
+            Math.min(MAX_VIDEO_HEIGHT, Number(height) || DEFAULT_VIDEO_HEIGHT),
+        ));
+        videoPanel.style.height = `${next}px`;
+        videoGrip.setAttribute("aria-valuenow", String(next));
+        if (persist) {
+            node.properties[VIDEO_HEIGHT_PROPERTY] = next;
+            node.graph?.setDirtyCanvas?.(true, true);
+            app.graph?.setDirtyCanvas?.(true, true);
+        }
+    }
+    setVideoHeight(initialVideoHeight);
+    videoGrip.addEventListener("pointerdown", (event) => {
+        event.preventDefault();
+        videoResize = {
+            pointerId: event.pointerId,
+            startY: event.clientY,
+            startHeight: videoPanel.getBoundingClientRect().height,
+        };
+        videoGrip.setPointerCapture?.(event.pointerId);
+    });
+    videoGrip.addEventListener("pointermove", (event) => {
+        if (!videoResize || event.pointerId !== videoResize.pointerId) return;
+        event.preventDefault();
+        setVideoHeight(videoResize.startHeight + event.clientY - videoResize.startY);
+    });
+    function finishVideoResize(event) {
+        if (!videoResize || event.pointerId !== videoResize.pointerId) return;
+        videoResize = null;
+        setVideoHeight(videoPanel.getBoundingClientRect().height, true);
+        videoGrip.releasePointerCapture?.(event.pointerId);
+    }
+    videoGrip.addEventListener("pointerup", finishVideoResize);
+    videoGrip.addEventListener("pointercancel", finishVideoResize);
+    videoGrip.addEventListener("dblclick", (event) => {
+        event.preventDefault();
+        setVideoHeight(DEFAULT_VIDEO_HEIGHT, true);
+    });
 
     const prefix = document.createElement("pre");
     prefix.className = "h3r-prefix";
@@ -405,7 +478,7 @@ function mount(node) {
     resumeRow.append(resumeSelect, refreshResume, loadResume);
     resume.append(resumeTitle, resumeRow, resumeStatus);
 
-    root.append(head, video, prefix, promptLabel, seedRow, actions, status, resume);
+    root.append(head, videoPanel, prefix, promptLabel, seedRow, actions, status, resume);
 
     let current = null;
     let countdownTimer = null;

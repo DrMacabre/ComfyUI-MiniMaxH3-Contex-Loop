@@ -147,6 +147,8 @@ current MP4 with synchronized audio and offers:
 Notification sound, auto-continue timeout, and model unloading while waiting
 are optional. The same node can preview and load **Resume scene N**; resume
 validates the plan, audio hash, fingerprint, and predecessor artifacts first.
+Drag the thin bar directly below the video to resize the preview; its height is
+saved with the workflow. Double-click the bar to restore the default height.
 
 ## Archival PNG export
 

@@ -68,6 +68,10 @@ assert.match(reviewSource, /gates\.length === 1/);
 assert.match(reviewSource, /"pointerdown", "pointerup", "mousedown", "mouseup", "click"/);
 assert.match(reviewSource, /preview_revision/);
 assert.match(reviewSource, /sameToken/);
+assert.match(reviewSource, /h3r-video-panel/);
+assert.match(reviewSource, /h3r-video-grip/);
+assert.match(reviewSource, /h3_chain_review_video_height/);
+assert.match(reviewSource, /setPointerCapture/);
 assert.doesNotMatch(reviewSource, /\/h3_motion_context\/review/);
 
 console.log("H3 Chain Review editor helpers: ok");
