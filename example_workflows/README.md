@@ -1,5 +1,19 @@
 # Example workflows
 
+## Experimental: MiniMax H3 Three-Angle Guitar Ref2VA
+
+A one-pass performance re-filming experiment, rather than a recursive loop.
+Core **Load Video** opens `3ClbaJYWVO4_000030.mp4`; **Reference Video Prep**
+samples it at H3's 24 fps, selects 209 valid frames (8.708 seconds), and copies
+the matching source-audio samples without padding or time-stretching. Stock
+Ref2VA receives the synchronized picture/audio pair and a source-specific
+three-angle prompt. At export, the original waveform replaces generated audio.
+
+The prompt preserves the visible performer, plaid shirt, cream Telecaster-style
+guitar, hand choreography, and musical timing while deliberately removing the
+source product card, website watermark, text, and split-screen layout. Treat
+this as experimental and select model paths available in your installation.
+
 ## Experimental: MiniMax H3 Extend Existing Video Model Workflow
 
 A compact two-scene model for extending an existing MP4. Core **Load Video**

@@ -20,6 +20,10 @@ huge cumulative image tensor.
 Newest first. Recent additions stay visible; older milestones are folded away
 so this page remains a useful starting point rather than a changelog wall.
 
+- **v0.3.8 — One-pass performance re-filming.** A Reference Video Prep node
+  converts native VIDEO or decoded IMAGE/AUDIO to exact 24 fps Ref2VA input,
+  copies its soundtrack without padding or time-stretching, and powers a new
+  experimental three-angle guitar workflow.
 - **v0.3.7 — Flexible video loaders.** Existing Video Context now accepts a
   native ComfyUI `VIDEO` directly or separate `IMAGE + AUDIO + FPS` outputs
   from VHS and other decoding nodes.
@@ -108,6 +112,7 @@ inspired by **nkxx188’s**
 | 🖼️ | Re-decode saved latents into a continuous PNG sequence |
 | 🎯 | Scene ranges such as `3` or `3:8` |
 | ⏩ | Continue an existing video, with optional original-video prepend |
+| 🎸 | Re-film one synchronized performance from new camera angles |
 
 The runtime changes are opt-in. Loading this pack does not alter ordinary
 ComfyUI workflows; its guarded patches activate only when a Contex Loop Context
@@ -149,6 +154,13 @@ Plan → Loop Start → Current Shot → stock H3 conditioning
 
 Loop End manifest → Assemble
 ```
+
+For a non-looping experiment, open the
+[three-angle guitar Ref2VA workflow](<example_workflows/EXPERIMENTAL MiniMax H3 Three-Angle Guitar Ref2VA.json>).
+It loads `3ClbaJYWVO4_000030.mp4`, turns the source performance into a
+209-frame synchronized Ref2VA reference, generates three alternate viewpoints
+in one pass, and exports with the original waveform cut exactly to 8.708 s.
+The source product card and watermark are deliberately excluded by the prompt.
 
 To extend an existing video, add **MiniMax H3 Existing Video Context**:
 

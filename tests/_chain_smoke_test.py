@@ -118,6 +118,7 @@ def main():
     print("review: async decision route preserves exact uint64 seeds")
     required = {
         "MiniMaxH3ChainPlan", "MiniMaxH3ChainScenePromptEditor",
+        "MiniMaxH3ReferenceVideoPrepare",
         "MiniMaxH3ChainExternalVideo",
         "MiniMaxH3ChainLoopStart",
         "MiniMaxH3ChainCurrent", "MiniMaxH3ChainContext",
@@ -167,6 +168,40 @@ def main():
     assert workflow_start.get("widgets_values") == [1, ""]
     assert "SEGMENT" not in str(workflow_start.get("title", "")).upper()
     print("workflow: loop node ids and package metadata use the new namespace")
+
+    angle_workflow_path = (ROOT / "example_workflows" /
+                           "EXPERIMENTAL MiniMax H3 Three-Angle Guitar Ref2VA.json")
+    angle_workflow = json.loads(
+        angle_workflow_path.read_text(encoding="utf-8"))
+    angle_types = {node.get("type") for node in angle_workflow["nodes"]}
+    assert "MiniMaxH3ReferenceVideoPrepare" in angle_types
+    assert "MiniMaxH3ReferenceToVideo" in angle_types
+    assert "MiniMaxH3LoopTrim" in angle_types
+    assert not any(str(value).startswith("MiniMaxH3ChainLoop")
+                   for value in angle_types)
+    angle_loader = next(node for node in angle_workflow["nodes"]
+                        if node.get("type") == "LoadVideo")
+    angle_prep = next(node for node in angle_workflow["nodes"]
+                      if node.get("type") == "MiniMaxH3ReferenceVideoPrepare")
+    angle_ref = next(node for node in angle_workflow["nodes"]
+                     if node.get("type") == "MiniMaxH3ReferenceToVideo")
+    assert angle_loader["widgets_values"][0] == "3ClbaJYWVO4_000030.mp4"
+    assert angle_prep["widgets_values"] == [209, 24.0]
+    prompt = angle_ref["widgets_values"][0]
+    sections = ["subject_definitions:", "summary:", "retention_analysis:",
+                "detailed_description:", "overall_soundscape:",
+                "non_diegetic_music:"]
+    positions = [prompt.index(section) for section in sections]
+    assert positions == sorted(positions)
+    assert "exactly three shots" in prompt
+    assert "Tera Echo product card" in prompt
+    links = {int(link[0]): link for link in angle_workflow["links"]}
+    prep_audio_links = next(
+        output["links"] for output in angle_prep["outputs"]
+        if output["name"] == "source_audio")
+    assert len(prep_audio_links) == 2
+    assert {links[link_id][3] for link_id in prep_audio_links} == {110, 132}
+    print("workflow: one-pass three-angle Ref2VA copies source audio exactly")
 
     # Every public socket/widget should explain its role in the graph, and
     # every output should describe what it carries. This keeps newly added
@@ -551,6 +586,35 @@ def main():
             class FakeNativeVideo:
                 def get_components(self):
                     return FakeVideoComponents()
+
+            ref_prep = chain.MiniMaxH3ReferenceVideoPrepare()
+            ref_frames, ref_audio, ref_length, ref_status = ref_prep.prepare(
+                5, 1.0, source_video=FakeNativeVideo())
+            assert ref_length == 5
+            assert tuple(ref_frames.shape) == (5, 32, 32, 3)
+            assert abs(float(ref_frames[-1, 0, 0, 0]) - 0.5) < 1e-6
+            assert int(ref_audio["waveform"].shape[-1]) == round(
+                5 / 24 * 8000)
+            assert torch.all(ref_audio["waveform"] == 0.75)
+            assert "native VIDEO" in ref_status
+            assert "5 frames at 24 fps" in ref_status
+            ref_override_audio = audio_for_frames(8)
+            ref_override_audio["waveform"].fill_(0.5)
+            decoded_ref = ref_prep.prepare(
+                5, 30.0, source_frames=source_frames,
+                source_audio=ref_override_audio)
+            assert "decoded IMAGE/AUDIO" in decoded_ref[3]
+            assert torch.all(decoded_ref[1]["waveform"] == 0.5)
+            try:
+                ref_prep.prepare(
+                    22, 30.0, source_frames=source_frames,
+                    source_audio=source_video_audio)
+            except ValueError as exc:
+                assert "Choose a shorter H3-valid length" in str(exc)
+            else:
+                raise AssertionError(
+                    "reference-video prep accepted an overlong source")
+            print("reference prep: native/decoded video and exact audio copy pass")
 
             native_context, native_status = adapter.prepare(
                 external_plan, source_fps=1.0, prepend_original=False,

@@ -1409,6 +1409,146 @@ def _external_video_frame_indices(frame_count: int, source_fps: float) -> Any:
                 min=0, max=frame_count - 1)
 
 
+def _resolve_video_inputs(source_video: Any, source_frames: Any,
+                          source_audio: Any, source_fps: float,
+                          label: str) -> tuple[Any, Any, float, str]:
+    """Resolve native VIDEO or decoded IMAGE/AUDIO without hiding provenance."""
+    if source_video is not None and source_frames is not None:
+        raise ValueError(
+            "%s received both source_video and source_frames. Connect one "
+            "video input route only." % label)
+    input_route = "decoded IMAGE/AUDIO"
+    if source_video is not None:
+        get_components = getattr(source_video, "get_components", None)
+        if not callable(get_components):
+            raise ValueError(
+                "%s source_video must be a native ComfyUI VIDEO value with "
+                "get_components()." % label)
+        try:
+            components = get_components()
+        except Exception as exc:
+            raise ValueError(
+                "%s source_video could not be decoded: %s" %
+                (label, exc)) from exc
+        source_frames = getattr(components, "images", None)
+        try:
+            source_fps = float(getattr(components, "frame_rate"))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "%s source_video has no valid frame rate." % label) from exc
+        if source_audio is None:
+            source_audio = getattr(components, "audio", None)
+        input_route = "native VIDEO"
+    elif source_frames is None:
+        raise ValueError(
+            "%s requires source_video or source_frames." % label)
+    return source_frames, source_audio, float(source_fps), input_route
+
+
+class MiniMaxH3ReferenceVideoPrepare:
+    """Prepare a synchronized source performance for one-pass H3 Ref2VA."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "length": ("INT", {
+                    "default": 209, "min": 5, "max": MAX_H3_FRAMES,
+                    "step": 17,
+                    "tooltip": "Exact H3 output/reference length. It must "
+                               "satisfy length % 17 == 5. The source video "
+                               "and copied soundtrack must both cover it."}),
+                "source_fps": ("FLOAT", {
+                    "default": 24.0, "min": 0.001, "max": 1000.0,
+                    "step": 0.001,
+                    "tooltip": "Actual frame rate represented by "
+                               "source_frames. It is ignored for native "
+                               "VIDEO, which carries its own exact FPS."}),
+            },
+            "optional": {
+                "source_video": ("VIDEO", {
+                    "tooltip": "Native ComfyUI VIDEO from core Load Video or "
+                               "another VIDEO loader. Its frames, embedded "
+                               "audio, and exact FPS are decoded directly."}),
+                "source_frames": ("IMAGE", {
+                    "tooltip": "Decoded IMAGE batch from VHS or another "
+                               "loader. Connect this instead of source_video "
+                               "and provide its actual source_fps."}),
+                "source_audio": ("AUDIO", {
+                    "tooltip": "Soundtrack paired with source_frames, or an "
+                               "override for native VIDEO audio. The node "
+                               "copies its opening samples exactly; it never "
+                               "time-stretches or silently pads them."}),
+            },
+        }
+
+    RETURN_TYPES = ("IMAGE", "AUDIO", "INT", "STRING")
+    RETURN_NAMES = ("ref_video", "source_audio", "length", "status")
+    OUTPUT_TOOLTIPS = (
+        "The source performance sampled at H3's 24 fps for Ref2VA.",
+        "The original source waveform cut exactly to the selected duration.",
+        "Validated H3 frame length for the stock Ref2VA length input.",
+        "Input route, source timing, selected frame count, and copied audio.",
+    )
+    FUNCTION = "prepare"
+    CATEGORY = "conditioning/minimax/contex_loop"
+    DESCRIPTION = ("Normalize a native VIDEO or IMAGE/AUDIO source to an "
+                   "exact one-pass H3 Ref2VA performance reference while "
+                   "copying, not regenerating, its synchronized soundtrack.")
+
+    def prepare(self, length=209, source_fps=24.0, source_video=None,
+                source_frames=None, source_audio=None):
+        length = _validate_h3_length(length, "H3 reference-video length")
+        source_frames, source_audio, source_fps, input_route = (
+            _resolve_video_inputs(
+                source_video, source_frames, source_audio, source_fps,
+                "H3 reference-video prep"))
+        if torch is None or not torch.is_tensor(source_frames):
+            raise ValueError(
+                "H3 reference-video source_frames must be an IMAGE tensor.")
+        if source_frames.ndim != 4 or int(source_frames.shape[-1]) < 3:
+            raise ValueError(
+                "H3 reference-video source_frames must be "
+                "[frames,height,width,channels]; got %r." %
+                (getattr(source_frames, "shape", None),))
+
+        indices = _external_video_frame_indices(
+            int(source_frames.shape[0]), source_fps)
+        available = int(indices.numel())
+        if available < length:
+            raise ValueError(
+                "H3 reference-video source becomes %d frames at 24 fps, but "
+                "length is %d. Choose a shorter H3-valid length or supply a "
+                "longer video." % (available, length))
+        selected = source_frames.index_select(
+            0, indices[:length].to(device=source_frames.device))
+
+        if source_audio is None:
+            raise ValueError(
+                "H3 reference-video prep requires source audio so the final "
+                "soundtrack can be copied unchanged.")
+        waveform, sample_rate = _audio_waveform_3d(
+            source_audio, "H3 reference-video source audio")
+        required_samples = int(round(length / float(FPS) * sample_rate))
+        available_samples = int(waveform.shape[-1])
+        if available_samples < required_samples:
+            raise ValueError(
+                "H3 reference-video source audio contains %d samples at %d "
+                "Hz, but %d frames require %d. Choose a shorter H3-valid "
+                "length; this node will not pad or stretch the soundtrack." %
+                (available_samples, sample_rate, length, required_samples))
+        copied_audio = {
+            "waveform": waveform[..., :required_samples].clone(),
+            "sample_rate": sample_rate,
+        }
+        status = (
+            "%s: %d frames at %.6g fps -> %d frames at %d fps; copied "
+            "%d audio samples at %d Hz (%.3fs)" %
+            (input_route, int(source_frames.shape[0]), source_fps, length, FPS,
+             required_samples, sample_rate, length / float(FPS)))
+        return selected, copied_audio, length, status
+
+
 def _external_prelude_paths(plan: dict[str, Any], fingerprint: str) -> dict[str, str]:
     directory = os.path.join(_run_dir(plan), "source")
     stem = "existing_video_%s" % str(fingerprint)[:20]
@@ -1497,36 +1637,10 @@ class MiniMaxH3ChainExternalVideo:
 
     def prepare(self, plan, source_frames=None, source_fps=24.0,
                 prepend_original=True, source_audio=None, source_video=None):
-        if source_video is not None and source_frames is not None:
-            raise ValueError(
-                "H3 existing-video adapter received both source_video and "
-                "source_frames. Connect one video input route only.")
-        input_route = "decoded IMAGE/AUDIO"
-        if source_video is not None:
-            get_components = getattr(source_video, "get_components", None)
-            if not callable(get_components):
-                raise ValueError(
-                    "H3 existing-video source_video must be a native ComfyUI "
-                    "VIDEO value with get_components().")
-            try:
-                components = get_components()
-            except Exception as exc:
-                raise ValueError(
-                    "H3 existing-video source_video could not be decoded: %s" %
-                    exc) from exc
-            source_frames = getattr(components, "images", None)
-            try:
-                source_fps = float(getattr(components, "frame_rate"))
-            except (TypeError, ValueError) as exc:
-                raise ValueError(
-                    "H3 existing-video source_video has no valid frame rate.") from exc
-            if source_audio is None:
-                source_audio = getattr(components, "audio", None)
-            input_route = "native VIDEO"
-        elif source_frames is None:
-            raise ValueError(
-                "H3 existing-video adapter requires source_video or "
-                "source_frames.")
+        source_frames, source_audio, source_fps, input_route = (
+            _resolve_video_inputs(
+                source_video, source_frames, source_audio, source_fps,
+                "H3 existing-video adapter"))
         if torch is None or not torch.is_tensor(source_frames):
             raise ValueError("H3 existing-video source_frames must be an IMAGE tensor.")
         if source_frames.ndim != 4 or int(source_frames.shape[-1]) < 3:
@@ -3920,6 +4034,7 @@ if (PromptServer is not None and web is not None and
 CHAIN_NODE_CLASS_MAPPINGS = {
     "MiniMaxH3ChainPlan": MiniMaxH3ChainPlan,
     "MiniMaxH3ChainScenePromptEditor": MiniMaxH3ChainScenePromptEditor,
+    "MiniMaxH3ReferenceVideoPrepare": MiniMaxH3ReferenceVideoPrepare,
     "MiniMaxH3ChainExternalVideo": MiniMaxH3ChainExternalVideo,
     "MiniMaxH3ChainLoopStart": MiniMaxH3ChainLoopStart,
     "MiniMaxH3ChainCurrent": MiniMaxH3ChainCurrent,
@@ -3935,6 +4050,7 @@ CHAIN_NODE_CLASS_MAPPINGS = {
 CHAIN_NODE_DISPLAY_NAME_MAPPINGS = {
     "MiniMaxH3ChainPlan": "MiniMax H3 Contex Loop Plan",
     "MiniMaxH3ChainScenePromptEditor": "MiniMax H3 Scene Prompt Editor",
+    "MiniMaxH3ReferenceVideoPrepare": "MiniMax H3 Reference Video Prep",
     "MiniMaxH3ChainExternalVideo": "MiniMax H3 Existing Video Context",
     "MiniMaxH3ChainLoopStart": "MiniMax H3 Contex Loop Start",
     "MiniMaxH3ChainCurrent": "MiniMax H3 Contex Loop Current Shot",
