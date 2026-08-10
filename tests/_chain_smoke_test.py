@@ -244,6 +244,14 @@ def main():
     )
     assert numeric_seed_plan["shots"][0]["seed"] == chain.MAX_SEED
     assert numeric_seed_plan["plan_hash"] == string_seed_plan["plan_hash"]
+    shorthand_defaults = chain._normalize_plan(
+        '{"duration_seconds":8,"steps":10,'
+        '"shots":[{"prompt":"top-level defaults"}]}',
+        "shorthand_defaults", 32, 32, 22, "video", "head", "disabled",
+        "source_track", 0, 15, 20, 1, 30,
+    )
+    assert shorthand_defaults["shots"][0]["raw_frames"] == 192
+    assert shorthand_defaults["shots"][0]["steps"] == 10
     try:
         chain._normalize_plan(
             json.dumps({"shots": [{"prompt": ["valid", 42]}]}),

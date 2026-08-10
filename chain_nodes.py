@@ -418,8 +418,8 @@ def _normalize_plan(
 
     defaults = raw.get("defaults") if isinstance(raw.get("defaults"), dict) else {}
     default_duration = float(defaults.get(
-        "duration_seconds", default_duration_seconds))
-    default_steps = int(defaults.get("steps", default_steps))
+        "duration_seconds", raw.get("duration_seconds", default_duration_seconds)))
+    default_steps = int(defaults.get("steps", raw.get("steps", default_steps)))
     if not math.isfinite(default_duration) or default_duration <= 0:
         raise ValueError("Default shot duration must be a finite positive number.")
     if default_steps < 1:

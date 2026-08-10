@@ -109,6 +109,27 @@ export function parsePlanJson(source) {
     }
 
     const plan = clone(raw);
+    const hasTopLevelDefaults = Object.hasOwn(plan, "duration_seconds")
+        || Object.hasOwn(plan, "steps");
+    if (hasTopLevelDefaults) {
+        const defaults = plan.defaults
+            && typeof plan.defaults === "object"
+            && !Array.isArray(plan.defaults)
+            ? {...plan.defaults} : {};
+        // Accept the common human-authored shorthand and serialize it back in
+        // the canonical shape. Explicit defaults.* values win when both forms
+        // are present.
+        if (!Object.hasOwn(defaults, "duration_seconds")
+            && Object.hasOwn(plan, "duration_seconds")) {
+            defaults.duration_seconds = plan.duration_seconds;
+        }
+        if (!Object.hasOwn(defaults, "steps") && Object.hasOwn(plan, "steps")) {
+            defaults.steps = plan.steps;
+        }
+        plan.defaults = defaults;
+        delete plan.duration_seconds;
+        delete plan.steps;
+    }
     plan.shots = plan.shots.map((shot, offset) => {
         if (typeof shot === "string") {
             return {prompt: promptTextToLines(shot)};

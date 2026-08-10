@@ -175,6 +175,10 @@ comments and `?` markers. Actual `plan_json` must be strict JSON:
 | `defaults.duration_seconds` | No | JSON-level default scene duration. Overrides the node's `default_duration_seconds`. |
 | `defaults.steps` | No | JSON-level default sampler steps. Overrides the node's `default_steps`. |
 
+For convenient pasting, top-level `duration_seconds` and `steps` are also
+accepted as aliases and moved into `defaults` when **Apply JSON** is clicked.
+The canonical JSON shown afterward always uses the `defaults` object.
+
 Precedence is always:
 
 ```text

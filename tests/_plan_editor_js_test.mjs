@@ -50,6 +50,22 @@ assert.equal(
     'Literal "seed": 18446744073709551615 text',
 );
 
+const shorthandDefaults = parsePlanJson(JSON.stringify({
+    duration_seconds: 8,
+    steps: 10,
+    shots: [{
+        id: "imported",
+        prompt: "Imported prompt.",
+        duration_seconds: 6,
+        steps: 12,
+    }],
+}));
+assert.deepEqual(shorthandDefaults.defaults, {duration_seconds: 8, steps: 10});
+assert.equal(Object.hasOwn(shorthandDefaults, "duration_seconds"), false);
+assert.equal(Object.hasOwn(shorthandDefaults, "steps"), false);
+assert.equal(shorthandDefaults.shots[0].duration_seconds, 6);
+assert.equal(shorthandDefaults.shots[0].steps, 12);
+
 assert.equal(h3FrameLength(5), 124);
 assert.equal(h3FrameLength(10), 243);
 assert.equal(h3FrameLength(15), 362);
