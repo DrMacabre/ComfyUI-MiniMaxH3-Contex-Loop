@@ -372,22 +372,31 @@ function mount(node) {
     setVideoHeight(initialVideoHeight);
     videoGrip.addEventListener("pointerdown", (event) => {
         event.preventDefault();
+        const layoutHeight = videoPanel.offsetHeight;
+        const visualHeight = videoPanel.getBoundingClientRect().height;
+        const displayScale = layoutHeight > 0 && visualHeight > 0
+            ? visualHeight / layoutHeight : 1;
         videoResize = {
             pointerId: event.pointerId,
             startY: event.clientY,
-            startHeight: videoPanel.getBoundingClientRect().height,
+            startHeight: layoutHeight || DEFAULT_VIDEO_HEIGHT,
+            displayScale,
         };
         videoGrip.setPointerCapture?.(event.pointerId);
     });
     videoGrip.addEventListener("pointermove", (event) => {
         if (!videoResize || event.pointerId !== videoResize.pointerId) return;
         event.preventDefault();
-        setVideoHeight(videoResize.startHeight + event.clientY - videoResize.startY);
+        setVideoHeight(videoResize.startHeight
+            + (event.clientY - videoResize.startY) / videoResize.displayScale);
     });
     function finishVideoResize(event) {
         if (!videoResize || event.pointerId !== videoResize.pointerId) return;
         videoResize = null;
-        setVideoHeight(videoPanel.getBoundingClientRect().height, true);
+        // offsetHeight is an unscaled layout value. getBoundingClientRect()
+        // includes ComfyUI canvas zoom and caused every release to compound a
+        // smaller screen-space height into the saved CSS height.
+        setVideoHeight(videoPanel.offsetHeight, true);
         videoGrip.releasePointerCapture?.(event.pointerId);
     }
     videoGrip.addEventListener("pointerup", finishVideoResize);
