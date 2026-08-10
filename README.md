@@ -15,6 +15,57 @@ huge cumulative image tensor.
 
 > **Contex** is the intentional public repository spelling.
 
+## Changelog
+
+Newest first. Recent additions stay visible; older milestones are folded away
+so this page remains a useful starting point rather than a changelog wall.
+
+- **v0.3.4 — Scene Prompt Editor.** A synchronized, large-format companion for
+  editing each scene’s real Plan prompt, with scene navigation, reference and
+  dialogue shortcuts, and adjustable type size.
+- **v0.3.3 — Reliable preview resizing.** Review video sizing now remains stable
+  when the ComfyUI canvas is zoomed.
+- **v0.3.2 — Resizable review video.** Drag the bar beneath Review Gate’s player
+  to give the preview more or less room.
+- **v0.3.1 — Friendlier JSON defaults.** Top-level `duration_seconds` and `steps`
+  shorthand now populate the visual Plan defaults correctly.
+- **v0.3.0 — Archival PNG export.** Re-decode saved scene checkpoints into a
+  continuous lossless PNG sequence without holding the whole production in RAM.
+
+<details>
+<summary><strong>v0.2.0 — Recovery, metadata, and compatibility</strong></summary>
+
+- Persisted each scene prompt, effective plan, workflow, and API prompt beside
+  the rendered chain.
+- Added scene-range rendering, resumable review checkpoints, partial assembly,
+  notification/timeout controls, and Firefox-safe Review Gate recovery.
+- Added guarded compatibility with H3-Multishot, SolAttn, Ref2VA, and the
+  separately installable upstream H3 Motion Context pack.
+- Added Comfy Registry publishing and the shorter project-focused README.
+
+</details>
+
+<details>
+<summary><strong>v0.1.0 — The production loop takes shape</strong></summary>
+
+- Introduced the visual scene-plan editor, readable multiline prompts, automatic
+  scene colors, responsive layout, and collapsible raw JSON.
+- Added the recursive one-body chain, frame-locked audio trimming, per-scene
+  checkpoints, interactive review/retry, and the looping Ref2VA example.
+- Renamed the expanded project **MiniMax H3 Contex Loop** so it can coexist
+  clearly with NikoDemon80’s original manual Motion Context tools.
+
+</details>
+
+<details>
+<summary><strong>Origins — Motion Context and Ref2VA continuation</strong></summary>
+
+- Began with MiniMax H3 clip chaining and true generated-audio continuation.
+- Added motion-context support for H3 Ref2VA, followed by opt-in compatibility
+  patches and a resumable disk-backed loop.
+
+</details>
+
 ## Why this project has its own name
 
 This work began with **NikoDemon80’s** excellent
