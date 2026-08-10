@@ -20,6 +20,9 @@ huge cumulative image tensor.
 Newest first. Recent additions stay visible; older milestones are folded away
 so this page remains a useful starting point rather than a changelog wall.
 
+- **v0.3.7 — Flexible video loaders.** Existing Video Context now accepts a
+  native ComfyUI `VIDEO` directly or separate `IMAGE + AUDIO + FPS` outputs
+  from VHS and other decoding nodes.
 - **v0.3.6 — Extend an existing video.** A typed adapter turns decoded video
   and optional audio into scene 1 context, while optional prepend preserves the
   normalized original before partial or final assembled output.
@@ -151,21 +154,25 @@ To extend an existing video, add **MiniMax H3 Existing Video Context**:
 
 The ready-to-run wiring is included separately in the
 [experimental existing-video model workflow](<example_workflows/MiniMax H3 Extend Existing Video Model Workflow.json>).
-It uses core Load Video/Get Video Components nodes, generated-audio continuity,
-optional original-video prepend, and a Review Gate between every saved scene
-and Loop End. This path is new and should be treated as experimental while it
-receives broader real-world validation. The earlier examples are unchanged.
+It uses core Load Video directly, generated-audio continuity, optional
+original-video prepend, and a Review Gate between every saved scene and Loop
+End. This path is new and should be treated as experimental while it receives
+broader real-world validation. The earlier examples are unchanged.
 
 ```text
-Load Video → Get Video Components ─→ Existing Video Context ─→ Loop Start
-Plan ─────────────────────↗
+Core Load Video (VIDEO) ─────────────→ Existing Video Context ─→ Loop Start
+Other loader IMAGE + AUDIO + FPS ────↗
+Plan ────────────────────────────────↗
 H3 audio VAE ─────────────────────────────────────→ Loop Context (optional)
 ```
 
-Set `source_fps` to the rate represented by the loaded frame batch. The adapter
-normalizes the source to the Plan canvas and H3's 24 fps, then uses its final
-`context_length` frames as scene 1's predecessor. Scene 1 becomes a normal
-continuation: with `head` mode its repeated context is removed by Loop Trim.
+Connect either `source_video` or `source_frames`, never both. Native `VIDEO`
+provides its own decoded frames, embedded audio, and exact frame rate; an
+explicit `source_audio` overrides its embedded audio. For IMAGE-based loaders,
+wire their frames and optional audio, then set or connect `source_fps` to the
+actual decoded-frame rate. The adapter normalizes either route to the Plan
+canvas and H3's 24 fps, then uses its final `context_length` frames as scene
+1's predecessor. With `head` mode its repeated context is removed by Loop Trim.
 Connect the H3 audio VAE to Loop Context when carrying imported audio in
 `generated_audio` or `source_plus_timeline` mode.
 

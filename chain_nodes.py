@@ -1446,17 +1446,13 @@ class MiniMaxH3ChainExternalVideo:
                     "tooltip": "The active H3 Chain Plan. Its canvas, crop, "
                                "context length, quality, and run folder are "
                                "used to prepare the imported video tail."}),
-                "source_frames": ("IMAGE", {
-                    "tooltip": "Decoded frames from the existing video to "
-                               "extend. The adapter resamples them to H3's "
-                               "24 fps and uses the final context-length run "
-                               "as scene 1's predecessor."}),
                 "source_fps": ("FLOAT", {
                     "default": 24.0, "min": 0.001, "max": 1000.0,
                     "step": 0.001,
-                    "tooltip": "Actual frame rate represented by source_frames. "
-                               "Use the loader's forced/output rate; the "
-                               "adapter converts it to H3's native 24 fps."}),
+                    "tooltip": "Actual frame rate represented by source_frames "
+                               "when using the separate IMAGE/AUDIO route. It "
+                               "is ignored when source_video is connected, "
+                               "because native VIDEO carries its own exact FPS."}),
                 "prepend_original": ("BOOLEAN", {
                     "default": True,
                     "tooltip": "Persist a normalized copy of the complete "
@@ -1465,11 +1461,23 @@ class MiniMaxH3ChainExternalVideo:
                                "to output only the extension."}),
             },
             "optional": {
+                "source_video": ("VIDEO", {
+                    "tooltip": "Native ComfyUI VIDEO from core Load Video or "
+                               "another VIDEO-producing loader. Its frames, "
+                               "embedded audio, and exact FPS are decoded "
+                               "directly. Connect either source_video or "
+                               "source_frames, not both."}),
+                "source_frames": ("IMAGE", {
+                    "tooltip": "Decoded IMAGE batch from VHS or another video "
+                               "loader. Set source_fps to the loader's actual "
+                               "output rate. Connect either source_frames or "
+                               "source_video, not both."}),
                 "source_audio": ("AUDIO", {
                     "tooltip": "Optional soundtrack decoded from the existing "
-                               "video. Its tail can seed scene 1 audio; when "
-                               "prepend_original is enabled it is preserved "
-                               "before the extension audio."}),
+                               "video. Use it with source_frames, or connect it "
+                               "to override a native VIDEO's embedded audio. "
+                               "Its tail can seed scene 1 audio; when prepend "
+                               "is enabled it is preserved before the extension."}),
             },
         }
 
@@ -1483,12 +1491,42 @@ class MiniMaxH3ChainExternalVideo:
     )
     FUNCTION = "prepare"
     CATEGORY = "conditioning/minimax/contex_loop"
-    DESCRIPTION = ("Turn an existing decoded video into scene 1's visual/audio "
-                   "predecessor, with optional original-video prepend during "
-                   "assembly.")
+    DESCRIPTION = ("Turn a native VIDEO or separately decoded IMAGE/AUDIO "
+                   "video into scene 1's visual/audio predecessor, with "
+                   "optional original-video prepend during assembly.")
 
-    def prepare(self, plan, source_frames, source_fps, prepend_original,
-                source_audio=None):
+    def prepare(self, plan, source_frames=None, source_fps=24.0,
+                prepend_original=True, source_audio=None, source_video=None):
+        if source_video is not None and source_frames is not None:
+            raise ValueError(
+                "H3 existing-video adapter received both source_video and "
+                "source_frames. Connect one video input route only.")
+        input_route = "decoded IMAGE/AUDIO"
+        if source_video is not None:
+            get_components = getattr(source_video, "get_components", None)
+            if not callable(get_components):
+                raise ValueError(
+                    "H3 existing-video source_video must be a native ComfyUI "
+                    "VIDEO value with get_components().")
+            try:
+                components = get_components()
+            except Exception as exc:
+                raise ValueError(
+                    "H3 existing-video source_video could not be decoded: %s" %
+                    exc) from exc
+            source_frames = getattr(components, "images", None)
+            try:
+                source_fps = float(getattr(components, "frame_rate"))
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "H3 existing-video source_video has no valid frame rate.") from exc
+            if source_audio is None:
+                source_audio = getattr(components, "audio", None)
+            input_route = "native VIDEO"
+        elif source_frames is None:
+            raise ValueError(
+                "H3 existing-video adapter requires source_video or "
+                "source_frames.")
         if torch is None or not torch.is_tensor(source_frames):
             raise ValueError("H3 existing-video source_frames must be an IMAGE tensor.")
         if source_frames.ndim != 4 or int(source_frames.shape[-1]) < 3:
@@ -1619,10 +1657,11 @@ class MiniMaxH3ChainExternalVideo:
             external_context["prelude"] = prelude
 
         status = (
-            "%d source frames at %.3f fps -> %d frames at %d fps; "
+            "%s: %d source frames at %.3f fps -> %d frames at %d fps; "
             "%d-frame (%.3fs) context; audio %s; original %s" %
-            (int(source_frames.shape[0]), float(source_fps), normalized_count,
-             FPS, context_length, context_length / float(FPS),
+            (input_route, int(source_frames.shape[0]), float(source_fps),
+             normalized_count, FPS, context_length,
+             context_length / float(FPS),
              "ready" if context_audio is not None else "not supplied",
              "will be prepended" if bool(prepend_original)
              else "will not be prepended"))

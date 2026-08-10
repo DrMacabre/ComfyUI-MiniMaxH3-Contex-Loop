@@ -433,14 +433,27 @@ historical workflows are not modified.
 
 ```text
 Chain Plan ───────────────────────────┐
-Load Video → Get Video Components ────┼→ Existing Video Context → Loop Start
-                AUDIO (optional) ─────┘
+Core Load Video (VIDEO) ───────────────┼→ Existing Video Context → Loop Start
+Other loader IMAGE + AUDIO + FPS ─────┘
 H3 audio VAE (when carrying audio) ─────────────────────────────→ Loop Context
 ```
 
+Use exactly one video route:
+
+- `source_video` accepts a native ComfyUI `VIDEO`. The adapter decodes its
+  frames and embedded audio and reads its exact FPS; the `source_fps` widget is
+  ignored. A separately connected `source_audio` overrides embedded audio.
+- `source_frames` accepts an `IMAGE` batch from VHS or another loader. Wire its
+  `AUDIO` output when available and set or connect `source_fps` to the actual
+  frame rate represented by that batch.
+
+Connecting both `source_video` and `source_frames` is rejected instead of
+silently choosing one.
+
 The adapter performs four explicit operations:
 
-1. resamples `source_frames` from the declared `source_fps` to H3's 24 fps;
+1. decodes native `VIDEO`, or accepts already decoded `source_frames`, then
+   resamples from the effective source FPS to H3's 24 fps;
 2. fits them to the Plan width/height using the Plan crop setting;
 3. keeps the last `context_length` frames and optional matching audio tail as
    scene 1's predecessor;

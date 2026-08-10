@@ -528,6 +528,7 @@ def main():
             adapter = chain.MiniMaxH3ChainExternalVideo()
             external_context, external_status = adapter.prepare(
                 external_plan, source_frames, 30.0, True, source_video_audio)
+            assert "decoded IMAGE/AUDIO" in external_status
             assert "will be prepended" in external_status
             assert tuple(external_context["context_frames"].shape) == (
                 1, 32, 32, 3)
@@ -541,6 +542,53 @@ def main():
                 tempdir, prelude["video"]).is_file()
             assert pathlib.Path(
                 tempdir, prelude["audio"]).is_file()
+
+            class FakeVideoComponents:
+                images = source_frames
+                audio = source_video_audio
+                frame_rate = 30
+
+            class FakeNativeVideo:
+                def get_components(self):
+                    return FakeVideoComponents()
+
+            native_context, native_status = adapter.prepare(
+                external_plan, source_fps=1.0, prepend_original=False,
+                source_video=FakeNativeVideo())
+            assert "native VIDEO" in native_status
+            assert "30.000 fps" in native_status
+            assert native_context["prelude"] is None
+            assert abs(float(native_context[
+                "context_frames"][0, 0, 0, 0]) - 0.6) < 1e-6
+            assert int(native_context["context_audio"][
+                "waveform"].shape[-1]) == round(5 / 24 * 8000)
+            override_audio = audio_for_frames(8)
+            override_audio["waveform"].fill_(0.5)
+            overridden_context = adapter.prepare(
+                external_plan, source_fps=24.0, prepend_original=False,
+                source_audio=override_audio,
+                source_video=FakeNativeVideo())[0]
+            assert torch.allclose(
+                overridden_context["context_audio"]["waveform"],
+                torch.full_like(
+                    overridden_context["context_audio"]["waveform"], 0.5))
+            try:
+                adapter.prepare(
+                    external_plan, source_frames, 30.0, False,
+                    source_video=FakeNativeVideo())
+            except ValueError as exc:
+                assert "both source_video and source_frames" in str(exc)
+            else:
+                raise AssertionError(
+                    "existing-video adapter accepted both video input routes")
+            try:
+                adapter.prepare(
+                    external_plan, source_fps=30.0, prepend_original=False)
+            except ValueError as exc:
+                assert "requires source_video or source_frames" in str(exc)
+            else:
+                raise AssertionError(
+                    "existing-video adapter accepted no video input")
 
             extension_audio = audio_for_frames(8)
             extension_audio["waveform"].fill_(0.25)
@@ -643,9 +691,9 @@ def main():
                 assert len(media.streams.video) == 1
                 assert len(media.streams.audio) == 1
                 assert sum(1 for _frame in media.decode(video=0)) == 14
-            print("existing video: 30 fps source normalized, scene 1 continued "
-                  "with AV context, and original prelude assembled with both "
-                  "media backends")
+            print("existing video: native VIDEO and decoded IMAGE/AUDIO routes "
+                  "normalized 30 fps input, scene 1 continued with AV context, "
+                  "and original prelude assembled with both media backends")
 
             saver = chain.MiniMaxH3ChainSegmentSave()
             generated_state = chain._initial_state(

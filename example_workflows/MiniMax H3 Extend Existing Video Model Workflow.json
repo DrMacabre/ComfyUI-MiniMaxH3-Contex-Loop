@@ -1808,7 +1808,7 @@
       "title": "EXPERIMENTAL WORKFLOW — READ BEFORE RUNNING",
       "properties": {},
       "widgets_values": [
-        "EXPERIMENTAL: this existing-video continuation path is new and needs broader real-world validation. Keep the source file and use a unique run_name.\n\n1. Choose the source MP4 in Load Video. Get Video Components sends its frames, sound and exact FPS to Existing Video Context.\n2. Keep prepend_original enabled to place the complete source before the generated extension. Disable it for extension-only output.\n3. Edit the two scene prompts in H3 Plan and use a unique run_name.\n4. Queue. Every generated scene is saved before Review Gate pauses. Approve, retry the prompt, reroll the seed, or approve and stop.\n5. Generated-audio mode carries the imported audio tail into scene 1. For a silent source, the visual continuation still works."
+        "EXPERIMENTAL: this existing-video continuation path is new and needs broader real-world validation. Keep the source file and use a unique run_name.\n\n1. Core Load Video connects its native VIDEO directly to Existing Video Context.\n2. For VHS or another loader, disconnect source_video and use source_frames + optional source_audio; set source_fps to the real decoded-frame rate. Never connect both video routes.\n3. Keep prepend_original enabled to place the complete source before the generated extension. Disable it for extension-only output.\n4. Edit the two scene prompts in H3 Plan and use a unique run_name.\n5. Queue. Every generated scene is saved before Review Gate pauses. Approve, retry the prompt, reroll the seed, or approve and stop.\n6. Generated-audio mode carries the imported audio tail into scene 1. For a silent source, the visual continuation still works."
       ],
       "color": "#432",
       "bgcolor": "#653"
@@ -1833,7 +1833,8 @@
           "name": "VIDEO",
           "type": "VIDEO",
           "links": [
-            76
+            76,
+            77
           ]
         }
       ],
@@ -1873,23 +1874,17 @@
         {
           "name": "images",
           "type": "IMAGE",
-          "links": [
-            77
-          ]
+          "links": null
         },
         {
           "name": "audio",
           "type": "AUDIO",
-          "links": [
-            78
-          ]
+          "links": null
         },
         {
           "name": "fps",
           "type": "FLOAT",
-          "links": [
-            79
-          ]
+          "links": null
         },
         {
           "name": "bit_depth",
@@ -1897,7 +1892,7 @@
           "links": null
         }
       ],
-      "title": "STEP 2 — DECODE FRAMES / AUDIO / FPS",
+      "title": "ALTERNATIVE — EXPOSE IMAGE / AUDIO / FPS",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -1926,20 +1921,21 @@
           "link": 80
         },
         {
-          "name": "source_frames",
-          "type": "IMAGE",
+          "name": "source_video",
+          "type": "VIDEO",
           "link": 77
         },
         {
-          "name": "source_fps",
-          "type": "FLOAT",
-          "link": 79
+          "name": "source_frames",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
         },
         {
           "name": "source_audio",
           "shape": 7,
           "type": "AUDIO",
-          "link": 78
+          "link": null
         }
       ],
       "outputs": [
@@ -1960,10 +1956,11 @@
       "title": "EXPERIMENTAL — BUILD IMPORTED VIDEO CONTEXT",
       "properties": {
         "aux_id": "ethanfel/ComfyUI-MiniMaxH3-Contex-Loop",
-        "ver": "0.3.6",
+        "ver": "0.3.7",
         "Node name for S&R": "MiniMaxH3ChainExternalVideo"
       },
       "widgets_values": [
+        24.0,
         true
       ],
       "color": "#1f1f48",
@@ -2500,27 +2497,11 @@
     ],
     [
       77,
-      1922,
+      1921,
       0,
       1923,
       1,
-      "IMAGE"
-    ],
-    [
-      78,
-      1922,
-      1,
-      1923,
-      3,
-      "AUDIO"
-    ],
-    [
-      79,
-      1922,
-      2,
-      1923,
-      2,
-      "FLOAT"
+      "VIDEO"
     ],
     [
       80,

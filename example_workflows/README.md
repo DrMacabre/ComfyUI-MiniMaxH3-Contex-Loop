@@ -3,10 +3,11 @@
 ## Experimental: MiniMax H3 Extend Existing Video Model Workflow
 
 A compact two-scene model for extending an existing MP4. Core **Load Video**
-and **Get Video Components** feed the decoded frames, optional soundtrack, and
-exact source FPS into **MiniMax H3 Existing Video Context**. Scene 1 continues
-from the imported tail, generated audio can inherit its ending, and
-`prepend_original` places the normalized source before the generated extension.
+connects its native `VIDEO` directly to **MiniMax H3 Existing Video Context**.
+VHS and other loaders can instead use the adapter's separate `IMAGE`, `AUDIO`,
+and `source_fps` inputs. Scene 1 continues from the imported tail, generated
+audio can inherit its ending, and `prepend_original` places the normalized
+source before the generated extension.
 
 The Review Gate is fully wired between **Segment Save** and **Loop End**, with
 frame-locked preview audio from Loop Trim. Its recovery branch is muted by
