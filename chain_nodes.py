@@ -70,6 +70,7 @@ except ImportError:
 from .nodes import (
     MiniMaxH3MotionContext,
     _prepare_native_guide_conditioning,
+    _resize,
     _streams_from_latent,
 )
 
@@ -89,6 +90,7 @@ STATE_TYPE = "H3_CHAIN_STATE"
 FLOW_TYPE = "H3_CHAIN_FLOW"
 SEGMENT_TYPE = "H3_CHAIN_SEGMENT"
 MANIFEST_TYPE = "H3_CHAIN_MANIFEST"
+EXTERNAL_CONTEXT_TYPE = "H3_CHAIN_EXTERNAL_CONTEXT"
 
 _PENDING_REVIEWS: dict[str, dict[str, Any]] = {}
 
@@ -222,6 +224,20 @@ def _audio_fingerprint(audio: dict[str, Any]) -> str:
     return digest.hexdigest()
 
 
+def _tensor_fingerprint(value: Any) -> str:
+    """Hash a tensor without materializing one giant Python bytes object."""
+    if torch is None or not torch.is_tensor(value):
+        raise ValueError("H3 external video fingerprinting requires a tensor.")
+    digest = hashlib.sha256()
+    digest.update(str(tuple(int(part) for part in value.shape)).encode("ascii"))
+    digest.update(str(value.dtype).encode("ascii"))
+    chunks = value.detach().split(8, dim=0) if value.ndim else (value.detach(),)
+    for chunk in chunks:
+        cpu = chunk.to(device="cpu").contiguous()
+        digest.update(memoryview(cpu.numpy()).cast("B"))
+    return digest.hexdigest()
+
+
 def _validate_audio(audio: dict[str, Any], label: str,
                     expected_frames: int | None = None) -> tuple[Any, int]:
     if torch is None:
@@ -272,6 +288,96 @@ def _pad_audio_to_samples(audio: dict[str, Any], samples: int,
     }
 
 
+def _audio_waveform_3d(audio: dict[str, Any], label: str) -> tuple[Any, int]:
+    """Return the first Comfy audio batch as [1, channels, samples]."""
+    waveform, sample_rate = _validate_audio(audio, label)
+    if waveform.ndim == 1:
+        waveform = waveform.unsqueeze(0).unsqueeze(0)
+    elif waveform.ndim == 2:
+        waveform = waveform.unsqueeze(0)
+    else:
+        waveform = waveform[:1]
+    channels = int(waveform.shape[1])
+    if channels not in (1, 2):
+        raise ValueError("%s must be mono or stereo; got %d channels." %
+                         (label, channels))
+    return waveform, sample_rate
+
+
+def _resample_audio_exact(audio: dict[str, Any], sample_rate: int,
+                          samples: int, channels: int,
+                          label: str) -> dict[str, Any]:
+    """Resample/channel-match audio to one exact frame-locked tensor."""
+    waveform, source_rate = _audio_waveform_3d(audio, label)
+    sample_rate = int(sample_rate)
+    samples = int(samples)
+    channels = int(channels)
+    if sample_rate <= 0 or samples < 1 or channels not in (1, 2):
+        raise ValueError("Invalid target audio format for %s." % label)
+    waveform = waveform.to(dtype=torch.float32)
+    if int(waveform.shape[1]) != channels:
+        if int(waveform.shape[1]) == 1 and channels == 2:
+            waveform = waveform.expand(-1, 2, -1)
+        elif int(waveform.shape[1]) == 2 and channels == 1:
+            waveform = waveform.mean(dim=1, keepdim=True)
+    current = int(waveform.shape[-1])
+    rate_adjusted = int(round(current * sample_rate / float(source_rate)))
+    if source_rate != sample_rate and rate_adjusted > 0:
+        waveform = torch.nn.functional.interpolate(
+            waveform.reshape(-1, 1, current), size=rate_adjusted,
+            mode="linear", align_corners=False).reshape(
+                1, channels, rate_adjusted)
+    current = int(waveform.shape[-1])
+    if current < samples:
+        padding = torch.zeros(
+            (1, channels, samples - current), dtype=waveform.dtype,
+            device=waveform.device)
+        waveform = torch.cat((waveform, padding), dim=-1)
+    else:
+        waveform = waveform[..., :samples]
+    return {
+        "waveform": waveform.detach().cpu().contiguous(),
+        "sample_rate": sample_rate,
+    }
+
+
+def _resample_audio_tail_exact(audio: dict[str, Any], sample_rate: int,
+                               samples: int, channels: int,
+                               label: str) -> dict[str, Any]:
+    """Resample and end-align an exact tail, left-padding when necessary."""
+    waveform, source_rate = _audio_waveform_3d(audio, label)
+    sample_rate = int(sample_rate)
+    samples = int(samples)
+    channels = int(channels)
+    if sample_rate <= 0 or samples < 1 or channels not in (1, 2):
+        raise ValueError("Invalid target audio tail format for %s." % label)
+    waveform = waveform.to(dtype=torch.float32)
+    if int(waveform.shape[1]) != channels:
+        if int(waveform.shape[1]) == 1 and channels == 2:
+            waveform = waveform.expand(-1, 2, -1)
+        elif int(waveform.shape[1]) == 2 and channels == 1:
+            waveform = waveform.mean(dim=1, keepdim=True)
+    current = int(waveform.shape[-1])
+    rate_adjusted = int(round(current * sample_rate / float(source_rate)))
+    if source_rate != sample_rate and rate_adjusted > 0:
+        waveform = torch.nn.functional.interpolate(
+            waveform.reshape(-1, 1, current), size=rate_adjusted,
+            mode="linear", align_corners=False).reshape(
+                1, channels, rate_adjusted)
+    current = int(waveform.shape[-1])
+    if current < samples:
+        padding = torch.zeros(
+            (1, channels, samples - current), dtype=waveform.dtype,
+            device=waveform.device)
+        waveform = torch.cat((padding, waveform), dim=-1)
+    else:
+        waveform = waveform[..., current - samples:]
+    return {
+        "waveform": waveform.detach().cpu().contiguous(),
+        "sample_rate": sample_rate,
+    }
+
+
 def _validate_source_audio_hash(compatibility: dict[str, Any],
                                 source_audio: dict[str, Any] | None,
                                 usage: str) -> None:
@@ -286,6 +392,115 @@ def _validate_source_audio_hash(compatibility: dict[str, Any],
         raise ValueError(
             "%s received a different source waveform than H3 Chain Loop Start. "
             "Wire the same AUDIO value to Start, Current Shot, and Assemble." % usage)
+
+
+def _external_context_contract(external_context: dict[str, Any]) -> dict[str, Any]:
+    frames = external_context.get("context_frames")
+    audio = external_context.get("context_audio")
+    return {
+        "version": int(external_context.get("version", 0)),
+        "base_plan_hash": str(external_context.get("base_plan_hash") or ""),
+        "context_frames": int(getattr(frames, "shape", (0,))[0]),
+        "context_frames_sha256": _tensor_fingerprint(frames),
+        "context_audio_sha256": (
+            _audio_fingerprint(audio) if isinstance(audio, dict) else "none"),
+    }
+
+
+def _plan_with_external_context(
+    plan: dict[str, Any],
+    external_context: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Make scene 1 a real continuation from an imported video tail."""
+    if external_context is None:
+        return plan
+    if not isinstance(external_context, dict):
+        raise ValueError(
+            "H3 Chain Loop Start external_context must come from MiniMax H3 "
+            "Existing Video Context.")
+    expected_base = str(plan.get("base_plan_hash") or plan["plan_hash"])
+    if str(external_context.get("base_plan_hash") or "") != expected_base:
+        raise ValueError(
+            "H3 existing-video context was prepared for a different Chain Plan. "
+            "Reconnect the current Plan to the adapter and queue again.")
+    contract = _external_context_contract(external_context)
+    context_hash = _fingerprint(contract)
+    if context_hash != str(external_context.get("context_hash") or ""):
+        raise ValueError(
+            "H3 existing-video context changed after it was prepared; refusing "
+            "to use an unverifiable video tail.")
+
+    span = int(contract["context_frames"])
+    configured = int(plan["compatibility"]["context_length"])
+    if span != configured:
+        raise ValueError(
+            "H3 existing-video context contains %d frames; this plan requires "
+            "exactly %d." % (span, configured))
+
+    prepared = dict(plan)
+    prepared["base_plan_hash"] = expected_base
+    prepared["shots"] = [dict(shot) for shot in plan["shots"]]
+    prepared["compatibility"] = dict(plan["compatibility"])
+    prepared["compatibility"].update({
+        "external_context_hash": context_hash,
+        "external_context_frames": span,
+    })
+    prelude = external_context.get("prelude")
+    prepared["prelude"] = (_json_document(prelude)
+                           if isinstance(prelude, dict) else None)
+
+    stitched_frames = 0
+    anchor_mode = prepared["compatibility"]["anchor_mode"]
+    for offset, shot in enumerate(prepared["shots"]):
+        raw_frames = int(shot["raw_frames"])
+        if offset == 0:
+            if anchor_mode == "head":
+                if raw_frames <= span:
+                    raise ValueError(
+                        "H3 scene 1 has %d raw frames, not enough for the "
+                        "%d-frame imported-video overlap." % (raw_frames, span))
+                generation_start = -span
+                delivered_frames = raw_frames - span
+            else:
+                generation_start = 0
+                delivered_frames = raw_frames
+            shot["external_context_frames"] = span
+        elif anchor_mode == "head":
+            generation_start = stitched_frames - configured
+            delivered_frames = raw_frames - configured
+        else:
+            generation_start = stitched_frames
+            delivered_frames = raw_frames
+        shot["generation_start_frame"] = generation_start
+        shot["delivered_frames"] = delivered_frames
+        # Scene 1's negative pre-roll comes from the imported video/audio, not
+        # from the extension soundtrack. Current Shot builds that composite
+        # explicitly and begins the new source track at frame zero.
+        shot["audio_start_seconds"] = max(0, generation_start) / float(FPS)
+        shot["audio_duration_seconds"] = raw_frames / float(FPS)
+        stitched_frames += delivered_frames
+
+    for shot in prepared["shots"][:-1]:
+        if int(shot["delivered_frames"]) < configured:
+            raise ValueError(
+                "Shot %d (%s) delivers only %d frames, but the next clip "
+                "requires %d context frames." %
+                (shot["index"], shot["id"], shot["delivered_frames"],
+                 configured))
+
+    prepared["total_delivered_frames"] = stitched_frames
+    prepared["plan_hash"] = _fingerprint({
+        "base_plan_hash": expected_base,
+        "external_context_hash": context_hash,
+    })
+    cfg = prepared["compatibility"]
+    prepared["summary"] = (
+        "%d clips; %d delivered frames (%.3fs) at %dx%d; context=%d; "
+        "audio=%s; imported video; run=%s" %
+        (len(prepared["shots"]), stitched_frames,
+         stitched_frames / float(FPS), cfg["width"], cfg["height"],
+         configured, cfg["audio_mode"], prepared["run_name"]))
+    return prepared
 
 
 def _plan_with_source_audio(plan: dict[str, Any],
@@ -316,14 +531,23 @@ def _plan_with_source_audio(plan: dict[str, Any],
         source_hash = "none"
         silent_padding = False
     prepared = dict(plan)
-    prepared["base_plan_hash"] = plan["plan_hash"]
+    prepared["base_plan_hash"] = str(
+        plan.get("base_plan_hash") or plan["plan_hash"])
     prepared["compatibility"] = dict(plan["compatibility"])
     prepared["compatibility"]["source_audio_hash"] = source_hash
     prepared["compatibility"]["source_audio_silent_padding"] = silent_padding
-    prepared["plan_hash"] = _fingerprint({
-        "base_plan_hash": plan["plan_hash"],
-        "source_audio_hash": source_hash,
-    })
+    if plan["compatibility"].get("external_context_hash"):
+        prepared["plan_hash"] = _fingerprint({
+            "prepared_plan_hash": plan["plan_hash"],
+            "source_audio_hash": source_hash,
+        })
+    else:
+        # Preserve the exact pre-v0.3.6 hash contract for ordinary chains so
+        # every existing checkpoint remains resumable.
+        prepared["plan_hash"] = _fingerprint({
+            "base_plan_hash": plan["plan_hash"],
+            "source_audio_hash": source_hash,
+        })
     return prepared
 
 
@@ -362,11 +586,16 @@ def _plan_with_review_revision(plan: dict[str, Any], index: int,
     base_plan_hash = str(revised.get("base_plan_hash") or revised["plan_hash"])
     source_hash = str(
         revised.get("compatibility", {}).get("source_audio_hash") or "none")
-    revised["plan_hash"] = _fingerprint({
+    external_hash = str(
+        revised.get("compatibility", {}).get("external_context_hash") or "none")
+    revision_contract = {
         "base_plan_hash": base_plan_hash,
         "source_audio_hash": source_hash,
         "review_overrides": overrides,
-    })
+    }
+    if external_hash != "none":
+        revision_contract["external_context_hash"] = external_hash
+    revised["plan_hash"] = _fingerprint(revision_contract)
     return revised
 
 
@@ -993,7 +1222,8 @@ def _load_resume_state(plan: dict[str, Any], start_clip: int) -> dict[str, Any]:
 
 
 def _initial_state(plan: dict[str, Any], start_clip: int,
-                   end_clip: int | None = None) -> dict[str, Any]:
+                   end_clip: int | None = None,
+                   external_context: dict[str, Any] | None = None) -> dict[str, Any]:
     total = len(plan["shots"])
     start_clip = int(start_clip)
     if start_clip < 1 or start_clip > total:
@@ -1009,8 +1239,14 @@ def _initial_state(plan: dict[str, Any], start_clip: int,
         state = {
             "plan": plan,
             "index": 1,
-            "previous_frames": None,
+            "previous_frames": (
+                external_context.get("context_frames")
+                if isinstance(external_context, dict) else None),
             "previous_latent": None,
+            "previous_audio": (
+                external_context.get("context_audio")
+                if isinstance(external_context, dict) else None),
+            "external_context": bool(external_context is not None),
             "segments": [],
             "resumed_from": 0,
         }
@@ -1047,6 +1283,49 @@ def _slice_audio(audio: dict[str, Any], start_seconds: float,
             (start_seconds, start_seconds + duration_seconds, wanted,
              total / float(sample_rate)))
     return {"waveform": waveform[..., start:end], "sample_rate": sample_rate}
+
+
+def _slice_audio_after_external_context(
+    source_audio: dict[str, Any],
+    external_audio: dict[str, Any] | None,
+    raw_frames: int,
+    lead_frames: int,
+    pad_silence: bool,
+) -> dict[str, Any]:
+    """Build scene 1 audio as imported tail + extension soundtrack start."""
+    waveform, sample_rate = _audio_waveform_3d(
+        source_audio, "H3 source audio")
+    channels = int(waveform.shape[1])
+    total_samples = int(round(int(raw_frames) / float(FPS) * sample_rate))
+    lead_samples = int(round(int(lead_frames) / float(FPS) * sample_rate))
+    lead_samples = min(lead_samples, total_samples)
+    extension_samples = total_samples - lead_samples
+    if int(waveform.shape[-1]) < extension_samples:
+        if pad_silence and _audio_is_silent(waveform):
+            source = _pad_audio_to_samples(
+                {"waveform": waveform, "sample_rate": sample_rate},
+                extension_samples, "H3 silent extension soundtrack")
+            extension = source["waveform"]
+        else:
+            raise ValueError(
+                "H3 extension soundtrack has %d samples; scene 1 requires %d "
+                "after its imported-video audio lead." %
+                (int(waveform.shape[-1]), extension_samples))
+    else:
+        extension = waveform[..., :extension_samples]
+    if external_audio is None:
+        lead = torch.zeros(
+            (1, channels, lead_samples), dtype=extension.dtype,
+            device=extension.device)
+    else:
+        lead = _resample_audio_tail_exact(
+            external_audio, sample_rate, lead_samples, channels,
+            "H3 existing-video context audio")["waveform"].to(
+                device=extension.device, dtype=extension.dtype)
+    return {
+        "waveform": torch.cat((lead, extension), dim=-1),
+        "sample_rate": sample_rate,
+    }
 
 
 def _write_segment_video(images: Any, path: str, fps: int, crf: int,
@@ -1112,6 +1391,242 @@ def _write_wav(audio: dict[str, Any], path: str) -> None:
         handle.setsampwidth(2)
         handle.setframerate(int(audio["sample_rate"]))
         handle.writeframes(pcm.tobytes())
+
+
+def _external_video_frame_indices(frame_count: int, source_fps: float) -> Any:
+    frame_count = int(frame_count)
+    source_fps = float(source_fps)
+    if frame_count < 1:
+        raise ValueError("H3 existing-video source contains no frames.")
+    if not math.isfinite(source_fps) or source_fps <= 0:
+        raise ValueError("H3 existing-video source_fps must be positive.")
+    target_count = max(1, int(round(frame_count * FPS / source_fps)))
+    # CFR sample at each 24 fps target timestamp. floor() avoids looking ahead
+    # across the join; the final selected frame remains the latest available
+    # source frame at that instant.
+    return (torch.arange(target_count, dtype=torch.float64) *
+            (source_fps / float(FPS))).floor().to(dtype=torch.long).clamp(
+                min=0, max=frame_count - 1)
+
+
+def _external_prelude_paths(plan: dict[str, Any], fingerprint: str) -> dict[str, str]:
+    directory = os.path.join(_run_dir(plan), "source")
+    stem = "existing_video_%s" % str(fingerprint)[:20]
+    return {
+        "video": os.path.join(directory, stem + ".mp4"),
+        "audio": os.path.join(directory, stem + ".safetensors"),
+        "metadata": os.path.join(directory, stem + ".json"),
+    }
+
+
+def _save_external_audio(audio: dict[str, Any], path: str) -> None:
+    if _st_save is None:
+        raise RuntimeError(
+            "safetensors is required to preserve existing-video audio.")
+    waveform, sample_rate = _audio_waveform_3d(
+        audio, "H3 existing-video prelude audio")
+    temporary = "%s.%s.tmp" % (path, uuid.uuid4().hex)
+    try:
+        _st_save({"waveform": waveform.detach().cpu().contiguous()}, temporary,
+                 metadata={
+                     "format": "h3_existing_video_audio_v1",
+                     "sample_rate": str(sample_rate),
+                 })
+        os.replace(temporary, path)
+    finally:
+        _safe_unlink(temporary)
+
+
+class MiniMaxH3ChainExternalVideo:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "plan": (PLAN_TYPE, {
+                    "tooltip": "The active H3 Chain Plan. Its canvas, crop, "
+                               "context length, quality, and run folder are "
+                               "used to prepare the imported video tail."}),
+                "source_frames": ("IMAGE", {
+                    "tooltip": "Decoded frames from the existing video to "
+                               "extend. The adapter resamples them to H3's "
+                               "24 fps and uses the final context-length run "
+                               "as scene 1's predecessor."}),
+                "source_fps": ("FLOAT", {
+                    "default": 24.0, "min": 0.001, "max": 1000.0,
+                    "step": 0.001,
+                    "tooltip": "Actual frame rate represented by source_frames. "
+                               "Use the loader's forced/output rate; the "
+                               "adapter converts it to H3's native 24 fps."}),
+                "prepend_original": ("BOOLEAN", {
+                    "default": True,
+                    "tooltip": "Persist a normalized copy of the complete "
+                               "existing video and place it before generated "
+                               "scenes during partial/final assembly. Disable "
+                               "to output only the extension."}),
+            },
+            "optional": {
+                "source_audio": ("AUDIO", {
+                    "tooltip": "Optional soundtrack decoded from the existing "
+                               "video. Its tail can seed scene 1 audio; when "
+                               "prepend_original is enabled it is preserved "
+                               "before the extension audio."}),
+            },
+        }
+
+    RETURN_TYPES = (EXTERNAL_CONTEXT_TYPE, "STRING")
+    RETURN_NAMES = ("external_context", "status")
+    OUTPUT_TOOLTIPS = (
+        "Typed imported-video tail for Loop Start. It contains only the small "
+        "recursive context plus verified prelude artifact paths.",
+        "Source/normalized frame counts, context duration, audio availability, "
+        "and prepend status.",
+    )
+    FUNCTION = "prepare"
+    CATEGORY = "conditioning/minimax/contex_loop"
+    DESCRIPTION = ("Turn an existing decoded video into scene 1's visual/audio "
+                   "predecessor, with optional original-video prepend during "
+                   "assembly.")
+
+    def prepare(self, plan, source_frames, source_fps, prepend_original,
+                source_audio=None):
+        if torch is None or not torch.is_tensor(source_frames):
+            raise ValueError("H3 existing-video source_frames must be an IMAGE tensor.")
+        if source_frames.ndim != 4 or int(source_frames.shape[-1]) < 3:
+            raise ValueError(
+                "H3 existing-video source_frames must be "
+                "[frames,height,width,channels]; got %r." %
+                (getattr(source_frames, "shape", None),))
+        cfg = plan["compatibility"]
+        context_length = int(cfg["context_length"])
+        indices = _external_video_frame_indices(
+            int(source_frames.shape[0]), float(source_fps))
+        normalized_count = int(indices.numel())
+        if normalized_count < context_length:
+            raise ValueError(
+                "H3 existing video becomes %d frames at 24 fps, but this plan "
+                "needs at least %d context frames. Supply a longer video or "
+                "reduce context_length." % (normalized_count, context_length))
+
+        selected_indices = indices if bool(prepend_original) else indices[-context_length:]
+        selected = source_frames.index_select(
+            0, selected_indices.to(device=source_frames.device))
+        normalized = _resize(
+            selected, int(cfg["width"]), int(cfg["height"]), cfg["crop"])
+        context_frames = _tensor_cpu_clone(normalized[-context_length:])
+
+        normalized_audio = None
+        context_audio = None
+        if source_audio is not None:
+            _source_waveform, source_rate = _audio_waveform_3d(
+                source_audio, "H3 existing-video source audio")
+            normalized_samples = int(round(
+                normalized_count / float(FPS) * source_rate))
+            normalized_audio = _resample_audio_exact(
+                source_audio, source_rate, normalized_samples,
+                int(_source_waveform.shape[1]),
+                "H3 existing-video source audio")
+            configured_audio_frames = int(cfg["audio_context_length"])
+            audio_context_frames = min(
+                normalized_count, configured_audio_frames or context_length)
+            context_samples = int(round(
+                audio_context_frames / float(FPS) * source_rate))
+            context_audio = {
+                "waveform": _tensor_cpu_clone(
+                    normalized_audio["waveform"][..., -context_samples:]),
+                "sample_rate": source_rate,
+            }
+
+        external_context = {
+            "version": 1,
+            "base_plan_hash": str(plan.get("base_plan_hash") or plan["plan_hash"]),
+            "context_frames": context_frames,
+            "context_audio": context_audio,
+            "prelude": None,
+        }
+        contract = _external_context_contract(external_context)
+        external_context["context_hash"] = _fingerprint(contract)
+
+        if bool(prepend_original):
+            # The complete normalized source is needed only long enough to
+            # persist an immutable stream-copy-compatible prelude. Recursive
+            # state receives the short tail above, never this full tensor.
+            if int(normalized.shape[0]) != normalized_count:
+                raise RuntimeError(
+                    "H3 existing-video normalization produced an unexpected "
+                    "frame count.")
+            content_fingerprint = _fingerprint({
+                "frames": _tensor_fingerprint(normalized),
+                "audio": (_audio_fingerprint(normalized_audio)
+                          if normalized_audio is not None else "none"),
+                "fps": FPS,
+                "width": int(cfg["width"]),
+                "height": int(cfg["height"]),
+                "crop": cfg["crop"],
+                "crf": int(plan["segment_crf"]),
+            })
+            paths = _external_prelude_paths(plan, content_fingerprint)
+            os.makedirs(os.path.dirname(paths["video"]), exist_ok=True)
+            cached = None
+            if os.path.isfile(paths["metadata"]):
+                try:
+                    cached = _read_json(paths["metadata"])
+                except (OSError, ValueError, json.JSONDecodeError):
+                    cached = None
+            video_reusable = bool(
+                isinstance(cached, dict) and
+                cached.get("source_fingerprint") == content_fingerprint and
+                os.path.isfile(paths["video"]) and
+                str(cached.get("video_sha256") or "") ==
+                _file_sha256(paths["video"]))
+            if not video_reusable:
+                _write_segment_video(
+                    normalized, paths["video"], FPS, int(plan["segment_crf"]),
+                    metadata={
+                        "title": "Existing video before H3 extension",
+                        "comment": "Normalized 24 fps prelude for %s" %
+                                   plan["run_name"],
+                    })
+            if normalized_audio is not None:
+                audio_reusable = bool(
+                    isinstance(cached, dict) and
+                    cached.get("source_fingerprint") == content_fingerprint and
+                    os.path.isfile(paths["audio"]) and
+                    str(cached.get("audio_sha256") or "") ==
+                    _file_sha256(paths["audio"]))
+                if not audio_reusable:
+                    _save_external_audio(normalized_audio, paths["audio"])
+            prelude = {
+                "format": "h3_existing_video_prelude_v1",
+                "prepend": True,
+                "source_fingerprint": content_fingerprint,
+                "frame_count": normalized_count,
+                "fps": FPS,
+                "width": int(cfg["width"]),
+                "height": int(cfg["height"]),
+                "duration_seconds": normalized_count / float(FPS),
+                "video": _relative_output_path(paths["video"]),
+                "video_sha256": _file_sha256(paths["video"]),
+                "source_fps": float(source_fps),
+            }
+            if normalized_audio is not None:
+                prelude.update({
+                    "audio": _relative_output_path(paths["audio"]),
+                    "audio_sha256": _file_sha256(paths["audio"]),
+                    "audio_sample_rate": int(normalized_audio["sample_rate"]),
+                })
+            _atomic_json(paths["metadata"], prelude)
+            prelude["metadata"] = _relative_output_path(paths["metadata"])
+            external_context["prelude"] = prelude
+
+        status = (
+            "%d source frames at %.3f fps -> %d frames at %d fps; "
+            "%d-frame (%.3fs) context; audio %s; original %s" %
+            (int(source_frames.shape[0]), float(source_fps), normalized_count,
+             FPS, context_length, context_length / float(FPS),
+             "ready" if context_audio is not None else "not supplied",
+             "will be prepended" if bool(prepend_original)
+             else "will not be prepended"))
+        return (external_context, status)
 
 
 class MiniMaxH3ChainPlan:
@@ -1304,6 +1819,11 @@ class MiniMaxH3ChainLoopStart:
                                "source_track and source_plus_timeline. Current "
                                "Shot slices the exact window for each scene. A "
                                "short, completely silent placeholder is padded."}),
+                "external_context": (EXTERNAL_CONTEXT_TYPE, {
+                    "tooltip": "Optional output from MiniMax H3 Existing Video "
+                               "Context. When connected, scene 1 continues from "
+                               "that video's tail and its repeated head is "
+                               "trimmed exactly like every later scene."}),
             },
             "hidden": {
                 "initial_state": (STATE_TYPE,),
@@ -1329,12 +1849,15 @@ class MiniMaxH3ChainLoopStart:
         return float("NaN")
 
     def start(self, plan, start_clip, source_audio=None, scene_range="",
-              initial_state=None):
+              external_context=None, initial_state=None):
         if initial_state is None:
-            prepared_plan = _plan_with_source_audio(plan, source_audio)
+            prepared_plan = _plan_with_external_context(plan, external_context)
+            prepared_plan = _plan_with_source_audio(prepared_plan, source_audio)
             range_start, range_end = _parse_scene_range(
                 scene_range, len(prepared_plan["shots"]), start_clip)
-            state = _initial_state(prepared_plan, range_start, range_end)
+            state = _initial_state(
+                prepared_plan, range_start, range_end,
+                external_context=external_context if range_start == 1 else None)
         else:
             state = dict(initial_state)
             prepared_plan = state["plan"]
@@ -1349,6 +1872,10 @@ class MiniMaxH3ChainLoopStart:
             status += "; resumed from clip %d" % state["resumed_from"]
         if prepared_plan["compatibility"].get("source_audio_silent_padding"):
             status += "; silent source audio will be padded to the plan duration"
+        if prepared_plan["compatibility"].get("external_context_hash"):
+            status += "; scene 1 extends imported video"
+            if isinstance(prepared_plan.get("prelude"), dict):
+                status += "; original video will be prepended"
         return ("h3_chain", state, status)
 
 
@@ -1390,8 +1917,10 @@ class MiniMaxH3ChainCurrent:
         "Resolved sampler steps for this scene.",
         "Plan generation width.",
         "Plan generation height.",
-        "Start time in seconds of this scene's source-track window.",
-        "Raw source-track window duration in seconds.",
+        "Start time in seconds of this scene's extension-track window. For an "
+        "imported-video scene 1, its separate context lead precedes this time.",
+        "Raw conditioning-audio duration in seconds, including any imported "
+        "scene 1 context lead.",
         "Frame-exact current source-audio window for Ref2VA. It is empty in "
         "generated_audio mode.",
         "Current scene timing, delivered frames, source window, and seed.",
@@ -1410,17 +1939,31 @@ class MiniMaxH3ChainCurrent:
         if mode in ("source_track", "source_plus_timeline"):
             _validate_source_audio_hash(
                 plan["compatibility"], source_audio, "H3 Chain Current Shot")
-            audio_slice = _slice_audio(
-                source_audio, shot["audio_start_seconds"],
-                shot["audio_duration_seconds"],
-                pad_silence=bool(plan["compatibility"].get(
-                    "source_audio_silent_padding")))
-        status = ("clip %d/%d %s; raw=%df delivered=%df; song %.3f..%.3fs; "
-                  "seed=%d" %
+            external_lead = int(shot.get("external_context_frames", 0))
+            if index == 1 and external_lead > 0:
+                audio_slice = _slice_audio_after_external_context(
+                    source_audio, state.get("previous_audio"),
+                    int(shot["raw_frames"]), external_lead,
+                    pad_silence=bool(plan["compatibility"].get(
+                        "source_audio_silent_padding")))
+            else:
+                audio_slice = _slice_audio(
+                    source_audio, shot["audio_start_seconds"],
+                    shot["audio_duration_seconds"],
+                    pad_silence=bool(plan["compatibility"].get(
+                        "source_audio_silent_padding")))
+        external_lead = int(shot.get("external_context_frames", 0))
+        if index == 1 and external_lead > 0:
+            audio_status = "imported lead %.3fs + song 0..%.3fs" % (
+                external_lead / float(FPS),
+                int(shot["delivered_frames"]) / float(FPS))
+        else:
+            audio_status = "song %.3f..%.3fs" % (
+                shot["audio_start_seconds"],
+                shot["audio_start_seconds"] + shot["audio_duration_seconds"])
+        status = ("clip %d/%d %s; raw=%df delivered=%df; %s; seed=%d" %
                   (index, len(plan["shots"]), shot["id"], shot["raw_frames"],
-                   shot["delivered_frames"], shot["audio_start_seconds"],
-                   shot["audio_start_seconds"] + shot["audio_duration_seconds"],
-                   shot["seed"]))
+                   shot["delivered_frames"], audio_status, shot["seed"]))
         cfg = plan["compatibility"]
         return (state, index, len(plan["shots"]), shot["id"], shot["prompt"],
                 shot["seed"], shot["raw_frames"], shot["steps"], cfg["width"],
@@ -1446,26 +1989,35 @@ class MiniMaxH3ChainContext:
                 "latent": ("LATENT", {
                     "tooltip": "The CURRENT scene's empty AV latent from the "
                                "stock H3 conditioning node."}),
+            },
+            "optional": {
+                "audio_vae": ("VAE", {
+                    "tooltip": "H3 audio VAE used only when scene 1 continues "
+                               "from imported video audio. Later loop scenes "
+                               "reuse their saved AV latent directly. It may be "
+                               "left disconnected for visual-only context or "
+                               "source_track mode."}),
             }
         }
 
     RETURN_TYPES = ("CONDITIONING", "INT", "BOOLEAN")
     RETURN_NAMES = ("conditioning", "trim_frames", "is_continuation")
     OUTPUT_TOOLTIPS = (
-        "Conditioning ready for the H3 guider/sampler: no motion context on "
-        "scene 1, motion-context enhanced thereafter.",
+        "Conditioning ready for the H3 guider/sampler: scene 1 passes through "
+        "unless Existing Video Context seeds it; later scenes always continue.",
         "Repeated leading frames to remove after decoding. Connect to "
         "MiniMax H3 Contex Loop Trim.",
         "True for resumed/continued scenes, false for the first scene.",
     )
     FUNCTION = "apply"
     CATEGORY = "conditioning/minimax/contex_loop"
-    DESCRIPTION = ("Pass clip 1 through without continuation context; apply "
-                   "H3 Motion Context automatically to every later scene.")
+    DESCRIPTION = ("Apply H3 Motion Context to every continuation, including "
+                   "scene 1 when Existing Video Context is connected.")
 
-    def apply(self, state, conditioning, vae, latent):
+    def apply(self, state, conditioning, vae, latent, audio_vae=None):
         index = int(state["index"])
-        if index == 1:
+        external_first = index == 1 and bool(state.get("external_context"))
+        if index == 1 and not external_first:
             return (_prepare_native_guide_conditioning(conditioning), 0, False)
         previous_frames = state.get("previous_frames")
         if previous_frames is None:
@@ -1475,7 +2027,10 @@ class MiniMaxH3ChainContext:
         use_latent_audio = cfg["audio_mode"] in (
             "generated_audio", "source_plus_timeline")
         previous_latent = state.get("previous_latent") if use_latent_audio else None
-        if use_latent_audio and previous_latent is None:
+        previous_audio = (state.get("previous_audio")
+                          if use_latent_audio and external_first else None)
+        if (use_latent_audio and previous_latent is None
+                and previous_audio is None and not external_first):
             raise ValueError("H3 chain continuation has no previous AV latent.")
         out, trim = MiniMaxH3MotionContext().apply(
             conditioning=conditioning,
@@ -1489,6 +2044,8 @@ class MiniMaxH3ChainContext:
             audio_context_length=cfg["audio_context_length"],
             audio_mode="timeline",
             context_latent=previous_latent,
+            audio_vae=audio_vae,
+            context_audio=previous_audio,
         )
         return (out, trim, True)
 
@@ -2056,6 +2613,8 @@ def _manifest_from_segments(plan: dict[str, Any], values: list[dict[str, Any]],
     }
     if archives:
         manifest["archives"] = archives
+    if isinstance(plan.get("prelude"), dict):
+        manifest["prelude"] = _json_document(plan["prelude"])
     if not complete:
         manifest["planned_clip_count"] = len(plan["shots"])
         manifest["last_completed_clip"] = len(segments)
@@ -2221,6 +2780,11 @@ class MiniMaxH3ChainLoopEnd:
                 else:
                     node.set_input(key, value)
         graph.lookup_node(open_node).set_input("initial_state", next_state)
+        # The imported source may contain thousands of decoded frames. Once
+        # Loop Start has reduced it to typed state, recursive iterations must
+        # not keep the adapter dependency alive or prepare the prelude again.
+        if "external_context" in start_info.get("inputs", {}):
+            graph.lookup_node(open_node).set_input("external_context", None)
         recurse = graph.lookup_node("Recurse")
         return {
             "result": tuple(recurse.out(index)
@@ -2299,6 +2863,11 @@ class MiniMaxH3ChainManifestLoad:
                     "tooltip": "The original full source track when the plan "
                                "uses source_track or source_plus_timeline. Its "
                                "fingerprint must match the saved checkpoints."}),
+                "external_context": (EXTERNAL_CONTEXT_TYPE, {
+                    "tooltip": "Reconnect the same Existing Video Context used "
+                               "for scene 1. Its tail fingerprint restores the "
+                               "correct resume contract and its persisted "
+                               "prelude remains available to Assemble."}),
             },
         }
 
@@ -2319,8 +2888,9 @@ class MiniMaxH3ChainManifestLoad:
     def IS_CHANGED(cls, *args, **kwargs):
         return float("NaN")
 
-    def load(self, plan, source_audio=None):
-        prepared_plan = _plan_with_source_audio(plan, source_audio)
+    def load(self, plan, source_audio=None, external_context=None):
+        prepared_plan = _plan_with_external_context(plan, external_context)
+        prepared_plan = _plan_with_source_audio(prepared_plan, source_audio)
         completed = _load_resume_state(
             prepared_plan, len(prepared_plan["shots"]) + 1)
         manifest = _manifest_from_state(completed)
@@ -2364,6 +2934,94 @@ def _generated_audio(manifest: dict[str, Any]) -> dict[str, Any]:
         waveforms.append(waveform)
     return {"waveform": torch.cat(waveforms, dim=-1),
             "sample_rate": int(sample_rate)}
+
+
+def _validate_prelude(manifest: dict[str, Any]) -> dict[str, Any] | None:
+    value = manifest.get("prelude")
+    if value is None:
+        return None
+    if not isinstance(value, dict) or not bool(value.get("prepend")):
+        raise ValueError("H3 chain manifest has an invalid prelude record.")
+    frames = int(value.get("frame_count", 0))
+    if frames < 1 or int(value.get("fps", 0)) != FPS:
+        raise ValueError(
+            "H3 chain prelude must contain at least one frame at %d fps." % FPS)
+    compatibility = manifest.get("compatibility") or {}
+    if (int(value.get("width", 0)) != int(compatibility.get("width", 0)) or
+            int(value.get("height", 0)) !=
+            int(compatibility.get("height", 0))):
+        raise ValueError(
+            "H3 chain prelude dimensions do not match generated segments.")
+    video_value = value.get("video")
+    expected_video_hash = str(value.get("video_sha256") or "")
+    if not isinstance(video_value, str) or not expected_video_hash:
+        raise ValueError("H3 chain prelude has no verified video artifact.")
+    video_path = _absolute_output_path(video_value)
+    if not os.path.isfile(video_path):
+        raise FileNotFoundError("H3 chain prelude video is missing: %s" % video_path)
+    if _file_sha256(video_path) != expected_video_hash:
+        raise ValueError("H3 chain prelude video failed its SHA-256 integrity check.")
+    audio_value = value.get("audio")
+    if audio_value is not None:
+        expected_audio_hash = str(value.get("audio_sha256") or "")
+        if not isinstance(audio_value, str) or not expected_audio_hash:
+            raise ValueError("H3 chain prelude has an unverified audio artifact.")
+        audio_path = _absolute_output_path(audio_value)
+        if not os.path.isfile(audio_path):
+            raise FileNotFoundError(
+                "H3 chain prelude audio is missing: %s" % audio_path)
+        if _file_sha256(audio_path) != expected_audio_hash:
+            raise ValueError(
+                "H3 chain prelude audio failed its SHA-256 integrity check.")
+    return value
+
+
+def _prelude_audio(record: dict[str, Any]) -> dict[str, Any] | None:
+    value = record.get("audio")
+    if value is None:
+        return None
+    if _st_load is None:
+        raise RuntimeError("safetensors is required to load H3 prelude audio.")
+    tensors = _st_load(_absolute_output_path(value))
+    waveform = tensors.get("waveform")
+    if waveform is None:
+        raise ValueError("H3 chain prelude audio contains no waveform tensor.")
+    sample_rate = int(record.get("audio_sample_rate", 0))
+    audio = {"waveform": waveform, "sample_rate": sample_rate}
+    _validate_audio(audio, "H3 chain prelude audio",
+                    expected_frames=int(record["frame_count"]))
+    return audio
+
+
+def _audio_with_prelude(
+    audio: dict[str, Any],
+    extension_frames: int,
+    prelude: dict[str, Any],
+) -> dict[str, Any]:
+    waveform, sample_rate = _audio_waveform_3d(
+        audio, "H3 extension assembly audio")
+    channels = int(waveform.shape[1])
+    extension_samples = int(round(
+        int(extension_frames) / float(FPS) * sample_rate))
+    normalized_extension = _resample_audio_exact(
+        {"waveform": waveform, "sample_rate": sample_rate},
+        sample_rate, extension_samples, channels,
+        "H3 extension assembly audio")
+    prelude_samples = int(round(
+        int(prelude["frame_count"]) / float(FPS) * sample_rate))
+    saved = _prelude_audio(prelude)
+    if saved is None:
+        prefix = torch.zeros(
+            (1, channels, prelude_samples), dtype=torch.float32)
+    else:
+        prefix = _resample_audio_exact(
+            saved, sample_rate, prelude_samples, channels,
+            "H3 chain prelude audio")["waveform"]
+    return {
+        "waveform": torch.cat(
+            (prefix, normalized_extension["waveform"]), dim=-1),
+        "sample_rate": sample_rate,
+    }
 
 
 def _validate_manifest(manifest: dict[str, Any]) -> list[dict[str, Any]]:
@@ -2912,6 +3570,7 @@ class MiniMaxH3ChainAssemble:
     def assemble(self, manifest, audio_source, filename, audio_bitrate,
                  source_audio=None):
         segments = _validate_manifest(manifest)
+        prelude = _validate_prelude(manifest)
         selected = audio_source
         if selected == "plan":
             mode = manifest["compatibility"]["audio_mode"]
@@ -2947,6 +3606,11 @@ class MiniMaxH3ChainAssemble:
         elif selected != "none":
             raise ValueError("Unknown H3 chain assembly audio source %r."
                              % selected)
+        extension_frames = int(manifest["total_delivered_frames"])
+        prelude_frames = int(prelude["frame_count"]) if prelude is not None else 0
+        total_output_frames = prelude_frames + extension_frames
+        if audio is not None and prelude is not None:
+            audio = _audio_with_prelude(audio, extension_frames, prelude)
 
         run_name = _safe_name(manifest.get("run_name"), "h3_chain")
         run_dir = os.path.join(_output_root(), "h3_chains", run_name)
@@ -2961,11 +3625,16 @@ class MiniMaxH3ChainAssemble:
         metadata_tmp = os.path.join(final_dir, ".metadata.tmp.txt")
 
         segment_paths = []
+        delivered_frames = []
+        if prelude is not None:
+            segment_paths.append(_absolute_output_path(prelude["video"]))
+            delivered_frames.append(prelude_frames)
         for item in segments:
             path = _absolute_output_path(item["segment"])
             if not os.path.isfile(path):
                 raise FileNotFoundError("H3 chain segment is missing: %s" % path)
             segment_paths.append(path)
+            delivered_frames.append(int(item["delivered_frames"]))
         ffmpeg = shutil.which("ffmpeg")
         if not ffmpeg and av is None:
             raise RuntimeError(
@@ -2997,9 +3666,7 @@ class MiniMaxH3ChainAssemble:
                     "H3 Chain ffmpeg executable not found; assembling with "
                     "the built-in PyAV stream-copy fallback")
                 _pyav_concat_video(
-                    segment_paths,
-                    [int(item["delivered_frames"]) for item in segments],
-                    video_tmp, media_metadata)
+                    segment_paths, delivered_frames, video_tmp, media_metadata)
 
             if audio is None:
                 os.replace(video_tmp, final_tmp)
@@ -3009,15 +3676,14 @@ class MiniMaxH3ChainAssemble:
                     ffmpeg, "-y", "-i", video_tmp, "-i", wav_tmp,
                     "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy",
                     "-c:a", "aac", "-b:a", "%dk" % int(audio_bitrate),
-                    "-t", "%.9f" % (int(manifest["total_delivered_frames"]) /
-                                      float(FPS)),
+                    "-t", "%.9f" % (total_output_frames / float(FPS)),
                     "-map_metadata", "0",
                     "-movflags", "use_metadata_tags+faststart", final_tmp,
                 ])
             else:
                 _pyav_mux_audio(
                     video_tmp, audio, final_tmp, int(audio_bitrate),
-                    int(manifest["total_delivered_frames"]))
+                    total_output_frames)
             os.replace(final_tmp, final_path)
         finally:
             for temporary in (concat_path, video_tmp, final_tmp, wav_tmp,
@@ -3025,8 +3691,9 @@ class MiniMaxH3ChainAssemble:
                 if os.path.exists(temporary):
                     os.unlink(temporary)
 
-        status = "assembled %d clips with %s -> %s" % (
-            len(segments), backend, final_path)
+        status = "assembled %d generated clips%s with %s -> %s" % (
+            len(segments), " + existing-video prelude" if prelude else "",
+            backend, final_path)
         _LOG.info("H3 Chain %s", status)
         return {"ui": {"text": [status]}, "result": (final_path,)}
 
@@ -3214,6 +3881,7 @@ if (PromptServer is not None and web is not None and
 CHAIN_NODE_CLASS_MAPPINGS = {
     "MiniMaxH3ChainPlan": MiniMaxH3ChainPlan,
     "MiniMaxH3ChainScenePromptEditor": MiniMaxH3ChainScenePromptEditor,
+    "MiniMaxH3ChainExternalVideo": MiniMaxH3ChainExternalVideo,
     "MiniMaxH3ChainLoopStart": MiniMaxH3ChainLoopStart,
     "MiniMaxH3ChainCurrent": MiniMaxH3ChainCurrent,
     "MiniMaxH3ChainContext": MiniMaxH3ChainContext,
@@ -3228,6 +3896,7 @@ CHAIN_NODE_CLASS_MAPPINGS = {
 CHAIN_NODE_DISPLAY_NAME_MAPPINGS = {
     "MiniMaxH3ChainPlan": "MiniMax H3 Contex Loop Plan",
     "MiniMaxH3ChainScenePromptEditor": "MiniMax H3 Scene Prompt Editor",
+    "MiniMaxH3ChainExternalVideo": "MiniMax H3 Existing Video Context",
     "MiniMaxH3ChainLoopStart": "MiniMax H3 Contex Loop Start",
     "MiniMaxH3ChainCurrent": "MiniMax H3 Contex Loop Current Shot",
     "MiniMaxH3ChainContext": "MiniMax H3 Contex Loop Context",

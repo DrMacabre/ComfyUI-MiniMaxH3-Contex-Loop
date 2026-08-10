@@ -418,6 +418,74 @@ ID or moving it to another position changes its derived seed.
 | `base_seed` | Unsigned 64-bit integer | Source for deterministic seeds when a scene omits `seed`. |
 | `segment_crf` | `0`–`51` | H.264 checkpoint-segment quality. Lower is higher quality and larger. Start around `18`–`20`. |
 
+## Extending an existing video
+
+Use **MiniMax H3 Existing Video Context** when scene 1 must continue a decoded
+video rather than begin from an empty timeline.
+
+Open
+[`MiniMax H3 Extend Existing Video Model Workflow.json`](<example_workflows/MiniMax H3 Extend Existing Video Model Workflow.json>)
+for a complete two-scene model with generated-audio continuity, original-video
+prepend, review/retry controls, and a muted recovery branch. It is a separate
+example; the existing looping and historical workflows are not modified.
+
+```text
+Chain Plan ───────────────────────────┐
+Load Video → Get Video Components ────┼→ Existing Video Context → Loop Start
+                AUDIO (optional) ─────┘
+H3 audio VAE (when carrying audio) ─────────────────────────────→ Loop Context
+```
+
+The adapter performs four explicit operations:
+
+1. resamples `source_frames` from the declared `source_fps` to H3's 24 fps;
+2. fits them to the Plan width/height using the Plan crop setting;
+3. keeps the last `context_length` frames and optional matching audio tail as
+   scene 1's predecessor;
+4. when `prepend_original` is enabled, persists the complete normalized source
+   for automatic partial/final assembly.
+
+No original H3 latent is required or recoverable from an ordinary MP4. The
+decoded tail is re-encoded with the same H3 video/audio VAE path used between
+generated scenes.
+
+With recommended `anchor_mode: head`, imported context changes scene 1 timing
+to the same rule used by later continuations:
+
+```text
+scene 1 delivered frames = raw_frames - context_length
+```
+
+Therefore a 362-frame first scene with 22 imported context frames contributes
+340 new frames. Keep Loop Trim connected with `match_tail=true`.
+
+`source_audio` has two distinct meanings in this setup:
+
+- Existing Video Context `source_audio` is the soundtrack of the video being
+  extended. Its tail seeds the first join and its full normalized duration is
+  preserved when prepend is enabled.
+- Loop Start / Current Shot / Assemble `source_audio` is the soundtrack for the
+  generated extension. For scene 1 the loop constructs one raw conditioning
+  window from the imported audio tail followed by this track from time zero.
+
+For `generated_audio` or `source_plus_timeline`, connect the H3 audio VAE to
+Loop Context so the imported decoded tail can become a timeline audio guide.
+With no imported audio, visual continuation still works and generated sound
+starts fresh. In `source_track`, the first source-reference window already
+contains the imported tail, so Loop Context does not need the audio VAE.
+
+When `prepend_original=true`, Assemble detects the prelude in the manifest and
+places it before all generated segments. Original audio is prepended to either
+the source-track or checkpointed generated extension audio; `audio_source:none`
+creates a silent final MP4. The source must be normalized and re-encoded because
+arbitrary input videos cannot safely share H.264 parameters, dimensions, and
+timestamps with generated segments. The Plan's `segment_crf` controls that
+single normalization pass.
+
+Reconnect the same Plan, source video, and adapter when resuming or rebuilding a
+manifest. The imported tail is fingerprinted as part of checkpoint continuity;
+changing it correctly invalidates dependent generated scenes.
+
 ## Audio modes and formatting
 
 ### `source_track`
@@ -525,6 +593,8 @@ Segment Save preserves the actual effective prompt and seed used for every
 accepted render. A run under `output/h3_chains/<run_name>/` contains:
 
 ```text
+source/existing_video_<hash>.mp4  normalized prelude when prepend is enabled
+source/existing_video_<hash>.safetensors  preserved prelude audio
 plan.json                         normalized effective plan for this run
 workflow.json                     loadable frontend ComfyUI workflow
 api_prompt.json                   queued API-format graph fallback

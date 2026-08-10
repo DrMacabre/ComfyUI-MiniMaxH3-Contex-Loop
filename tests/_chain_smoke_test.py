@@ -118,6 +118,7 @@ def main():
     print("review: async decision route preserves exact uint64 seeds")
     required = {
         "MiniMaxH3ChainPlan", "MiniMaxH3ChainScenePromptEditor",
+        "MiniMaxH3ChainExternalVideo",
         "MiniMaxH3ChainLoopStart",
         "MiniMaxH3ChainCurrent", "MiniMaxH3ChainContext",
         "MiniMaxH3ChainSegmentSave", "MiniMaxH3ChainLoopEnd",
@@ -469,6 +470,10 @@ def main():
             changed_source = audio_for_frames(9)
             changed_source["waveform"][..., 0] = 1.0
             prepared_plan = chain._plan_with_source_audio(plan, source)
+            assert prepared_plan["plan_hash"] == chain._fingerprint({
+                "base_plan_hash": plan["plan_hash"],
+                "source_audio_hash": chain._audio_fingerprint(source),
+            })
             started = chain.MiniMaxH3ChainLoopStart().start(plan, 1, source)
             assert started[1]["plan"]["compatibility"]["source_audio_hash"]
             current = chain.MiniMaxH3ChainCurrent().current(started[1], source)
@@ -506,6 +511,142 @@ def main():
                 started[1], conditioning, None, av_latent())
             assert bypass == (conditioning, 0, False)
             print("current/context: source window exact; short silence pads safely")
+
+            external_plan = chain._normalize_plan(
+                json.dumps({"shots": [
+                    {"id": "extension_one", "prompt": "continue", "length": 5},
+                    {"id": "extension_two", "prompt": "continue again", "length": 5},
+                ]}),
+                "external_smoke", 32, 32, 1, "video", "head", "disabled",
+                "source_plus_timeline", 5, 1, 2, 11, 30,
+            )
+            source_frames = torch.zeros((8, 32, 32, 3), dtype=torch.float32)
+            for frame_index in range(8):
+                source_frames[frame_index, ..., 0] = frame_index / 10.0
+            source_video_audio = audio_for_frames(8)
+            source_video_audio["waveform"].fill_(0.75)
+            adapter = chain.MiniMaxH3ChainExternalVideo()
+            external_context, external_status = adapter.prepare(
+                external_plan, source_frames, 30.0, True, source_video_audio)
+            assert "will be prepended" in external_status
+            assert tuple(external_context["context_frames"].shape) == (
+                1, 32, 32, 3)
+            assert int(external_context["context_audio"][
+                "waveform"].shape[-1]) == round(5 / 24 * 8000)
+            assert abs(float(external_context["context_frames"][0, 0, 0, 0])
+                       - 0.6) < 1e-6
+            prelude = external_context["prelude"]
+            assert prelude["frame_count"] == 6
+            assert pathlib.Path(
+                tempdir, prelude["video"]).is_file()
+            assert pathlib.Path(
+                tempdir, prelude["audio"]).is_file()
+
+            extension_audio = audio_for_frames(8)
+            extension_audio["waveform"].fill_(0.25)
+            external_started = chain.MiniMaxH3ChainLoopStart().start(
+                external_plan, 1, extension_audio,
+                external_context=external_context)
+            external_state1 = external_started[1]
+            effective_external_plan = external_state1["plan"]
+            assert [shot["delivered_frames"] for shot in
+                    effective_external_plan["shots"]] == [4, 4]
+            assert effective_external_plan["total_delivered_frames"] == 8
+            assert external_state1["external_context"]
+            assert tuple(external_state1["previous_frames"].shape) == (
+                1, 32, 32, 3)
+            first_current = chain.MiniMaxH3ChainCurrent().current(
+                external_state1, extension_audio)
+            first_slice = first_current[12]["waveform"]
+            first_lead_samples = round(1 / 24 * 8000)
+            assert int(first_slice.shape[-1]) == round(5 / 24 * 8000)
+            assert torch.allclose(
+                first_slice[..., :first_lead_samples],
+                torch.full_like(first_slice[..., :first_lead_samples], 0.75))
+            assert torch.allclose(
+                first_slice[..., first_lead_samples:],
+                torch.full_like(first_slice[..., first_lead_samples:], 0.25))
+
+            context_call = {}
+
+            class FakeExternalMotionContext:
+                def apply(self, **kwargs):
+                    context_call.update(kwargs)
+                    return ("continued", 1)
+
+            real_motion_context = chain.MiniMaxH3MotionContext
+            chain.MiniMaxH3MotionContext = FakeExternalMotionContext
+            try:
+                external_conditioning = chain.MiniMaxH3ChainContext().apply(
+                    external_state1, conditioning, None, av_latent(),
+                    audio_vae="audio-vae")
+            finally:
+                chain.MiniMaxH3MotionContext = real_motion_context
+            assert external_conditioning == ("continued", 1, True)
+            assert context_call["context_latent"] is None
+            assert context_call["audio_vae"] == "audio-vae"
+            assert context_call["context_audio"] is external_state1[
+                "previous_audio"]
+
+            external_saver = chain.MiniMaxH3ChainSegmentSave()
+            external_saver.save(
+                external_state1,
+                torch.zeros((4, 32, 32, 3), dtype=torch.float32),
+                av_latent())["result"][0]
+            external_state2 = chain._initial_state(
+                effective_external_plan, 2)
+            external_segment2 = external_saver.save(
+                external_state2,
+                torch.zeros((4, 32, 32, 3), dtype=torch.float32),
+                av_latent())["result"][0]
+            external_complete = dict(external_state2)
+            external_complete["segments"] = (
+                external_state2["segments"] + [external_segment2])
+            external_manifest = chain._manifest_from_state(external_complete)
+            assert external_manifest["prelude"]["frame_count"] == 6
+            loaded_external = chain.MiniMaxH3ChainManifestLoad().load(
+                external_plan, extension_audio, external_context)[0]
+            assert loaded_external["plan_hash"] == external_manifest["plan_hash"]
+
+            joined_audio = chain._audio_with_prelude(
+                extension_audio, 8, prelude)
+            assert int(joined_audio["waveform"].shape[-1]) == round(
+                14 / 24 * 8000)
+            prelude_samples = round(6 / 24 * 8000)
+            assert torch.allclose(
+                joined_audio["waveform"][..., :prelude_samples],
+                torch.full_like(
+                    joined_audio["waveform"][..., :prelude_samples], 0.75))
+            external_result = chain.MiniMaxH3ChainAssemble().assemble(
+                external_manifest, "source", "extended_with_original", 96,
+                extension_audio)
+            external_path = pathlib.Path(external_result["result"][0])
+            assert external_path.is_file() and external_path.stat().st_size > 0
+            external_duration = float(subprocess.check_output([
+                "ffprobe", "-v", "error", "-show_entries", "format=duration",
+                "-of", "default=nw=1:nk=1", str(external_path),
+            ], text=True).strip())
+            assert abs(external_duration - 14 / 24) < 0.05
+            assert "existing-video prelude" in external_result["ui"]["text"][0]
+            external_original_which = chain.shutil.which
+            chain.shutil.which = lambda executable: (
+                None if executable == "ffmpeg"
+                else external_original_which(executable))
+            try:
+                external_fallback = chain.MiniMaxH3ChainAssemble().assemble(
+                    external_manifest, "source", "extended_pyav", 96,
+                    extension_audio)
+            finally:
+                chain.shutil.which = external_original_which
+            with chain.av.open(
+                    external_fallback["result"][0], mode="r") as media:
+                assert len(media.streams.video) == 1
+                assert len(media.streams.audio) == 1
+                assert sum(1 for _frame in media.decode(video=0)) == 14
+            print("existing video: 30 fps source normalized, scene 1 continued "
+                  "with AV context, and original prelude assembled with both "
+                  "media backends")
+
             saver = chain.MiniMaxH3ChainSegmentSave()
             generated_state = chain._initial_state(
                 chain._plan_with_source_audio(before_plan, None), 1)

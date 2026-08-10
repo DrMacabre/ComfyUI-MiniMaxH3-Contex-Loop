@@ -1,5 +1,18 @@
 # Example workflows
 
+## MiniMax H3 Extend Existing Video Model Workflow
+
+A compact two-scene model for extending an existing MP4. Core **Load Video**
+and **Get Video Components** feed the decoded frames, optional soundtrack, and
+exact source FPS into **MiniMax H3 Existing Video Context**. Scene 1 continues
+from the imported tail, generated audio can inherit its ending, and
+`prepend_original` places the normalized source before the generated extension.
+
+The Review Gate is fully wired between **Segment Save** and **Loop End**, with
+frame-locked preview audio from Loop Trim. Its recovery branch is muted by
+default. Select your own source video and model files before queueing. This is a
+new standalone example; none of the earlier workflow JSON files were changed.
+
 ## Looping MiniMax H3 Seamless Chain Global Refs Example
 
 Disk-backed recursive Ref2VA chain using the visual H3 Chain Plan editor,

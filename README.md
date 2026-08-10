@@ -20,6 +20,9 @@ huge cumulative image tensor.
 Newest first. Recent additions stay visible; older milestones are folded away
 so this page remains a useful starting point rather than a changelog wall.
 
+- **v0.3.6 — Extend an existing video.** A typed adapter turns decoded video
+  and optional audio into scene 1 context, while optional prepend preserves the
+  normalized original before partial or final assembled output.
 - **v0.3.5 — Native guides and portable assembly.** Automatically uses
   ComfyUI’s native arbitrary-position AV guides when PR #15439 (or its merged
   equivalent) is present, retains the guarded legacy path, and falls back to
@@ -101,6 +104,7 @@ inspired by **nkxx188’s**
 | 💾 | Atomic checkpoints, partial assembly, and resume |
 | 🖼️ | Re-decode saved latents into a continuous PNG sequence |
 | 🎯 | Scene ranges such as `3` or `3:8` |
+| ⏩ | Continue an existing video, with optional original-video prepend |
 
 The runtime changes are opt-in. Loading this pack does not alter ordinary
 ComfyUI workflows; its guarded patches activate only when a Contex Loop Context
@@ -142,6 +146,35 @@ Plan → Loop Start → Current Shot → stock H3 conditioning
 
 Loop End manifest → Assemble
 ```
+
+To extend an existing video, add **MiniMax H3 Existing Video Context**:
+
+The ready-to-run wiring is included separately in the
+[existing-video model workflow](<example_workflows/MiniMax H3 Extend Existing Video Model Workflow.json>).
+It uses core Load Video/Get Video Components nodes, generated-audio continuity,
+optional original-video prepend, and a Review Gate between every saved scene
+and Loop End. The earlier examples are unchanged.
+
+```text
+Load Video → Get Video Components ─→ Existing Video Context ─→ Loop Start
+Plan ─────────────────────↗
+H3 audio VAE ─────────────────────────────────────→ Loop Context (optional)
+```
+
+Set `source_fps` to the rate represented by the loaded frame batch. The adapter
+normalizes the source to the Plan canvas and H3's 24 fps, then uses its final
+`context_length` frames as scene 1's predecessor. Scene 1 becomes a normal
+continuation: with `head` mode its repeated context is removed by Loop Trim.
+Connect the H3 audio VAE to Loop Context when carrying imported audio in
+`generated_audio` or `source_plus_timeline` mode.
+
+With `prepend_original=true`, the normalized source is saved once under the run
+folder and Assemble automatically places it before generated scenes, including
+partial videos. Its audio is followed by the selected extension audio. Disable
+prepend to produce only the extension. Since arbitrary input codecs, frame
+rates, and sizes cannot be stream-concatenated safely, the preserved source is
+re-encoded at the Plan's `segment_crf`; generated H.264 scenes remain
+stream-copied without another quality pass.
 
 Recommended first settings:
 
