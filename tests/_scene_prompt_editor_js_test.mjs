@@ -38,6 +38,14 @@ assert.match(source, /Alt\+Right/);
 assert.match(source, /@ Reference/);
 assert.match(source, /# Dialogue/);
 assert.match(source, /FONT_SIZE_PROPERTY/);
+assert.match(source, /PromptAssistantClient/);
+assert.match(source, /buildPromptAssistantContext/);
+assert.match(source, /prompt_assist_result/);
+assert.match(source, /Staged .* proposal/);
+assert.match(source, /Apply to scene/);
+assert.match(source, /Apply anyway/);
+assert.match(source, /Undo last apply/);
+assert.match(source, /assistant\.client\?\.close\(\)/);
 assert.match(source, /window\.setInterval\(\(\) => loadPlan\(false\), 500\)/);
 
 console.log("H3 Scene Prompt companion: Plan synchronization and controls pass");

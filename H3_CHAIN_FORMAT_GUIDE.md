@@ -23,6 +23,14 @@ textarea is bidirectionally synchronized with the active
 stored on the companion itself. Arrow buttons and `Alt+Left/Right` navigate
 scenes, while `@` opens reference tags and `#` inserts dialogue markup.
 
+Its optional **Prompt Assistant** connects to a running `comfyui-mcp
+--panel-orchestrator` and can ask Codex or Hermes to discuss, rewrite, shorten,
+critique, or improve continuity for the active scene. Shared and adjacent scene
+context are controlled by checkboxes; selected text is included automatically.
+The agent's proposed replacement is staged below the chat and remains editable.
+Only **Apply to scene** changes `shots[n].prompt`. A source-revision fence warns
+and asks for confirmation when manual edits landed after the request began.
+
 Inside a prompt, type `@` or click **@ Reference** to insert a MiniMax
 `<Picture N>`, `<Video N>`, or `<Audio N>` tag. Select dialogue text and type
 `#`, or click **# Dialogue**, to wrap it in `<d>...</d>`. These interactions

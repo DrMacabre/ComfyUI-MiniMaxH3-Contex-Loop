@@ -5,17 +5,24 @@
 Yes, the Scene Prompt Editor can host an interactive prompt assistant for Codex
 and Hermes.
 
+The first implementation now exists on this study branch together with the
+`feature/prompt-assistant-bridge` comfyui-mcp branch. It follows the isolated,
+staged design below. Codex uses app-server; the initial Hermes adapter uses its
+tool-restricted one-shot interface while a persistent ACP adapter remains a
+possible later optimization.
+
 The recommended architecture is:
 
 ```text
 Scene Prompt Editor DOM widget
         |
-        | prompt-assist request / streamed reply
+        | prompt-assist request / progress / staged result
         v
 comfyui-mcp local orchestrator
         |
         +-- Codex app-server backend
-        +-- Hermes ACP/backend adapter
+        +-- Hermes tool-restricted one-shot adapter (initial)
+            +-- persistent ACP adapter (later option)
 ```
 
 The assistant should have its own restricted conversation and a correlated
@@ -88,7 +95,7 @@ Add a collapsible **Prompt Assistant** area below the scene textarea:
 - action presets: Rewrite, Improve continuity, Shorten, Critique;
 - a free-form instruction box and Send/Stop buttons;
 - a compact transcript for follow-up requests;
-- a staged draft view with Apply, Replace selection, Copy, and Discard;
+- a staged draft view with Apply, Copy, and Discard;
 - connection, working, and error status that does not replace the editor's
   existing Plan synchronization status.
 
@@ -103,7 +110,8 @@ Suggested interaction:
    the unfinished action for scene 4."
 3. The node sends the current scene, shared prompt, and bounded neighboring
    continuity context.
-4. The assistant streams its explanation while accumulating a structured draft.
+4. The UI shows working/progress state while the assistant builds a structured
+   result.
 5. The node shows the proposed prompt separately.
 6. The user applies or discards it, then can continue chatting about the staged
    draft.
@@ -117,28 +125,26 @@ The entire plan should not be sent by default. Useful bounded context is:
 - reference tags available to the workflow;
 - the prompt-writing rules bundled with this pack.
 
-## Proposed bridge protocol
+## Implemented bridge protocol
 
-Add a prompt-assistant client kind and correlated frames to `comfyui-mcp`. The
-names are illustrative, but correlation and isolation are requirements.
+The implementation adds a prompt-assistant client kind and correlated frames to
+`comfyui-mcp`.
 
 Client request:
 
 ```json
 {
-  "type": "prompt_assist_start",
+  "type": "prompt_assist_request",
   "request_id": "pa-uuid",
-  "client_id": "browser-instance-uuid",
-  "node_id": "42",
+  "conversation_id": "h3-browser-instance-uuid",
   "provider": "codex",
-  "session_id": null,
   "mode": "rewrite",
   "instruction": "Improve camera precision and ending continuity.",
-  "source_revision": "sha256-of-source-text-and-scene-id",
+  "source_revision": "opaque-source-text-and-scene-id-revision",
   "context": {
     "scene_id": "clip_0003",
-    "scene_prompt": "...",
-    "selection": null,
+    "source_prompt": "...",
+    "selected_text": null,
     "shared_prompt": "...",
     "previous_prompt": "...",
     "next_prompt": "..."
@@ -149,12 +155,12 @@ Client request:
 Server frames:
 
 ```json
-{"type":"prompt_assist_started","request_id":"pa-uuid","session_id":"..."}
-{"type":"prompt_assist_delta","request_id":"pa-uuid","text":"..."}
+{"type":"prompt_assist_started","request_id":"pa-uuid","provider":"codex"}
+{"type":"prompt_assist_progress","request_id":"pa-uuid"}
 {
   "type": "prompt_assist_result",
   "request_id": "pa-uuid",
-  "source_revision": "sha256-of-source-text-and-scene-id",
+  "source_revision": "opaque-source-text-and-scene-id-revision",
   "message": "What changed and why.",
   "rewritten_prompt": "The complete proposed scene prompt."
 }
@@ -167,9 +173,10 @@ Cancellation:
 {"type":"prompt_assist_cancel","request_id":"pa-uuid"}
 ```
 
-The final result should be schema-constrained. A conversational message and the
-complete replacement prompt must be separate fields; parsing markdown fences or
-guessing where an answer ends is too fragile.
+The canonical final result is schema-constrained. A conversational message and
+the complete replacement prompt are separate fields. Codex enforces the schema;
+the initial Hermes adapter also accepts a plain-text fallback so older local
+Hermes models remain usable.
 
 For an HTTPS-hosted ComfyUI, use the panel's existing advertised secure bridge
 mechanism. A page served over HTTPS cannot directly use an insecure localhost
@@ -226,10 +233,11 @@ authority for what may be applied.
 
 ## Implementation phases
 
-### Phase 0: one-shot UX proof
+### Phase 0: one-shot UX proof (superseded)
 
-Build a manually started local development sidecar, outside ComfyUI's Python
-process, with one `POST /rewrite` or small WebSocket API.
+The original proposal was a manually started local development sidecar outside
+ComfyUI's Python process. The native bridge was implemented directly instead,
+so no separate sidecar is required.
 
 - Codex: `codex exec --ephemeral --sandbox read-only` with structured output.
 - Hermes: `hermes --oneshot` with tools disabled and a structured-output
@@ -239,32 +247,42 @@ process, with one `POST /rewrite` or small WebSocket API.
 This proves prompt quality and editor ergonomics. It should be marked a local
 development mode, not the shipping architecture.
 
-### Phase 1: native comfyui-mcp capability
+### Phase 1: native comfyui-mcp capability (implemented for Codex and initial Hermes)
 
 - add the prompt-assist frame family and dedicated session manager;
 - reuse the current Codex backend/app-server lifecycle;
-- add a Hermes backend through ACP or Hermes' local backend API;
+- use Hermes' tool-restricted one-shot adapter initially; ACP remains the
+  persistent-session optimization;
 - expose provider readiness specifically for prompt assistance;
-- support streaming, cancellation, reset, and structured final output;
+- support progress state, cancellation, reset, and structured final output;
 - keep the existing panel protocol and shared panel sessions unchanged.
 
-### Phase 2: production editor UI
+### Phase 2: production editor UI (initial implementation complete)
 
 - implement the assistant panel in `web/h3_chain_scene_prompt_editor.js`;
 - factor transport and revision helpers into testable `.mjs` modules;
-- add local transcript/session state with bounded workflow persistence;
-- add selection replacement and a compact before/after diff;
+- keep a transient node transcript plus bounded orchestrator transcript state;
+  neither is serialized into the workflow;
+- include selected text as special context and provide an editable staged
+  replacement with original/proposal comparison;
 - document startup and unavailable-provider states.
 
 ## Test plan
 
-Frontend unit tests should cover:
+Current frontend tests cover bounded context construction, source revisions,
+stale-draft detection, bridge discovery, deferred conversation reset, Plan
+round-trips, and the editor's staged controls. Current orchestrator tests cover
+request validation, output parsing, correlated result/cancellation, transcript
+reset and provider separation, Codex isolation settings, auxiliary socket
+routing, and existing conversation-boundary behavior.
+
+A later browser-level automation pass should additionally cover:
 
 - request context for first, middle, and last scenes;
 - multiline prompt round trips;
 - request/result correlation with out-of-order replies;
 - navigation and source edits while a request is in flight;
-- Apply, Replace selection, Discard, and one-step undo;
+- Apply, Discard, and one-step undo through real DOM events;
 - cancellation and node removal;
 - bridge loss/reconnect without duplicate Apply;
 - no bridge token, credential, or transcript leakage into `plan_json`.
@@ -280,8 +298,8 @@ Orchestrator tests should cover:
 - a malicious prompt cannot change the requested response shape or tool policy.
 
 A browser smoke test should edit a real Plan prompt, request a rewrite, verify
-that streaming does not change `plan_json`, Apply the draft, and confirm both the
-large editor and the Plan editor show the same saved text.
+that agent progress does not change `plan_json`, Apply the draft, and confirm
+both the large editor and the Plan editor show the same saved text.
 
 ## Decision
 

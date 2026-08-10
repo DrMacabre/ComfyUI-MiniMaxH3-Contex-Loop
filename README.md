@@ -284,6 +284,39 @@ buttons or `Alt+Left/Right` to move between scenes, `@` for Picture/Video/Audio
 reference tags, `#` for dialogue tags, and `A−`/`A+` for a persistent font size.
 The node may sit inline before Loop Start or on an editor-only branch.
 
+### Prompt Assistant (Codex or Hermes)
+
+The Scene Prompt Editor also contains an optional **Prompt Assistant**. It uses
+the local `comfyui-mcp` panel orchestrator as a bridge, so agent authentication
+and execution stay on the machine where Codex or Hermes is installed. Start the
+current prompt-assist-capable `comfyui-mcp` build with:
+
+```bash
+comfyui-mcp --panel-orchestrator
+```
+
+Then, inside the node:
+
+1. choose **Codex** or **Hermes** and an action such as Rewrite, Continuity,
+   Shorten, Critique, or Discuss;
+2. optionally include the shared prompt and previous/next scenes, select a
+   passage if it deserves special attention, and type your instruction;
+3. press **Ask agent** (`Ctrl/Cmd+Enter` also sends);
+4. read the response and edit the separately staged proposal;
+5. choose **Apply to scene**, Copy, or Discard.
+
+Agent output never edits the Plan while it is being generated. Apply is the only
+action that replaces `shots[n].prompt`, and it uses the same synchronized Plan
+write path as manual typing. If the scene changes after a request starts, the
+draft is marked stale and **Apply anyway…** asks for confirmation. **Undo last
+apply** restores the prompt that existed immediately before Apply.
+
+Each editor uses a restricted prompt-only conversation separate from the
+sidebar panel chat. Codex runs an ephemeral, read-only app-server thread with
+MCP disabled; Hermes runs a prompt-only one-shot turn. Connecting an already
+running console agent directly to the node is a separate follow-up integration,
+not part of this first bridge.
+
 `scene_range` on Loop Start is continuity-safe:
 
 | Value | Result |
