@@ -200,6 +200,22 @@ function clamp(value, minimum, maximum, fallback) {
         ? Math.max(minimum, Math.min(maximum, Math.round(numeric))) : fallback;
 }
 
+function promptAssistantIdentityKey(node) {
+    // Node ids are only unique inside one workflow. ComfyUI can keep several
+    // workflows open in the same browser/sessionStorage, so include the active
+    // workflow identity or two editors with (for example) node id 7 would share
+    // one agent route and pending-request record.
+    const workflow = app.extensionManager?.workflow?.activeWorkflow;
+    const workflowIdentity = workflow?.path
+        ?? workflow?.activeState?.id
+        ?? workflow?.filename
+        ?? "legacy-workflow";
+    const nodeIdentity = node.id == null
+        ? `new-${globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2)}`
+        : String(node.id);
+    return `workflow-${workflowIdentity}-node-${nodeIdentity}`;
+}
+
 function mount(node) {
     if (node._h3ScenePromptEditorMounted || typeof node.addDOMWidget !== "function") return;
     node._h3ScenePromptEditorMounted = true;
@@ -239,10 +255,13 @@ function mount(node) {
             includeShared: true,
             includeAdjacent: true,
             composer: "",
-            messages: [],
+            messagesByProvider: {codex: [], hermes: []},
             drafts: new Map(),
             requestContexts: new Map(),
             activeRequest: null,
+            preparingRequest: null,
+            pendingStorageKey: "",
+            reconnectTimer: null,
             lastApplied: null,
             providers: null,
             error: "",
@@ -253,26 +272,26 @@ function mount(node) {
 
     const assistant = state.assistant;
     assistant.client = new PromptAssistantClient({
-        identityKey: node.id == null
-            ? `node-new-${globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2)}`
-            : `node-${node.id}`,
+        identityKey: promptAssistantIdentityKey(node),
         onFrame: (frame) => handleAssistantFrame(frame),
         onStatus: (status, detail) => {
             assistant.status = status;
-            assistant.statusDetail = status === "connected"
-                ? "Connected · isolated prompt session"
-                : status === "connecting" ? "Connecting to comfyui-mcp…"
-                    : "Disconnected · send to reconnect";
-            if (status === "disconnected" && assistant.activeRequest) {
-                assistant.requestContexts.delete(assistant.activeRequest);
-                assistant.activeRequest = null;
-                assistant.error = "The bridge disconnected before the agent returned a result.";
-                assistantMessage("system", "Bridge disconnected. No change was made to the scene prompt.");
+            if (status === "connected") {
+                clearAssistantReconnect();
+                assistant.statusDetail = "Connected · isolated prompt session";
+            } else if (status === "connecting") {
+                assistant.statusDetail = "Connecting to comfyui-mcp…";
+            } else if (assistant.activeRequest) {
+                assistant.statusDetail = "Disconnected · reconnecting to recover the active draft…";
+                scheduleAssistantReconnect();
+            } else {
+                assistant.statusDetail = "Disconnected · send to reconnect";
             }
             if (detail?.providers) assistant.providers = detail.providers;
             refreshAssistant();
         },
     });
+    assistant.pendingStorageKey = `h3.prompt-assistant.pending.${assistant.client.identity}`;
 
     function dirty() {
         node.graph?.setDirtyCanvas?.(true, true);
@@ -297,11 +316,103 @@ function mount(node) {
         dirty();
     }
 
-    function assistantMessage(role, text) {
+    function messagesForProvider(provider = assistant.provider) {
+        const key = provider === "hermes" ? "hermes" : "codex";
+        assistant.messagesByProvider[key] ??= [];
+        return assistant.messagesByProvider[key];
+    }
+
+    function assistantMessage(role, text, provider = assistant.provider) {
         const value = String(text ?? "").trim();
         if (!value) return;
-        assistant.messages.push({role, text: value});
-        assistant.messages = assistant.messages.slice(-24);
+        const messages = messagesForProvider(provider);
+        messages.push({role, text: value});
+        assistant.messagesByProvider[provider === "hermes" ? "hermes" : "codex"] = messages.slice(-24);
+    }
+
+    function clearAssistantReconnect() {
+        if (assistant.reconnectTimer != null) {
+            window.clearTimeout(assistant.reconnectTimer);
+            assistant.reconnectTimer = null;
+        }
+    }
+
+    function scheduleAssistantReconnect(delay = 500) {
+        if (!assistant.activeRequest || assistant.reconnectTimer != null) return;
+        assistant.reconnectTimer = window.setTimeout(async () => {
+            assistant.reconnectTimer = null;
+            if (!assistant.activeRequest) return;
+            try {
+                await assistant.client.connect();
+            } catch (_error) {
+                if (assistant.activeRequest) scheduleAssistantReconnect(1_000);
+            }
+        }, delay);
+    }
+
+    function persistPendingRequest(requestId, meta) {
+        try {
+            globalThis.sessionStorage?.setItem(assistant.pendingStorageKey, JSON.stringify({
+                requestId,
+                ...meta,
+            }));
+        } catch (_error) {
+            // Recovery across reload is best-effort; live correlation still works.
+        }
+    }
+
+    function clearPendingRequest(requestId = null) {
+        if (requestId && assistant.activeRequest && assistant.activeRequest !== requestId) return;
+        try { globalThis.sessionStorage?.removeItem(assistant.pendingStorageKey); } catch (_error) { /* unavailable */ }
+    }
+
+    function restorePendingRequest() {
+        let stored = null;
+        try {
+            stored = JSON.parse(globalThis.sessionStorage?.getItem(assistant.pendingStorageKey) || "null");
+        } catch (_error) {
+            clearPendingRequest();
+        }
+        if (!stored || typeof stored !== "object" || typeof stored.requestId !== "string") return;
+        const meta = {
+            sceneKey: String(stored.sceneKey || ""),
+            sceneId: String(stored.sceneId || ""),
+            sceneIndex: Number(stored.sceneIndex),
+            sourcePrompt: String(stored.sourcePrompt ?? ""),
+            sourceRevision: String(stored.sourceRevision || ""),
+            provider: stored.provider === "hermes" ? "hermes" : "codex",
+        };
+        if (!meta.sceneKey || !meta.sceneId || !Number.isInteger(meta.sceneIndex) || !meta.sourceRevision) {
+            clearPendingRequest();
+            return;
+        }
+        assistant.provider = meta.provider;
+        assistant.activeRequest = stored.requestId;
+        assistant.requestContexts.set(stored.requestId, meta);
+        assistant.status = "connecting";
+        assistant.statusDetail = "Reconnecting to recover the active draft…";
+        refreshAssistant();
+        scheduleAssistantReconnect(0);
+    }
+
+    function reconcileAssistantProvider() {
+        // A restored in-flight request remains owned by its original provider.
+        // Switching the visible lane during recovery would hide its reply in a
+        // different provider transcript.
+        if (assistant.activeRequest) return;
+        const selected = assistant.providers?.find((item) => item.id === assistant.provider);
+        if (selected?.available !== false) return;
+        const fallback = assistant.providers?.find((item) => item.available !== false);
+        if (!fallback || !["codex", "hermes"].includes(fallback.id)) return;
+        const unavailable = assistant.provider === "hermes" ? "Hermes" : "Codex";
+        assistant.provider = fallback.id;
+        node.properties[ASSIST_PROVIDER_PROPERTY] = assistant.provider;
+        assistantMessage("system", `${unavailable} is unavailable; using ${fallback.label || fallback.id}.`, assistant.provider);
+        dirty();
+    }
+
+    function assistantProviderAvailable(provider = assistant.provider) {
+        return assistant.providers?.find((item) => item.id === provider)?.available !== false;
     }
 
     function refreshAssistant() {
@@ -315,21 +426,29 @@ function mount(node) {
         if (!frame || typeof frame !== "object") return;
         if (frame.type === "prompt_assist_ready") {
             assistant.providers = Array.isArray(frame.providers) ? frame.providers : null;
+            reconcileAssistantProvider();
             assistant.error = "";
         } else if (frame.type === "prompt_assist_started") {
             if (frame.request_id === assistant.activeRequest) assistant.status = "working";
         } else if (frame.type === "prompt_assist_progress") {
             if (frame.request_id === assistant.activeRequest) assistant.statusDetail = "Agent is drafting…";
         } else if (frame.type === "prompt_assist_result") {
+            // Accept only a request this editor incarnation has in its live or
+            // sessionStorage-restored correlation map. A disconnected "New
+            // chat" can reconnect to a buffered result before its reset frame
+            // reaches the server; reconstructing metadata from that result
+            // would resurrect a draft the user explicitly discarded.
             const meta = assistant.requestContexts.get(frame.request_id);
             if (!meta) return;
             assistant.requestContexts.delete(frame.request_id);
             if (assistant.activeRequest === frame.request_id) assistant.activeRequest = null;
+            clearPendingRequest(frame.request_id);
+            clearAssistantReconnect();
             assistant.status = "connected";
             assistant.statusDetail = "Connected · isolated prompt session";
             assistant.error = "";
-            assistantMessage("agent", frame.message || "Draft ready.");
-            if (typeof frame.rewritten_prompt === "string") {
+            assistantMessage("agent", frame.message || "Draft ready.", meta.provider);
+            if (typeof frame.rewritten_prompt === "string" && frame.rewritten_prompt.trim()) {
                 assistant.drafts.set(meta.sceneKey, {
                     sceneId: meta.sceneId,
                     sceneIndex: meta.sceneIndex,
@@ -338,45 +457,108 @@ function mount(node) {
                     proposed: frame.rewritten_prompt,
                     provider: frame.provider || meta.provider,
                 });
+            } else if (typeof frame.rewritten_prompt === "string") {
+                assistant.error = "The agent returned an empty draft, so it was not staged.";
             }
         } else if (frame.type === "prompt_assist_error") {
             const meta = assistant.requestContexts.get(frame.request_id);
+            if (frame.request_id && !meta && assistant.activeRequest !== frame.request_id) return;
             if (meta) assistant.requestContexts.delete(frame.request_id);
             if (!frame.request_id || assistant.activeRequest === frame.request_id) {
                 assistant.activeRequest = null;
             }
-            assistant.status = assistant.client?.socket ? "connected" : "disconnected";
+            clearPendingRequest(frame.request_id);
+            clearAssistantReconnect();
+            assistant.status = assistant.client?.socket?.readyState === WebSocket.OPEN
+                ? "connected" : "disconnected";
             assistant.error = String(frame.error || "Prompt assistant failed.");
-            assistantMessage("system", `Agent error: ${assistant.error}`);
+            assistantMessage("system", `Agent error: ${assistant.error}`, meta?.provider);
         } else if (frame.type === "prompt_assist_cancelled") {
+            const meta = assistant.requestContexts.get(frame.request_id);
+            if (!meta && assistant.activeRequest !== frame.request_id) return;
             assistant.requestContexts.delete(frame.request_id);
             if (assistant.activeRequest === frame.request_id) assistant.activeRequest = null;
+            clearPendingRequest(frame.request_id);
+            clearAssistantReconnect();
             assistant.status = "connected";
             assistant.statusDetail = "Stopped · ready for another request";
-            assistantMessage("system", "Request stopped. The scene prompt was not changed.");
+            assistantMessage("system", "Request stopped. The scene prompt was not changed.", meta?.provider);
+        } else if (
+            frame.type === "prompt_assist_cancel_ack"
+            && frame.cancelled === false
+            && frame.request_id === assistant.activeRequest
+        ) {
+            // The orchestrator may have restarted while the browser retained a
+            // pending request. A negative correlated ack proves there is no
+            // server-side turn left to wait for.
+            const meta = assistant.requestContexts.get(frame.request_id);
+            assistant.requestContexts.delete(frame.request_id);
+            assistant.activeRequest = null;
+            clearPendingRequest(frame.request_id);
+            clearAssistantReconnect();
+            assistant.status = assistant.client?.socket?.readyState === WebSocket.OPEN
+                ? "connected" : "disconnected";
+            assistant.statusDetail = "No active server request · ready for another request";
+            assistant.error = "The prior request is no longer active, likely because the bridge restarted.";
+            assistantMessage("system", assistant.error, meta?.provider);
         }
         refreshAssistant();
     }
 
     async function sendAssistant(promptTextarea) {
-        if (assistant.activeRequest || !state.plan?.shots?.length) return;
-        const shot = state.plan.shots[state.active];
-        const sceneId = String(shot.id || `clip_${String(state.active + 1).padStart(4, "0")}`);
-        const sceneKey = promptSceneKey(sceneId, state.active);
-        const selectedText = promptTextarea.value.slice(
+        if (assistant.activeRequest || assistant.preparingRequest || !state.plan?.shots?.length) return;
+        // Snapshot the selected scene before the asynchronous bridge handshake.
+        // Navigation remains usable while connecting; reading state.active and
+        // an old textarea after await could otherwise pair scene B's id with
+        // scene A's prompt.
+        const requestSceneIndex = state.active;
+        const requestShot = state.plan.shots[requestSceneIndex];
+        const sourcePrompt = promptTextarea.value;
+        const selectedText = sourcePrompt.slice(
             promptTextarea.selectionStart ?? 0,
             promptTextarea.selectionEnd ?? 0,
         );
         const context = buildPromptAssistantContext(
             state.plan,
-            state.active,
-            promptTextarea.value,
+            requestSceneIndex,
+            sourcePrompt,
             {
                 includeShared: assistant.includeShared,
                 includeAdjacent: assistant.includeAdjacent,
                 selectedText,
             },
         );
+        const preparation = {};
+        assistant.preparingRequest = preparation;
+        assistant.status = "connecting";
+        assistant.statusDetail = "Connecting to comfyui-mcp…";
+        assistant.error = "";
+        refreshAssistant();
+        try {
+            // Wait for prompt_assist_ready before freezing the provider into the
+            // request. The ready frame may switch a persisted unavailable Hermes
+            // selection to Codex.
+            await assistant.client.connect();
+        } catch (error) {
+            // New chat may have invalidated this connect attempt while it was
+            // awaiting the handshake. In that case it owns no UI state.
+            if (assistant.preparingRequest !== preparation) return;
+            assistant.preparingRequest = null;
+            assistant.status = "disconnected";
+            assistant.error = error.message || String(error);
+            assistantMessage("system", `Could not connect: ${assistant.error}`);
+            refreshAssistant();
+            return;
+        }
+        if (assistant.preparingRequest !== preparation) return;
+        assistant.preparingRequest = null;
+        if (!assistantProviderAvailable()) {
+            assistant.error = `${assistant.provider === "hermes" ? "Hermes" : "Codex"} is unavailable.`;
+            refreshAssistant();
+            return;
+        }
+        const sceneId = String(requestShot.id || `clip_${String(requestSceneIndex + 1).padStart(4, "0")}`);
+        const sceneKey = promptSceneKey(sceneId, requestSceneIndex);
         const requestId = `pa-${globalThis.crypto?.randomUUID?.()
             ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`}`;
         const request = makePromptAssistRequest({
@@ -390,12 +572,14 @@ function mount(node) {
         assistant.requestContexts.set(requestId, {
             sceneKey,
             sceneId,
-            sceneIndex: state.active,
-            sourcePrompt: promptTextarea.value,
+            sceneIndex: requestSceneIndex,
+            sourcePrompt,
             sourceRevision: request.source_revision,
             provider: assistant.provider,
         });
+        const requestMeta = assistant.requestContexts.get(requestId);
         assistant.activeRequest = requestId;
+        persistPendingRequest(requestId, requestMeta);
         assistant.status = "working";
         assistant.statusDetail = `Asking ${assistant.provider === "hermes" ? "Hermes" : "Codex"}…`;
         assistant.error = "";
@@ -408,6 +592,8 @@ function mount(node) {
             if (assistant.activeRequest !== requestId) return;
             assistant.activeRequest = null;
             assistant.requestContexts.delete(requestId);
+            clearPendingRequest(requestId);
+            clearAssistantReconnect();
             assistant.status = "disconnected";
             assistant.error = error.message || String(error);
             assistantMessage("system", `Could not send: ${assistant.error}`);
@@ -430,8 +616,11 @@ function mount(node) {
         if (assistant.activeRequest) assistant.client.cancel(assistant.activeRequest);
         assistant.client.reset();
         assistant.activeRequest = null;
+        assistant.preparingRequest = null;
+        clearPendingRequest();
+        clearAssistantReconnect();
         assistant.requestContexts.clear();
-        assistant.messages = [];
+        assistant.messagesByProvider = {codex: [], hermes: []};
         assistant.error = "";
         assistant.statusDetail = "New isolated conversation";
         refreshAssistant();
@@ -459,6 +648,11 @@ function mount(node) {
         )) return;
         const before = promptTextarea.value;
         const after = draft.proposed;
+        if (!String(after).trim()) {
+            assistant.error = "An empty assistant draft cannot replace the scene prompt.";
+            refreshAssistant();
+            return;
+        }
         assistant.lastApplied = {
             sceneKey: promptSceneKey(draft.sceneId, draft.sceneIndex),
             before,
@@ -489,7 +683,8 @@ function mount(node) {
 
         const head = element("div", "h3sp-assist-head");
         const heading = element("span", "h3sp-assist-title", "Prompt Assistant");
-        const statusText = assistant.activeRequest
+        const busy = Boolean(assistant.activeRequest || assistant.preparingRequest);
+        const statusText = busy
             ? assistant.statusDetail || "Agent is working…"
             : assistant.statusDetail;
         head.append(heading, element("span", "h3sp-assist-status", statusText));
@@ -508,11 +703,12 @@ function mount(node) {
             provider.append(option);
         }
         provider.value = assistant.provider;
-        provider.disabled = Boolean(assistant.activeRequest);
+        provider.disabled = busy;
         provider.addEventListener("change", () => {
             assistant.provider = provider.value;
             node.properties[ASSIST_PROVIDER_PROPERTY] = assistant.provider;
             persistView();
+            refreshAssistant();
         });
         const mode = element("select");
         mode.title = "Choose the kind of help to request.";
@@ -522,7 +718,7 @@ function mount(node) {
             mode.append(option);
         }
         mode.value = assistant.mode;
-        mode.disabled = Boolean(assistant.activeRequest);
+        mode.disabled = busy;
         mode.addEventListener("change", () => {
             assistant.mode = mode.value;
             node.properties[ASSIST_MODE_PROPERTY] = assistant.mode;
@@ -532,13 +728,14 @@ function mount(node) {
         controls.append(provider, mode, button("New chat", "Clear agent conversation; staged drafts remain.", resetAssistantChat));
 
         const chat = element("div", "h3sp-assist-chat");
-        if (!assistant.messages.length) {
+        const messages = messagesForProvider();
+        if (!messages.length) {
             chat.append(element(
                 "div", "h3sp-assist-empty",
                 "Ask for a rewrite, continuity pass, critique, or a specific change. Nothing is applied until you press Apply.",
             ));
         } else {
-            for (const message of assistant.messages) {
+            for (const message of messages) {
                 chat.append(element(
                     "div",
                     `h3sp-assist-message h3sp-assist-message-${message.role}`,
@@ -590,7 +787,7 @@ function mount(node) {
             const input = element("input");
             input.type = "checkbox";
             input.checked = checked;
-            input.disabled = Boolean(assistant.activeRequest);
+            input.disabled = busy;
             input.addEventListener("change", () => change(input.checked));
             wrapper.append(input, document.createTextNode(label));
             return wrapper;
@@ -609,7 +806,7 @@ function mount(node) {
         const composer = element("textarea");
         composer.value = assistant.composer;
         composer.placeholder = PROMPT_ASSIST_DEFAULT_INSTRUCTIONS[assistant.mode];
-        composer.disabled = Boolean(assistant.activeRequest);
+        composer.disabled = busy;
         composer.addEventListener("input", () => { assistant.composer = composer.value; });
         composer.addEventListener("keydown", (event) => {
             if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
@@ -620,7 +817,7 @@ function mount(node) {
         const send = button("Ask agent", "Send (Ctrl/Cmd+Enter). The response is staged, never auto-applied.", () => {
             void sendAssistant(promptTextarea);
         });
-        send.disabled = Boolean(assistant.activeRequest);
+        send.disabled = busy || !assistantProviderAvailable();
         compose.append(composer, send);
         if (assistant.activeRequest) {
             compose.append(button("Stop", "Interrupt this prompt-assist request.", stopAssistant));
@@ -820,12 +1017,16 @@ function mount(node) {
     const removed = node.onRemoved;
     node.onRemoved = function () {
         if (state.pollTimer != null) window.clearInterval(state.pollTimer);
+        assistant.preparingRequest = null;
+        clearAssistantReconnect();
+        clearPendingRequest();
         assistant.client?.close();
         return removed?.apply(this, arguments);
     };
     node._h3ScenePromptEditorRefresh = () => loadPlan(true);
     state.pollTimer = window.setInterval(() => loadPlan(false), 500);
     loadPlan(true);
+    restorePendingRequest();
 }
 
 app.registerExtension({
