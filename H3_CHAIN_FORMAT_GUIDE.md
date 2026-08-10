@@ -512,7 +512,10 @@ final/<filename>.mp4              workflow, API graph and manifest embedded
 ```
 
 The segment record and manifest store `prompt_prefix`, `scene_prompt`, the
-combined `prompt`, `prompt_hash`, `seed`, and paths to the recovery archives.
+combined `prompt`, `prompt_hash`, `prompt_file_sha256`, `seed`, and paths to the
+recovery archives. `prompt_hash` identifies normalized prompt text, while
+`prompt_file_sha256` verifies the exact sidecar bytes. Older Windows sidecars
+that used CRLF line endings remain resumable through normalized text checking.
 The same prompt fields are also stored in the safetensors metadata. Review Gate
 retries rewrite `plan.json`, `workflow.json`, and `api_prompt.json` with the
 effective scene prompt and exact uint64 seed before saving the replacement.
@@ -525,6 +528,34 @@ authoritative record of what the loop actually rendered if an external API
 queued the job without frontend workflow metadata. As with ordinary ComfyUI
 workflow metadata, connected node widget values are archived too; keep the run
 folder private if a workflow contains credentials or other sensitive values.
+
+### Re-decode checkpoints to PNG
+
+Wire a completed or partial manifest and the same H3 video VAE into
+**MiniMax H3 Contex Loop Export PNG Sequence**. The node:
+
+1. verifies every safetensors checkpoint hash without depending on the H.264
+   segment file;
+2. decodes one full scene latent at a time;
+3. computes `trim_frames = raw_frames - delivered_frames` and removes the
+   repeated continuation overlap;
+4. writes a continuous frame-numbered 8-bit RGB PNG sequence;
+5. writes `export.json` with scene frame ranges, prompts, seeds and checkpoints.
+
+The export lives under
+`output/h3_chains/<run_name>/frames/<export_name>/`. If that folder already
+exists, a numbered sibling is created instead of overwriting it. PNG compression
+is lossless: changing `png_compression` only changes encoding time and file size.
+When `embed_workflow` is enabled, the first PNG stores the archived `workflow`,
+API `prompt`, effective `h3_plan`, and `h3_manifest`; each scene's first frame
+stores its effective scene metadata and full prompt.
+
+The checkpoint contains the exact sampled video latent, but VAE decoding is a
+separate computation. For the closest reconstruction, use the same H3 video
+VAE, ComfyUI version, precision, and decode/tiling behavior as the original
+render. The PNG files are lossless representations of this new decode after its
+conversion to standard 8-bit RGB; they are not guaranteed to be bit-identical
+to frames decoded previously under different settings.
 
 ## Complete music-video template
 

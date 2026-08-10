@@ -8,6 +8,7 @@ outputs with ffmpeg.
 """
 
 import asyncio
+import hashlib
 import importlib.util
 import json
 import pathlib
@@ -34,6 +35,7 @@ import folder_paths  # noqa: E402
 import torch  # noqa: E402
 import execution  # noqa: E402
 import nodes as comfy_nodes  # noqa: E402
+from PIL import Image as PILImage  # noqa: E402
 from safetensors import safe_open  # noqa: E402
 
 
@@ -118,7 +120,8 @@ def main():
         "MiniMaxH3ChainPlan", "MiniMaxH3ChainLoopStart",
         "MiniMaxH3ChainCurrent", "MiniMaxH3ChainContext",
         "MiniMaxH3ChainSegmentSave", "MiniMaxH3ChainLoopEnd",
-        "MiniMaxH3ChainManifestLoad", "MiniMaxH3ChainAssemble",
+        "MiniMaxH3ChainManifestLoad", "MiniMaxH3ChainExportPNG",
+        "MiniMaxH3ChainAssemble",
         "MiniMaxH3LoopTrim",
     }
     assert required <= set(package.NODE_CLASS_MAPPINGS)
@@ -545,6 +548,8 @@ def main():
             prompt_path = pathlib.Path(chain._absolute_output_path(
                 segment1["prompt_file"]))
             assert prompt_path.read_text(encoding="utf-8") == "first"
+            assert segment1["prompt_file_sha256"] == chain._file_sha256(
+                str(prompt_path))
             segment_metadata = json.loads(pathlib.Path(
                 chain._absolute_output_path(segment1["metadata"])
             ).read_text(encoding="utf-8"))
@@ -553,6 +558,27 @@ def main():
             assert segment_metadata["archives"] == segment1["archives"]
 
             run_dir = pathlib.Path(tempdir, "h3_chains", "smoke")
+            exact_text_path = run_dir / "exact-lf.txt"
+            chain._atomic_text(str(exact_text_path), "line one\nline two")
+            assert exact_text_path.read_bytes() == b"line one\nline two"
+
+            legacy_prompt_path = run_dir / "legacy-windows.prompt.txt"
+            legacy_prompt_path.write_bytes(b"line one\r\nline two")
+            legacy_segment = dict(segment1)
+            legacy_segment["prompt_file"] = chain._relative_output_path(
+                str(legacy_prompt_path))
+            legacy_segment["prompt_hash"] = hashlib.sha256(
+                b"line one\nline two").hexdigest()
+            legacy_segment.pop("prompt_file_sha256", None)
+            chain._verify_segment_artifacts(legacy_segment, 1)
+            legacy_prompt_path.write_bytes(b"line one\r\nchanged")
+            try:
+                chain._verify_segment_artifacts(legacy_segment, 1)
+            except ValueError as exc:
+                assert "prompt sidecar" in str(exc)
+            else:
+                raise AssertionError("changed legacy prompt sidecar was accepted")
+
             archived_plan = json.loads(
                 (run_dir / "plan.json").read_text(encoding="utf-8"))
             archived_api = json.loads(
@@ -960,6 +986,54 @@ def main():
                                 "manifest.json").is_file()
             manifest = loaded_manifest
             print("manifest load: completed chain restored without rerender")
+
+            class FakeVideoVAE:
+                def __init__(self):
+                    self.calls = 0
+
+                def decode(self, _video):
+                    self.calls += 1
+                    images = torch.zeros(
+                        (1, 5, 4, 4, 3), dtype=torch.float32)
+                    for frame in range(5):
+                        images[:, frame, ..., 0] = (
+                            self.calls * 10 + frame) / 255.0
+                    return images
+
+            fake_vae = FakeVideoVAE()
+            png_result = chain.MiniMaxH3ChainExportPNG().export(
+                manifest, fake_vae, "archive", 1, 1, True)
+            png_dir = pathlib.Path(png_result["result"][0])
+            png_files = sorted(png_dir.glob("frame_*.png"))
+            assert png_result["result"][1] == 9
+            assert len(png_files) == 9
+            assert [path.name for path in (png_files[0], png_files[-1])] == [
+                "frame_00000001.png", "frame_00000009.png"]
+            png_export = json.loads(
+                (png_dir / "export.json").read_text(encoding="utf-8"))
+            assert png_export["complete"]
+            assert png_export["frame_count"] == 9
+            assert png_export["clips"][0]["first_frame_number"] == 1
+            assert png_export["clips"][1]["first_frame_number"] == 6
+            assert png_export["clips"][1]["trim_frames"] == 1
+            with PILImage.open(png_files[0]) as first_png:
+                assert json.loads(first_png.text["workflow"])["nodes"][0][
+                    "type"] == "MiniMaxH3ChainPlan"
+                assert json.loads(first_png.text["h3_manifest"])[
+                    "clip_count"] == 2
+                assert json.loads(first_png.text["h3_scene"])[
+                    "prompt"] == "first"
+            with PILImage.open(png_files[5]) as second_scene_png:
+                assert second_scene_png.text["h3_clip_index"] == "2"
+                assert json.loads(second_scene_png.text["h3_scene"])[
+                    "prompt"] == "second"
+            # The second clip's raw frame 1 is overlap and must be absent: its
+            # first delivered PNG therefore carries fake decoded value 21.
+            with PILImage.open(png_files[5]) as trimmed_png:
+                assert trimmed_png.getpixel((0, 0))[0] == 21
+            assert fake_vae.calls == 2
+            print("PNG export: checkpoints re-decoded one scene at a time; "
+                  "overlap trimmed and workflow metadata preserved")
 
             assembler = chain.MiniMaxH3ChainAssemble()
             source_result = assembler.assemble(

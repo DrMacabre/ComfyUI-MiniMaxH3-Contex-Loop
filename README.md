@@ -44,6 +44,7 @@ inspired by **nkxx188’s**
 | 🧬 | Motion and optional audio continuity |
 | 👀 | Video-with-sound review, edit, reroll, or approve |
 | 💾 | Atomic checkpoints, partial assembly, and resume |
+| 🖼️ | Re-decode saved latents into a continuous PNG sequence |
 | 🎯 | Scene ranges such as `3` or `3:8` |
 
 The runtime changes are opt-in. Loading this pack does not alter ordinary
@@ -146,6 +147,21 @@ current MP4 with synchronized audio and offers:
 Notification sound, auto-continue timeout, and model unloading while waiting
 are optional. The same node can preview and load **Resume scene N**; resume
 validates the plan, audio hash, fingerprint, and predecessor artifacts first.
+
+## Archival PNG export
+
+Connect a completed or partial manifest and the original H3 video VAE to
+**Export PNG Sequence**. It loads each safetensors checkpoint independently,
+decodes its full video latent, removes that scene's repeated overlap, and writes
+one continuous `frame_00000001.png` sequence under
+`output/h3_chains/<run_name>/frames/`. Scenes are released between decodes, so
+the complete movie is never accumulated in RAM.
+
+The export is lossless after conversion to standard 8-bit RGB PNG. Use the same
+VAE and decode precision/settings to reproduce the original decode as closely
+as possible. Existing export folders are never overwritten, and `export.json`
+maps every frame range back to its checkpoint, prompt, and seed. The first PNG
+can also carry the archived ComfyUI workflow and manifest.
 
 ## Audio modes
 
