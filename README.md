@@ -20,6 +20,10 @@ huge cumulative image tensor.
 Newest first. Recent additions stay visible; older milestones are folded away
 so this page remains a useful starting point rather than a changelog wall.
 
+- **v0.3.14 — Local-path fallback for remote ComfyUI.** When the ComfyUI host
+  cannot open a Plan's output folder, **Output** also tries the identical path
+  on the browser computer before copying it. Browsers that prohibit
+  `file://` links still receive the absolute path through the clipboard.
 - **v0.3.13 — Open a Plan's output folder.** A compact **Output** button with
   an outline folder-open icon in the Plan header creates and opens
   `output/h3_chains/<run_name>` on the ComfyUI host. Headless or systemd-hosted

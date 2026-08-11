@@ -7,6 +7,7 @@ import {
     duplicateShot,
     formatClock,
     h3FrameLength,
+    localFileUrl,
     makeShot,
     moveShot,
     parsePlanJson,
@@ -204,6 +205,20 @@ function setOutputButtonLabel(item, label, showIcon = false) {
     item.replaceChildren();
     if (showIcon) item.append(folderOpenIcon());
     item.append(document.createTextNode(label));
+}
+
+function tryOpenLocalFolder(path) {
+    const url = localFileUrl(path);
+    if (!url) return false;
+    const link = document.createElement("a");
+    link.href = url;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.hidden = true;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    return true;
 }
 
 function field(label, control) {
@@ -654,7 +669,8 @@ function mountEditor(node) {
         const openOutput = button(
             "Output",
             "Open this Plan's output/h3_chains/<run_name> folder on the ComfyUI host. " +
-            "If the host has no desktop session, its path is copied instead.",
+            "If that fails, try the same path on the browser computer and copy it. " +
+            "Some browsers block local file links from web pages.",
             async () => {
                 const runName = String(widgetValue(node, "run_name", "")).trim();
                 openOutput.disabled = true;
@@ -674,12 +690,20 @@ function mountEditor(node) {
                     if (payload.opened) {
                         setOutputButtonLabel(openOutput, "Opened ✓");
                     } else {
+                        const localAttempted = tryOpenLocalFolder(payload.path);
+                        let copied = false;
                         try {
                             await navigator.clipboard.writeText(payload.path);
-                            setOutputButtonLabel(openOutput, "Path copied");
+                            copied = true;
                         } catch (_error) {
-                            setOutputButtonLabel(openOutput, "See tooltip");
+                            // The absolute path remains available in the tooltip.
                         }
+                        setOutputButtonLabel(
+                            openOutput,
+                            copied ? "Path copied" : (localAttempted ? "Local open tried" : "See tooltip"),
+                        );
+                        openOutput.title += "\nTried this path on the browser computer; " +
+                            "the browser may block file:// links.";
                         if (payload.error) openOutput.title += `\n${payload.error}`;
                     }
                 } catch (error) {

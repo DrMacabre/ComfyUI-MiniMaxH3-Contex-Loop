@@ -8,6 +8,7 @@ import {
     calculatePlanTiming,
     duplicateShot,
     h3FrameLength,
+    localFileUrl,
     moveShot,
     parsePlanJson,
     planToJson,
@@ -22,6 +23,9 @@ assert.equal(new Set(AUTO_SCENE_COLORS).size, AUTO_SCENE_COLORS.length);
 assert.equal(automaticSceneColor(0), AUTO_SCENE_COLORS[0]);
 assert.equal(automaticSceneColor(12), AUTO_SCENE_COLORS[0]);
 assert.equal(automaticSceneColor(-1), AUTO_SCENE_COLORS.at(-1));
+assert.equal(localFileUrl("/media/p5/My Project"), "file:///media/p5/My%20Project");
+assert.equal(localFileUrl("C:\\ComfyUI\\output\\My Project"), "file:///C:/ComfyUI/output/My%20Project");
+assert.equal(localFileUrl("\\\\server\\output\\My Project"), "file://server/output/My%20Project");
 
 const plan = parsePlanJson(JSON.stringify({
     prompt_prefix: ["Identity.", "", "Wardrobe."],
@@ -153,6 +157,7 @@ assert.match(editorSource, /createElementNS\(namespace, "svg"\)/);
 assert.match(editorSource, /h3c-folder-icon/);
 assert.match(editorSource, /minimax_h3_context_loop\/open-run-folder/);
 assert.match(editorSource, /navigator\.clipboard\.writeText\(payload\.path\)/);
+assert.match(editorSource, /tryOpenLocalFolder\(payload\.path\)/);
 assert.doesNotMatch(editorSource, /h3_motion_context\.chain_plan_editor/);
 
 console.log("H3 Chain Plan editor core: parsing, uint64 seeds, timing and edits pass");
