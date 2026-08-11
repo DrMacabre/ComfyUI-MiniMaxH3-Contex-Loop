@@ -969,13 +969,14 @@ function mount(node) {
     function showReferencePreview(record, preview) {
         preview.replaceChildren();
         preview.classList.add("h3sp-visible");
-        const media = findMediaPreview(record.source, record.kind);
+        const mediaKind = record.kind === "picture" ? "image" : record.kind;
+        const media = findMediaPreview(record.source, mediaKind);
         if (media.url) {
-            const mediaElement = element(record.kind === "image" ? "img"
-                : record.kind === "video" ? "video" : "audio",
+            const mediaElement = element(mediaKind === "image" ? "img"
+                : mediaKind === "video" ? "video" : "audio",
             "h3sp-ref-preview-media");
             mediaElement.src = media.url;
-            if (record.kind !== "image") {
+            if (mediaKind !== "image") {
                 mediaElement.controls = true;
                 mediaElement.preload = "metadata";
             } else {
@@ -1051,11 +1052,14 @@ function mount(node) {
                 },
             );
             chip.classList.add("h3sp-ref-chip", record.active ? "h3sp-active" : "h3sp-inactive");
-            chip.addEventListener("pointerenter", () => showReferencePreview(record, preview));
+            chip.addEventListener("mouseenter", () => showReferencePreview(record, preview));
             chip.addEventListener("focus", () => showReferencePreview(record, preview));
             refs.append(chip);
         }
         refs.append(preview);
+        showReferencePreview(
+            records.find((record) => record.active) ?? records[0], preview,
+        );
     }
 
     function render() {

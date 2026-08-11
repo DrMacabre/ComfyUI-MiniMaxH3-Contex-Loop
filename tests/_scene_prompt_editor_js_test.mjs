@@ -40,6 +40,8 @@ assert.match(source, /scheduledReferenceRecords/);
 assert.match(source, /Hover to preview/);
 assert.match(source, /Audio never autoplays/);
 assert.match(source, /h3sp-ref-preview-media/);
+assert.match(source, /record\.kind === "picture" \? "image"/);
+assert.match(source, /records\.find\(\(record\) => record\.active\)/);
 assert.match(source, /# Dialogue/);
 assert.match(source, /FONT_SIZE_PROPERTY/);
 assert.match(source, /const PROMPT_ASSISTANT_ENABLED = false;/);
