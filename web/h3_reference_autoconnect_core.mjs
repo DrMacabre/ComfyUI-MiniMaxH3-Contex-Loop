@@ -64,6 +64,15 @@ function setWidget(node, name, value) {
     return true;
 }
 
+export function migrateLegacyVideoScheduleWidgets(node, info) {
+    const values = info?.widgets_values;
+    if (nodeType(node) !== VIDEO_REF_TYPE || !Array.isArray(values)
+            || values.length < 4) return false;
+    // v0.3.10 stored [tag, scenes, declaration, audio_tag,
+    // audio_declaration]. The lean scheduler stores [tag, scenes, audio_tag].
+    return setWidget(node, "audio_tag", values[3] ?? "");
+}
+
 function copyWidget(oldNode, newNode, name) {
     const source = widget(oldNode, name);
     const target = widget(newNode, name);

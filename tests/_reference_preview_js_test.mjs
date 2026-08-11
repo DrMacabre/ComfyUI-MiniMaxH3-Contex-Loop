@@ -50,13 +50,13 @@ const firstImage = add(makeNode(4, "LoadImage", {image: "first.png"}));
 const secondImage = add(makeNode(5, "LoadImage", {image: "second.png"}));
 const audioFile = add(makeNode(6, "LoadAudio", {audio: "score.wav"}));
 const first = add(makeNode(7, "MiniMaxH3ScheduledPictureReference", {
-    tag: "picture_1", scenes: "1", declaration: "Use {ref} first.",
+    tag: "picture_1", scenes: "1",
 }));
 const second = add(makeNode(8, "MiniMaxH3ScheduledPictureReference", {
-    tag: "picture_2", scenes: "", declaration: "Use {ref} second.",
+    tag: "picture_2", scenes: "",
 }));
 const audio = add(makeNode(9, "MiniMaxH3ScheduledAudioReference", {
-    tag: "score", scenes: "all", declaration: "Use {ref} for sound.",
+    tag: "score", scenes: "all",
 }));
 
 connect(editor, relay, "state");

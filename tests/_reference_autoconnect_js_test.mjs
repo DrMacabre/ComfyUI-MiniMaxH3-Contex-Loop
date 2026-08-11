@@ -10,6 +10,7 @@ import {
     VIDEO_REF_TYPE,
     collectReferenceInputs,
     convertCoreRef2VA,
+    migrateLegacyVideoScheduleWidgets,
 } from "../web/h3_reference_autoconnect_core.mjs";
 
 class FakeNode {
@@ -114,20 +115,19 @@ function schema(type) {
     if (type === PICTURE_REF_TYPE) {
         return new FakeNode(type, ["image", "previous"], [
             "schedule", "schedule_fingerprint", "status"], [
-            ["tag", "hero_face"], ["scenes", ""], ["declaration", "picture"],
+            ["tag", "hero_face"], ["scenes", ""],
         ]);
     }
     if (type === VIDEO_REF_TYPE) {
         return new FakeNode(type, ["video", "audio", "previous"], [
             "schedule", "schedule_fingerprint", "status"], [
-            ["tag", "performance"], ["scenes", ""], ["declaration", "video"],
-            ["audio_tag", ""], ["audio_declaration", "audio"],
+            ["tag", "performance"], ["scenes", ""], ["audio_tag", ""],
         ]);
     }
     if (type === AUDIO_REF_TYPE) {
         return new FakeNode(type, ["audio", "previous"], [
             "schedule", "schedule_fingerprint", "status"], [
-            ["tag", "voice"], ["scenes", ""], ["declaration", "audio"],
+            ["tag", "voice"], ["scenes", ""],
         ]);
     }
     return null;
@@ -252,10 +252,21 @@ assert.equal(protectedResult.connectedFingerprint, false);
 assert.equal(protectedPlan.inputs[0].link, null);
 assert.equal(protectedPlan.widgets[0].value, "model-v2");
 
+const migratedVideo = schema(VIDEO_REF_TYPE);
+assert.equal(migrateLegacyVideoScheduleWidgets(migratedVideo, {
+    widgets_values: [
+        "performance", "4:6", "old declaration", "performance_audio",
+        "old audio declaration",
+    ],
+}), true);
+assert.equal(migratedVideo.widgets.find(
+    (item) => item.name === "audio_tag").value, "performance_audio");
+
 const extensionSource = fs.readFileSync(
     new URL("../web/h3_reference_autoconnect.js", import.meta.url), "utf8");
 assert.match(extensionSource, /Convert to MiniMax H3 Scheduled Ref2VA/);
 assert.match(extensionSource, /beforeRegisterNodeDef/);
+assert.match(extensionSource, /migrateLegacyVideoScheduleWidgets/);
 assert.match(extensionSource, /LiteGraph\?\.createNode/);
 
 console.log("H3 Ref2VA autoconnector: references, loop sockets, outputs, and fingerprint safety pass");

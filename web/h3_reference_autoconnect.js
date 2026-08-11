@@ -1,7 +1,9 @@
 import {app} from "/scripts/app.js";
 import {
     CORE_REF2VA_TYPE,
+    VIDEO_REF_TYPE,
     convertCoreRef2VA,
+    migrateLegacyVideoScheduleWidgets,
 } from "./h3_reference_autoconnect_core.mjs";
 
 const EXTENSION = "minimax_h3_context_loop.reference_autoconnect";
@@ -42,19 +44,28 @@ function convert(node) {
 app.registerExtension({
     name: EXTENSION,
     async beforeRegisterNodeDef(nodeType, nodeData) {
-        if (nodeData.name !== CORE_REF2VA_TYPE) return;
-        const original = nodeType.prototype.getExtraMenuOptions;
-        nodeType.prototype.getExtraMenuOptions = function (_, options) {
-            const result = original?.apply(this, arguments);
-            const menu = Array.isArray(options) ? options : [];
-            menu.splice(Math.max(0, menu.length - 1), 0,
-                null,
-                {
-                    content: "Convert to MiniMax H3 Scheduled Ref2VA",
-                    callback: () => convert(this),
-                },
-            );
-            return result;
-        };
+        if (nodeData.name === VIDEO_REF_TYPE) {
+            const originalConfigure = nodeType.prototype.onConfigure;
+            nodeType.prototype.onConfigure = function (info) {
+                const result = originalConfigure?.apply(this, arguments);
+                migrateLegacyVideoScheduleWidgets(this, info);
+                return result;
+            };
+        }
+        if (nodeData.name === CORE_REF2VA_TYPE) {
+            const originalMenu = nodeType.prototype.getExtraMenuOptions;
+            nodeType.prototype.getExtraMenuOptions = function (_, options) {
+                const result = originalMenu?.apply(this, arguments);
+                const menu = Array.isArray(options) ? options : [];
+                menu.splice(Math.max(0, menu.length - 1), 0,
+                    null,
+                    {
+                        content: "Convert to MiniMax H3 Scheduled Ref2VA",
+                        callback: () => convert(this),
+                    },
+                );
+                return result;
+            };
+        }
     },
 });

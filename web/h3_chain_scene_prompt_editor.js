@@ -993,10 +993,6 @@ function mount(node) {
         }
 
         const sourceTitle = media.source?.title || nodeType(media.source) || "unresolved source";
-        const declarationName = record.pairedWith ? "audio_declaration" : "declaration";
-        const declaration = String(
-            record.node?.widgets?.find((item) => item.name === declarationName)?.value ?? "",
-        ).trim();
         const mapping = record.active
             ? `${record.label} in scene ${state.active + 1}`
             : `inactive in scene ${state.active + 1}`;
@@ -1007,8 +1003,7 @@ function mount(node) {
             element("div", "h3sp-ref-preview-title", previewTitle),
             document.createTextNode(
                 `\n${record.kind.toUpperCase()} · scenes ${record.selector}` +
-                `\nSource: ${sourceTitle}` +
-                (declaration ? `\nDeclaration: ${declaration}` : ""),
+                `\nSource: ${sourceTitle}`,
             ),
         );
         preview.append(copy);

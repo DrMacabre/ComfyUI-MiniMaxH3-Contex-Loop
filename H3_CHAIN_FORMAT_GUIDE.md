@@ -465,8 +465,8 @@ edit, not a runtime monkeypatch. It:
 
 Converted entries initially use all scenes and readable aliases such as
 `@picture_1`, `@video_1`, `@video_1_audio`, and `@audio_1`. Edit their selectors,
-tags, and declarations after conversion. A paired-audio socket without its
-same-index video is ignored because core Ref2VA would ignore it as well.
+and tags after conversion. A paired-audio socket without its same-index video
+is ignored because core Ref2VA would ignore it as well.
 
 Each entry has a stable human alias. A Plan prompt can say `@hero_face`,
 `@performance`, or `@voice` without knowing which native H3 ordinal that
@@ -487,33 +487,30 @@ tokens, and selections beyond `clip_count` stop before model execution with a
 specific error. Unlike Loop Start's render range, disjoint reference selections
 are safe because they do not skip the chain's motion dependency.
 
-### Declarations and native labels
+### Prompt definitions and native labels
 
-Use `{ref}` inside an entry declaration as the placeholder for its assigned
-native label:
+Write reference definitions directly in the Plan prompt with stable aliases:
 
 ```text
-Picture tag: @hero_face
-Declaration: <Subject 1> is the woman in {ref}; preserve her facial identity,
-             hairstyle, skin tone, age, and distinctive physical features.
-
-Video tag: @performance
-Declaration: {ref} provides the performance timing and camera motion.
+subject_definitions:
+<Subject 1> is the woman whose facial identity comes from @hero_face and whose
+walking motion comes from @performance; preserve her hairstyle, skin tone,
+apparent age, and distinctive physical features.
 ```
 
 For one active picture and one active video, the compiled prompt receives:
 
 ```text
-<Subject 1> is the woman in <Picture 1>; preserve her facial identity,
-hairstyle, skin tone, age, and distinctive physical features.
-<Video 1> provides the performance timing and camera motion.
+subject_definitions:
+<Subject 1> is the woman whose facial identity comes from <Picture 1> and whose
+walking motion comes from <Video 1>; preserve her hairstyle, skin tone,
+apparent age, and distinctive physical features.
 ```
 
-The wrapper replaces every active `@tag` in both declarations and the scene
-prompt. If the prompt already has a `subject_definitions:` line, generated
-declarations are inserted immediately below it; otherwise they are prepended as
-plain reference-definition lines. Unknown tags and tags scheduled for another
-scene are rejected rather than leaking unresolved aliases into H3.
+The wrapper only replaces active `@tags`; it never inserts definitions. This
+keeps the complete six-section H3 prompt visible in the Plan and Prompt Editor.
+Unknown tags and tags scheduled for another scene are rejected rather than
+leaking unresolved aliases into H3.
 
 ComfyUI's stock Ref2VA presents media in a fixed order, and the compiler mirrors
 it exactly:
@@ -531,11 +528,11 @@ valid and expand to stock Ref2VA without dynamic reference sockets.
 
 ### Checkpoint compatibility
 
-Every schedule entry fingerprints its normalized selector, declarations, and
-actual media bytes. For a schedule made entirely from static loaders, connect
+Every schedule entry fingerprints its normalized selector, tags, and actual
+media bytes. For a schedule made entirely from static loaders, connect
 its `schedule_fingerprint` output to Plan `generation_fingerprint`. Changing a
-reference file, its selector, its tag, or its declaration will then invalidate
-incompatible saved predecessors.
+reference file, its selector, or its tag will then invalidate incompatible
+saved predecessors.
 
 An entry may instead consume a per-iteration output—for example Current Shot's
 frame-exact `source_audio_slice`. Keep that entry inside the recursive body and

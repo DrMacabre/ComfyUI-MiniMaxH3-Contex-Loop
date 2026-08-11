@@ -272,8 +272,11 @@ def main():
     for index, shot in enumerate(scheduled_plan["shots"], start=1):
         text = "\n".join(shot["prompt"])
         assert "@hero_look" in text and "@song" in text
+        assert any(line.startswith("@song is ") for line in shot["prompt"])
         assert ("@hero_face" in text) == (index <= 7)
         assert ("@performance" in text) == (4 <= index <= 6)
+        assert (any(line.startswith("@performance provides ")
+                    for line in shot["prompt"]) == (4 <= index <= 6))
         assert "<Picture 1>" not in text and "<Picture 2>" not in text
         assert "<Audio 1>" not in text
     picture_nodes = {
@@ -282,15 +285,63 @@ def main():
     }
     assert picture_nodes["hero_face"]["widgets_values"][1] == "1:7"
     assert picture_nodes["hero_look"]["widgets_values"][1] == "all"
+    assert all(len(node["widgets_values"]) == 2
+               for node in picture_nodes.values())
     video_schedule = next(
         node for node in scheduled["nodes"]
         if node.get("type") == "MiniMaxH3ScheduledVideoReference")
     assert video_schedule["widgets_values"][:2] == ["performance", "4:6"]
-    assert video_schedule["widgets_values"][3] == "performance_audio"
+    assert video_schedule["widgets_values"][2] == "performance_audio"
+    assert len(video_schedule["widgets_values"]) == 3
     audio_schedule = next(
         node for node in scheduled["nodes"]
         if node.get("type") == "MiniMaxH3ScheduledAudioReference")
     assert audio_schedule["widgets_values"][:2] == ["song", "all"]
+    assert len(audio_schedule["widgets_values"]) == 2
+    demo_schedule = chain._make_reference_schedule([
+        {
+            "kind": "picture", "tag": "hero_face", "scenes": "1:7",
+            "ranges": ((1, 7),), "value": object(), "content_hash": "face",
+        },
+        {
+            "kind": "picture", "tag": "hero_look", "scenes": "all",
+            "ranges": (), "value": object(), "content_hash": "look",
+        },
+        {
+            "kind": "video", "tag": "performance", "scenes": "4:6",
+            "ranges": ((4, 6),), "value": object(), "audio": object(),
+            "audio_tag": "performance_audio", "content_hash": "video",
+            "audio_hash": "paired-audio",
+        },
+        {
+            "kind": "audio", "tag": "song", "scenes": "all",
+            "ranges": (), "value": object(), "content_hash": "song",
+        },
+    ])
+    for scene in (1, 4, 8):
+        source = "\n".join(scheduled_plan["shots"][scene - 1]["prompt"])
+        compiled_demo, _mapping, _bindings = (
+            chain._compile_scheduled_reference_prompt(
+                demo_schedule, scene, 14, source))
+        assert "@hero" not in compiled_demo
+        assert "@performance" not in compiled_demo
+        assert "@song" not in compiled_demo
+        assert "{ref}" not in compiled_demo
+        assert "defines <Subject 1>" not in compiled_demo
+        assert "for scenes 1-7" not in compiled_demo
+        assert compiled_demo.startswith("subject_definitions:\n<Subject 1>")
+        if scene == 1:
+            assert "<Picture 1>" in compiled_demo
+            assert "<Picture 2>" in compiled_demo
+            assert "<Audio 1> is the current frame-exact" in compiled_demo
+        elif scene == 4:
+            assert "<Video 1> provides a weak reference" in compiled_demo
+            assert "<Audio 1> is the synchronized soundtrack" in compiled_demo
+            assert "<Audio 2> is the current frame-exact" in compiled_demo
+        else:
+            assert "defined by <Picture 1>" in compiled_demo
+            assert "<Picture 2>" not in compiled_demo
+            assert "<Audio 1> is the current frame-exact" in compiled_demo
     scheduled_links = {int(link[0]): link for link in scheduled["links"]}
     fingerprint_input = next(
         item for item in scheduled_plan_node["inputs"]
@@ -483,24 +534,21 @@ def main():
     video_node = chain.MiniMaxH3ScheduledVideoReference()
     audio_node = chain.MiniMaxH3ScheduledAudioReference()
     picture_schedule = picture_node.add(
-        picture, "@hero", "1,3,5:8",
-        "<Subject 1> is the performer in {ref}.")[0]
+        picture, "@hero", "1,3,5:8")[0]
     video_schedule = video_node.add(
-        video, "performance", "2:4",
-        "{ref} provides motion for <Subject 1>.",
-        "performance_sound",
-        "{ref} is synchronized with @performance.",
+        video, "performance", "2:4", "performance_sound",
         audio=paired_audio, previous=picture_schedule)[0]
     schedule, schedule_fingerprint, _status = audio_node.add(
-        voice_audio, "voice", "3",
-        "{ref} provides voice timing.", previous=video_schedule)
+        voice_audio, "voice", "3", previous=video_schedule)
     assert schedule_fingerprint == schedule["fingerprint"]
     assert len(schedule["entries"]) == 3
     assert schedule["entries"][0]["value"].shape[0] == 1
 
     source_prompt = (
         "subject_definitions:\n"
-        "<Subject 1> follows @hero and @performance.\n\n"
+        "<Subject 1> follows @hero and @performance.\n"
+        "@performance_sound is synchronized with @performance.\n"
+        "@voice provides voice timing.\n\n"
         "summary:\n"
         "Use @performance_sound and @voice in scene 3."
     )
@@ -513,9 +561,8 @@ def main():
         "@performance -> <Video 1>; @voice -> <Audio 2>")
     assert compiled.startswith(
         "subject_definitions:\n"
-        "<Subject 1> is the performer in <Picture 1>.\n"
+        "<Subject 1> follows <Picture 1> and <Video 1>.\n"
         "<Audio 1> is synchronized with <Video 1>.\n"
-        "<Video 1> provides motion for <Subject 1>.\n"
         "<Audio 2> provides voice timing.\n")
     assert "@hero" not in compiled
     assert "@performance" not in compiled
@@ -544,15 +591,15 @@ def main():
         compiled, active_summary, schedule_fingerprint)
 
     first_picture_schedule = picture_node.add(
-        picture, "picture_1", "1",
-        "Use {ref} as the first identity reference.")[0]
+        picture, "picture_1", "1")[0]
     renumbering_schedule = picture_node.add(
         picture, "picture_2", "",
-        "Use {ref} as the second identity reference.",
         previous=first_picture_schedule)[0]
     scene_one_compiled, scene_one_summary, _ = (
         chain._compile_scheduled_reference_prompt(
-            renumbering_schedule, 1, 2, "Follow @picture_2."))
+            renumbering_schedule, 1, 2,
+            "Use @picture_2 as the second identity reference.\n"
+            "Follow @picture_2."))
     assert scene_one_summary == (
         "scene 1/2: @picture_1 -> <Picture 1>; "
         "@picture_2 -> <Picture 2>")
@@ -561,14 +608,16 @@ def main():
     assert "Follow <Picture 2>." in scene_one_compiled
     scene_two_compiled, scene_two_summary, _ = (
         chain._compile_scheduled_reference_prompt(
-            renumbering_schedule, 2, 2, "Follow @picture_2."))
+            renumbering_schedule, 2, 2,
+            "Use @picture_2 as the second identity reference.\n"
+            "Follow @picture_2."))
     assert scene_two_summary == "scene 2/2: @picture_2 -> <Picture 1>"
     assert "Use <Picture 1> as the second identity reference." in (
         scene_two_compiled)
     assert "Follow <Picture 1>." in scene_two_compiled
 
     picture_only = picture_node.add(
-        picture, "single", "1", "{ref} is used only in scene 1.")[0]
+        picture, "single", "1")[0]
     unreferenced = chain.MiniMaxH3ScheduledReferenceToVideo().apply(
         "clip", "video-vae", "audio-vae", picture_only, 2, 2,
         "A text-only second scene.", 960, 544, 124, "match")
@@ -596,15 +645,14 @@ def main():
         raise AssertionError("compiler accepted an unknown reference tag")
     try:
         audio_node.add(
-            voice_audio, "hero", "", "duplicate", picture_schedule)
+            voice_audio, "hero", "", previous=picture_schedule)
     except ValueError as exc:
         assert "already in this chain" in str(exc)
     else:
         raise AssertionError("scheduler accepted a duplicate tag")
     try:
         video_node.add(
-            video, "same", "1", "video", "same", "audio",
-            audio=paired_audio)
+            video, "same", "1", "same", audio=paired_audio)
     except ValueError as exc:
         assert "must be different" in str(exc)
     else:

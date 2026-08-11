@@ -23,7 +23,8 @@ so this page remains a useful starting point rather than a changelog wall.
 - **v0.3.10 — Scene-scheduled Ref2VA.** Chain picture, video, paired-video
   audio, and standalone-audio references under stable `@tags`; each scene
   receives only its active sockets while native `<Picture N>`, `<Video N>`,
-  and `<Audio N>` labels and declarations compile automatically. A right-click
+  and `<Audio N>` labels compile automatically. Reference definitions remain
+  visible and editable in the Plan/Prompt Editor. A right-click
   converter turns an already-wired core Ref2VA node into this layout.
 - **v0.3.8 — One-pass performance re-filming.** A Reference Video Prep node
   converts native VIDEO or decoded IMAGE/AUDIO to exact 24 fps Ref2VA input,
@@ -191,19 +192,17 @@ CLIP + video VAE + audio VAE ─────────────────
 
 Give each entry a stable tag such as `@hero`, `@performance`, or `@voice`.
 Its `scenes` field accepts blank/all, `1`, `1:4`, or `1,3,5:8`. The wrapper
-passes only active media into core Ref2VA, replaces tags with that scene's
-native labels, and inserts each entry's declaration above the scene prompt.
-If the prompt already contains `subject_definitions:`, declarations are
-inserted directly below it so the six-section Ref2VA format stays intact.
+passes only active media into core Ref2VA and replaces tags with that scene's
+native labels. It never inserts or rewrites semantic prompt text; write every
+reference definition directly in the Plan or Prompt Editor.
 
 Tags identify references; their names do not reserve native H3 numbers. Native
 labels are compactly assigned by media type from the entries active in the
 current scene. For example, suppose two picture nodes use tags `picture_1` and
 `picture_2`. If `picture_1` is removed or inactive in scene 3, write
 `@picture_2` in that scene's prompt: the wrapper safely compiles it to
-`<Picture 1>`. Write `{ref}` only inside a schedule node's `declaration`; it is
-replaced with that node's current native label. The `active_references` output
-shows the exact mapping for the current scene.
+`<Picture 1>`. The `active_references` output shows the exact mapping for the
+current scene.
 
 The **Scene Prompt Editor** discovers the Scheduled Ref2VA connected downstream
 without adding an execution socket or a graph cycle. Open its **@ Reference**
@@ -225,7 +224,7 @@ connected, the tray exposes hoverable `<Picture 1>` (first frame) and
 correctly presented as `<Picture 1>`.
 
 For static references, connect the final schedule fingerprint to the Plan's
-`generation_fingerprint` so changed media or declarations invalidate resume.
+`generation_fingerprint` so changed media, tags, or selectors invalidate resume.
 When an entry consumes a Current Shot output such as `source_audio_slice`, keep
 that entry inside the loop and do not create a fingerprint cycle back to Plan;
 the Plan already fingerprints the full source track.

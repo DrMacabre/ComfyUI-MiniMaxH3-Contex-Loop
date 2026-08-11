@@ -44,6 +44,8 @@ Current Shot ─ prompt, clip_index, clip_count, width, height, length ───
 Write stable aliases such as `@hero_face` in Plan scene prompts. Scheduled
 Ref2VA compiles them to the active scene's exact `<Picture N>`, `<Video N>`,
 and `<Audio N>` numbering before expanding to ComfyUI's stock Ref2VA node.
+Write all subject, video, and audio definitions directly in the Plan/Prompt
+Editor; schedule nodes never inject hidden prompt text.
 Video-paired soundtracks remain paired on the same dynamic index and receive a
 separate tag (blank `audio_tag` derives `@<video_tag>_audio`). A scene may have
 no active references; it still expands through the stock node with no dynamic

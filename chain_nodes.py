@@ -292,8 +292,8 @@ def _reference_is_active(entry: dict[str, Any], scene: int) -> bool:
 
 def _reference_entry_contract(entry: dict[str, Any]) -> dict[str, Any]:
     keys = (
-        "kind", "tag", "scenes", "declaration", "content_hash",
-        "audio_tag", "audio_declaration", "audio_hash",
+        "kind", "tag", "scenes", "content_hash", "audio_tag",
+        "audio_hash",
     )
     return {key: entry[key] for key in keys if key in entry}
 
@@ -332,9 +332,8 @@ def _make_reference_schedule(
 
 def _append_scheduled_reference(
         previous: Any, *, kind: str, tag: Any, scenes: Any,
-        declaration: Any, value: Any, content_hash: str,
-        audio: Any = None, audio_tag: Any = "",
-        audio_declaration: Any = "", audio_hash: str = "") -> dict[str, Any]:
+        value: Any, content_hash: str, audio: Any = None,
+        audio_tag: Any = "", audio_hash: str = "") -> dict[str, Any]:
     entries = _reference_schedule_entries(previous)
     normalized_tag = _normalize_reference_tag(tag, "Reference tag")
     ranges = _parse_reference_selector(scenes)
@@ -343,8 +342,6 @@ def _append_scheduled_reference(
         "tag": normalized_tag,
         "scenes": _reference_selector_text(ranges),
         "ranges": ranges,
-        "declaration": str(declaration or "").replace(
-            "\r\n", "\n").replace("\r", "\n").strip(),
         "value": value,
         "content_hash": str(content_hash),
     }
@@ -355,8 +352,6 @@ def _append_scheduled_reference(
         entry.update({
             "audio": audio,
             "audio_tag": normalized_audio_tag,
-            "audio_declaration": str(audio_declaration or "").replace(
-                "\r\n", "\n").replace("\r", "\n").strip(),
             "audio_hash": str(audio_hash),
         })
 
@@ -416,7 +411,7 @@ def _active_reference_bindings(
         aliases[entry["tag"]] = label
         presentation.append({
             "entry": entry, "role": "picture", "tag": entry["tag"],
-            "label": label, "declaration": entry.get("declaration", ""),
+            "label": label,
         })
 
     audio_ordinal = 0
@@ -428,14 +423,12 @@ def _active_reference_bindings(
             presentation.append({
                 "entry": entry, "role": "audio",
                 "tag": entry["audio_tag"], "label": audio_label,
-                "declaration": entry.get("audio_declaration", ""),
             })
         video_label = "<Video %d>" % ordinal
         aliases[entry["tag"]] = video_label
         presentation.append({
             "entry": entry, "role": "video", "tag": entry["tag"],
             "label": video_label,
-            "declaration": entry.get("declaration", ""),
         })
     for entry in audios:
         audio_ordinal += 1
@@ -443,7 +436,7 @@ def _active_reference_bindings(
         aliases[entry["tag"]] = label
         presentation.append({
             "entry": entry, "role": "audio", "tag": entry["tag"],
-            "label": label, "declaration": entry.get("declaration", ""),
+            "label": label,
         })
     return {
         "pictures": pictures,
@@ -476,15 +469,6 @@ def _replace_reference_aliases(
     return _REFERENCE_ALIAS_RE.sub(replace, str(text))
 
 
-def _reference_fallback_declaration(role: str, label: str) -> str:
-    nouns = {
-        "picture": "visual reference",
-        "video": "motion and temporal reference",
-        "audio": "audio reference",
-    }
-    return "%s is the %s assigned to this scene." % (label, nouns[role])
-
-
 def _compile_scheduled_reference_prompt(
         schedule: Any, scene: int, scene_count: int,
         prompt: Any) -> tuple[str, str, dict[str, Any]]:
@@ -493,45 +477,15 @@ def _compile_scheduled_reference_prompt(
         "\r\n", "\n").replace("\r", "\n").strip()
     compiled_body = _replace_reference_aliases(
         normalized_prompt, bindings, scene)
-    declaration_lines = []
     mapping_lines = []
     for item in bindings["presentation"]:
-        label = item["label"]
-        declaration = str(item.get("declaration") or "")
-        if declaration:
-            declaration = declaration.replace("{ref}", label).replace(
-                "{label}", label)
-            declaration = _replace_reference_aliases(
-                declaration, bindings, scene)
-            if label not in declaration:
-                declaration = "%s: %s" % (label, declaration)
-        else:
-            declaration = _reference_fallback_declaration(
-                item["role"], label)
-        declaration_lines.append(declaration)
-        mapping_lines.append("@%s -> %s" % (item["tag"], label))
-
-    if declaration_lines:
-        subject_header = re.search(
-            r"(?im)^subject_definitions:\s*$", compiled_body)
-        block = "\n".join(declaration_lines)
-        if subject_header is not None:
-            insert = subject_header.end()
-            compiled = compiled_body[:insert] + "\n" + block
-            remainder = compiled_body[insert:].lstrip("\n")
-            if remainder:
-                compiled += "\n" + remainder
-        else:
-            compiled = block
-            if compiled_body:
-                compiled += "\n\n" + compiled_body
-    else:
-        compiled = compiled_body
+        mapping_lines.append("@%s -> %s" % (
+            item["tag"], item["label"]))
     summary = "scene %d/%d: %s" % (
         int(scene), int(scene_count),
         "; ".join(mapping_lines) if mapping_lines
         else "no scheduled references")
-    return compiled, summary, bindings
+    return compiled_body, summary, bindings
 
 
 def _derived_seed(base_seed: int, index: int, shot_id: str) -> int:
@@ -1925,16 +1879,6 @@ class MiniMaxH3ScheduledPictureReference:
                                "pictures consume <Picture N> numbers, so the "
                                "same @tag may receive a different native "
                                "number in different scenes."}),
-                "declaration": ("STRING", {
-                    "default": "Use {ref} as the visual identity reference.",
-                    "multiline": True, "dynamicPrompts": False,
-                    "tooltip": "Prompt line inserted before the scene prompt. "
-                               "Here {ref} means this picture's native label "
-                               "for the current scene. Example: 'Use {ref} "
-                               "as the identity for <Subject 1>.' Use stable "
-                               "@tags in scene prompts or to cross-reference "
-                               "other active entries; do not hard-code "
-                               "<Picture N> when the schedule can change."}),
             },
             "optional": {
                 "previous": (REFERENCE_SCHEDULE_TYPE, {
@@ -1950,7 +1894,7 @@ class MiniMaxH3ScheduledPictureReference:
     RETURN_NAMES = ("schedule", "schedule_fingerprint", "status")
     OUTPUT_TOOLTIPS = (
         "Reference schedule to chain into another entry or Scheduled Ref2VA.",
-        "SHA-256 of every scheduled source and declaration. Connect this to "
+        "SHA-256 of every scheduled source, tag, and selector. Connect it to "
         "the Plan generation_fingerprint to protect checkpoint resume.",
         "Normalized tag, scene selector, entry count, and fingerprint.",
     )
@@ -1962,10 +1906,10 @@ class MiniMaxH3ScheduledPictureReference:
                    "in the current scene and numbers them compactly from "
                    "<Picture 1>. For example, if @picture_1 is removed or "
                    "inactive, @picture_2 automatically becomes <Picture 1>. "
-                   "Write @picture_2 in scene prompts and {ref} in this "
-                   "node's declaration so both are rewritten safely.")
+                   "Write @picture_2 in the Plan prompt; the scheduler only "
+                   "resolves aliases and never inserts prompt text.")
 
-    def add(self, image, tag, scenes, declaration, previous=None):
+    def add(self, image, tag, scenes, previous=None):
         if (torch is None or not torch.is_tensor(image) or image.ndim != 4 or
                 int(image.shape[0]) < 1 or int(image.shape[-1]) < 3):
             raise ValueError(
@@ -1974,8 +1918,7 @@ class MiniMaxH3ScheduledPictureReference:
         picture = image[:1]
         schedule = _append_scheduled_reference(
             previous, kind="picture", tag=tag, scenes=scenes,
-            declaration=declaration, value=picture,
-            content_hash=_tensor_fingerprint(picture))
+            value=picture, content_hash=_tensor_fingerprint(picture))
         entry = schedule["entries"][-1]
         status = "@%s picture on %s; %d sources; %s" % (
             entry["tag"], entry["scenes"], len(schedule["entries"]),
@@ -2005,26 +1948,12 @@ class MiniMaxH3ScheduledVideoReference:
                                "paired soundtrack are active. Blank means all; "
                                "1, 1:4, and 1,3,5:8 are supported. Only "
                                "active videos consume <Video N> numbers."}),
-                "declaration": ("STRING", {
-                    "default": "Use {ref} as the motion and temporal reference.",
-                    "multiline": True, "dynamicPrompts": False,
-                    "tooltip": "Prompt line for the assigned <Video N>. Use "
-                               "{ref} for this video's current native label "
-                               "and stable @tags for other active scheduled "
-                               "references. Avoid hard-coded <Video N> labels "
-                               "when the schedule can change."}),
                 "audio_tag": ("STRING", {
                     "default": "",
                     "tooltip": "Alias for the paired soundtrack when audio "
                                "is connected. Blank derives @<video_tag>_audio. "
                                "This is also a stable alias, not a reserved "
                                "<Audio N> number."}),
-                "audio_declaration": ("STRING", {
-                    "default": "Use {ref} as the synchronized audio reference.",
-                    "multiline": True, "dynamicPrompts": False,
-                    "tooltip": "Prompt line for the paired <Audio N>. It is "
-                               "ignored when no paired audio is connected. "
-                               "Use {ref} for its current native audio label."}),
             },
             "optional": {
                 "audio": ("AUDIO", {
@@ -2042,7 +1971,7 @@ class MiniMaxH3ScheduledVideoReference:
     RETURN_NAMES = ("schedule", "schedule_fingerprint", "status")
     OUTPUT_TOOLTIPS = (
         "Reference schedule to chain into another entry or Scheduled Ref2VA.",
-        "SHA-256 of all sources and declarations for checkpoint compatibility.",
+        "SHA-256 of all sources, tags, and selectors for checkpoint safety.",
         "Normalized video/audio tags, selector, entry count, and fingerprint.",
     )
     FUNCTION = "add"
@@ -2051,11 +1980,10 @@ class MiniMaxH3ScheduledVideoReference:
                    "index-paired soundtrack using stable @tags. Tags identify "
                    "assets while the wrapper assigns compact <Video N> and "
                    "<Audio N> labels from the entries active in each scene. "
-                   "Use @tags in prompts and {ref} in declarations; do not "
-                   "treat a tag suffix as a fixed native number.")
+                   "Use @tags in Plan prompts; this node never inserts prompt "
+                   "text. Do not treat a tag suffix as a fixed native number.")
 
-    def add(self, video, tag, scenes, declaration, audio_tag,
-            audio_declaration, audio=None, previous=None):
+    def add(self, video, tag, scenes, audio_tag, audio=None, previous=None):
         if (torch is None or not torch.is_tensor(video) or video.ndim != 4 or
                 int(video.shape[0]) < 5 or int(video.shape[-1]) < 3):
             raise ValueError(
@@ -2067,10 +1995,8 @@ class MiniMaxH3ScheduledVideoReference:
             paired_hash = _audio_fingerprint(audio)
         schedule = _append_scheduled_reference(
             previous, kind="video", tag=tag, scenes=scenes,
-            declaration=declaration, value=video,
-            content_hash=_tensor_fingerprint(video), audio=audio,
-            audio_tag=audio_tag, audio_declaration=audio_declaration,
-            audio_hash=paired_hash)
+            value=video, content_hash=_tensor_fingerprint(video), audio=audio,
+            audio_tag=audio_tag, audio_hash=paired_hash)
         entry = schedule["entries"][-1]
         paired = (" + @%s" % entry["audio_tag"]
                   if entry.get("audio_tag") else "")
@@ -2102,14 +2028,6 @@ class MiniMaxH3ScheduledAudioReference:
                                "Blank means all; use 1, 1:4, or 1,3,5:8. "
                                "Only active audio references consume "
                                "<Audio N> numbers."}),
-                "declaration": ("STRING", {
-                    "default": "Use {ref} as the audio reference.",
-                    "multiline": True, "dynamicPrompts": False,
-                    "tooltip": "Prompt line inserted before the scene prompt. "
-                               "Use {ref} for this audio's current native "
-                               "label and stable @tags in scene prompts. Avoid "
-                               "hard-coded <Audio N> labels when the schedule "
-                               "can change."}),
             },
             "optional": {
                 "previous": (REFERENCE_SCHEDULE_TYPE, {
@@ -2123,23 +2041,21 @@ class MiniMaxH3ScheduledAudioReference:
     RETURN_NAMES = ("schedule", "schedule_fingerprint", "status")
     OUTPUT_TOOLTIPS = (
         "Reference schedule to chain into another entry or Scheduled Ref2VA.",
-        "SHA-256 of all sources and declarations for checkpoint compatibility.",
+        "SHA-256 of all sources, tags, and selectors for checkpoint safety.",
         "Normalized tag, scene selector, entry count, and fingerprint.",
     )
     FUNCTION = "add"
     CATEGORY = "conditioning/minimax/contex_loop/references"
     DESCRIPTION = ("Add one scene-scheduled standalone audio reference using "
                    "a stable @tag. The wrapper compactly renumbers active "
-                   "audio as <Audio N> in each scene. Use the @tag in prompts "
-                   "and {ref} in this declaration so removing or disabling "
-                   "an earlier entry cannot stale the prompt label.")
+                   "audio as <Audio N> in each scene. Write the @tag and its "
+                   "definition in the Plan prompt; this node inserts no text.")
 
-    def add(self, audio, tag, scenes, declaration, previous=None):
+    def add(self, audio, tag, scenes, previous=None):
         _validate_audio(audio, "Scheduled H3 standalone audio")
         schedule = _append_scheduled_reference(
             previous, kind="audio", tag=tag, scenes=scenes,
-            declaration=declaration, value=audio,
-            content_hash=_audio_fingerprint(audio))
+            value=audio, content_hash=_audio_fingerprint(audio))
         entry = schedule["entries"][-1]
         status = "@%s audio on %s; %d sources; %s" % (
             entry["tag"], entry["scenes"], len(schedule["entries"]),
@@ -2165,7 +2081,7 @@ class MiniMaxH3ScheduledReferenceToVideo:
                                "Video, and Audio reference nodes. For each "
                                "scene it removes inactive entries, compactly "
                                "assigns native labels by type, then resolves "
-                               "stable @tags and {ref} declarations."}),
+                               "stable @tags used in the Plan prompt."}),
                 "clip_index": ("INT", {
                     "default": 1, "min": 1, "max": MAX_SHOTS,
                     "tooltip": "Current one-based scene. Connect Current "
@@ -2183,7 +2099,8 @@ class MiniMaxH3ScheduledReferenceToVideo:
                                "replaces them with native H3 labels for the "
                                "current scene. Example: @picture_2 becomes "
                                "<Picture 1> if it is the only active picture. "
-                               "Use {ref} only in a schedule node's declaration."}),
+                               "All reference definitions remain visible and "
+                               "editable in the Plan or Prompt Editor."}),
                 "width": ("INT", {
                     "default": 960, "min": 32, "max": 4096, "step": 32,
                     "tooltip": "Generation width forwarded unchanged to "
@@ -2210,7 +2127,7 @@ class MiniMaxH3ScheduledReferenceToVideo:
     OUTPUT_TOOLTIPS = (
         "Positive conditioning produced by stock MiniMax H3 Ref2VA.",
         "Empty MiniMax H3 AV latent produced by stock Ref2VA.",
-        "Exact prompt sent to H3 after declarations and native labels compile.",
+        "Exact prompt sent to H3 after stable aliases compile to native labels.",
         "Human-readable mapping for this scene, for example "
         "@picture_2 -> <Picture 1>. Use it to verify renumbering.",
         "Full schedule fingerprint. Connect the schedule node's matching "
@@ -2221,11 +2138,11 @@ class MiniMaxH3ScheduledReferenceToVideo:
     CATEGORY = "conditioning/minimax/contex_loop/references"
     DESCRIPTION = ("Select scheduled references for the current scene, "
                    "remove inactive entries, and compactly number each media "
-                   "type from 1. Stable @tags in the prompt and {ref} in each "
-                   "declaration are then compiled to those scene-local native "
-                   "labels before core MiniMax H3 Ref2VA runs. A tag named "
-                   "@picture_2 may therefore map to <Picture 1>; inspect the "
-                   "active_references output for the exact mapping.")
+                   "type from 1. Stable @tags in the Plan prompt are compiled "
+                   "to those scene-local native labels before core MiniMax H3 "
+                   "Ref2VA runs; the scheduler inserts no prompt text. A tag "
+                   "named @picture_2 may therefore map to <Picture 1>; inspect "
+                   "the active_references output for the exact mapping.")
 
     def apply(self, clip, vae, audio_vae, reference_schedule, clip_index,
               clip_count, prompt, width, height, length,
