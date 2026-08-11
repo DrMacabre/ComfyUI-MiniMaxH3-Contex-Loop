@@ -35,6 +35,11 @@ Inside a prompt, type `@` or click **@ Reference** to insert a MiniMax
 `<Picture N>`, `<Video N>`, or `<Audio N>` tag. Select dialogue text and type
 `#`, or click **# Dialogue**, to wrap it in `<d>...</d>`. These interactions
 are authoring shortcuts only; they produce ordinary MiniMax prompt text.
+When the editor can trace the Plan downstream to Scheduled Ref2VA, core
+Ref2VA, or core Image-to-Video, the tray shows the references actually wired
+for that scene. Hover to preview loaded media. Core FL2VA exposes its connected
+first and last frames as `<Picture 1>` and `<Picture 2>`; L2VA with only a last
+frame correctly exposes that frame as `<Picture 1>`.
 
 Use the editor's **JSON** button when you need to inspect, paste, import, or
 export the underlying plan. The JSON format below remains the runtime contract

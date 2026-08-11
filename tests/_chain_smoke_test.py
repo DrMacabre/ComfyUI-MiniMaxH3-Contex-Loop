@@ -189,6 +189,128 @@ def main():
     assert "SEGMENT" not in str(workflow_start.get("title", "")).upper()
     print("workflow: loop node ids and package metadata use the new namespace")
 
+    def assert_workflow_links(payload):
+        nodes = {int(node["id"]): node for node in payload["nodes"]}
+        links = {int(link[0]): link for link in payload["links"]}
+        assert len(nodes) == len(payload["nodes"])
+        assert len(links) == len(payload["links"])
+        for link_id, link in links.items():
+            _, origin_id, origin_slot, target_id, target_slot, _ = link
+            origin = nodes[int(origin_id)]
+            target = nodes[int(target_id)]
+            assert link_id in (origin["outputs"][int(origin_slot)].get("links") or [])
+            assert target["inputs"][int(target_slot)].get("link") == link_id
+        for node in nodes.values():
+            for input_socket in node.get("inputs", []):
+                link_id = input_socket.get("link")
+                assert link_id is None or int(link_id) in links
+            for output_socket in node.get("outputs", []):
+                for link_id in output_socket.get("links") or []:
+                    assert int(link_id) in links
+
+    fl2va_path = (ROOT / "example_workflows" /
+                  "Looping MiniMax H3 V2 - Core FL2VA.json")
+    fl2va = json.loads(fl2va_path.read_text(encoding="utf-8"))
+    assert_workflow_links(fl2va)
+    fl2va_types = {node.get("type") for node in fl2va["nodes"]}
+    assert {
+        "MiniMaxH3ImageToVideo",
+        "MiniMaxH3ChainScenePromptEditor",
+        "MiniMaxH3ChainReview",
+    } <= fl2va_types
+    assert not any(str(value).startswith("MiniMaxH3Scheduled")
+                   for value in fl2va_types)
+    assert "LoadAudio" not in fl2va_types
+    fl_plan_node = next(node for node in fl2va["nodes"]
+                        if node.get("type") == "MiniMaxH3ChainPlan")
+    fl_plan = json.loads(fl_plan_node["widgets_values"][0])
+    assert len(fl_plan["shots"]) == 1
+    assert fl_plan["shots"][0]["length"] == 124
+    fl_prompt = "\n".join(fl_plan["shots"][0]["prompt"])
+    assert fl_prompt.startswith(
+        "How the reference pictures align with the target video")
+    fl_sections = [
+        "integrated_multimodal_description:",
+        "overall_soundscape:",
+        "non_diegetic_music:",
+    ]
+    assert [fl_prompt.index(value) for value in fl_sections] == sorted(
+        fl_prompt.index(value) for value in fl_sections)
+    assert fl_plan_node["widgets_values"][9] == "generated_audio"
+    fl_conditioner = next(node for node in fl2va["nodes"]
+                          if node.get("type") == "MiniMaxH3ImageToVideo")
+    assert {input_socket["name"] for input_socket in fl_conditioner["inputs"]
+            if input_socket.get("link") is not None} >= {
+        "first_frame", "last_frame", "prompt", "width", "height", "length",
+    }
+    fl_assemble = next(node for node in fl2va["nodes"]
+                       if node.get("type") == "MiniMaxH3ChainAssemble"
+                       and node.get("mode", 0) == 0)
+    assert "%date:yyyy-MM-dd%" in fl_assemble["widgets_values"][1]
+    print("workflow v2: scheduler-free core FL2VA editing/review graph passes")
+
+    scheduled_path = (ROOT / "example_workflows" /
+                      "Looping MiniMax H3 Seamless Chain V2 - Scheduled Refs.json")
+    scheduled = json.loads(scheduled_path.read_text(encoding="utf-8"))
+    assert_workflow_links(scheduled)
+    scheduled_types = {node.get("type") for node in scheduled["nodes"]}
+    assert {
+        "MiniMaxH3ScheduledPictureReference",
+        "MiniMaxH3ScheduledVideoReference",
+        "MiniMaxH3ScheduledAudioReference",
+        "MiniMaxH3ScheduledReferenceToVideo",
+        "MiniMaxH3ReferenceVideoPrepare",
+        "MiniMaxH3ChainScenePromptEditor",
+        "MiniMaxH3ChainReview",
+    } <= scheduled_types
+    assert "MiniMaxH3ReferenceToVideo" not in scheduled_types
+    scheduled_plan_node = next(
+        node for node in scheduled["nodes"]
+        if node.get("type") == "MiniMaxH3ChainPlan")
+    scheduled_plan = json.loads(scheduled_plan_node["widgets_values"][0])
+    assert len(scheduled_plan["shots"]) == 14
+    for index, shot in enumerate(scheduled_plan["shots"], start=1):
+        text = "\n".join(shot["prompt"])
+        assert "@hero_look" in text and "@song" in text
+        assert ("@hero_face" in text) == (index <= 7)
+        assert ("@performance" in text) == (4 <= index <= 6)
+        assert "<Picture 1>" not in text and "<Picture 2>" not in text
+        assert "<Audio 1>" not in text
+    picture_nodes = {
+        node["widgets_values"][0]: node for node in scheduled["nodes"]
+        if node.get("type") == "MiniMaxH3ScheduledPictureReference"
+    }
+    assert picture_nodes["hero_face"]["widgets_values"][1] == "1:7"
+    assert picture_nodes["hero_look"]["widgets_values"][1] == "all"
+    video_schedule = next(
+        node for node in scheduled["nodes"]
+        if node.get("type") == "MiniMaxH3ScheduledVideoReference")
+    assert video_schedule["widgets_values"][:2] == ["performance", "4:6"]
+    assert video_schedule["widgets_values"][3] == "performance_audio"
+    audio_schedule = next(
+        node for node in scheduled["nodes"]
+        if node.get("type") == "MiniMaxH3ScheduledAudioReference")
+    assert audio_schedule["widgets_values"][:2] == ["song", "all"]
+    scheduled_links = {int(link[0]): link for link in scheduled["links"]}
+    fingerprint_input = next(
+        item for item in scheduled_plan_node["inputs"]
+        if item["name"] == "generation_fingerprint")
+    fingerprint_link = scheduled_links[int(fingerprint_input["link"])]
+    assert fingerprint_link[1] == video_schedule["id"]
+    current_node = next(node for node in scheduled["nodes"]
+                        if node.get("type") == "MiniMaxH3ChainCurrent")
+    current_audio_link = next(
+        item for item in current_node["outputs"]
+        if item["name"] == "source_audio_slice")
+    assert len(current_audio_link["links"]) == 1
+    assert scheduled_links[current_audio_link["links"][0]][3] == audio_schedule["id"]
+    scheduled_assemble = next(
+        node for node in scheduled["nodes"]
+        if node.get("type") == "MiniMaxH3ChainAssemble"
+        and node.get("mode", 0) == 0)
+    assert "%date:yyyy-MM-dd%" in scheduled_assemble["widgets_values"][1]
+    print("workflow v2: scheduled picture/video/audio aliases and review graph pass")
+
     angle_workflow_path = (ROOT / "example_workflows" /
                            "EXPERIMENTAL MiniMax H3 Three-Angle Guitar Ref2VA.json")
     angle_workflow = json.loads(

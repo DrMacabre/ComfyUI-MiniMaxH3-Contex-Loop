@@ -143,9 +143,19 @@ and selected audio is encoded to AAC.
 
 ## Start here
 
-Open the bundled
-[looping Ref2VA workflow](<example_workflows/Looping MiniMax H3 Seamless Chain Global Refs Example.json>).
-The loop is deliberately small:
+Start with one of the two v2 workflows:
+
+- [Core FL2VA v2](<example_workflows/Looping MiniMax H3 V2 - Core FL2VA.json>)
+  uses ComfyUI's stock `MiniMaxH3ImageToVideo` with no reference scheduler. It
+  is a one-scene first/last-frame model that also demonstrates the large prompt
+  editor, native keyframe hover previews, review/retry, recovery, and safe
+  date-versioned assembly.
+- [Scheduled Ref2VA v2](<example_workflows/Looping MiniMax H3 Seamless Chain V2 - Scheduled Refs.json>)
+  is the complete long-form loop with scene-selective picture, video, paired
+  audio, and frame-exact song references. Its in-canvas notes show every alias
+  mapping used by the fourteen-scene plan.
+
+The common loop remains deliberately small:
 
 ```text
 Plan → Loop Start → Current Shot → stock H3 conditioning
@@ -208,6 +218,11 @@ The same tray also recognizes a downstream core **MiniMax H3 Reference to
 Video** node. In that compatibility mode it previews connected media and
 inserts native labels such as `<Picture 1>` and `<Audio 1>`; stable `@tags` and
 scene scheduling remain exclusive to Scheduled Ref2VA.
+
+Core **MiniMax H3 Image to Video** is recognized as well. With both keyframes
+connected, the tray exposes hoverable `<Picture 1>` (first frame) and
+`<Picture 2>` (last frame). With only the last frame connected for L2VA, it is
+correctly presented as `<Picture 1>`.
 
 For static references, connect the final schedule fingerprint to the Plan's
 `generation_fingerprint` so changed media or declarations invalidate resume.

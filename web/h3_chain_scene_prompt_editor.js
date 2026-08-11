@@ -988,7 +988,7 @@ function mount(node) {
             preview.append(element(
                 "div", "h3sp-ref-preview-copy",
                 "No browser-playable source was found. Dynamic tensors can " +
-                "still run in Ref2VA, but need an upstream loaded file for an editor preview.",
+                "still run in the generation graph, but need an upstream loaded file for an editor preview.",
             ));
         }
 
@@ -1021,7 +1021,7 @@ function mount(node) {
         if (!records.length) {
             refs.append(element(
                 "div", "h3sp-ref-help",
-                "No connected Scheduled or core Ref2VA was found. Generic native labels are shown instead.",
+                "No connected Scheduled Ref2VA, core Ref2VA, or core I2V/FL2V node was found. Generic native labels are shown instead.",
             ));
             for (const [kind, count] of [["Picture", 9], ["Video", 3], ["Audio", 6]]) {
                 for (let ordinal = 1; ordinal <= count; ordinal += 1) {
@@ -1038,8 +1038,11 @@ function mount(node) {
         const help = mode === "scheduled"
             ? `Scheduled references for scene ${state.active + 1}. Hover to preview; ` +
               "click to insert the stable @tag. Audio never autoplays."
-            : "Core Ref2VA references. Hover to preview; click to insert the " +
-              "native label. Audio never autoplays.";
+            : mode === "native_keyframes"
+              ? "Core I2V/FL2V keyframes. Hover to preview; click to insert " +
+                "the native Picture label."
+              : "Core Ref2VA references. Hover to preview; click to insert the " +
+                "native label. Audio never autoplays.";
         refs.append(element("div", "h3sp-ref-help", help));
         const icons = {picture: "▧", video: "▶", audio: "♫"};
         for (const record of records) {
@@ -1050,7 +1053,7 @@ function mount(node) {
                 record.active
                     ? (mode === "scheduled"
                         ? `Insert ${record.token}; it compiles to ${record.label} in this scene.`
-                        : `Insert ${record.token} for the connected core Ref2VA input.`)
+                        : `Insert ${record.token} for the connected core conditioning input.`)
                     : `Insert ${record.token}. Warning: it is inactive in this scene.`,
                 () => {
                     insertText(textarea, record.token);

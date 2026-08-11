@@ -1,5 +1,34 @@
 # Example workflows
 
+## V2 demos: choose core FL2VA or Scheduled Ref2VA
+
+[`Looping MiniMax H3 V2 - Core FL2VA.json`](<Looping MiniMax H3 V2 - Core FL2VA.json>)
+is the scheduler-free starting point. It uses ComfyUI's stock
+`MiniMaxH3ImageToVideo` with a deliberately one-scene, 124-frame plan so one
+first/last keyframe pair is applied exactly once. The prompt follows H3's
+FL2VA format and the Scene Prompt Editor previews both connected native Picture
+labels. Disconnect the last image for I2VA, the first for L2VA, or both for
+T2VA. For a long T2VA continuation, add Plan scenes only after disconnecting
+the global keyframes; otherwise the same pair would intentionally constrain
+every recursive scene.
+
+[`Looping MiniMax H3 Seamless Chain V2 - Scheduled Refs.json`](<Looping MiniMax H3 Seamless Chain V2 - Scheduled Refs.json>)
+is the full fourteen-scene Ref2VA demonstration. It includes the large Scene
+Prompt Editor, reference hover previews, Review Gate, muted recovery assembly,
+and date/version-safe final filenames. Its schedule exercises every media
+route:
+
+- `@hero_face` is active only in scenes 1–7;
+- `@hero_look` is always active and therefore renumbers from `<Picture 2>` to
+  `<Picture 1>` beginning in scene 8;
+- `@performance` and paired `@performance_audio` are active in scenes 4–6;
+- the frame-exact `@song` slice is always active, moving from `<Audio 1>` to
+  `<Audio 2>` while the paired soundtrack is present and back afterward.
+
+Both workflows contain in-canvas operating notes. Replace their placeholder
+media filenames and model selections before queueing. The older global-reference
+workflow remains available unchanged for compatibility and comparison.
+
 ## Scheduled Ref2VA wiring
 
 Version 0.3.10 adds a typed reference chain which can replace the stock

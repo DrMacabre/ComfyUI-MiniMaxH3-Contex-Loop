@@ -1,5 +1,6 @@
 export const SCHEDULED_REF2VA_TYPE = "MiniMaxH3ScheduledReferenceToVideo";
 export const CORE_REF2VA_TYPE = "MiniMaxH3ReferenceToVideo";
+export const IMAGE_TO_VIDEO_TYPE = "MiniMaxH3ImageToVideo";
 export const PICTURE_REF_TYPE = "MiniMaxH3ScheduledPictureReference";
 export const VIDEO_REF_TYPE = "MiniMaxH3ScheduledVideoReference";
 export const AUDIO_REF_TYPE = "MiniMaxH3ScheduledAudioReference";
@@ -59,6 +60,10 @@ export function findScheduledRef2VA(start) {
 
 export function findCoreRef2VA(start) {
     return findDownstreamType(start, CORE_REF2VA_TYPE);
+}
+
+export function findImageToVideo(start) {
+    return findDownstreamType(start, IMAGE_TO_VIDEO_TYPE);
 }
 
 export function collectScheduleNodes(wrapper) {
@@ -208,8 +213,48 @@ export function coreReferenceRecords(editorNode) {
     };
 }
 
+export function imageToVideoReferenceRecords(editorNode) {
+    const wrapper = findImageToVideo(editorNode);
+    if (!wrapper) return {wrapper: null, mode: null, records: []};
+    const firstFrame = inputSource(wrapper, "first_frame");
+    const lastFrame = inputSource(wrapper, "last_frame");
+    const records = [];
+    if (firstFrame) {
+        records.push({
+            node: wrapper,
+            kind: "picture",
+            tag: "",
+            token: "<Picture 1>",
+            selector: "all",
+            active: true,
+            source: firstFrame,
+            label: "<Picture 1>",
+            mode: "native",
+            role: "first frame",
+        });
+    }
+    if (lastFrame) {
+        const ordinal = firstFrame ? 2 : 1;
+        records.push({
+            node: wrapper,
+            kind: "picture",
+            tag: "",
+            token: `<Picture ${ordinal}>`,
+            selector: "all",
+            active: true,
+            source: lastFrame,
+            label: `<Picture ${ordinal}>`,
+            mode: "native",
+            role: "last frame",
+        });
+    }
+    return {wrapper, mode: "native_keyframes", records};
+}
+
 export function referencePreviewRecords(editorNode, scene) {
     const scheduled = scheduledReferenceRecords(editorNode, scene);
     if (scheduled.wrapper) return scheduled;
-    return coreReferenceRecords(editorNode);
+    const core = coreReferenceRecords(editorNode);
+    if (core.wrapper) return core;
+    return imageToVideoReferenceRecords(editorNode);
 }

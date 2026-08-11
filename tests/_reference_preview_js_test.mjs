@@ -3,6 +3,7 @@ import {
     collectScheduleNodes,
     coreReferenceRecords,
     findScheduledRef2VA,
+    imageToVideoReferenceRecords,
     referencePreviewRecords,
     referenceIsActive,
     scheduledReferenceRecords,
@@ -102,4 +103,36 @@ assert.deepEqual(native.records.map(({kind, token, label}) => ({kind, token, lab
 ]);
 assert.equal(referencePreviewRecords(coreEditor, 1).mode, "native");
 
-console.log("H3 reference preview: scheduled and core Ref2VA discovery pass");
+const flEditor = add(makeNode(15, "MiniMaxH3ChainScenePromptEditor"));
+const flRelay = add(makeNode(16, "MiniMaxH3ChainCurrent"));
+const fl2v = add(makeNode(17, "MiniMaxH3ImageToVideo"));
+const firstFrame = add(makeNode(18, "LoadImage", {image: "first.png"}));
+const lastFrame = add(makeNode(19, "LoadImage", {image: "last.png"}));
+connect(flEditor, flRelay, "state");
+connect(flRelay, fl2v, "prompt");
+connect(firstFrame, fl2v, "first_frame");
+connect(lastFrame, fl2v, "last_frame");
+const keyframes = imageToVideoReferenceRecords(flEditor);
+assert.equal(keyframes.mode, "native_keyframes");
+assert.deepEqual(
+    keyframes.records.map(({token, role}) => ({token, role})),
+    [
+        {token: "<Picture 1>", role: "first frame"},
+        {token: "<Picture 2>", role: "last frame"},
+    ],
+);
+assert.equal(referencePreviewRecords(flEditor, 1).mode, "native_keyframes");
+
+const lEditor = add(makeNode(20, "MiniMaxH3ChainScenePromptEditor"));
+const lRelay = add(makeNode(21, "MiniMaxH3ChainCurrent"));
+const l2v = add(makeNode(22, "MiniMaxH3ImageToVideo"));
+const onlyLastFrame = add(makeNode(23, "LoadImage", {image: "last-only.png"}));
+connect(lEditor, lRelay, "state");
+connect(lRelay, l2v, "prompt");
+connect(onlyLastFrame, l2v, "last_frame");
+assert.deepEqual(
+    imageToVideoReferenceRecords(lEditor).records.map(({token, role}) => ({token, role})),
+    [{token: "<Picture 1>", role: "last frame"}],
+);
+
+console.log("H3 reference preview: scheduled Ref2VA, core Ref2VA, and core I2V/FL2V discovery pass");
