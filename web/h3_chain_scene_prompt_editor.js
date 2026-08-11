@@ -17,7 +17,7 @@ import {
     promptSourceRevision,
 } from "./h3_prompt_assistant_core.mjs";
 import {PromptAssistantClient} from "./h3_prompt_assistant_client.mjs";
-import {scheduledReferenceRecords} from "./h3_reference_preview_core.mjs";
+import {referencePreviewRecords} from "./h3_reference_preview_core.mjs";
 
 // The compact @ reference and # dialogue authoring interactions are inspired
 // by nkxx188/ComfyUI-MiniMaxH3-Easy (MIT); see THIRD_PARTY_NOTICES.md.
@@ -980,7 +980,7 @@ function mount(node) {
                 mediaElement.controls = true;
                 mediaElement.preload = "metadata";
             } else {
-                mediaElement.alt = `Preview for @${record.tag}`;
+                mediaElement.alt = `Preview for ${record.token}`;
                 mediaElement.loading = "lazy";
             }
             preview.append(mediaElement);
@@ -1000,9 +1000,11 @@ function mount(node) {
         const mapping = record.active
             ? `${record.label} in scene ${state.active + 1}`
             : `inactive in scene ${state.active + 1}`;
+        const previewTitle = record.mode === "native"
+            ? record.token : `${record.token} → ${mapping}`;
         const copy = element("div", "h3sp-ref-preview-copy");
         copy.append(
-            element("div", "h3sp-ref-preview-title", `@${record.tag} → ${mapping}`),
+            element("div", "h3sp-ref-preview-title", previewTitle),
             document.createTextNode(
                 `\n${record.kind.toUpperCase()} · scenes ${record.selector}` +
                 `\nSource: ${sourceTitle}` +
@@ -1014,12 +1016,12 @@ function mount(node) {
 
     function renderReferenceTray(refs, textarea) {
         refs.replaceChildren();
-        const {records} = scheduledReferenceRecords(node, state.active + 1);
+        const {records, mode} = referencePreviewRecords(node, state.active + 1);
         const preview = element("div", "h3sp-ref-preview");
         if (!records.length) {
             refs.append(element(
                 "div", "h3sp-ref-help",
-                "No connected Scheduled Ref2VA was found. Native labels are shown instead.",
+                "No connected Scheduled or core Ref2VA was found. Generic native labels are shown instead.",
             ));
             for (const [kind, count] of [["Picture", 9], ["Video", 3], ["Audio", 6]]) {
                 for (let ordinal = 1; ordinal <= count; ordinal += 1) {
@@ -1033,21 +1035,25 @@ function mount(node) {
             return;
         }
 
-        refs.append(element(
-            "div", "h3sp-ref-help",
-            `Scheduled references for scene ${state.active + 1}. Hover to preview; ` +
-            "click to insert the stable @tag. Audio never autoplays.",
-        ));
+        const help = mode === "scheduled"
+            ? `Scheduled references for scene ${state.active + 1}. Hover to preview; ` +
+              "click to insert the stable @tag. Audio never autoplays."
+            : "Core Ref2VA references. Hover to preview; click to insert the " +
+              "native label. Audio never autoplays.";
+        refs.append(element("div", "h3sp-ref-help", help));
         const icons = {picture: "▧", video: "▶", audio: "♫"};
         for (const record of records) {
-            const mapping = record.active ? ` → ${record.label}` : " · inactive";
+            const mapping = mode === "scheduled"
+                ? (record.active ? ` → ${record.label}` : " · inactive") : "";
             const chip = button(
-                `${icons[record.kind] ?? "@"} @${record.tag}${mapping}`,
+                `${icons[record.kind] ?? "@"} ${record.token}${mapping}`,
                 record.active
-                    ? `Insert @${record.tag}; it compiles to ${record.label} in this scene.`
-                    : `Insert @${record.tag}. Warning: it is inactive in this scene.`,
+                    ? (mode === "scheduled"
+                        ? `Insert ${record.token}; it compiles to ${record.label} in this scene.`
+                        : `Insert ${record.token} for the connected core Ref2VA input.`)
+                    : `Insert ${record.token}. Warning: it is inactive in this scene.`,
                 () => {
-                    insertText(textarea, `@${record.tag}`);
+                    insertText(textarea, record.token);
                     refs.classList.remove("h3sp-open");
                 },
             );
@@ -1121,7 +1127,7 @@ function mount(node) {
 
         const tools = element("div", "h3sp-tools");
         const refs = element("div", "h3sp-refs");
-        const referenceButton = button("@ Reference", "Open scheduled reference tags and previews (@)", () => {
+        const referenceButton = button("@ Reference", "Open connected Ref2VA references and previews (@)", () => {
             const opening = !refs.classList.contains("h3sp-open");
             if (opening) renderReferenceTray(refs, textarea);
             refs.classList.toggle("h3sp-open", opening);

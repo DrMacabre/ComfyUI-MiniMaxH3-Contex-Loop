@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import {
     collectScheduleNodes,
+    coreReferenceRecords,
     findScheduledRef2VA,
+    referencePreviewRecords,
     referenceIsActive,
     scheduledReferenceRecords,
 } from "../web/h3_reference_preview_core.mjs";
@@ -83,4 +85,21 @@ assert.deepEqual(sceneTwo.map(({tag, label, active}) => ({tag, label, active})),
     {tag: "score", label: "<Audio 1>", active: true},
 ]);
 
-console.log("H3 reference preview: schedule discovery and scene-local mappings pass");
+const coreEditor = add(makeNode(10, "MiniMaxH3ChainScenePromptEditor"));
+const coreRelay = add(makeNode(11, "MiniMaxH3ChainCurrent"));
+const core = add(makeNode(12, "MiniMaxH3ReferenceToVideo"));
+const coreImage = add(makeNode(13, "LoadImage", {image: "core.png"}));
+const coreAudio = add(makeNode(14, "LoadAudio", {audio: "core.wav"}));
+connect(coreEditor, coreRelay, "state");
+connect(coreRelay, core, "prompt");
+connect(coreImage, core, "ref_images.ref_image_0");
+connect(coreAudio, core, "ref_audios.ref_audio_0");
+const native = coreReferenceRecords(coreEditor);
+assert.equal(native.mode, "native");
+assert.deepEqual(native.records.map(({kind, token, label}) => ({kind, token, label})), [
+    {kind: "picture", token: "<Picture 1>", label: "<Picture 1>"},
+    {kind: "audio", token: "<Audio 1>", label: "<Audio 1>"},
+]);
+assert.equal(referencePreviewRecords(coreEditor, 1).mode, "native");
+
+console.log("H3 reference preview: scheduled and core Ref2VA discovery pass");

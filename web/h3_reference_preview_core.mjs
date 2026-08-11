@@ -1,4 +1,5 @@
 export const SCHEDULED_REF2VA_TYPE = "MiniMaxH3ScheduledReferenceToVideo";
+export const CORE_REF2VA_TYPE = "MiniMaxH3ReferenceToVideo";
 export const PICTURE_REF_TYPE = "MiniMaxH3ScheduledPictureReference";
 export const VIDEO_REF_TYPE = "MiniMaxH3ScheduledVideoReference";
 export const AUDIO_REF_TYPE = "MiniMaxH3ScheduledAudioReference";
@@ -39,17 +40,25 @@ function outputTargets(node) {
     return targets;
 }
 
-export function findScheduledRef2VA(start) {
+function findDownstreamType(start, wantedType) {
     const queue = [start];
     const seen = new Set();
     while (queue.length) {
         const node = queue.shift();
         if (!node || seen.has(node)) continue;
         seen.add(node);
-        if (node !== start && nodeType(node) === SCHEDULED_REF2VA_TYPE) return node;
+        if (node !== start && nodeType(node) === wantedType) return node;
         queue.push(...outputTargets(node));
     }
     return null;
+}
+
+export function findScheduledRef2VA(start) {
+    return findDownstreamType(start, SCHEDULED_REF2VA_TYPE);
+}
+
+export function findCoreRef2VA(start) {
+    return findDownstreamType(start, CORE_REF2VA_TYPE);
 }
 
 export function collectScheduleNodes(wrapper) {
@@ -145,8 +154,62 @@ export function scheduledReferenceRecords(editorNode, scene) {
 
     return {
         wrapper,
+        mode: "scheduled",
         records: [...pictures, ...videos, ...pairedAudios, ...audios]
-            .filter((item) => item.tag),
+            .filter((item) => item.tag)
+            .map((item) => ({...item, token: `@${item.tag}`})),
     };
 }
 
+function numberedInputRecords(wrapper, pattern, kind, labelKind) {
+    const records = [];
+    for (const input of wrapper?.inputs ?? []) {
+        const match = String(input.name ?? "").match(pattern);
+        if (!match || input.link == null) continue;
+        const index = Number(match[1]);
+        const label = `<${labelKind} ${index + 1}>`;
+        records.push({
+            node: wrapper,
+            kind,
+            tag: "",
+            token: label,
+            selector: "all",
+            active: true,
+            source: inputSource(wrapper, input.name),
+            label,
+            index,
+            mode: "native",
+        });
+    }
+    records.sort((left, right) => left.index - right.index);
+    return records;
+}
+
+export function coreReferenceRecords(editorNode) {
+    const wrapper = findCoreRef2VA(editorNode);
+    if (!wrapper) return {wrapper: null, mode: null, records: []};
+    const pictures = numberedInputRecords(
+        wrapper, /^ref_images\.ref_image_(\d+)$/, "picture", "Picture");
+    const videos = numberedInputRecords(
+        wrapper, /^ref_videos\.ref_video_(\d+)$/, "video", "Video");
+    const pairedAudios = numberedInputRecords(
+        wrapper, /^ref_video_audios\.ref_video_audio_(\d+)$/, "audio", "Audio");
+    const audios = numberedInputRecords(
+        wrapper, /^ref_audios\.ref_audio_(\d+)$/, "audio", "Audio");
+    // Audio labels are shared across video-paired and standalone references.
+    [...pairedAudios, ...audios].forEach((item, index) => {
+        item.label = `<Audio ${index + 1}>`;
+        item.token = item.label;
+    });
+    return {
+        wrapper,
+        mode: "native",
+        records: [...pictures, ...videos, ...pairedAudios, ...audios],
+    };
+}
+
+export function referencePreviewRecords(editorNode, scene) {
+    const scheduled = scheduledReferenceRecords(editorNode, scene);
+    if (scheduled.wrapper) return scheduled;
+    return coreReferenceRecords(editorNode);
+}

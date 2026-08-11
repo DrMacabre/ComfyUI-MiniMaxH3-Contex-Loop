@@ -204,6 +204,11 @@ never autoplays. A computed media tensor can still be scheduled, but its hover
 preview is available only when the editor can trace it to a browser-playable
 upstream file.
 
+The same tray also recognizes a downstream core **MiniMax H3 Reference to
+Video** node. In that compatibility mode it previews connected media and
+inserts native labels such as `<Picture 1>` and `<Audio 1>`; stable `@tags` and
+scene scheduling remain exclusive to Scheduled Ref2VA.
+
 For static references, connect the final schedule fingerprint to the Plan's
 `generation_fingerprint` so changed media or declarations invalidate resume.
 When an entry consumes a Current Shot output such as `source_audio_slice`, keep
