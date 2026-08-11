@@ -303,6 +303,8 @@ def main():
     assert trim == 22
     assert layout_patch.is_applied() and layout_patch.native_guides_active()
     assert not payload_patch.is_applied()
+    priority_status = nodes._claim_inline_patch_ownership()
+    assert priority_status == "native guides; layout owned by this pack"
     assert "minimax_frame_count" not in captured
     assert captured["minimax_refs"] == refs
     keyframes = captured["minimax_keyframes"]

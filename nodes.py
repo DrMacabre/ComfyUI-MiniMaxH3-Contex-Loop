@@ -46,11 +46,13 @@ from .patch_layout import (
     MC_KEY,
     MC_AUDIO_KEY,
     apply_patch as apply_layout_patch,
+    claim_patch_ownership as claim_layout_patch_ownership,
     is_applied,
     native_guides_active,
 )
 from .patch_payload import (
     apply_patch as apply_payload_patch,
+    claim_patch_ownership as claim_payload_patch_ownership,
     is_applied as payload_patch_applied,
 )
 
@@ -94,6 +96,24 @@ def _activate_inline_patches():
             "Ref2VA refs could overwrite the motion-context video latents. "
             "Check the log for the compatibility failure reason.")
     return "legacy"
+
+
+def _claim_inline_patch_ownership():
+    """Explicitly make this pack the active compatible patch-family owner."""
+    layout_ok, layout_detail = claim_layout_patch_ownership()
+    if not layout_ok or not is_applied():
+        raise RuntimeError(
+            "h3_motion_context: could not claim the H3 layout patch: %s" %
+            layout_detail)
+    if native_guides_active():
+        return "native guides; %s" % layout_detail
+
+    payload_ok, payload_detail = claim_payload_patch_ownership()
+    if not payload_ok or not payload_patch_applied():
+        raise RuntimeError(
+            "h3_motion_context: could not claim the H3 payload patch: %s" %
+            payload_detail)
+    return "legacy guides; %s; %s" % (layout_detail, payload_detail)
 
 
 def _prepare_native_guide_conditioning(conditioning):

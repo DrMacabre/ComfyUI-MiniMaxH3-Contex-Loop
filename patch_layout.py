@@ -43,6 +43,7 @@ unmarked native-guide graphs remain entirely core-owned.
 
 import inspect
 import logging
+import sys
 
 import torch
 
@@ -602,6 +603,20 @@ def _solattn_wrapped_init(init):
     return None
 
 
+def _replace_solattn_wrapped_init(init, replacement):
+    """Replace only SolAttn's explicitly identified captured constructor."""
+    if not getattr(init, "__module__", "").endswith(
+            SOLATTN_LAYOUT_MODULE_SUFFIX):
+        return False
+    closure = getattr(init, "__closure__", None) or ()
+    freevars = getattr(getattr(init, "__code__", None), "co_freevars", ())
+    for name, cell in zip(freevars, closure):
+        if name == "original_init":
+            cell.cell_contents = replacement
+            return True
+    return False
+
+
 def _uses_native_guide_api(init):
     """Whether a constructor exposes PR #15439's frame_count-free API."""
     original = _solattn_wrapped_init(init) or init
@@ -767,6 +782,90 @@ def apply_patch():
     else:
         _LOG.info("h3_motion_context: interior keyframe anchors enabled")
     return True
+
+
+def claim_patch_ownership():
+    """Prefer this copy over an older compatible copy of the same patch.
+
+    The operation is explicit because it changes process-global ownership.
+    Only wrappers carrying this patch family's marker, or its exact historical
+    function names, are replaceable. SolAttn's narrowly recognised observer is
+    retained around the new owner; unknown wrappers fail closed.
+
+    Returns ``(ok, detail)`` for the visible Patch Priority pass-through node.
+    """
+    global _orig_init, _applied, _native_active
+    cls = getattr(mm, "PackedLayout", None)
+    current = getattr(cls, "__init__", None) if cls is not None else None
+    if current is None or not hasattr(mm, "FRAME_RESCALE"):
+        return False, "MiniMax H3 PackedLayout is unavailable"
+    if current in (_patched_init, _patched_init_native):
+        _applied = True
+        _native_active = current is _patched_init_native
+        return True, "layout owned by this pack"
+
+    who = _already_patched()
+    if who in (None, "solattn"):
+        # No sibling owns the patch yet. Normal activation already has all
+        # compatibility checks needed for stock or SolAttn-first load order.
+        _applied = False
+        if not apply_patch():
+            return False, "layout activation failed its compatibility test"
+        return True, ("layout activated by this pack"
+                      if who is None else
+                      "layout activated while retaining SolAttn")
+    if who == "foreign":
+        return False, (
+            "layout owner is unknown; only another H3 Motion Context copy "
+            "can be safely replaced")
+
+    solattn_inner = _solattn_wrapped_init(current)
+    family_wrapper = solattn_inner or current
+    owner_module = sys.modules.get(str(getattr(
+        family_wrapper, "__module__", "")))
+    original = getattr(owner_module, "_orig_init", None)
+    if not callable(original) or original is family_wrapper:
+        return False, (
+            "the existing H3 Motion Context layout wrapper does not expose "
+            "its captured constructor; restart with only one copy enabled")
+
+    stock = _solattn_wrapped_init(original) or original
+    home = str(getattr(cls, "__module__", "") or "")
+    where = str(getattr(stock, "__module__", "") or "")
+    if (hasattr(stock, "__wrapped__") or (home and where != home)
+            or getattr(stock, PATCH_MARKER, False)):
+        return False, (
+            "the existing layout wrapper captured another unknown wrapper; "
+            "refusing to discard it")
+
+    previous_original = _orig_init
+    previous_native = _native_active
+    native_api = _uses_native_guide_api(original)
+    _orig_init = original
+    try:
+        if native_api:
+            _self_test_native()
+        else:
+            _self_test()
+    except Exception as exc:
+        _orig_init = previous_original
+        _native_active = previous_native
+        return False, "replacement layout self-test failed: %s" % exc
+
+    replacement = _patched_init_native if native_api else _patched_init
+    if solattn_inner is not None:
+        if not _replace_solattn_wrapped_init(current, replacement):
+            _orig_init = previous_original
+            _native_active = previous_native
+            return False, "could not preserve SolAttn's layout observer"
+    else:
+        cls.__init__ = replacement
+    _applied = True
+    _native_active = native_api
+    _LOG.info(
+        "h3_motion_context: this pack claimed H3 layout ownership from "
+        "compatible module %s", getattr(family_wrapper, "__module__", "?"))
+    return True, "layout ownership claimed from a compatible older copy"
 
 
 def is_applied():

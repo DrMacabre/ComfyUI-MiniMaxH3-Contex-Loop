@@ -14,6 +14,9 @@ stock overwrite, then checks four cases:
   4. one mechanism only                -> untouched either way
 """
 
+import importlib
+import importlib.util
+import os
 import sys
 import types
 
@@ -58,10 +61,18 @@ def make_model_base():
     return mb
 
 
+def load_payload_patch(name):
+    spec = importlib.util.spec_from_file_location(
+        name, os.path.join(_PKG, "patch_payload.py"))
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 def main():
     mb = make_model_base()
     sys.modules.pop("patch_payload", None)
-    import importlib
     pp = importlib.import_module("patch_payload")
     assert pp.apply_patch(), "payload patch did not apply"
 
@@ -147,6 +158,25 @@ def main():
     assert pp3._already_patched(mb3.MiniMaxH3) == "foreign"
     assert not pp3.apply_patch(), "unrelated marker collision was accepted"
     print("6. lookalike marker from an unrelated pack: still refused")
+
+    mb4 = make_model_base()
+    older = load_payload_patch("h3_payload_vendor_older")
+    assert older.apply_patch()
+    newer = load_payload_patch("h3_payload_vendor_newer")
+    assert newer.apply_patch()
+    assert mb4.MiniMaxH3.extra_conds is older._patched_extra_conds
+    claimed, detail = newer.claim_patch_ownership()
+    assert claimed, detail
+    assert mb4.MiniMaxH3.extra_conds is newer._patched_extra_conds
+    got = mb4.MiniMaxH3().extra_conds(
+        minimax_keyframes=mc_kf, minimax_refs=mixed_refs,
+        minimax_frame_count=124)["minimax_payload"].cond
+    assert got["cond_video_latents"] == ["KF", "R1", "R2"], got
+    assert got["cond_audio_latents"] == ["A2", "A3"], got
+    refused, _detail = pp3.claim_patch_ownership()
+    assert not refused, "priority replaced an unrelated payload wrapper"
+    print("7. explicit priority claims an older compatible payload owner and "
+          "still refuses an unrelated wrapper")
 
     print("payload gate test passed")
 

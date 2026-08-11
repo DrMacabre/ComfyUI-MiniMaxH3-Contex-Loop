@@ -229,6 +229,9 @@ def main():
         audio_mode="timeline", context_latent=prev)
 
     assert patch_layout.is_applied() and patch_payload.is_applied()
+    assert nodes._claim_inline_patch_ownership() == (
+        "legacy guides; layout owned by this pack; "
+        "payload owned by this pack")
     assert mm.PackedLayout.__init__ is not stock_layout_init
     assert MiniMaxH3.extra_conds is not stock_extra_conds
 

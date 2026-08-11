@@ -45,6 +45,7 @@ the video list, so the two stay in step however the graph is wired.
 """
 
 import logging
+import sys
 
 import comfy.model_base as model_base
 
@@ -189,6 +190,58 @@ def apply_patch():
     _applied = True
     _LOG.info("h3_motion_context: keyframe/ref coexistence enabled")
     return True
+
+
+def claim_patch_ownership():
+    """Prefer this copy over an older compatible copy of the same patch.
+
+    This is intentionally stricter than merely replacing whatever currently
+    owns ``extra_conds``. Only a wrapper carrying our shared marker (or the
+    exact legacy wrapper name) can be displaced, and its module must expose
+    the unwrapped stock callable it captured. H3-Multishot's known-compatible
+    merge remains in place; unknown wrappers are refused.
+
+    Returns ``(ok, detail)`` for the visible Patch Priority pass-through node.
+    """
+    global _orig_extra_conds, _applied
+    cls = getattr(model_base, "MiniMaxH3", None)
+    current = getattr(cls, "extra_conds", None) if cls is not None else None
+    if current is None:
+        return False, "MiniMaxH3.extra_conds is unavailable"
+    if current is _patched_extra_conds:
+        _applied = True
+        return True, "payload owned by this pack"
+
+    who = _already_patched(cls)
+    if who == "h3_multishot":
+        _applied = True
+        return True, "compatible H3-Multishot payload merge retained"
+    if who not in ("same", "other"):
+        return False, (
+            "payload owner is %s; only another H3 Motion Context copy can "
+            "be safely replaced" % (who or "stock/uninitialized"))
+
+    owner_module = sys.modules.get(str(getattr(current, "__module__", "")))
+    original = getattr(owner_module, "_orig_extra_conds", None)
+    if not callable(original) or original is current:
+        return False, (
+            "the existing H3 Motion Context payload wrapper does not expose "
+            "its captured stock method; restart with only one copy enabled")
+    home = str(getattr(cls, "__module__", "") or "")
+    where = str(getattr(original, "__module__", "") or "")
+    if (hasattr(original, "__wrapped__") or (home and where != home)
+            or getattr(original, PATCH_MARKER, False)):
+        return False, (
+            "the existing payload wrapper captured another unknown wrapper; "
+            "refusing to discard it")
+
+    _orig_extra_conds = original
+    cls.extra_conds = _patched_extra_conds
+    _applied = True
+    _LOG.info(
+        "h3_motion_context: this pack claimed keyframe/ref payload ownership "
+        "from compatible module %s", getattr(current, "__module__", "?"))
+    return True, "payload ownership claimed from a compatible older copy"
 
 
 def is_applied():

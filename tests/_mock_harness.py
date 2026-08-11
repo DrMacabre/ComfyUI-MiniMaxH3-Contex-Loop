@@ -56,6 +56,8 @@ Checks:
 """
 
 import importlib
+import importlib.util
+import os
 import sys
 import types
 
@@ -206,6 +208,22 @@ def load_patch(mm):
     sys.modules["torch"] = make_torch()
     sys.modules.pop("patch_layout", None)
     return importlib.import_module("patch_layout")
+
+
+def load_patch_named(mm, name):
+    for module_name in ("comfy", "comfy.ldm", "comfy.ldm.minimax"):
+        sys.modules.setdefault(module_name, types.ModuleType(module_name))
+    sys.modules["comfy.ldm.minimax.model"] = mm
+    sys.modules["comfy"].ldm = sys.modules["comfy.ldm"]
+    sys.modules["comfy.ldm"].minimax = sys.modules["comfy.ldm.minimax"]
+    sys.modules["comfy.ldm.minimax"].model = mm
+    sys.modules["torch"] = make_torch()
+    spec = importlib.util.spec_from_file_location(
+        name, os.path.join(os.path.dirname(__file__), "..", "patch_layout.py"))
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 TEXT_LEN, LATENT_T, LH, LW, AUDIO_T = 7, 7, 22, 38, 16
@@ -480,6 +498,60 @@ def main():
         [origin12 + FRAME_RESCALE * i for i in range(4)])
     print("11. interior-anchor patch first: SolAttn composes outside it and a "
           "second vendored copy stands down through the known wrapper")
+
+    # 12. The explicit workflow node may promote the current pack over an
+    # older compatible vendor. Unlike the same-name reload cases above, real
+    # custom-node packages have distinct module names, so the active wrapper's
+    # module remains addressable and exposes the stock constructor it captured.
+    mm13 = make_mm()
+    older13 = load_patch_named(mm13, "h3_layout_vendor_older")
+    assert older13.apply_patch()
+    newer13 = load_patch_named(mm13, "h3_layout_vendor_newer")
+    assert newer13.apply_patch()
+    assert mm13.PackedLayout.__init__ is older13._patched_init
+    claimed, detail = newer13.claim_patch_ownership()
+    assert claimed, detail
+    assert mm13.PackedLayout.__init__ is newer13._patched_init
+    lay13 = mm13.PackedLayout(
+        TEXT_LEN, LATENT_T, LH, LW, AUDIO_T,
+        keyframes=run, refs=[dict(marked)], frame_count=FC)
+    origin13 = newer13._target_origin(lay13)
+    assert np.allclose(
+        _cond_ts(lay13),
+        [origin13 + FRAME_RESCALE * i for i in range(4)])
+
+    # Preserve SolAttn even when it loaded around the older owner: claim the
+    # captured inner constructor instead of replacing the observer itself.
+    observed14 = {}
+    mm14 = make_mm()
+    older14 = load_patch_named(mm14, "h3_layout_solattn_older")
+    assert older14.apply_patch()
+    captured14 = mm14.PackedLayout.__init__
+
+    def install_solattn_around_older():
+        original_init = captured14
+
+        def __init__(self, *args, **kwargs):
+            original_init(self, *args, **kwargs)
+            observed14[id(self.position_ids)] = self
+
+        __init__.__module__ = "ComfyUI-SolAttn_triton._morton_h3"
+        mm14.PackedLayout.__init__ = __init__
+
+    install_solattn_around_older()
+    solattn14 = mm14.PackedLayout.__init__
+    newer14 = load_patch_named(mm14, "h3_layout_solattn_newer")
+    assert newer14.apply_patch()
+    claimed, detail = newer14.claim_patch_ownership()
+    assert claimed, detail
+    assert mm14.PackedLayout.__init__ is solattn14
+    assert newer14._solattn_wrapped_init(solattn14) is newer14._patched_init
+    lay14 = mm14.PackedLayout(
+        TEXT_LEN, LATENT_T, LH, LW, AUDIO_T,
+        keyframes=run, refs=[dict(marked)], frame_count=FC)
+    assert observed14[id(lay14.position_ids)] is lay14
+    print("12. explicit priority claims layout ownership from an older copy "
+          "and preserves SolAttn when it wraps that owner")
 
     print("all checks passed")
 

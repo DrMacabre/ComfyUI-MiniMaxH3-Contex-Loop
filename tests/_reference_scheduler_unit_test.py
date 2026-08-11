@@ -25,6 +25,7 @@ sys.modules[PACKAGE] = package
 
 shared_nodes = types.ModuleType(PACKAGE + ".nodes")
 shared_nodes.MiniMaxH3MotionContext = object
+shared_nodes._claim_inline_patch_ownership = lambda: "test patch owner"
 shared_nodes._prepare_native_guide_conditioning = lambda *args: None
 shared_nodes._resize = lambda *args: None
 shared_nodes._streams_from_latent = lambda *args: None
@@ -114,6 +115,9 @@ base_seed_help = plan_inputs["base_seed"][1]["tooltip"]
 assert "Reroll seed does NOT change base_seed" in base_seed_help
 assert "Show advanced > Seed" in base_seed_help
 assert "audio_tag" in video_inputs
+conditioning = object()
+priority_result = chain.MiniMaxH3PatchPriority().claim(conditioning)
+assert priority_result == (conditioning, "test patch owner")
 
 original_output_root = chain._output_root
 original_launch_directory = chain._launch_directory

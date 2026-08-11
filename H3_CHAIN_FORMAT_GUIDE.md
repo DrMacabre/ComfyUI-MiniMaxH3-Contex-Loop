@@ -555,6 +555,25 @@ receives its own audio tag; if `audio_tag` is blank, `@performance` derives
 3 videos, and 3 standalone audios. Scenes with no active references remain
 valid and expand to stock Ref2VA without dynamic reference sockets.
 
+### Optional patch ownership control
+
+Normally the first compatible H3 Motion Context copy loaded by ComfyUI owns the
+small process-level compatibility wrappers. If an older installed copy wins
+load order, wire **MiniMax H3 Patch Priority** between the conditioning node and
+**MiniMax H3 Contex Loop Context**:
+
+```text
+Ref2VA / I2V conditioning → Patch Priority → Contex Loop Context
+```
+
+The node passes conditioning through bit-for-bit and executes an ownership
+check first. It can replace only a recognised older copy of the same shared
+patch family. It preserves the known-compatible H3-Multishot payload merge and
+SolAttn layout observer. Any unknown wrapper is rejected with its ownership
+reason instead of being overwritten. The selection is process-global after the
+node executes; one wired node is enough for the workflow, while a disconnected
+control node will not execute.
+
 ### Checkpoint compatibility
 
 Every schedule entry fingerprints its normalized selector, tags, and actual

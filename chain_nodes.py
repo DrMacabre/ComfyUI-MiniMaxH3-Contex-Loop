@@ -71,6 +71,7 @@ except ImportError:
 
 from .nodes import (
     MiniMaxH3MotionContext,
+    _claim_inline_patch_ownership,
     _prepare_native_guide_conditioning,
     _resize,
     _streams_from_latent,
@@ -2899,6 +2900,40 @@ class MiniMaxH3ChainCurrent:
                 shot["audio_duration_seconds"], audio_slice, status)
 
 
+class MiniMaxH3PatchPriority:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "conditioning": ("CONDITIONING", {
+                    "tooltip": "Conditioning pass-through. Wire this directly "
+                               "between Ref2VA/I2V and Contex Loop Context so "
+                               "the node executes before continuation guides "
+                               "are added."}),
+            },
+        }
+
+    RETURN_TYPES = ("CONDITIONING", "STRING")
+    RETURN_NAMES = ("conditioning", "status")
+    OUTPUT_TOOLTIPS = (
+        "The exact input conditioning, unchanged. Connect it to Contex Loop "
+        "Context.",
+        "The active native/legacy patch path and ownership result.",
+    )
+    FUNCTION = "claim"
+    CATEGORY = "conditioning/minimax/contex_loop"
+    DESCRIPTION = (
+        "Explicitly prefer this pack's current H3 compatibility patch, then "
+        "pass conditioning through unchanged. It may replace only an older "
+        "compatible H3 Motion Context copy, retains recognised "
+        "H3-Multishot/SolAttn behavior, and refuses unknown wrappers. This is "
+        "process-global after execution, so use one wired node per workflow.")
+
+    def claim(self, conditioning):
+        status = _claim_inline_patch_ownership()
+        return (conditioning, status)
+
+
 class MiniMaxH3ChainContext:
     @classmethod
     def INPUT_TYPES(cls):
@@ -4862,6 +4897,7 @@ CHAIN_NODE_CLASS_MAPPINGS = {
     "MiniMaxH3ChainExternalVideo": MiniMaxH3ChainExternalVideo,
     "MiniMaxH3ChainLoopStart": MiniMaxH3ChainLoopStart,
     "MiniMaxH3ChainCurrent": MiniMaxH3ChainCurrent,
+    "MiniMaxH3PatchPriority": MiniMaxH3PatchPriority,
     "MiniMaxH3ChainContext": MiniMaxH3ChainContext,
     "MiniMaxH3ChainSegmentSave": MiniMaxH3ChainSegmentSave,
     "MiniMaxH3ChainReview": MiniMaxH3ChainReview,
@@ -4883,6 +4919,7 @@ CHAIN_NODE_DISPLAY_NAME_MAPPINGS = {
     "MiniMaxH3ChainExternalVideo": "MiniMax H3 Existing Video Context",
     "MiniMaxH3ChainLoopStart": "MiniMax H3 Contex Loop Start",
     "MiniMaxH3ChainCurrent": "MiniMax H3 Contex Loop Current Shot",
+    "MiniMaxH3PatchPriority": "MiniMax H3 Patch Priority",
     "MiniMaxH3ChainContext": "MiniMax H3 Contex Loop Context",
     "MiniMaxH3ChainSegmentSave": "MiniMax H3 Contex Loop Segment + Checkpoint",
     "MiniMaxH3ChainReview": "MiniMax H3 Contex Loop Review Gate",

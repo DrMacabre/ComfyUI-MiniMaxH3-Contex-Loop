@@ -20,6 +20,11 @@ huge cumulative image tensor.
 Newest first. Recent additions stay visible; older milestones are folded away
 so this page remains a useful starting point rather than a changelog wall.
 
+- **v0.3.14 — Explicit compatible patch priority.** The optional wired
+  **MiniMax H3 Patch Priority** pass-through can promote this pack over an
+  older compatible H3 Motion Context patch copy. It leaves conditioning
+  unchanged, retains recognised H3-Multishot and SolAttn behavior, and refuses
+  unknown wrappers rather than overwriting them.
 - **v0.3.13 — Open a Plan's output folder.** A compact **Output** button with
   an outline folder-open icon in the Plan header creates and opens
   `output/h3_chains/<run_name>` on the ComfyUI host. Headless or systemd-hosted
@@ -260,6 +265,15 @@ CLIP/VAE, prompt, dimensions, length, picture/video/audio sources, paired video
 soundtracks, and conditioning/latent consumers. It also connects Current Shot's
 scene index/count when it can identify the loop. The original core node remains
 untouched in ComfyUI; the replacement invokes it internally per scene.
+
+If another installed pack vendors an older version of the same H3 compatibility
+patch, insert **MiniMax H3 Patch Priority** between Ref2VA/I2V conditioning and
+**Contex Loop Context**. Because it is wired, it executes before continuation
+guides are added and promotes this pack's implementation for the ComfyUI
+process. It only replaces a recognised H3 Motion Context sibling; compatible
+H3-Multishot/SolAttn hooks remain active and an unknown wrapper produces a clear
+error rather than being overwritten. Leaving the node absent or disconnected
+does not change runtime behavior.
 
 For a non-looping experiment, open the
 [three-angle guitar Ref2VA workflow](<example_workflows/EXPERIMENTAL MiniMax H3 Three-Angle Guitar Ref2VA.json>).
