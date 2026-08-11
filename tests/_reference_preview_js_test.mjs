@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import {
+    availableReferenceRecords,
     collectScheduleNodes,
     coreReferenceRecords,
     findScheduledRef2VA,
@@ -85,6 +86,15 @@ assert.deepEqual(sceneTwo.map(({tag, label, active}) => ({tag, label, active})),
     {tag: "picture_2", label: "<Picture 1>", active: true},
     {tag: "score", label: "<Audio 1>", active: true},
 ]);
+assert.deepEqual(
+    availableReferenceRecords(editor, 2).records.map(({tag}) => tag),
+    ["picture_2", "score"],
+);
+assert.deepEqual(
+    availableReferenceRecords(editor, 2, {includeInactive: true})
+        .records.map(({tag}) => tag),
+    ["picture_1", "picture_2", "score"],
+);
 
 const coreEditor = add(makeNode(10, "MiniMaxH3ChainScenePromptEditor"));
 const coreRelay = add(makeNode(11, "MiniMaxH3ChainCurrent"));
@@ -102,6 +112,10 @@ assert.deepEqual(native.records.map(({kind, token, label}) => ({kind, token, lab
     {kind: "audio", token: "<Audio 1>", label: "<Audio 1>"},
 ]);
 assert.equal(referencePreviewRecords(coreEditor, 1).mode, "native");
+assert.deepEqual(
+    availableReferenceRecords(coreEditor, 1).records.map(({token}) => token),
+    ["<Picture 1>", "<Audio 1>"],
+);
 
 const flEditor = add(makeNode(15, "MiniMaxH3ChainScenePromptEditor"));
 const flRelay = add(makeNode(16, "MiniMaxH3ChainCurrent"));
@@ -145,6 +159,7 @@ assert.deepEqual(
         .map(({token, selector, active}) => ({token, selector, active})),
     [{token: "<Picture 1>", selector: "1", active: false}],
 );
+assert.deepEqual(availableReferenceRecords(i2vEditor, 2).records, []);
 
 const lEditor = add(makeNode(20, "MiniMaxH3ChainScenePromptEditor"));
 const lRelay = add(makeNode(21, "MiniMaxH3ChainCurrent"));

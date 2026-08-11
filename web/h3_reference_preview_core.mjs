@@ -261,3 +261,15 @@ export function referencePreviewRecords(editorNode, scene) {
     if (core.wrapper) return core;
     return imageToVideoReferenceRecords(editorNode, scene);
 }
+
+export function availableReferenceRecords(
+    editorNode, scene, {includeInactive = false} = {},
+) {
+    const result = referencePreviewRecords(editorNode, scene);
+    return {
+        ...result,
+        records: result.records.filter(
+            (record) => record.source && (includeInactive || record.active),
+        ),
+    };
+}

@@ -220,11 +220,17 @@ Current Shot prompt / clip_index / clip_count / width / height / length ──�
 CLIP + video VAE + audio VAE ─────────────────────────────────────────────↗
 ```
 
-Give each entry a stable tag such as `@hero`, `@performance`, or `@voice`.
+Each entry can have a stable tag such as `@hero`, `@performance`, or `@voice`.
 Its `scenes` field accepts blank/all, `1`, `1:4`, or `1,3,5:8`. The wrapper
 passes only active media into core Ref2VA and replaces tags with that scene's
 native labels. It never inserts or rewrites semantic prompt text; write every
 reference definition directly in the Plan or Prompt Editor.
+
+Aliases are optional authoring conveniences, not extra H3 syntax the user must
+adopt. Core Ref2VA workflows can keep writing native `<Picture N>`, `<Video N>`,
+and `<Audio N>` labels. Scheduled workflows may also use native labels when the
+author deliberately manages each scene's compact numbering; `@tags` are simply
+the safer option when references appear, disappear, or renumber between scenes.
 
 Tags identify references; their names do not reserve native H3 numbers. Native
 labels are compactly assigned by media type from the entries active in the
@@ -236,7 +242,8 @@ current scene.
 
 The **Scene Prompt Editor** discovers the Scheduled Ref2VA connected downstream
 without adding an execution socket or a graph cycle. Open its **@ Reference**
-tray to see the stable tags and their native mapping for the selected scene.
+tray to see only references connected and active for the selected scene, with
+stable tags and their native mapping when using the scheduler.
 Hover a tag to preview an upstream loaded image, video, or audio file, then
 click it to insert the stable `@tag`. Audio uses visible playback controls and
 never autoplays. A computed media tensor can still be scheduled, but its hover

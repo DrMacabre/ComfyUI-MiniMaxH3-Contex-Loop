@@ -158,7 +158,7 @@ assert "experimental" in audio_mode_help
 assert "output/h3_chains" in plan_inputs["run_name"][1]["tooltip"]
 base_seed_help = plan_inputs["base_seed"][1]["tooltip"]
 assert "Reroll seed does NOT change base_seed" in base_seed_help
-assert "Show advanced > Seed" in base_seed_help
+assert "always-visible Scene seed" in base_seed_help
 assert "audio_tag" in video_inputs
 conditioning = object()
 priority_result = chain.MiniMaxH3PatchPriority().claim(conditioning)

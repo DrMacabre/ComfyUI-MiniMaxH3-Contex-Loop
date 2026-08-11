@@ -56,7 +56,8 @@ Picture Ref (scenes 1,3,5:8) ─→ Video Ref (scenes 1:4)
 Current Shot ─ prompt, clip_index, clip_count, width, height, length ─────↗
 ```
 
-Write stable aliases such as `@hero_face` in Plan scene prompts. Scheduled
+You may write stable aliases such as `@hero_face` in Plan scene prompts. They
+are optional authoring conveniences rather than required H3 syntax. Scheduled
 Ref2VA compiles them to the active scene's exact `<Picture N>`, `<Video N>`,
 and `<Audio N>` numbering before expanding to ComfyUI's stock Ref2VA node.
 Write all subject, video, and audio definitions directly in the Plan/Prompt

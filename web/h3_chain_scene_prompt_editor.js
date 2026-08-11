@@ -17,7 +17,7 @@ import {
     promptSourceRevision,
 } from "./h3_prompt_assistant_core.mjs";
 import {PromptAssistantClient} from "./h3_prompt_assistant_client.mjs";
-import {referencePreviewRecords} from "./h3_reference_preview_core.mjs";
+import {availableReferenceRecords} from "./h3_reference_preview_core.mjs";
 
 // The compact @ reference and # dialogue authoring interactions are inspired
 // by nkxx188/ComfyUI-MiniMaxH3-Easy (MIT); see THIRD_PARTY_NOTICES.md.
@@ -1011,28 +1011,24 @@ function mount(node) {
 
     function renderReferenceTray(refs, textarea) {
         refs.replaceChildren();
-        const {records, mode} = referencePreviewRecords(node, state.active + 1);
+        const {records, mode, wrapper} = availableReferenceRecords(
+            node, state.active + 1,
+        );
         const preview = element("div", "h3sp-ref-preview");
         if (!records.length) {
             refs.append(element(
                 "div", "h3sp-ref-help",
-                "No connected Scheduled Ref2VA, core Ref2VA, or core I2V/FL2V node was found. Generic native labels are shown instead.",
+                wrapper
+                    ? `No connected references are active in scene ${state.active + 1}.`
+                    : "No connected Scheduled Ref2VA, core Ref2VA, or core I2V/FL2V references were found. The menu does not invent unavailable labels.",
             ));
-            for (const [kind, count] of [["Picture", 9], ["Video", 3], ["Audio", 6]]) {
-                for (let ordinal = 1; ordinal <= count; ordinal += 1) {
-                    const tag = `<${kind} ${ordinal}>`;
-                    refs.append(button(tag, `Insert ${tag}`, () => {
-                        insertText(textarea, tag);
-                        refs.classList.remove("h3sp-open");
-                    }));
-                }
-            }
             return;
         }
 
         const help = mode === "scheduled"
             ? `Scheduled references for scene ${state.active + 1}. Hover to preview; ` +
-              "click to insert the stable @tag. Audio never autoplays."
+              "click to insert the optional stable @alias. It compiles to a native label; " +
+              "the scheduler inserts no prompt text. Audio never autoplays."
             : mode === "native_keyframes"
               ? `Core I2V/FL2V keyframes for scene ${state.active + 1}. ` +
                 "A first-scene gate is shown inactive on continuations. " +
@@ -1043,29 +1039,24 @@ function mount(node) {
         const icons = {picture: "▧", video: "▶", audio: "♫"};
         for (const record of records) {
             const mapping = (mode === "scheduled" || mode === "native_keyframes")
-                ? (record.active ? (mode === "scheduled" ? ` → ${record.label}` : "")
-                    : " · inactive") : "";
+                ? (mode === "scheduled" ? ` → ${record.label}` : "") : "";
             const chip = button(
                 `${icons[record.kind] ?? "@"} ${record.token}${mapping}`,
-                record.active
-                    ? (mode === "scheduled"
-                        ? `Insert ${record.token}; it compiles to ${record.label} in this scene.`
-                        : `Insert ${record.token} for the connected core conditioning input.`)
-                    : `Insert ${record.token}. Warning: it is inactive in this scene.`,
+                mode === "scheduled"
+                    ? `Insert optional alias ${record.token}; it compiles to ${record.label} in this scene.`
+                    : `Insert ${record.token} for the connected core conditioning input.`,
                 () => {
                     insertText(textarea, record.token);
                     refs.classList.remove("h3sp-open");
                 },
             );
-            chip.classList.add("h3sp-ref-chip", record.active ? "h3sp-active" : "h3sp-inactive");
+            chip.classList.add("h3sp-ref-chip", "h3sp-active");
             chip.addEventListener("mouseenter", () => showReferencePreview(record, preview));
             chip.addEventListener("focus", () => showReferencePreview(record, preview));
             refs.append(chip);
         }
         refs.append(preview);
-        showReferencePreview(
-            records.find((record) => record.active) ?? records[0], preview,
-        );
+        showReferencePreview(records[0], preview);
     }
 
     function render() {

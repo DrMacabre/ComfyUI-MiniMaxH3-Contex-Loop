@@ -6,12 +6,14 @@ import {
     AUTO_SCENE_COLORS,
     automaticSceneColor,
     calculatePlanTiming,
+    derivedSceneSeed,
     duplicateShot,
     h3FrameLength,
     moveShot,
     parsePlanJson,
     planToJson,
     promptValueToText,
+    randomSceneSeed,
     setSharedPrompt,
     sharedPrompt,
     validateH3Length,
@@ -22,6 +24,19 @@ assert.equal(new Set(AUTO_SCENE_COLORS).size, AUTO_SCENE_COLORS.length);
 assert.equal(automaticSceneColor(0), AUTO_SCENE_COLORS[0]);
 assert.equal(automaticSceneColor(12), AUTO_SCENE_COLORS[0]);
 assert.equal(automaticSceneColor(-1), AUTO_SCENE_COLORS.at(-1));
+assert.equal(await derivedSceneSeed(0, 1, "intro"), "2670204060324819354");
+assert.equal(await derivedSceneSeed(42, 2, "scene_02"), "7780599706863635211");
+assert.equal(
+    await derivedSceneSeed(42, 2, "scene_02", {}),
+    "7780599706863635211",
+);
+assert.equal(randomSceneSeed({
+    getRandomValues(words) {
+        words[0] = 0x12345678;
+        words[1] = 0x9abcdef0;
+        return words;
+    },
+}), "1311768467463790320");
 
 const plan = parsePlanJson(JSON.stringify({
     prompt_prefix: ["Identity.", "", "Wardrobe."],
@@ -145,6 +160,15 @@ assert.match(editorSource, /onGraphConfigured/);
 assert.match(editorSource, /scheduleResponsiveSize\(\)/);
 assert.doesNotMatch(editorSource, /height: \$\{EDITOR_HEIGHT\}px/);
 assert.match(editorSource, /node\.size\?\.\[1\][^\n]+0,/);
+assert.doesNotMatch(editorSource, /const computed = node\.computeSize/);
+assert.match(editorSource, /h3_chain_plan_layout/);
+assert.match(editorSource, /new ResizeObserver/);
+assert.match(editorSource, /"pointerdown", "pointerup", "mousedown", "mouseup", "click"/);
+assert.match(editorSource, /availableReferenceRecords/);
+assert.doesNotMatch(editorSource, /\[\["Picture", 9\], \["Video", 3\], \["Audio", 6\]\]/);
+assert.match(editorSource, /Derived seed:/);
+assert.match(editorSource, /New random/);
+assert.match(editorSource, /Use derived/);
 assert.match(editorSource, /h3_chain_scene_colors/);
 assert.match(editorSource, /type = "color"/);
 assert.match(editorSource, /minimax_h3_context_loop\.chain_plan_editor/);

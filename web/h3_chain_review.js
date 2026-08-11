@@ -12,6 +12,7 @@ import {
 const NODE_NAME = "MiniMaxH3ChainReview";
 const PLAN_NAME = "MiniMaxH3ChainPlan";
 const VIDEO_HEIGHT_PROPERTY = "h3_chain_review_video_height";
+const PROMPT_HEIGHT_PROPERTY = "h3_chain_review_prompt_height";
 const DEFAULT_VIDEO_HEIGHT = 300;
 const MIN_VIDEO_HEIGHT = 140;
 const MAX_VIDEO_HEIGHT = 1200;
@@ -419,6 +420,40 @@ function mount(node) {
     prompt.title = "Edit only the current scene prompt. Retry writes it back into the Scene Plan and regenerates this scene from the same accepted predecessor.";
     promptLabel.append(prompt);
 
+    let promptResizeObserver = null;
+    function applySavedLayout() {
+        node.properties ??= {};
+        const restoredVideoHeight = Number(node.properties[VIDEO_HEIGHT_PROPERTY]);
+        setVideoHeight(Number.isFinite(restoredVideoHeight)
+            ? restoredVideoHeight : DEFAULT_VIDEO_HEIGHT);
+        const restoredPromptHeight = Number(node.properties[PROMPT_HEIGHT_PROPERTY]);
+        if (Number.isFinite(restoredPromptHeight) && restoredPromptHeight >= 120) {
+            prompt.style.height = `${Math.round(restoredPromptHeight)}px`;
+        } else {
+            prompt.style.removeProperty("height");
+        }
+    }
+    if (typeof ResizeObserver === "function") {
+        let initialized = false;
+        promptResizeObserver = new ResizeObserver(() => {
+            if (!prompt.isConnected) return;
+            const next = Math.round(prompt.offsetHeight);
+            if (!Number.isFinite(next) || next < 120) return;
+            if (!initialized) {
+                initialized = true;
+                return;
+            }
+            if (Number(node.properties?.[PROMPT_HEIGHT_PROPERTY]) === next) return;
+            node.properties ??= {};
+            node.properties[PROMPT_HEIGHT_PROPERTY] = next;
+            node.graph?.setDirtyCanvas?.(true, true);
+            app.graph?.setDirtyCanvas?.(true, true);
+        });
+        promptResizeObserver.observe(prompt);
+    }
+    node._h3ReviewApplyLayout = applySavedLayout;
+    applySavedLayout();
+
     const seedRow = document.createElement("label");
     seedRow.className = "h3r-row";
     seedRow.append("Seed");
@@ -702,6 +737,7 @@ function mount(node) {
     const removed = node.onRemoved;
     node.onRemoved = function () {
         stopCountdown();
+        promptResizeObserver?.disconnect();
         mountedReviewNodes.delete(this);
         updatePendingPolling();
         return removed?.apply(this, arguments);
@@ -734,6 +770,18 @@ app.registerExtension({
             setTimeout(() => mount(this), 0);
             return result;
         };
+        const configured = nodeType.prototype.onConfigure;
+        nodeType.prototype.onConfigure = function () {
+            const result = configured?.apply(this, arguments);
+            setTimeout(() => this._h3ReviewApplyLayout?.(), 0);
+            return result;
+        };
+        const graphConfigured = nodeType.prototype.onGraphConfigured;
+        nodeType.prototype.onGraphConfigured = function () {
+            const result = graphConfigured?.apply(this, arguments);
+            setTimeout(() => this._h3ReviewApplyLayout?.(), 0);
+            return result;
+        };
     },
     async nodeCreated(node) {
         // Official per-instance hook. Keep the prototype hook above for older
@@ -745,6 +793,7 @@ app.registerExtension({
         await fetchPending();
         for (const node of allNodes(app.graph)) {
             if (nodeType(node) === NODE_NAME) node._h3RefreshResume?.();
+            if (nodeType(node) === NODE_NAME) node._h3ReviewApplyLayout?.();
         }
     },
 });

@@ -2077,8 +2077,10 @@ class MiniMaxH3ScheduledVideoReference:
                    "index-paired soundtrack using stable @tags. Tags identify "
                    "assets while the wrapper assigns compact <Video N> and "
                    "<Audio N> labels from the entries active in each scene. "
-                   "Use @tags in Plan prompts; this node never inserts prompt "
-                   "text. Do not treat a tag suffix as a fixed native number.")
+                   "You may use @tags in Plan prompts when automatic renumbering "
+                   "is useful; they are optional authoring aliases and this node "
+                   "never inserts prompt text. Do not treat a tag suffix as a "
+                   "fixed native number.")
 
     def add(self, video, tag, scenes, audio_tag, audio=None, previous=None):
         if (torch is None or not torch.is_tensor(video) or video.ndim != 4 or
@@ -2146,7 +2148,8 @@ class MiniMaxH3ScheduledAudioReference:
     DESCRIPTION = ("Add one scene-scheduled standalone audio reference using "
                    "a stable @tag. The wrapper compactly renumbers active "
                    "audio as <Audio N> in each scene. Write the @tag and its "
-                   "definition in the Plan prompt; this node inserts no text.")
+                   "definition in the Plan prompt if you use the optional alias; "
+                   "this node inserts no text.")
 
     def add(self, audio, tag, scenes, previous=None):
         if audio is None:
@@ -2205,12 +2208,14 @@ class MiniMaxH3ScheduledReferenceToVideo:
                 "prompt": ("STRING", {
                     "default": "", "multiline": True,
                     "dynamicPrompts": True,
-                    "tooltip": "Scene prompt using stable aliases such as "
+                    "tooltip": "Scene prompt may use optional stable aliases such as "
                                "@hero_face and @performance. The wrapper "
                                "replaces them with native H3 labels for the "
                                "current scene. Example: @picture_2 becomes "
                                "<Picture 1> if it is the only active picture. "
-                               "All reference definitions remain visible and "
+                               "Aliases are a scheduler convenience, not required "
+                               "H3 syntax. Native labels remain user-managed. All "
+                               "reference definitions remain visible and "
                                "editable in the Plan or Prompt Editor."}),
                 "width": ("INT", {
                     "default": 960, "min": 32, "max": 4096, "step": 32,
@@ -2655,7 +2660,7 @@ class MiniMaxH3ChainPlan:
                                "each scene that has no explicit seed. Review "
                                "Gate's Reroll seed does NOT change base_seed; it "
                                "writes an explicit override into that scene's "
-                               "Show advanced > Seed field, leaving every other "
+                               "always-visible Scene seed field, leaving every other "
                                "scene reproducible and checkpoint-compatible."}),
                 "segment_crf": ("INT", {
                     "default": 18, "min": 0, "max": 51,

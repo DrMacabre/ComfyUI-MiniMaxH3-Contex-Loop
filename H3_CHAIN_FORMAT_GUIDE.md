@@ -36,8 +36,11 @@ The agent's proposed replacement is staged below the chat and remains editable.
 Only **Apply to scene** changes `shots[n].prompt`. A source-revision fence warns
 and asks for confirmation when manual edits landed after the request began.
 
-Inside a prompt, type `@` or click **@ Reference** to insert a MiniMax
-`<Picture N>`, `<Video N>`, or `<Audio N>` tag. Select dialogue text and type
+Inside a prompt, type `@` or click **@ Reference** to insert one of the
+references actually connected and active for that scene. Core conditioning
+inserts native `<Picture N>`, `<Video N>`, or `<Audio N>` labels; Scheduled
+Ref2VA offers optional stable `@aliases` which compile to those labels. Select
+dialogue text and type
 `#`, or click **# Dialogue**, to wrap it in `<d>...</d>`. These interactions
 are authoring shortcuts only; they produce ordinary MiniMax prompt text.
 When the editor can trace the Plan downstream to Scheduled Ref2VA, core
@@ -46,7 +49,7 @@ for that scene. Hover to preview loaded media. Core FL2VA exposes its connected
 first and last frames as `<Picture 1>` and `<Picture 2>`; L2VA with only a last
 frame correctly exposes that frame as `<Picture 1>`. When a core I2V first
 frame passes through **MiniMax H3 First-Scene Image Gate**, Picture 1 is active
-only in scene 1 and appears inactive on continuation scenes.
+only in scene 1 and is omitted from the menu on continuation scenes.
 
 Use the editor's **JSON** button when you need to inspect, paste, import, or
 export the underlying plan. The JSON format below remains the runtime contract
@@ -497,10 +500,12 @@ Converted entries initially use all scenes and readable aliases such as
 and tags after conversion. A paired-audio socket without its same-index video
 is ignored because core Ref2VA would ignore it as well.
 
-Each entry has a stable human alias. A Plan prompt can say `@hero_face`,
+Each entry has a stable human alias. Using it is optional: a Plan prompt can say `@hero_face`,
 `@performance`, or `@voice` without knowing which native H3 ordinal that
-reference will receive in a particular scene. Do not manually mix native and
-alias names for the same source; let the compiler own its native label.
+reference will receive in a particular scene. Core workflows can continue using
+native labels directly. In a scheduled prompt, do not mix native and alias names
+for the same source; either manage native numbering yourself or let the alias
+compiler own it.
 
 The `scenes` field uses one-based scene numbers:
 
@@ -518,7 +523,8 @@ are safe because they do not skip the chain's motion dependency.
 
 ### Prompt definitions and native labels
 
-Write reference definitions directly in the Plan prompt with stable aliases:
+Write reference definitions directly in the Plan prompt. Optional stable aliases
+are useful when scheduled references renumber between scenes:
 
 ```text
 subject_definitions:

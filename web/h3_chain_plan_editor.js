@@ -4,6 +4,7 @@ import {
     MAX_SHOTS,
     automaticSceneColor,
     calculatePlanTiming,
+    derivedSceneSeed,
     duplicateShot,
     formatClock,
     h3FrameLength,
@@ -13,10 +14,12 @@ import {
     planToJson,
     promptTextToLines,
     promptValueToText,
+    randomSceneSeed,
     safeShotId,
     setSharedPrompt,
     sharedPrompt,
 } from "./h3_chain_plan_core.mjs";
+import {availableReferenceRecords} from "./h3_reference_preview_core.mjs";
 
 // This scene editor is an original implementation. Its quick @ reference and
 // # dialogue interactions are inspired by nkxx188/ComfyUI-MiniMaxH3-Easy,
@@ -27,6 +30,7 @@ const NODE_NAME = "MiniMaxH3ChainPlan";
 const MIN_WIDTH = 700;
 const EDITOR_HEIGHT = 650;
 const SCENE_COLOR_PROPERTY = "h3_chain_scene_colors";
+const LAYOUT_PROPERTY = "h3_chain_plan_layout";
 
 function injectStyles() {
     if (document.getElementById("h3-chain-plan-editor-style")) return;
@@ -145,7 +149,11 @@ function injectStyles() {
         }
         .h3c-ref-menu.h3c-open { display: flex; }
         .h3c-ref-menu button { padding: 3px 6px; color: var(--h3c-accent); }
-        .h3c-advanced-fields { display: none; grid-template-columns: 150px minmax(220px, 1fr); gap: 7px; margin-top: 8px; }
+        .h3c-seed-control { display:grid; grid-template-columns:minmax(210px,1fr) auto auto;
+            align-items:center; gap:6px; }
+        .h3c-seed-status { grid-column:1 / -1; color:var(--h3c-muted);
+            overflow-wrap:anywhere; }
+        .h3c-advanced-fields { display: none; grid-template-columns:minmax(220px, 1fr); gap: 7px; margin-top: 8px; }
         .h3c-editor.h3c-show-advanced .h3c-advanced-fields { display: grid; }
         .h3c-errors { display: none; margin: 7px 0; padding: 7px; border-radius: 5px; color: #ffb4b8; background: #5d202866; white-space: pre-wrap; }
         .h3c-errors.h3c-open { display: block; }
@@ -157,7 +165,9 @@ function injectStyles() {
         .h3c-footer { justify-content: space-between; padding-top: 4px; color: var(--h3c-muted); }
         .h3c-footer a { color: var(--h3c-accent); }
         @media (max-width: 650px) {
-            .h3c-defaults, .h3c-length-row, .h3c-advanced-fields { grid-template-columns: 1fr; }
+            .h3c-defaults, .h3c-length-row, .h3c-advanced-fields,
+            .h3c-seed-control { grid-template-columns: 1fr; }
+            .h3c-seed-status { grid-column:1; }
             .h3c-card-head { flex-wrap: wrap; }
             .h3c-timing { width: 100%; }
         }
@@ -252,6 +262,20 @@ function colorOverrides(node) {
     return node.properties[SCENE_COLOR_PROPERTY];
 }
 
+function planLayout(node) {
+    node.properties ??= {};
+    const current = node.properties[LAYOUT_PROPERTY];
+    if (!current || typeof current !== "object" || Array.isArray(current)) {
+        node.properties[LAYOUT_PROPERTY] = {};
+    }
+    const layout = node.properties[LAYOUT_PROPERTY];
+    if (!layout.promptHeights || typeof layout.promptHeights !== "object"
+            || Array.isArray(layout.promptHeights)) {
+        layout.promptHeights = {};
+    }
+    return layout;
+}
+
 function sceneColorKey(shot, index) {
     return safeShotId(shot?.id, `clip_${String(index + 1).padStart(4, "0")}`);
 }
@@ -317,13 +341,22 @@ function mountEditor(node) {
     injectStyles();
     const root = element("div", "h3c-editor");
     root.title = "Build an ordered MiniMax H3 scene plan. Hover individual controls for wiring, timing, and formatting guidance.";
+    for (const eventName of [
+        "pointerdown", "pointerup", "mousedown", "mouseup", "click", "dblclick",
+    ]) {
+        root.addEventListener(eventName, (event) => event.stopPropagation());
+    }
+    root.addEventListener("wheel", (event) => event.stopPropagation());
+    const savedLayout = planLayout(node);
     const state = {
         plan: null,
-        advanced: false,
-        jsonOpen: false,
+        advanced: Boolean(savedLayout.advanced),
+        jsonOpen: Boolean(savedLayout.jsonOpen),
         lastWidgetValue: "",
         syncing: false,
         draggedIndex: null,
+        resizeObservers: [],
+        seedRefreshers: [],
     };
     node._h3ChainEditor = state;
 
@@ -341,6 +374,46 @@ function mountEditor(node) {
         app.graph?.setDirtyCanvas?.(true, true);
     }
 
+    function savePanelState() {
+        const layout = planLayout(node);
+        layout.advanced = state.advanced;
+        layout.jsonOpen = state.jsonOpen;
+        graphDirty();
+    }
+
+    function disconnectResizeObservers() {
+        for (const observer of state.resizeObservers) observer.disconnect?.();
+        state.resizeObservers = [];
+    }
+
+    function bindTextareaHeight(textarea, key, minimum) {
+        const heights = planLayout(node).promptHeights;
+        const saved = Number(heights[key]);
+        if (Number.isFinite(saved) && saved >= minimum) {
+            textarea.style.height = `${Math.round(saved)}px`;
+        }
+        if (typeof ResizeObserver !== "function") return;
+        let initialized = false;
+        const observer = new ResizeObserver(() => {
+            if (!textarea.isConnected) return;
+            const next = Math.round(textarea.offsetHeight);
+            if (!Number.isFinite(next) || next < minimum) return;
+            if (!initialized) {
+                initialized = true;
+                return;
+            }
+            const current = planLayout(node).promptHeights;
+            if (Number(current[key]) === next) return;
+            current[key] = next;
+            node.properties[LAYOUT_PROPERTY] = {
+                ...planLayout(node), promptHeights: {...current},
+            };
+            graphDirty();
+        });
+        observer.observe(textarea);
+        state.resizeObservers.push(observer);
+    }
+
     function saveSceneColor(key, value) {
         const colors = colorOverrides(node);
         if (value) colors[key] = value.toLowerCase();
@@ -351,16 +424,11 @@ function mountEditor(node) {
 
     function applyResponsiveSize() {
         collapseWidget(planWidget);
-        const computed = node.computeSize?.();
-        const width = Math.max(node.size?.[0] || computed?.[0] || 0, MIN_WIDTH);
+        const width = Math.max(Number(node.size?.[0]) || MIN_WIDTH, MIN_WIDTH);
         // Preserve the workflow/user-selected height. The DOM widget receives
         // all free vertical space above its minimum, so taller nodes reveal
         // more scene cards and shorter nodes scroll internally.
-        const height = Math.max(
-            node.size?.[1] || 0,
-            computed?.[1] || 0,
-            EDITOR_HEIGHT + 120,
-        );
+        const height = Math.max(Number(node.size?.[1]) || 0, EDITOR_HEIGHT + 120);
         // Call even when dimensions are unchanged so ComfyUI recomputes the
         // DOM widget's free-space allocation after plan_json was collapsed.
         node.setSize?.([width, height]);
@@ -424,29 +492,59 @@ function mountEditor(node) {
         }
     }
 
-    function promptTools(textarea) {
+    function promptTools(textarea, scene = null) {
         const wrap = element("div", "h3c-prompt-tools");
         const references = button("@ Reference", "Insert a MiniMax reference tag", () => {
-            menu.classList.toggle("h3c-open");
+            const opening = !menu.classList.contains("h3c-open");
+            if (opening) renderReferenceMenu();
+            menu.classList.toggle("h3c-open", opening);
         });
         const dialogue = button("# Dialogue", "Wrap the selection in <d> dialogue tags", () => {
             insertDialogue(textarea);
         });
         const hint = element("span", "h3c-hint", "Shortcuts: @ reference · # dialogue");
         const menu = element("div", "h3c-ref-menu");
-        for (const [kind, count] of [["Picture", 9], ["Video", 3], ["Audio", 6]]) {
-            for (let ordinal = 1; ordinal <= count; ordinal += 1) {
-                const tag = `<${kind} ${ordinal}>`;
-                menu.append(button(tag, `Insert ${tag}`, () => {
-                    insertText(textarea, tag);
-                    menu.classList.remove("h3c-open");
-                }));
+        function renderReferenceMenu() {
+            menu.replaceChildren();
+            const requestedScene = scene ?? 1;
+            const {records, mode} = availableReferenceRecords(
+                node, requestedScene, {includeInactive: scene == null},
+            );
+            if (!records.length) {
+                menu.append(element(
+                    "span", "h3c-help",
+                    scene == null
+                        ? "No references connected to a downstream Ref2VA/I2V node."
+                        : `No connected references are active in scene ${scene}.`,
+                ));
+                return;
+            }
+            menu.append(element(
+                "span", "h3c-help",
+                mode === "scheduled"
+                    ? "Connected scheduled references only. @aliases are optional authoring shortcuts that compile to native labels; the scheduler inserts no prompt text."
+                    : "Connected core references only. These use native <Picture/Video/Audio N> labels; @aliases are not required.",
+            ));
+            for (const record of records) {
+                const mapping = mode === "scheduled" && record.label
+                    ? ` → ${record.label}` : "";
+                menu.append(button(
+                    `${record.token}${mapping}`,
+                    mode === "scheduled"
+                        ? `Insert optional alias ${record.token}. It compiles to ${record.label ?? "the active native label"} for this scene.`
+                        : `Insert ${record.token} for the connected core reference.`,
+                    () => {
+                        insertText(textarea, record.token);
+                        menu.classList.remove("h3c-open");
+                    },
+                ));
             }
         }
         textarea.addEventListener("keydown", (event) => {
             if (event.ctrlKey || event.metaKey || event.altKey) return;
             if (event.key === "@") {
                 event.preventDefault();
+                renderReferenceMenu();
                 menu.classList.add("h3c-open");
                 references.focus();
             } else if (event.key === "#") {
@@ -524,7 +622,15 @@ function mountEditor(node) {
                 delete colors[previousKey];
                 node.properties[SCENE_COLOR_PROPERTY] = {...colors};
             }
+            const heights = planLayout(node).promptHeights;
+            const previousPromptKey = `scene:${previousKey}`;
+            const nextPromptKey = `scene:${nextKey}`;
+            if (previousPromptKey !== nextPromptKey && heights[previousPromptKey]) {
+                heights[nextPromptKey] = heights[previousPromptKey];
+                delete heights[previousPromptKey];
+            }
             syncPlan();
+            void refreshSeedStatus();
         });
         const timingLabel = element("span", "h3c-timing");
         const up = button("↑", "Move scene up", () => {
@@ -619,6 +725,66 @@ function mountEditor(node) {
             shot.prompt = promptTextToLines(prompt.value);
             syncPlan();
         });
+        bindTextareaHeight(
+            prompt, `scene:${sceneColorKey(shot, index)}`, 112,
+        );
+
+        const seedControl = element("div", "h3c-seed-control");
+        const seed = element("input");
+        seed.type = "text";
+        seed.inputMode = "numeric";
+        seed.placeholder = "Blank = stable derived seed";
+        seed.value = shot.seed ?? "";
+        seed.title = "Explicit unsigned 64-bit seed for this scene. Leave blank to use the displayed stable seed derived from base_seed, scene index, and scene ID.";
+        const seedStatus = element("span", "h3c-seed-status");
+        async function refreshSeedStatus() {
+            const explicit = seed.value.trim();
+            useDerivedSeed.disabled = !explicit;
+            if (explicit) {
+                seedStatus.textContent = `Explicit seed: ${explicit}`;
+                seedStatus.title = "This exact seed is stored in plan_json.";
+                return;
+            }
+            const baseSeed = widgetValue(node, "base_seed", 0);
+            const shotId = safeShotId(
+                shot.id, `clip_${String(index + 1).padStart(4, "0")}`,
+            );
+            const request = `${baseSeed}:${index + 1}:${shotId}`;
+            seedStatus.dataset.request = request;
+            seedStatus.textContent = "Resolving stable derived seed…";
+            try {
+                const resolved = await derivedSceneSeed(baseSeed, index + 1, shotId);
+                if (seedStatus.isConnected && !seed.value.trim()
+                        && seedStatus.dataset.request === request) {
+                    seedStatus.textContent = `Derived seed: ${resolved}`;
+                    seedStatus.title = `Stable result of base_seed ${baseSeed}, scene ${index + 1}, and ID ${shotId}. It will repeat until one of those values changes.`;
+                }
+            } catch (error) {
+                seedStatus.textContent = error.message;
+            }
+        }
+        seed.addEventListener("input", () => {
+            if (seed.value.trim()) shot.seed = seed.value.trim();
+            else delete shot.seed;
+            syncPlan();
+            void refreshSeedStatus();
+        });
+        const randomizeSeed = button("New random", "Create and store a new explicit uint64 seed for only this scene", () => {
+            seed.value = randomSceneSeed();
+            shot.seed = seed.value;
+            syncPlan();
+            void refreshSeedStatus();
+        });
+        const useDerivedSeed = button("Use derived", "Remove this scene's explicit override and return to its stable base_seed-derived value", () => {
+            seed.value = "";
+            delete shot.seed;
+            syncPlan();
+            void refreshSeedStatus();
+        });
+        useDerivedSeed.disabled = !seed.value.trim();
+        seedControl.append(seed, randomizeSeed, useDerivedSeed, seedStatus);
+        state.seedRefreshers.push(refreshSeedStatus);
+        void refreshSeedStatus();
 
         const advanced = element("div", "h3c-advanced-fields");
         const steps = numberInput(shot.steps ?? "", {min: "1", max: "10000", step: "1"});
@@ -629,24 +795,23 @@ function mountEditor(node) {
             else delete shot.steps;
             syncPlan();
         });
-        const seed = element("input");
-        seed.type = "text";
-        seed.inputMode = "numeric";
-        seed.placeholder = "Automatic deterministic seed";
-        seed.value = shot.seed ?? "";
-        seed.title = "Optional unsigned 64-bit seed for this scene. Leave blank for a stable seed derived from base_seed, scene index, and scene ID.";
-        seed.addEventListener("input", () => {
-            if (seed.value.trim()) shot.seed = seed.value.trim();
-            else delete shot.seed;
-            syncPlan();
-        });
-        advanced.append(field("Steps (blank = default)", steps), field("Seed (blank = automatic)", seed));
-        card.append(head, lengthRow, field("Scene prompt (optional with shared prompt)", prompt), promptTools(prompt), advanced);
+        advanced.append(field("Steps (blank = default)", steps));
+        card.append(
+            head,
+            lengthRow,
+            field("Scene prompt (optional with shared prompt)", prompt),
+            promptTools(prompt, index + 1),
+            field("Scene seed", seedControl),
+            advanced,
+        );
         return card;
     }
 
     function render() {
         if (!state.plan) return;
+        disconnectResizeObservers();
+        state.seedRefreshers = [];
+        const scrollTop = root.scrollTop;
         root.replaceChildren();
         root.classList.toggle("h3c-show-advanced", state.advanced);
 
@@ -709,8 +874,12 @@ function mountEditor(node) {
             setSharedPrompt(state.plan, prefix.value);
             syncPlan();
         });
+        bindTextareaHeight(prefix, "shared", 88);
         const prefixSection = element("section", "h3c-section");
-        prefixSection.append(field("Shared prompt — automatically prepended to every scene", prefix), promptTools(prefix));
+        prefixSection.append(
+            field("Shared prompt — automatically prepended to every scene", prefix),
+            promptTools(prefix, null),
+        );
 
         state.plan.defaults = state.plan.defaults
             && typeof state.plan.defaults === "object"
@@ -749,12 +918,14 @@ function mountEditor(node) {
             render();
         });
         add.disabled = state.plan.shots.length >= MAX_SHOTS;
-        const advanced = button(state.advanced ? "Hide advanced" : "Show advanced", "Show per-scene seed and steps", () => {
+        const advanced = button(state.advanced ? "Hide steps" : "Show steps", "Show or hide per-scene sampler-step overrides", () => {
             state.advanced = !state.advanced;
+            savePanelState();
             render();
         });
         const json = button(state.jsonOpen ? "Hide raw JSON" : "Raw JSON", "Expand the raw plan JSON for direct editing, import, or export", () => {
             state.jsonOpen = !state.jsonOpen;
+            savePanelState();
             render();
         });
         toolbar.append(add, advanced, element("span", "h3c-spacer"), json);
@@ -768,6 +939,7 @@ function mountEditor(node) {
         jsonArea.value = planToJson(state.plan);
         jsonArea.spellcheck = false;
         jsonArea.title = "Canonical plan JSON. Apply JSON replaces the visual editor contents after validation; saving the workflow also serializes this value.";
+        bindTextareaHeight(jsonArea, "json", 260);
         const jsonStatus = element("span", "h3c-json-status", "Raw JSON escape hatch");
         const apply = button("Apply JSON", "Validate and load this JSON into the scene editor", () => {
             try {
@@ -821,6 +993,7 @@ function mountEditor(node) {
 
         root.append(header, prefixSection, defaults, toolbar, errors, cards, jsonPanel, footer);
         updateTiming();
+        requestAnimationFrame(() => { root.scrollTop = scrollTop; });
         graphDirty();
     }
 
@@ -852,13 +1025,21 @@ function mountEditor(node) {
         return result;
     };
 
-    for (const name of ["context_length", "anchor_mode", "default_duration_seconds", "default_steps"]) {
+    for (const name of [
+        "context_length", "anchor_mode", "default_duration_seconds",
+        "default_steps", "base_seed",
+    ]) {
         const widget = node.widgets?.find((item) => item.name === name);
         if (!widget || widget._h3TimingWrapped) continue;
         const callback = widget.callback;
         widget.callback = function (...args) {
             const result = callback?.apply(this, args);
             setTimeout(() => updateTiming(), 0);
+            if (name === "base_seed") {
+                setTimeout(() => {
+                    for (const refresh of state.seedRefreshers) void refresh();
+                }, 0);
+            }
             return result;
         };
         widget._h3TimingWrapped = true;
@@ -866,12 +1047,20 @@ function mountEditor(node) {
 
     node._h3ChainEditorRefresh = () => {
         collapseWidget(planWidget);
+        const layout = planLayout(node);
+        state.advanced = Boolean(layout.advanced);
+        state.jsonOpen = Boolean(layout.jsonOpen);
         loadFromWidget(true);
         scheduleResponsiveSize();
     };
     node._h3ChainEditorFit = applyResponsiveSize;
     loadFromWidget(true);
     scheduleResponsiveSize();
+    const removed = node.onRemoved;
+    node.onRemoved = function () {
+        disconnectResizeObservers();
+        return removed?.apply(this, arguments);
+    };
 }
 
 app.registerExtension({
