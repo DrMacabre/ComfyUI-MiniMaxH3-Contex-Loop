@@ -39,7 +39,9 @@ When the editor can trace the Plan downstream to Scheduled Ref2VA, core
 Ref2VA, or core Image-to-Video, the tray shows the references actually wired
 for that scene. Hover to preview loaded media. Core FL2VA exposes its connected
 first and last frames as `<Picture 1>` and `<Picture 2>`; L2VA with only a last
-frame correctly exposes that frame as `<Picture 1>`.
+frame correctly exposes that frame as `<Picture 1>`. When a core I2V first
+frame passes through **MiniMax H3 First-Scene Image Gate**, Picture 1 is active
+only in scene 1 and appears inactive on continuation scenes.
 
 Use the editor's **JSON** button when you need to inspect, paste, import, or
 export the underlying plan. The JSON format below remains the runtime contract
@@ -304,6 +306,12 @@ frames, or 14.167 seconds, to the final video. The source-audio window still
 covers all 362 raw frames and begins 22 frames before the prior delivered end,
 so its overlap matches the repeated picture context.
 
+For the dedicated single-image I2VA example, each requested 10-second scene
+rounds up to 243 raw frames and `context_length: 5`. Two scenes therefore
+deliver `243 + (243 - 5) = 481` frames, or 20.04 seconds at 24 fps. The
+First-Scene Image Gate supplies the opening image only to scene 1; scene 2 has
+no Picture label and relies on incoming motion context.
+
 With `anchor_mode: before`, no repeated head is delivered, so every scene
 delivers its complete raw length. This mode is retained for experimentation;
 `head` is the tested and recommended mode.
@@ -430,6 +438,22 @@ ID or moving it to another position changes its derived seed.
 | `default_steps` | `1`–`10000` | Used only when JSON defaults and the scene both omit steps. |
 | `base_seed` | Unsigned 64-bit integer | Source for deterministic seeds when a scene omits `seed`. |
 | `segment_crf` | `0`–`51` | H.264 checkpoint-segment quality. Lower is higher quality and larger. Start around `18`–`20`. |
+
+### Which audio mode should I use for a voice?
+
+The Plan's `audio_mode` controls the chain timeline and final soundtrack. It
+does not turn scheduled `@voice` / native `<Audio N>` references on or off.
+
+- Use `source_track` when you have the finished spoken performance, dialogue,
+  vocal, or song and want that exact recording in the final video. Connect the
+  complete track to Loop Start and Assemble, then route Current Shot's
+  frame-exact slice into Ref2VA or Scheduled Audio.
+- Use `generated_audio` when you have only a short voice identity, accent, or
+  timbre reference and want H3 to generate new speech/sound described by the
+  prompt. Schedule that clip as `@voice`, connect the audio VAE to Loop Context,
+  and save the trimmed decoded audio for continuity and assembly.
+- Use `source_plus_timeline` only when you intentionally want both the exact
+  source slice and the preceding generated-audio latent. It is experimental.
 
 ## Scene-scheduled Ref2VA references
 

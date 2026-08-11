@@ -1,6 +1,7 @@
 export const SCHEDULED_REF2VA_TYPE = "MiniMaxH3ScheduledReferenceToVideo";
 export const CORE_REF2VA_TYPE = "MiniMaxH3ReferenceToVideo";
 export const IMAGE_TO_VIDEO_TYPE = "MiniMaxH3ImageToVideo";
+export const FIRST_SCENE_IMAGE_TYPE = "MiniMaxH3ChainFirstSceneImage";
 export const PICTURE_REF_TYPE = "MiniMaxH3ScheduledPictureReference";
 export const VIDEO_REF_TYPE = "MiniMaxH3ScheduledVideoReference";
 export const AUDIO_REF_TYPE = "MiniMaxH3ScheduledAudioReference";
@@ -213,20 +214,22 @@ export function coreReferenceRecords(editorNode) {
     };
 }
 
-export function imageToVideoReferenceRecords(editorNode) {
+export function imageToVideoReferenceRecords(editorNode, scene = 1) {
     const wrapper = findImageToVideo(editorNode);
     if (!wrapper) return {wrapper: null, mode: null, records: []};
     const firstFrame = inputSource(wrapper, "first_frame");
     const lastFrame = inputSource(wrapper, "last_frame");
     const records = [];
     if (firstFrame) {
+        const firstSceneOnly = nodeType(firstFrame) === FIRST_SCENE_IMAGE_TYPE;
+        const active = !firstSceneOnly || Number(scene) === 1;
         records.push({
             node: wrapper,
             kind: "picture",
             tag: "",
             token: "<Picture 1>",
-            selector: "all",
-            active: true,
+            selector: firstSceneOnly ? "1" : "all",
+            active,
             source: firstFrame,
             label: "<Picture 1>",
             mode: "native",
@@ -256,5 +259,5 @@ export function referencePreviewRecords(editorNode, scene) {
     if (scheduled.wrapper) return scheduled;
     const core = coreReferenceRecords(editorNode);
     if (core.wrapper) return core;
-    return imageToVideoReferenceRecords(editorNode);
+    return imageToVideoReferenceRecords(editorNode, scene);
 }

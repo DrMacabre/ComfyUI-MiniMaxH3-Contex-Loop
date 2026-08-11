@@ -1034,15 +1034,17 @@ function mount(node) {
             ? `Scheduled references for scene ${state.active + 1}. Hover to preview; ` +
               "click to insert the stable @tag. Audio never autoplays."
             : mode === "native_keyframes"
-              ? "Core I2V/FL2V keyframes. Hover to preview; click to insert " +
-                "the native Picture label."
+              ? `Core I2V/FL2V keyframes for scene ${state.active + 1}. ` +
+                "A first-scene gate is shown inactive on continuations. " +
+                "Hover to preview; click to insert the native Picture label."
               : "Core Ref2VA references. Hover to preview; click to insert the " +
                 "native label. Audio never autoplays.";
         refs.append(element("div", "h3sp-ref-help", help));
         const icons = {picture: "▧", video: "▶", audio: "♫"};
         for (const record of records) {
-            const mapping = mode === "scheduled"
-                ? (record.active ? ` → ${record.label}` : " · inactive") : "";
+            const mapping = (mode === "scheduled" || mode === "native_keyframes")
+                ? (record.active ? (mode === "scheduled" ? ` → ${record.label}` : "")
+                    : " · inactive") : "";
             const chip = button(
                 `${icons[record.kind] ?? "@"} ${record.token}${mapping}`,
                 record.active

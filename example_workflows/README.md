@@ -1,16 +1,31 @@
 # Example workflows
 
-## V2 demos: choose core FL2VA or Scheduled Ref2VA
+## V2 demos: choose single-image I2VA, core FL2VA, or Scheduled Ref2VA
+
+[`Looping MiniMax H3 V2 - Single Image I2VA 20s.json`](<Looping MiniMax H3 V2 - Single Image I2VA 20s.json>)
+is the simple long-form image-to-video starting point. It uses one opening
+image, no last-frame input, and two requested 10-second scenes. The included
+**First-Scene Image Gate** passes `<Picture 1>` to ComfyUI's stock
+`MiniMaxH3ImageToVideo` only for scene 1; later recursive scenes receive no
+first-frame keyframe and continue from saved H3 Motion Context. The prompt
+editor marks Picture 1 active for scene 1 and inactive for scene 2.
+
+H3 rounds each 10-second request up to 243 raw frames. With the example's
+five-frame head overlap, the final delivery is `243 + (243 - 5) = 481` frames,
+or 20.04 seconds at 24 fps. Duplicate the second Plan scene to extend the
+chain; each additional requested 10-second continuation contributes 238 frames
+(about 9.92 seconds). Replace the opening image and both generic motion prompts
+before queueing.
 
 [`Looping MiniMax H3 V2 - Core FL2VA.json`](<Looping MiniMax H3 V2 - Core FL2VA.json>)
 is the scheduler-free starting point. It uses ComfyUI's stock
 `MiniMaxH3ImageToVideo` with a deliberately one-scene, 124-frame plan so one
 first/last keyframe pair is applied exactly once. The prompt follows H3's
 FL2VA format and the Scene Prompt Editor previews both connected native Picture
-labels. Disconnect the last image for I2VA, the first for L2VA, or both for
-T2VA. For a long T2VA continuation, add Plan scenes only after disconnecting
-the global keyframes; otherwise the same pair would intentionally constrain
-every recursive scene.
+labels. Disconnect the last image for a one-scene I2VA render, the first for
+L2VA, or both for T2VA. For a multi-scene I2VA chain use the dedicated example
+above; a globally connected keyframe would otherwise constrain every recursive
+scene.
 
 [`Looping MiniMax H3 Seamless Chain V2 - Scheduled Refs.json`](<Looping MiniMax H3 Seamless Chain V2 - Scheduled Refs.json>)
 is the full fourteen-scene Ref2VA demonstration. It includes the large Scene

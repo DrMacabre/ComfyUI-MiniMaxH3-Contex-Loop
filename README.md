@@ -20,6 +20,13 @@ huge cumulative image tensor.
 Newest first. Recent additions stay visible; older milestones are folded away
 so this page remains a useful starting point rather than a changelog wall.
 
+- **v0.3.12 — Clearer Plan guidance and looping I2VA.** Expanded every ambiguous Plan tooltip,
+  including a direct choice between exact prerecorded voice/song tracks,
+  short voice-identity references with generated speech, and the experimental
+  mixed audio mode. Seed rerolls now explicitly point users to the per-scene
+  override rather than `base_seed`. A dedicated single-image I2VA example and
+  First-Scene Image Gate now anchor only scene 1 before context-only recursive
+  continuations.
 - **v0.3.11 — Invisible legacy widget-width repair.** While any Contex Loop
   node is on the canvas, the pack repairs the LiteGraph widget-width regression
   across every node, including nodes from other packs. No dedicated fix node is
@@ -126,6 +133,7 @@ inspired by **nkxx188’s**
 | ⏩ | Continue an existing video, with optional original-video prepend |
 | 🎸 | Re-film one synchronized performance from new camera angles |
 | 🗓️ | Schedule Ref2VA sources per scene with stable human-readable tags |
+| 🖼️ | Apply one I2VA opening image only to scene 1 of a long chain |
 
 The runtime changes are opt-in. Loading this pack does not alter ordinary
 ComfyUI workflows; its guarded patches activate only when a Contex Loop Context
@@ -152,8 +160,13 @@ and selected audio is encoded to AAC.
 
 ## Start here
 
-Start with one of the two v2 workflows:
+Start with one of the three v2 workflows:
 
+- [Single-image I2VA 20s v2](<example_workflows/Looping MiniMax H3 V2 - Single Image I2VA 20s.json>)
+  is the simplest long-form image-to-video example: one opening image, no last
+  frame, and two requested 10-second scenes. Its First-Scene Image Gate applies
+  `<Picture 1>` only to scene 1; scene 2 continues from motion context. With a
+  five-frame overlap, the assembled result is 481 frames, or 20.04 seconds.
 - [Core FL2VA v2](<example_workflows/Looping MiniMax H3 V2 - Core FL2VA.json>)
   uses ComfyUI's stock `MiniMaxH3ImageToVideo` with no reference scheduler. It
   is a one-scene first/last-frame model that also demonstrates the large prompt
@@ -426,6 +439,12 @@ metadata. The run also stores `plan.json`, loadable `workflow.json`, and
 `api_prompt.json`; review-gate prompt or seed retries update these recovery
 copies before the replacement segment is committed. Segment and assembled MP4s
 also use ComfyUI's standard embedded `workflow` and `prompt` tags.
+
+For voice specifically, choose `source_track` when a complete prerecorded
+performance must remain exact in the final video. Choose `generated_audio` when
+`@voice` is only a short identity/timbre reference and H3 should generate new
+speech. The audio mode controls timeline/final audio; it does not activate or
+deactivate scheduled audio-reference tags.
 
 ## Compatibility and guardrails
 

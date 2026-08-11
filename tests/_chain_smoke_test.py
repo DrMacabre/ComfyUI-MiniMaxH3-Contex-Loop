@@ -132,6 +132,7 @@ def main():
     print("review: async decision route preserves exact uint64 seeds")
     required = {
         "MiniMaxH3ChainPlan", "MiniMaxH3ChainScenePromptEditor",
+        "MiniMaxH3ChainFirstSceneImage",
         "MiniMaxH3ReferenceVideoPrepare",
         "MiniMaxH3ScheduledPictureReference",
         "MiniMaxH3ScheduledVideoReference",
@@ -248,6 +249,33 @@ def main():
                        and node.get("mode", 0) == 0)
     assert "%date:yyyy-MM-dd%" in fl_assemble["widgets_values"][1]
     print("workflow v2: scheduler-free core FL2VA editing/review graph passes")
+
+    i2va_path = (ROOT / "example_workflows" /
+                  "Looping MiniMax H3 V2 - Single Image I2VA 20s.json")
+    i2va = json.loads(i2va_path.read_text(encoding="utf-8"))
+    assert_workflow_links(i2va)
+    i2va_types = {node.get("type") for node in i2va["nodes"]}
+    assert {
+        "MiniMaxH3ImageToVideo",
+        "MiniMaxH3ChainFirstSceneImage",
+        "MiniMaxH3ChainScenePromptEditor",
+        "MiniMaxH3ChainReview",
+    } <= i2va_types
+    assert "LoadAudio" not in i2va_types
+    i2va_plan_node = next(node for node in i2va["nodes"]
+                           if node.get("type") == "MiniMaxH3ChainPlan")
+    i2va_plan = package.NODE_CLASS_MAPPINGS["MiniMaxH3ChainPlan"]().build(
+        *i2va_plan_node["widgets_values"])[0]
+    assert [shot["raw_frames"] for shot in i2va_plan["shots"]] == [243, 243]
+    assert [shot["delivered_frames"] for shot in i2va_plan["shots"]] == [243, 238]
+    assert i2va_plan["total_delivered_frames"] == 481
+    i2va_conditioner = next(node for node in i2va["nodes"]
+                            if node.get("type") == "MiniMaxH3ImageToVideo")
+    i2va_inputs = {item["name"]: item.get("link")
+                    for item in i2va_conditioner["inputs"]}
+    assert i2va_inputs["first_frame"] is not None
+    assert i2va_inputs["last_frame"] is None
+    print("workflow v2: gated two-scene I2VA 20-second graph passes")
 
     scheduled_path = (ROOT / "example_workflows" /
                       "Looping MiniMax H3 Seamless Chain V2 - Scheduled Refs.json")
@@ -440,6 +468,13 @@ def main():
     prompt_editor = package.NODE_CLASS_MAPPINGS[
         "MiniMaxH3ChainScenePromptEditor"]()
     assert prompt_editor.passthrough(readable_prompts)[0] is readable_prompts
+    opening_image = object()
+    first_scene_gate = package.NODE_CLASS_MAPPINGS[
+        "MiniMaxH3ChainFirstSceneImage"]()
+    assert first_scene_gate.select({"index": 1}, opening_image)[:2] == (
+        opening_image, True)
+    assert first_scene_gate.select({"index": 2}, opening_image)[:2] == (
+        None, False)
     shared_only = chain._normalize_plan(
         json.dumps({
             "prompt_prefix": ["Shared identity.", "", "Shared direction."],

@@ -123,6 +123,29 @@ assert.deepEqual(
 );
 assert.equal(referencePreviewRecords(flEditor, 1).mode, "native_keyframes");
 
+const i2vEditor = add(makeNode(24, "MiniMaxH3ChainScenePromptEditor"));
+const i2vRelay = add(makeNode(25, "MiniMaxH3ChainCurrent"));
+const i2v = add(makeNode(26, "MiniMaxH3ImageToVideo"));
+const openingFrame = add(makeNode(27, "LoadImage", {image: "opening.png"}));
+const firstSceneGate = add(makeNode(28, "MiniMaxH3ChainFirstSceneImage"));
+connect(i2vEditor, i2vRelay, "state");
+connect(i2vRelay, i2v, "prompt");
+connect(openingFrame, firstSceneGate, "image");
+connect(firstSceneGate, i2v, "first_frame");
+assert.deepEqual(
+    imageToVideoReferenceRecords(i2vEditor, 1).records
+        .map(({token, selector, active, source}) => ({
+            token, selector, active, source: source.type,
+        })),
+    [{token: "<Picture 1>", selector: "1", active: true,
+        source: "MiniMaxH3ChainFirstSceneImage"}],
+);
+assert.deepEqual(
+    referencePreviewRecords(i2vEditor, 2).records
+        .map(({token, selector, active}) => ({token, selector, active})),
+    [{token: "<Picture 1>", selector: "1", active: false}],
+);
+
 const lEditor = add(makeNode(20, "MiniMaxH3ChainScenePromptEditor"));
 const lRelay = add(makeNode(21, "MiniMaxH3ChainCurrent"));
 const l2v = add(makeNode(22, "MiniMaxH3ImageToVideo"));

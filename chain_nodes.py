@@ -2430,22 +2430,32 @@ class MiniMaxH3ChainPlan:
                 "plan_json": ("STRING", {
                     "default": sample, "multiline": True,
                     "dynamicPrompts": False,
-                    "tooltip": "JSON source for the visual Scene Plan editor. "
-                               "It stores the shared prompt, ordered scenes, "
-                               "optional scene lengths, steps, and seeds. Use "
-                               "Raw JSON in the editor to import or export it."}),
+                    "tooltip": "The editable production plan behind the large "
+                               "Scene Plan interface: shared prompt, ordered "
+                               "scene prompts, optional lengths, sampler steps, "
+                               "and per-scene seed overrides. Use the visual "
+                               "editor for normal work and Raw JSON only for "
+                               "import, export, or advanced editing. Reference "
+                               "media is connected elsewhere; this JSON only "
+                               "mentions its @tags or native <Picture/Video/Audio "
+                               "N> labels."}),
                 "run_name": ("STRING", {
                     "default": "h3_chain",
-                    "tooltip": "Stable name for this chain's checkpoint folder "
-                               "under ComfyUI output/h3_chain. Keep it unchanged "
-                               "when resuming; change it to start an independent "
-                               "render without reusing old checkpoints."}),
+                    "tooltip": "Identity of one render history and its folder "
+                               "under ComfyUI output/h3_chains. Keep it unchanged "
+                               "to resume or regenerate scenes from that same "
+                               "production. Use a new name for a separate render; "
+                               "reusing a name intentionally exposes that run's "
+                               "existing checkpoints to Review Gate and resume."}),
                 "generation_fingerprint": ("STRING", {
                     "default": "",
-                    "tooltip": "Change this tag whenever the model, VAE, global "
-                               "references, CFG, scheduler, or other external "
-                               "generation settings change. It is enforced when "
-                               "resuming checkpoints."}),
+                    "tooltip": "Checkpoint compatibility tag for generation "
+                               "inputs not stored in plan_json. Connect Scheduled "
+                               "Ref2VA's schedule_fingerprint when using scheduled "
+                               "references. Otherwise enter/change a stable tag "
+                               "whenever the model, VAE, LoRA, global references, "
+                               "CFG, sampler, or scheduler changes. Resume rejects "
+                               "a mismatched fingerprint instead of mixing runs."}),
                 "width": ("INT", {
                     "default": 960, "min": 32, "max": 4096, "step": 32,
                     "tooltip": "Generation width for every scene. Connect the "
@@ -2458,59 +2468,94 @@ class MiniMaxH3ChainPlan:
                                "so its latent always matches the plan."}),
                 "context_length": (list(H3_CONTEXT_LENGTHS), {
                     "default": 22,
-                    "tooltip": "Previous-scene frames carried into each "
-                               "continuation. In the recommended head mode they "
-                               "are regenerated at the start, then removed by "
-                               "Trim. Larger values preserve more motion but "
-                               "reduce each scene's new delivered frames."}),
+                    "tooltip": "Number of previous-scene video frames used to "
+                               "continue motion. 22 is recommended. With head "
+                               "anchors, those frames are regenerated at the "
+                               "start and Loop Trim removes them, so later scenes "
+                               "deliver raw scene frames minus context_length. "
+                               "Larger values strengthen motion continuity but "
+                               "produce fewer new frames per scene. This does not "
+                               "control reference-audio duration."}),
                 "encode_mode": (["video", "frames"], {
                     "default": "video",
-                    "tooltip": "video encodes the overlap as one motion-bearing "
-                               "clip and is recommended. frames encodes separate "
-                               "still anchors and is heavier."}),
+                    "tooltip": "How the carried visual overlap is encoded. Use "
+                               "video (recommended) to preserve the previous "
+                               "frames as one motion-bearing latent clip. frames "
+                               "creates separate still-image anchors, costs more "
+                               "conditioning space, and is mainly for diagnosing "
+                               "or experimenting with anchor behavior."}),
                 "anchor_mode": (["head", "before"], {
                     "default": "head",
-                    "tooltip": "head places the overlap at the beginning of the "
-                               "new clip and requires Trim; it is the tested "
-                               "default. before uses negative-time anchors and "
-                               "returns no repeated frames."}),
+                    "tooltip": "Where previous frames sit on the next scene's "
+                               "timeline. head is the tested default: it repeats "
+                               "the overlap at the beginning, and Loop Trim must "
+                               "remove exactly trim_frames. before places context "
+                               "at negative time and returns no repeated head; use "
+                               "it only for workflows deliberately built around "
+                               "that experimental timing."}),
                 "crop": (["disabled", "center"], {
                     "default": "disabled",
-                    "tooltip": "How saved context frames fit the generation "
-                               "canvas. disabled stretches; center preserves "
-                               "aspect ratio and center-crops."}),
+                    "tooltip": "How saved context frames are fitted when their "
+                               "shape differs from the Plan canvas. disabled "
+                               "resizes directly to width x height and may change "
+                               "aspect ratio. center preserves aspect ratio, then "
+                               "center-crops overflow. It does not crop Ref2VA "
+                               "picture/video reference inputs."}),
                 "audio_mode": (list(AUDIO_MODES), {
                     "default": "source_track",
-                    "tooltip": "source_track slices one external track per "
-                               "scene; generated_audio continues H3's generated "
-                               "sound through latent context; "
-                               "source_plus_timeline supplies both the source "
-                               "slice and previous generated-audio context."}),
+                    "tooltip": "Controls timeline continuity and final audio; it "
+                               "does NOT enable or disable @voice/<Audio N> "
+                               "references. For a finished prerecorded voice, "
+                               "dialogue, or song that must remain exact, choose "
+                               "source_track: wire the full track to Loop Start "
+                               "and Assemble, and feed Current Shot's exact slice "
+                               "to Ref2VA/Scheduled Audio. For a short @voice "
+                               "identity/timbre reference while H3 generates new "
+                               "speech and sound, choose generated_audio: no full "
+                               "source track is required, connect the audio VAE to "
+                               "Loop Context, and save trimmed generated audio. "
+                               "source_plus_timeline provides both an exact source "
+                               "slice and previous generated-audio context; it is "
+                               "experimental and usually not the first choice."}),
                 "audio_context_length": ("INT", {
                     "default": 22, "min": 0, "max": 240,
-                    "tooltip": "Previous generated-audio tail length in video "
-                               "frames. 0 follows context_length. Used only by "
-                               "generated_audio and source_plus_timeline; it is "
-                               "ignored by source_track."}),
+                    "tooltip": "Amount of previous generated sound carried into "
+                               "the next scene, measured in 24-fps video frames. "
+                               "0 means use context_length; 22 is the tested "
+                               "explicit value. Only generated_audio and "
+                               "source_plus_timeline use it. source_track ignores "
+                               "it because each scene receives a fresh exact "
+                               "slice from the external track."}),
                 "default_duration_seconds": ("FLOAT", {
                     "default": 15.0, "min": 0.1,
                     "max": MAX_H3_FRAMES / FPS, "step": 0.01,
-                    "tooltip": "Scene duration used when neither the scene nor "
-                               "JSON defaults specify one. It rounds UP to the "
-                               "next H3-valid 17k+5 frame length."}),
+                    "tooltip": "Fallback duration only when the scene and JSON "
+                               "defaults both omit a duration/length. H3 cannot "
+                               "generate every frame count, so seconds round UP "
+                               "to the next valid 17k+5 raw length. In head mode, "
+                               "continuation scenes then lose context_length "
+                               "repeated frames from their delivered duration."}),
                 "default_steps": ("INT", {
                     "default": 20, "min": 1, "max": 10000,
-                    "tooltip": "Sampler step count emitted for scenes without a "
-                               "per-scene or JSON-default steps value."}),
+                    "tooltip": "Fallback sampler steps only when a scene and the "
+                               "JSON defaults both omit steps. A value set under "
+                               "a scene's Show advanced section overrides this."}),
                 "base_seed": ("INT", {
                     "default": 0, "min": 0, "max": MAX_SEED,
-                    "tooltip": "Base for deterministic per-scene seeds. A scene "
-                               "with its own seed overrides this derived value."}),
+                    "tooltip": "Base used to derive a stable different seed for "
+                               "each scene that has no explicit seed. Review "
+                               "Gate's Reroll seed does NOT change base_seed; it "
+                               "writes an explicit override into that scene's "
+                               "Show advanced > Seed field, leaving every other "
+                               "scene reproducible and checkpoint-compatible."}),
                 "segment_crf": ("INT", {
                     "default": 18, "min": 0, "max": 51,
-                    "tooltip": "H.264 checkpoint quality: lower is higher "
+                    "tooltip": "H.264 quality for each saved scene MP4 (and "
+                               "normalized imported prelude): lower means higher "
                                "quality and larger files. 18 is visually high "
-                               "quality; 0 is lossless and 51 is lowest quality."}),
+                               "quality; 0 is lossless and 51 is lowest quality. "
+                               "This does not change model sampling or the saved "
+                               "safetensors continuation checkpoint."}),
             }
         }
 
@@ -2574,6 +2619,44 @@ class MiniMaxH3ChainScenePromptEditor:
 
     def passthrough(self, plan):
         return (plan,)
+
+
+class MiniMaxH3ChainFirstSceneImage:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "state": (STATE_TYPE, {
+                    "tooltip": "Current state from H3 Chain Current Shot. The "
+                               "scene number decides whether the image is "
+                               "passed through."}),
+                "image": ("IMAGE", {
+                    "tooltip": "Opening image for scene 1. It is returned only "
+                               "for the first scene in the plan and omitted for "
+                               "every continuation scene."}),
+            }
+        }
+
+    RETURN_TYPES = ("IMAGE", "BOOLEAN", "STRING")
+    RETURN_NAMES = ("first_frame", "is_first_scene", "status")
+    OUTPUT_TOOLTIPS = (
+        "Connect to the stock MiniMax H3 Image to Video first_frame input. "
+        "Scene 1 receives the image; later scenes receive no first-frame "
+        "keyframe and continue only from H3 Motion Context.",
+        "True only while scene 1 is being generated.",
+        "Reports whether the opening image was supplied or omitted.",
+    )
+    FUNCTION = "select"
+    CATEGORY = "conditioning/minimax/contex_loop"
+    DESCRIPTION = ("Use one opening image for scene 1 of a recursive I2VA "
+                   "chain without reapplying it to continuation scenes.")
+
+    def select(self, state, image):
+        index = int(state["index"])
+        if index == 1:
+            return (image, True, "scene 1: opening image supplied")
+        return (None, False,
+                "scene %d: opening image omitted for continuation" % index)
 
 
 class MiniMaxH3ChainLoopStart:
@@ -4687,6 +4770,7 @@ if (PromptServer is not None and web is not None and
 CHAIN_NODE_CLASS_MAPPINGS = {
     "MiniMaxH3ChainPlan": MiniMaxH3ChainPlan,
     "MiniMaxH3ChainScenePromptEditor": MiniMaxH3ChainScenePromptEditor,
+    "MiniMaxH3ChainFirstSceneImage": MiniMaxH3ChainFirstSceneImage,
     "MiniMaxH3ReferenceVideoPrepare": MiniMaxH3ReferenceVideoPrepare,
     "MiniMaxH3ScheduledPictureReference": MiniMaxH3ScheduledPictureReference,
     "MiniMaxH3ScheduledVideoReference": MiniMaxH3ScheduledVideoReference,
@@ -4707,6 +4791,7 @@ CHAIN_NODE_CLASS_MAPPINGS = {
 CHAIN_NODE_DISPLAY_NAME_MAPPINGS = {
     "MiniMaxH3ChainPlan": "MiniMax H3 Contex Loop Plan",
     "MiniMaxH3ChainScenePromptEditor": "MiniMax H3 Scene Prompt Editor",
+    "MiniMaxH3ChainFirstSceneImage": "MiniMax H3 First-Scene Image Gate",
     "MiniMaxH3ReferenceVideoPrepare": "MiniMax H3 Reference Video Prep",
     "MiniMaxH3ScheduledPictureReference": "MiniMax H3 Scheduled Picture Ref",
     "MiniMaxH3ScheduledVideoReference": "MiniMax H3 Scheduled Video Ref",

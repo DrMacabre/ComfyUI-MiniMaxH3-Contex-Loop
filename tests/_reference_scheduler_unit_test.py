@@ -100,6 +100,65 @@ assert "declaration" not in picture_inputs
 assert "declaration" not in video_inputs
 assert "audio_declaration" not in video_inputs
 assert "declaration" not in audio_inputs
+
+plan_inputs = chain.MiniMaxH3ChainPlan.INPUT_TYPES()["required"]
+audio_mode_help = plan_inputs["audio_mode"][1]["tooltip"]
+assert "does NOT enable or disable @voice/<Audio N> references" in audio_mode_help
+assert "finished prerecorded voice" in audio_mode_help
+assert "short @voice identity/timbre reference" in audio_mode_help
+assert "generated_audio" in audio_mode_help
+assert "experimental" in audio_mode_help
+assert "output/h3_chains" in plan_inputs["run_name"][1]["tooltip"]
+base_seed_help = plan_inputs["base_seed"][1]["tooltip"]
+assert "Reroll seed does NOT change base_seed" in base_seed_help
+assert "Show advanced > Seed" in base_seed_help
 assert "audio_tag" in video_inputs
 
-print("H3 scheduler: alias-only compilation and visible Plan definitions pass")
+i2va_workflow = json.loads((
+    ROOT / "example_workflows" /
+    "Looping MiniMax H3 V2 - Single Image I2VA 20s.json"
+).read_text(encoding="utf-8"))
+i2va_plan_node = next(node for node in i2va_workflow["nodes"]
+                       if node.get("type") == "MiniMaxH3ChainPlan")
+normalized = chain.MiniMaxH3ChainPlan().build(
+    *i2va_plan_node["widgets_values"])[0]
+assert [shot["raw_frames"] for shot in normalized["shots"]] == [243, 243]
+assert [shot["delivered_frames"] for shot in normalized["shots"]] == [243, 238]
+assert normalized["total_delivered_frames"] == 481
+assert normalized["total_delivered_frames"] / chain.FPS > 20
+assert normalized["compatibility"]["context_length"] == 5
+assert "<Picture 1>" in normalized["shots"][0]["scene_prompt"]
+assert "<Picture" not in normalized["shots"][1]["scene_prompt"]
+
+gate_node = next(node for node in i2va_workflow["nodes"]
+                 if node.get("type") == "MiniMaxH3ChainFirstSceneImage")
+assert gate_node["inputs"][0]["name"] == "state"
+assert gate_node["inputs"][1]["name"] == "image"
+opening_image = object()
+gate = chain.MiniMaxH3ChainFirstSceneImage()
+first_result = gate.select({"index": 1}, opening_image)
+later_result = gate.select({"index": 2}, opening_image)
+assert first_result[:2] == (opening_image, True)
+assert later_result[:2] == (None, False)
+
+links = {link[0]: link for link in i2va_workflow["links"]}
+nodes = {node["id"]: node for node in i2va_workflow["nodes"]}
+for node in nodes.values():
+    for slot, input_spec in enumerate(node.get("inputs", [])):
+        link_id = input_spec.get("link")
+        if link_id is None:
+            continue
+        assert link_id in links
+        assert links[link_id][3:5] == [node["id"], slot]
+    for slot, output_spec in enumerate(node.get("outputs", [])):
+        for link_id in output_spec.get("links") or []:
+            assert link_id in links
+            assert links[link_id][1:3] == [node["id"], slot]
+i2v_node = next(node for node in nodes.values()
+                 if node.get("type") == "MiniMaxH3ImageToVideo")
+assert next(item for item in i2v_node["inputs"]
+            if item["name"] == "first_frame")["link"] is not None
+assert next(item for item in i2v_node["inputs"]
+            if item["name"] == "last_frame")["link"] is None
+
+print("H3 scheduler: aliases, Plan guidance, and looping I2VA workflow pass")
