@@ -27,6 +27,7 @@ import sys
 import time
 import uuid
 import wave
+from collections.abc import Mapping
 from datetime import datetime
 from fractions import Fraction
 from typing import Any
@@ -519,7 +520,7 @@ def _history_hash(plan: dict[str, Any], through_index: int) -> str:
     return _fingerprint(_history_contract(plan, through_index))
 
 
-def _audio_fingerprint(audio: dict[str, Any]) -> str:
+def _audio_fingerprint(audio: Mapping[str, Any]) -> str:
     if torch is None:
         raise RuntimeError("Source-audio checkpoint validation requires torch.")
     waveform = audio["waveform"].detach().cpu().contiguous()
@@ -545,11 +546,14 @@ def _tensor_fingerprint(value: Any) -> str:
     return digest.hexdigest()
 
 
-def _validate_audio(audio: dict[str, Any], label: str,
+def _validate_audio(audio: Mapping[str, Any], label: str,
                     expected_frames: int | None = None) -> tuple[Any, int]:
     if torch is None:
         raise RuntimeError("H3 chain audio validation requires torch.")
-    if not isinstance(audio, dict) or "waveform" not in audio:
+    # VHS deliberately exposes video soundtracks as LazyAudioMap, a Mapping
+    # that decodes only when a consumer requests waveform/sample_rate. It is a
+    # valid ComfyUI AUDIO value even though it is not a literal dict.
+    if not isinstance(audio, Mapping) or "waveform" not in audio:
         raise ValueError("%s must be a ComfyUI AUDIO value." % label)
     waveform = audio["waveform"]
     if not torch.is_tensor(waveform) or waveform.ndim not in (1, 2, 3):
@@ -710,7 +714,7 @@ def _external_context_contract(external_context: dict[str, Any]) -> dict[str, An
         "context_frames": int(getattr(frames, "shape", (0,))[0]),
         "context_frames_sha256": _tensor_fingerprint(frames),
         "context_audio_sha256": (
-            _audio_fingerprint(audio) if isinstance(audio, dict) else "none"),
+            _audio_fingerprint(audio) if isinstance(audio, Mapping) else "none"),
     }
 
 

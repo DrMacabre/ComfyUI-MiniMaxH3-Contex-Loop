@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Standalone scheduler compiler test without importing a ComfyUI checkout."""
 
+from collections.abc import Mapping
 import importlib.util
 import json
 import pathlib
@@ -36,6 +37,24 @@ spec = importlib.util.spec_from_file_location(
 chain = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = chain
 spec.loader.exec_module(chain)
+
+
+class LazyAudio(Mapping):
+    """Minimal VHS LazyAudioMap equivalent for AUDIO compatibility testing."""
+
+    def __init__(self, value):
+        self.value = value
+        self.reads = 0
+
+    def __getitem__(self, key):
+        self.reads += 1
+        return self.value[key]
+
+    def __iter__(self):
+        return iter(self.value)
+
+    def __len__(self):
+        return len(self.value)
 
 
 def schedule():
@@ -102,6 +121,26 @@ assert "declaration" not in picture_inputs
 assert "declaration" not in video_inputs
 assert "audio_declaration" not in video_inputs
 assert "declaration" not in audio_inputs
+
+lazy_audio = LazyAudio({
+    "waveform": chain.torch.zeros((1, 2, 8000), dtype=chain.torch.float32),
+    "sample_rate": 8000,
+})
+lazy_schedule, lazy_fingerprint, lazy_status = (
+    chain.MiniMaxH3ScheduledAudioReference().add(
+        lazy_audio, "lazy_voice", "1:2"))
+assert lazy_audio.reads > 0
+assert lazy_schedule["entries"][0]["value"] is lazy_audio
+assert len(lazy_schedule["entries"][0]["content_hash"]) == 64
+assert lazy_schedule["fingerprint"] == lazy_fingerprint
+assert "@lazy_voice audio on 1:2" in lazy_status
+try:
+    chain.MiniMaxH3ScheduledAudioReference().add(
+        lambda: b"legacy VHS_AUDIO", "legacy", "1")
+except ValueError as exc:
+    assert "ComfyUI AUDIO" in str(exc)
+else:
+    raise AssertionError("legacy callable VHS_AUDIO was accepted")
 
 plan_inputs = chain.MiniMaxH3ChainPlan.INPUT_TYPES()["required"]
 audio_mode_help = plan_inputs["audio_mode"][1]["tooltip"]
