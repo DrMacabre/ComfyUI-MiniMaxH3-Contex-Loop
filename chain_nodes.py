@@ -1197,6 +1197,8 @@ def _artifact_paths(plan: dict[str, Any], index: int) -> dict[str, str]:
     return {
         "run_dir": run_dir,
         "segment": os.path.join(run_dir, "segments", "clip_%04d.mp4" % index),
+        "generated_audio": os.path.join(
+            run_dir, "generated_audio", "clip_%04d.wav" % index),
         "checkpoint": os.path.join(run_dir, "checkpoints",
                                    "clip_%04d.safetensors" % index),
         "metadata": os.path.join(run_dir, "checkpoints", "clip_%04d.json" % index),
@@ -1474,6 +1476,7 @@ def _public_segment(value: dict[str, Any]) -> dict[str, Any]:
     return {key: value[key] for key in (
         "index", "id", "segment", "checkpoint", "metadata",
         "revision", "revision_metadata", "supersedes", "prompt_file",
+        "generated_audio", "generated_audio_sha256",
         "raw_frames", "delivered_frames", "history_hash",
         "prompt_prefix", "scene_prompt", "prompt", "prompt_hash", "archives",
         "seed", "steps", "sample_rate", "segment_sha256",
@@ -1503,6 +1506,22 @@ def _verify_segment_artifacts(segment: dict[str, Any], index: int) -> None:
             raise ValueError(
                 "H3 chain clip %d %s failed its SHA-256 integrity check." %
                 (index, key))
+    generated_audio = segment.get("generated_audio")
+    if generated_audio is not None:
+        expected_hash = str(segment.get("generated_audio_sha256") or "")
+        if not isinstance(generated_audio, str) or not expected_hash:
+            raise ValueError(
+                "H3 chain clip %d metadata has no verified generated-audio "
+                "sidecar." % index)
+        audio_path = _absolute_output_path(generated_audio)
+        if not os.path.isfile(audio_path):
+            raise FileNotFoundError(
+                "H3 chain clip %d generated-audio sidecar is missing: %s" %
+                (index, audio_path))
+        if _file_sha256(audio_path) != expected_hash:
+            raise ValueError(
+                "H3 chain clip %d generated-audio sidecar failed its SHA-256 "
+                "integrity check." % index)
     prompt_file = segment.get("prompt_file")
     if isinstance(prompt_file, str):
         prompt_path = _absolute_output_path(prompt_file)
@@ -1757,6 +1776,17 @@ def _write_wav(audio: dict[str, Any], path: str) -> None:
         handle.setsampwidth(2)
         handle.setframerate(int(audio["sample_rate"]))
         handle.writeframes(pcm.tobytes())
+
+
+def _atomic_wav(audio: dict[str, Any], path: str) -> None:
+    """Publish a WAV without exposing a partial file to resume or the user."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    temporary = "%s.%s.tmp.wav" % (path, uuid.uuid4().hex)
+    try:
+        _write_wav(audio, temporary)
+        os.replace(temporary, path)
+    finally:
+        _safe_unlink(temporary)
 
 
 def _external_video_frame_indices(frame_count: int, source_fps: float) -> Any:
@@ -3034,8 +3064,9 @@ class MiniMaxH3ChainSegmentSave:
                 "audio": ("AUDIO", {
                     "tooltip": "Delivered decoded audio AFTER MiniMax H3 "
                                "Contex Loop Trim with match_tail enabled. "
-                               "Required for "
-                               "generated_audio and synchronized review."}),
+                               "Connect it in every audio mode to preserve "
+                               "H3's generated sound as WAV sidecars. Required "
+                               "for generated_audio and synchronized review."}),
             },
             "hidden": {
                 "prompt": "PROMPT",
@@ -3054,7 +3085,7 @@ class MiniMaxH3ChainSegmentSave:
     CATEGORY = "conditioning/minimax/contex_loop"
     DESCRIPTION = ("Immediately save one delivered H3 clip as an H.264 segment "
                    "plus a safetensors resume checkpoint, exact prompt metadata, "
-                   "and workflow recovery sidecars.")
+                   "generated-audio WAV, and workflow recovery sidecars.")
 
     @classmethod
     def IS_CHANGED(cls, *args, **kwargs):
@@ -3113,6 +3144,8 @@ class MiniMaxH3ChainSegmentSave:
         transaction = uuid.uuid4().hex
         published_segment = _versioned_path(paths["segment"], transaction)
         published_checkpoint = _versioned_path(paths["checkpoint"], transaction)
+        published_audio = (_versioned_path(paths["generated_audio"], transaction)
+                           if audio is not None else None)
         published_prompt = os.path.splitext(published_segment)[0] + ".prompt.txt"
         published_metadata = _versioned_path(paths["metadata"], transaction)
         checkpoint_tmp = "%s.%s.tmp" % (published_checkpoint, uuid.uuid4().hex)
@@ -3130,6 +3163,11 @@ class MiniMaxH3ChainSegmentSave:
             _write_segment_video(
                 images, published_segment, FPS, plan["segment_crf"],
                 metadata=video_metadata)
+            if published_audio is not None:
+                _atomic_wav(
+                    {"waveform": tensors["delivered_audio"],
+                     "sample_rate": sample_rate},
+                    published_audio)
             _atomic_text(published_prompt, shot["prompt"])
             _st_save(tensors, checkpoint_tmp, metadata={
                 "format": "h3_chain_checkpoint_v3",
@@ -3165,6 +3203,11 @@ class MiniMaxH3ChainSegmentSave:
                 "checkpoint_sha256": _file_sha256(published_checkpoint),
                 "prompt_file_sha256": _file_sha256(published_prompt),
             }
+            if published_audio is not None:
+                segment.update({
+                    "generated_audio": _relative_output_path(published_audio),
+                    "generated_audio_sha256": _file_sha256(published_audio),
+                })
             if previous_revision is not None:
                 segment["supersedes"] = previous_revision
             metadata = {
@@ -3186,13 +3229,17 @@ class MiniMaxH3ChainSegmentSave:
             if not committed:
                 _safe_unlink(published_segment)
                 _safe_unlink(published_checkpoint)
+                if published_audio is not None:
+                    _safe_unlink(published_audio)
                 _safe_unlink(published_prompt)
                 _safe_unlink(published_metadata)
 
         retained = "; previous revision retained" if previous_revision else ""
-        status = ("saved clip %d/%d revision %s: %s + checkpoint %s%s" %
+        audio_status = (" + generated WAV %s" % published_audio
+                        if published_audio is not None else "")
+        status = ("saved clip %d/%d revision %s: %s + checkpoint %s%s%s" %
                   (index, len(plan["shots"]), transaction, published_segment,
-                   published_checkpoint, retained))
+                   published_checkpoint, audio_status, retained))
         _LOG.info("H3 Chain %s", status)
         return {"ui": {"text": [status]}, "result": (segment, status)}
 
@@ -4555,6 +4602,18 @@ class MiniMaxH3ChainAssemble:
             selected = ("source" if mode in
                         ("source_track", "source_plus_timeline")
                         else "generated")
+        preserve_generated = manifest.get("format") == "h3_chain_manifest_v3"
+        generated_track = None
+        generated_warning = ""
+        if preserve_generated or selected == "generated":
+            try:
+                generated_track = _generated_audio(manifest)
+            except Exception as exc:
+                if selected == "generated":
+                    raise
+                generated_warning = (
+                    "generated audio sidecar unavailable: %s" % exc)
+                _LOG.warning("H3 Chain %s", generated_warning)
         audio = None
         if selected == "source":
             _validate_source_audio_hash(
@@ -4580,7 +4639,7 @@ class MiniMaxH3ChainAssemble:
             else:
                 audio = source_audio
         elif selected == "generated":
-            audio = _generated_audio(manifest)
+            audio = generated_track
         elif selected != "none":
             raise ValueError("Unknown H3 chain assembly audio source %r."
                              % selected)
@@ -4589,6 +4648,10 @@ class MiniMaxH3ChainAssemble:
         total_output_frames = prelude_frames + extension_frames
         if audio is not None and prelude is not None:
             audio = _audio_with_prelude(audio, extension_frames, prelude)
+        generated_sidecar_audio = generated_track if preserve_generated else None
+        if generated_sidecar_audio is not None and prelude is not None:
+            generated_sidecar_audio = _audio_with_prelude(
+                generated_sidecar_audio, extension_frames, prelude)
 
         run_name = _safe_name(manifest.get("run_name"), "h3_chain")
         run_dir = os.path.join(_output_root(), "h3_chains", run_name)
@@ -4598,6 +4661,9 @@ class MiniMaxH3ChainAssemble:
         final_path = os.path.join(final_dir, final_name + ".mp4")
         if not overwrite_existing:
             final_path = _available_versioned_path(final_path)
+        generated_sidecar_path = (
+            os.path.splitext(final_path)[0] + ".generated.wav"
+            if generated_sidecar_audio is not None else None)
         concat_path = os.path.join(final_dir, ".concat.txt")
         video_tmp = os.path.join(final_dir, ".video.tmp.mp4")
         final_tmp = os.path.join(final_dir, ".final.tmp.mp4")
@@ -4664,6 +4730,8 @@ class MiniMaxH3ChainAssemble:
                 _pyav_mux_audio(
                     video_tmp, audio, final_tmp, int(audio_bitrate),
                     total_output_frames)
+            if generated_sidecar_path is not None:
+                _atomic_wav(generated_sidecar_audio, generated_sidecar_path)
             os.replace(final_tmp, final_path)
         finally:
             for temporary in (concat_path, video_tmp, final_tmp, wav_tmp,
@@ -4671,9 +4739,13 @@ class MiniMaxH3ChainAssemble:
                 if os.path.exists(temporary):
                     os.unlink(temporary)
 
-        status = "assembled %d generated clips%s with %s -> %s" % (
+        sidecar_status = (
+            "; generated audio -> %s" % generated_sidecar_path
+            if generated_sidecar_path is not None else
+            ("; %s" % generated_warning if generated_warning else ""))
+        status = "assembled %d generated clips%s with %s -> %s%s" % (
             len(segments), " + existing-video prelude" if prelude else "",
-            backend, final_path)
+            backend, final_path, sidecar_status)
         _LOG.info("H3 Chain %s", status)
         return {"ui": {"text": [status]}, "result": (final_path,)}
 

@@ -17,6 +17,7 @@ import sys
 import tempfile
 import threading
 import time
+import wave
 from datetime import datetime
 
 
@@ -1191,6 +1192,15 @@ def main():
             segment1 = result1["result"][0]
             assert pathlib.Path(chain._absolute_output_path(
                 segment1["segment"])).is_file()
+            segment1_audio_path = pathlib.Path(chain._absolute_output_path(
+                segment1["generated_audio"]))
+            assert segment1_audio_path.is_file()
+            assert segment1["generated_audio_sha256"] == chain._file_sha256(
+                str(segment1_audio_path))
+            with wave.open(str(segment1_audio_path), "rb") as saved_audio:
+                assert saved_audio.getframerate() == 8000
+                assert saved_audio.getnchannels() == 2
+                assert saved_audio.getnframes() == round(5 / 24 * 8000)
 
             assert segment1["prompt_prefix"] == ""
             assert segment1["scene_prompt"] == "first"
@@ -1274,7 +1284,8 @@ def main():
             assert checkpoint_metadata["prompt"] == "first"
             assert checkpoint_metadata["seed"] == "1"
             before_interruption = (
-                segment1_path.read_bytes(), checkpoint1_path.read_bytes())
+                segment1_path.read_bytes(), checkpoint1_path.read_bytes(),
+                segment1_audio_path.read_bytes())
             real_st_save = chain._st_save
 
             def interrupted_save(*args, **kwargs):
@@ -1293,12 +1304,14 @@ def main():
                 chain._st_save = real_st_save
             assert segment1_path.read_bytes() == before_interruption[0]
             assert checkpoint1_path.read_bytes() == before_interruption[1]
+            assert segment1_audio_path.read_bytes() == before_interruption[2]
             assert chain._initial_state(prepared_plan, 2)["index"] == 2
             replacement = saver.save(
                 state1, images1, av_latent(), audio_for_frames(5))["result"][0]
             assert replacement["segment"] != segment1["segment"]
             assert segment1_path.exists()
             assert checkpoint1_path.exists()
+            assert segment1_audio_path.exists()
             assert prompt_path.exists()
             assert revision_metadata_path.exists()
             assert replacement["supersedes"] == segment1["revision_metadata"]
@@ -1307,8 +1320,8 @@ def main():
             ).read_text(encoding="utf-8"))
             assert active_metadata["segment"]["revision"] == replacement["revision"]
             segment1 = replacement
-            print("atomic save: interruption preserved old pair; retry switched "
-                  "+ retained prior revision")
+            print("atomic save: interruption preserved old AV artifacts; retry "
+                  "switched + retained prior revision")
 
             review_item, has_audio, warning = chain._review_video(
                 prepared_plan, segment1, audio_for_frames(5))
@@ -1725,6 +1738,13 @@ def main():
                 manifest, "source", "source_final", 96, source)
             source_path = pathlib.Path(source_result["result"][0])
             assert source_path.is_file() and source_path.stat().st_size > 0
+            generated_sidecar = source_path.with_suffix(".generated.wav")
+            assert generated_sidecar.is_file()
+            with wave.open(str(generated_sidecar), "rb") as saved_audio:
+                assert saved_audio.getframerate() == 8000
+                assert saved_audio.getnchannels() == 2
+                assert saved_audio.getnframes() == round(9 / 24 * 8000)
+            assert "generated audio ->" in source_result["ui"]["text"][0]
             source_tags = json.loads(subprocess.check_output([
                 "ffprobe", "-v", "error", "-show_entries", "format_tags",
                 "-of", "json", str(source_path),
@@ -1778,8 +1798,8 @@ def main():
                     float(fallback_media.duration) / float(chain.av.time_base))
                 assert abs(fallback_duration - 9 / 24) < 0.05
                 assert sum(1 for _frame in fallback_media.decode(video=0)) == 9
-            print("segments: H.264 save + source/generated audio assembly and "
-                  "ffmpeg-free PyAV fallback pass")
+            print("segments: H.264 save + per-scene/combined generated WAVs + "
+                  "source/generated audio assembly and PyAV fallback pass")
 
             changed = json.loads(json.dumps({"shots": [
                 {"id": "one", "prompt": "changed", "length": 5, "seed": 1},

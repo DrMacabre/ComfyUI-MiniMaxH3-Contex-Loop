@@ -7,6 +7,9 @@ import pathlib
 import sys
 import tempfile
 import types
+import wave
+
+import torch
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -86,14 +89,26 @@ def main():
             }],
         }
         state = {"plan": plan, "index": 1}
+        generated_audio = {
+            "waveform": torch.zeros(
+                (1, 2, round(5 / chain.FPS * 8000)), dtype=torch.float32),
+            "sample_rate": 8000,
+        }
         saver = chain.MiniMaxH3ChainSegmentSave()
-        first = saver.save(state, FakeImages(), object())["result"][0]
+        first = saver.save(
+            state, FakeImages(), object(), generated_audio)["result"][0]
         first_paths = {
             key: pathlib.Path(chain._absolute_output_path(first[key]))
             for key in ("segment", "checkpoint", "prompt_file",
-                        "revision_metadata")
+                        "revision_metadata", "generated_audio")
         }
         assert all(path.is_file() for path in first_paths.values())
+        assert first["generated_audio_sha256"] == chain._file_sha256(
+            str(first_paths["generated_audio"]))
+        with wave.open(str(first_paths["generated_audio"]), "rb") as audio_file:
+            assert audio_file.getnchannels() == 2
+            assert audio_file.getframerate() == 8000
+            assert audio_file.getnframes() == round(5 / chain.FPS * 8000)
 
         plan["shots"][0].update({
             "prompt": "second take",
@@ -101,9 +116,11 @@ def main():
             "prompt_hash": "replacement-hash",
             "seed": 2,
         })
-        second = saver.save(state, FakeImages(), object())["result"][0]
+        second = saver.save(
+            state, FakeImages(), object(), generated_audio)["result"][0]
         assert second["revision"] != first["revision"]
         assert second["supersedes"] == first["revision_metadata"]
+        assert second["generated_audio"] != first["generated_audio"]
         assert all(path.is_file() for path in first_paths.values())
 
         current = json.loads(pathlib.Path(
@@ -116,7 +133,8 @@ def main():
         assert archived["segment"]["revision"] == first["revision"]
         assert archived["segment"]["prompt"] == "first take"
 
-    print("H3 segment revisions: regeneration advances the active pointer and retains the previous take")
+    print("H3 segment revisions: regeneration advances the active pointer and "
+          "retains the previous take's video, checkpoint, prompt, and WAV")
 
 
 if __name__ == "__main__":

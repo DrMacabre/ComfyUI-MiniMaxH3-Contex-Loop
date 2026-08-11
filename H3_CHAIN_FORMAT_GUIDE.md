@@ -681,6 +681,9 @@ Recommended for a music video driven by one song.
 - Current Shot slices a frame-exact raw audio window for each Ref2VA scene.
 - Motion Context carries picture context only.
 - Assemble muxes the original source track over the stitched video.
+- Wire trimmed decoded audio into Segment Save. H3's generated audio is saved
+  as per-scene WAVs and as one combined `.generated.wav` beside the final MP4,
+  even though the MP4 itself uses the original source track.
 - The song must be at least as long as the total delivered video.
 - A genuinely silent placeholder may be shorter; Loop Start detects it and
   zero-pads scene slices and final assembly to the required duration.
@@ -692,6 +695,7 @@ Recommended for a music video driven by one song.
 - Chain Context carries the preceding H3 audio latent on the timeline.
 - Wire trimmed decoded audio into Segment Save.
 - Assemble concatenates the checkpointed generated audio.
+- The same generated track is also preserved as WAV sidecars for later editing.
 - MiniMax H3 Contex Loop Trim must keep `match_tail` enabled for exact sample counts.
 
 ### `source_plus_timeline`
@@ -700,6 +704,7 @@ Recommended for a music video driven by one song.
 - Chain Context also carries the preceding generated audio latent.
 - This mode is experimental.
 - Assemble selects the source track when `audio_source` is `plan`.
+- H3's generated track remains available in the generated-audio WAV sidecars.
 
 ## Native MiniMax H3 guides
 

@@ -449,14 +449,19 @@ can also carry the archived ComfyUI workflow and manifest.
 | `generated_audio` | No source track. Carry the previous compact AV latent and concatenate checkpointed audio. |
 | `source_plus_timeline` | Experimental combination of source reference audio and generated timeline context. |
 
-`source_track` is recommended for music video. Generated audio remains coherent
-at joins but may lose high-frequency detail over long chains. Artifacts live in
-`output/h3_chains/<run_name>/`. Every segment keeps its exact prompt in the MP4
-metadata, a matching `.prompt.txt`, its checkpoint JSON, and the safetensors
-metadata. The run also stores `plan.json`, loadable `workflow.json`, and
-`api_prompt.json`; review-gate prompt or seed retries update these recovery
-copies before the replacement segment is committed. Segment and assembled MP4s
-also use ComfyUI's standard embedded `workflow` and `prompt` tags.
+`source_track` is recommended for music video. The final MP4 still follows the
+selected audio source, but H3's own decoded output is never hidden by that mux:
+when audio is connected to Segment Save, each scene gets an uncompressed WAV in
+`output/h3_chains/<run_name>/generated_audio/`, and a completed assembly also
+writes `<final-name>.generated.wav` beside the final MP4. This leaves H3's
+ambience, effects, and regenerated performance available for post-production.
+
+Every segment also keeps its exact prompt in the MP4 metadata, a matching
+`.prompt.txt`, its checkpoint JSON, and the safetensors metadata. The run stores
+`plan.json`, loadable `workflow.json`, and `api_prompt.json`; review-gate prompt
+or seed retries update these recovery copies before the replacement segment is
+committed. Segment and assembled MP4s also use ComfyUI's standard embedded
+`workflow` and `prompt` tags.
 
 For voice specifically, choose `source_track` when a complete prerecorded
 performance must remain exact in the final video. Choose `generated_audio` when
