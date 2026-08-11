@@ -20,6 +20,12 @@ separate tag (blank `audio_tag` derives `@<video_tag>_audio`). A scene may have
 no active references; it still expands through the stock node with no dynamic
 reference sockets.
 
+To adapt the bundled global-reference loop without rebuilding its links by
+hand, right-click its core **MiniMax H3 Reference to Video** node and choose
+**Convert to MiniMax H3 Scheduled Ref2VA**. Existing connected reference
+sockets become all-scene schedule entries; narrow their `scenes` fields and
+replace fixed native labels in Plan prompts with the generated `@tags`.
+
 ## Experimental: MiniMax H3 Three-Angle Guitar Ref2VA
 
 A one-pass performance re-filming experiment, rather than a recursive loop.

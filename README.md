@@ -23,7 +23,8 @@ so this page remains a useful starting point rather than a changelog wall.
 - **v0.3.10 — Scene-scheduled Ref2VA.** Chain picture, video, paired-video
   audio, and standalone-audio references under stable `@tags`; each scene
   receives only its active sockets while native `<Picture N>`, `<Video N>`,
-  and `<Audio N>` labels and declarations compile automatically.
+  and `<Audio N>` labels and declarations compile automatically. A right-click
+  converter turns an already-wired core Ref2VA node into this layout.
 - **v0.3.8 — One-pass performance re-filming.** A Reference Video Prep node
   converts native VIDEO or decoded IMAGE/AUDIO to exact 24 fps Ref2VA input,
   copies its soundtrack without padding or time-stretching, and powers a new
@@ -190,6 +191,13 @@ For static references, connect the final schedule fingerprint to the Plan's
 When an entry consumes a Current Shot output such as `source_audio_slice`, keep
 that entry inside the loop and do not create a fingerprint cycle back to Plan;
 the Plan already fingerprints the full source track.
+
+Already have a core **MiniMax H3 Reference to Video** wired? Right-click it and
+choose **Convert to MiniMax H3 Scheduled Ref2VA**. The converter preserves its
+CLIP/VAE, prompt, dimensions, length, picture/video/audio sources, paired video
+soundtracks, and conditioning/latent consumers. It also connects Current Shot's
+scene index/count when it can identify the loop. The original core node remains
+untouched in ComfyUI; the replacement invokes it internally per scene.
 
 For a non-looping experiment, open the
 [three-angle guitar Ref2VA workflow](<example_workflows/EXPERIMENTAL MiniMax H3 Three-Angle Guitar Ref2VA.json>).

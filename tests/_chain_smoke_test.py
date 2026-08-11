@@ -165,6 +165,8 @@ def main():
     assert (ROOT / "web" / "h3_chain_plan_editor.js").is_file()
     assert (ROOT / "web" / "h3_chain_plan_core.mjs").is_file()
     assert (ROOT / "web" / "h3_chain_scene_prompt_editor.js").is_file()
+    assert (ROOT / "web" / "h3_reference_autoconnect.js").is_file()
+    assert (ROOT / "web" / "h3_reference_autoconnect_core.mjs").is_file()
     workflow_path = (ROOT / "example_workflows" /
                      "Looping MiniMax H3 Seamless Chain Global Refs Example.json")
     workflow = json.loads(workflow_path.read_text(encoding="utf-8"))

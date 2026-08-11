@@ -431,6 +431,30 @@ Current Shot ─ width, height, length ───────────→ Sche
 CLIP + video VAE + audio VAE ──────────────────→ Scheduled Ref2VA
 ```
 
+### Convert an existing core Ref2VA node
+
+For an existing workflow, right-click **MiniMax H3 Reference to Video** and
+select **Convert to MiniMax H3 Scheduled Ref2VA**. The conversion is a graph
+edit, not a runtime monkeypatch. It:
+
+- replaces the visible core node with Scheduled Ref2VA at the same position;
+- preserves CLIP, both VAEs, prompt, width, height, length, image-size mode,
+  and both downstream core outputs;
+- creates one schedule entry for every connected picture, video, paired video
+  soundtrack, and standalone audio socket;
+- keeps same-index video/audio inputs together in one Video Schedule node;
+- connects Current Shot `clip_index` and `clip_count` when the loop node is
+  already connected to the core prompt/dimensions, or is the only Current Shot;
+- connects a static schedule fingerprint to the only Plan when safe and leaves
+  it disconnected when a reference depends on Current Shot, avoiding a cycle;
+- preserves an existing non-empty Plan `generation_fingerprint` instead of
+  overwriting it; combine the displayed schedule hash explicitly in that case.
+
+Converted entries initially use all scenes and readable aliases such as
+`@picture_1`, `@video_1`, `@video_1_audio`, and `@audio_1`. Edit their selectors,
+tags, and declarations after conversion. A paired-audio socket without its
+same-index video is ignored because core Ref2VA would ignore it as well.
+
 Each entry has a stable human alias. A Plan prompt can say `@hero_face`,
 `@performance`, or `@voice` without knowing which native H3 ordinal that
 reference will receive in a particular scene. Do not manually mix native and
