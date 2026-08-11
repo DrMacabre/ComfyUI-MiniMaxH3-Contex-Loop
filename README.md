@@ -449,8 +449,8 @@ can also carry the archived ComfyUI workflow and manifest.
 | `generated_audio` | No source track. Carry the previous compact AV latent and concatenate checkpointed audio. |
 | `source_plus_timeline` | Experimental combination of source reference audio and generated timeline context. |
 
-Core ComfyUI AUDIO dictionaries and Video Helper Suite's lazy AUDIO mappings
-are both supported for source tracks and scheduled audio references.
+Core ComfyUI AUDIO dictionaries and compatible lazy/proxy AUDIO values are
+supported for source tracks and scheduled audio references.
 
 `source_track` is recommended for music video. The final MP4 still follows the
 selected audio source, but H3's own decoded output is never hidden by that mux:

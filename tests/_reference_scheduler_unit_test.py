@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Standalone scheduler compiler test without importing a ComfyUI checkout."""
 
-from collections.abc import Mapping
 import importlib.util
 import json
 import pathlib
@@ -39,8 +38,8 @@ sys.modules[spec.name] = chain
 spec.loader.exec_module(chain)
 
 
-class LazyAudio(Mapping):
-    """Minimal VHS LazyAudioMap equivalent for AUDIO compatibility testing."""
+class LazyAudio:
+    """Minimal non-dict ComfyUI AUDIO proxy for compatibility testing."""
 
     def __init__(self, value):
         self.value = value
@@ -49,13 +48,6 @@ class LazyAudio(Mapping):
     def __getitem__(self, key):
         self.reads += 1
         return self.value[key]
-
-    def __iter__(self):
-        return iter(self.value)
-
-    def __len__(self):
-        return len(self.value)
-
 
 def schedule():
     return chain._make_reference_schedule([
