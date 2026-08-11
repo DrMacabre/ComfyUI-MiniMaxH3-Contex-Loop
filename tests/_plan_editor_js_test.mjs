@@ -148,6 +148,11 @@ assert.match(editorSource, /node\.size\?\.\[1\][^\n]+0,/);
 assert.match(editorSource, /h3_chain_scene_colors/);
 assert.match(editorSource, /type = "color"/);
 assert.match(editorSource, /minimax_h3_context_loop\.chain_plan_editor/);
+assert.match(editorSource, /function folderOpenIcon\(\)/);
+assert.match(editorSource, /createElementNS\(namespace, "svg"\)/);
+assert.match(editorSource, /h3c-folder-icon/);
+assert.match(editorSource, /minimax_h3_context_loop\/open-run-folder/);
+assert.match(editorSource, /navigator\.clipboard\.writeText\(payload\.path\)/);
 assert.doesNotMatch(editorSource, /h3_motion_context\.chain_plan_editor/);
 
 console.log("H3 Chain Plan editor core: parsing, uint64 seeds, timing and edits pass");

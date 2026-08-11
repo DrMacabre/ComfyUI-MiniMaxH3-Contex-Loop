@@ -16,6 +16,11 @@ automatically; use the small header swatch to customize one, or double-click
 the swatch to restore its automatic color. Colors are UI-only and do not alter
 the plan or checkpoint compatibility.
 
+The compact **Output** button with its outline folder-open icon in the Plan
+header creates and opens the current `output/h3_chains/<run_name>` directory on
+the ComfyUI host. When the host is headless or its systemd service cannot
+access a desktop session, the button copies the absolute host path instead.
+
 The optional **MiniMax H3 Scene Prompt Editor** companion connects to the Plan
 and provides a larger, adjustable-font view of one scene prompt at a time. Its
 textarea is bidirectionally synchronized with the active

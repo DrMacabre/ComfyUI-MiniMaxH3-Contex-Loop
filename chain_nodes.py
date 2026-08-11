@@ -23,6 +23,7 @@ import re
 import secrets
 import shutil
 import subprocess
+import sys
 import time
 import uuid
 import wave
@@ -1107,6 +1108,63 @@ def _run_dir(plan: dict[str, Any]) -> str:
     if os.path.commonpath([root, path]) != root:
         raise ValueError("H3 chain run path escapes the ComfyUI output directory.")
     return path
+
+
+def _launch_directory(path: str) -> tuple[bool, str | None]:
+    """Ask the host desktop to reveal a directory without invoking a shell."""
+    try:
+        if os.name == "nt":
+            startfile = getattr(os, "startfile", None)
+            if startfile is None:
+                return False, "This Python build does not provide os.startfile."
+            startfile(path)
+            return True, None
+        if sys.platform == "darwin":
+            commands = [["open", path]]
+        else:
+            commands = []
+            xdg_open = shutil.which("xdg-open")
+            gio = shutil.which("gio")
+            if xdg_open:
+                commands.append([xdg_open, path])
+            if gio:
+                commands.append([gio, "open", path])
+        if not commands:
+            return False, "No supported host folder opener was found."
+
+        errors = []
+        for command in commands:
+            try:
+                result = subprocess.run(
+                    command, stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE, timeout=5, check=False)
+            except subprocess.TimeoutExpired:
+                errors.append("%s timed out" % os.path.basename(command[0]))
+                continue
+            if result.returncode == 0:
+                return True, None
+            detail = result.stderr.decode("utf-8", errors="replace").strip()
+            errors.append(detail or "%s exited with status %d" % (
+                os.path.basename(command[0]), result.returncode))
+        return False, "; ".join(errors)
+    except OSError as exc:
+        return False, str(exc)
+
+
+def _open_run_output_directory(run_name: Any) -> dict[str, Any]:
+    normalized = _safe_name(run_name, "")
+    if not normalized:
+        raise ValueError("A non-empty H3 chain run_name is required.")
+    path = _run_dir({"run_name": normalized})
+    os.makedirs(path, exist_ok=True)
+    opened, error = _launch_directory(path)
+    return {
+        "ok": True,
+        "opened": bool(opened),
+        "run_name": normalized,
+        "path": path,
+        "error": str(error or ""),
+    }
 
 
 def _relative_output_path(path: str) -> str:
@@ -4757,6 +4815,29 @@ async def _list_saved_checkpoints(request):
     })
 
 
+async def _open_run_folder(request):
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response(
+            {"error": "The output-folder request must contain JSON."},
+            status=400)
+    if not isinstance(body, dict):
+        return web.json_response(
+            {"error": "The output-folder request must contain a JSON object."},
+            status=400)
+    try:
+        payload = await asyncio.to_thread(
+            _open_run_output_directory, body.get("run_name"))
+    except ValueError as exc:
+        return web.json_response({"error": str(exc)}, status=400)
+    except OSError as exc:
+        return web.json_response(
+            {"error": "Could not create the H3 run folder: %s" % exc},
+            status=500)
+    return web.json_response(payload)
+
+
 if (PromptServer is not None and web is not None and
         getattr(PromptServer, "instance", None) is not None):
     PromptServer.instance.routes.post(
@@ -4765,6 +4846,8 @@ if (PromptServer is not None and web is not None and
         "/minimax_h3_context_loop/reviews")(_list_pending_reviews)
     PromptServer.instance.routes.get(
         "/minimax_h3_context_loop/checkpoints")(_list_saved_checkpoints)
+    PromptServer.instance.routes.post(
+        "/minimax_h3_context_loop/open-run-folder")(_open_run_folder)
 
 
 CHAIN_NODE_CLASS_MAPPINGS = {

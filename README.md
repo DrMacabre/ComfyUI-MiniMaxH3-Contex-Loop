@@ -20,6 +20,10 @@ huge cumulative image tensor.
 Newest first. Recent additions stay visible; older milestones are folded away
 so this page remains a useful starting point rather than a changelog wall.
 
+- **v0.3.13 — Open a Plan's output folder.** A compact **Output** button with
+  an outline folder-open icon in the Plan header creates and opens
+  `output/h3_chains/<run_name>` on the ComfyUI host. Headless or systemd-hosted
+  servers fall back to copying the exact host path into the browser clipboard.
 - **v0.3.12 — Clearer Plan guidance and looping I2VA.** Expanded every ambiguous Plan tooltip,
   including a direct choice between exact prerecorded voice/song tracks,
   short voice-identity references with generated speech, and the experimental

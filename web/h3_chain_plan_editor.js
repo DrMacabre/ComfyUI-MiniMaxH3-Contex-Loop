@@ -1,4 +1,5 @@
 import {app} from "/scripts/app.js";
+import {api} from "/scripts/api.js";
 import {
     MAX_SHOTS,
     automaticSceneColor,
@@ -77,6 +78,13 @@ function injectStyles() {
         .h3c-header, .h3c-toolbar, .h3c-card-head, .h3c-prompt-tools,
         .h3c-json-actions, .h3c-footer { display: flex; align-items: center; gap: 6px; }
         .h3c-header { justify-content: space-between; margin-bottom: 8px; }
+        .h3c-header-actions { display:flex; align-items:center; justify-content:flex-end;
+            gap:7px; min-width:0; }
+        .h3c-open-output { display:inline-flex; align-items:center; gap:5px;
+            padding:4px 7px !important; }
+        .h3c-folder-icon { width:15px; height:15px; flex:none; fill:none;
+            stroke:currentColor; stroke-width:1.8; stroke-linecap:round;
+            stroke-linejoin:round; }
         .h3c-title { font-size: 15px; font-weight: 700; }
         .h3c-summary { color: var(--h3c-muted); text-align: right; }
         .h3c-section {
@@ -170,6 +178,32 @@ function button(label, title, action) {
     if (title) item.title = title;
     item.addEventListener("click", action);
     return item;
+}
+
+function folderOpenIcon() {
+    const namespace = "http://www.w3.org/2000/svg";
+    const icon = document.createElementNS(namespace, "svg");
+    icon.classList.add("h3c-folder-icon");
+    icon.setAttribute("viewBox", "0 0 24 24");
+    icon.setAttribute("aria-hidden", "true");
+    const folder = document.createElementNS(namespace, "path");
+    folder.setAttribute(
+        "d",
+        "M3.5 8.5V6.25A1.75 1.75 0 0 1 5.25 4.5h4.1l2.1 2.25h7.3a1.75 1.75 0 0 1 1.75 1.75v1",
+    );
+    const opening = document.createElementNS(namespace, "path");
+    opening.setAttribute(
+        "d",
+        "M4.5 9.5h15.35a1.35 1.35 0 0 1 1.3 1.72l-2.05 7.1a1.6 1.6 0 0 1-1.54 1.18H5.4a1.6 1.6 0 0 1-1.57-1.3L2.9 13.15A3.1 3.1 0 0 1 4.5 9.5Z",
+    );
+    icon.append(folder, opening);
+    return icon;
+}
+
+function setOutputButtonLabel(item, label, showIcon = false) {
+    item.replaceChildren();
+    if (showIcon) item.append(folderOpenIcon());
+    item.append(document.createTextNode(label));
 }
 
 function field(label, control) {
@@ -617,7 +651,54 @@ function mountEditor(node) {
         root.classList.toggle("h3c-show-advanced", state.advanced);
 
         const header = element("div", "h3c-header");
-        header.append(element("div", "h3c-title", "MiniMax H3 Scene Plan"), element("div", "h3c-summary"));
+        const openOutput = button(
+            "Output",
+            "Open this Plan's output/h3_chains/<run_name> folder on the ComfyUI host. " +
+            "If the host has no desktop session, its path is copied instead.",
+            async () => {
+                const runName = String(widgetValue(node, "run_name", "")).trim();
+                openOutput.disabled = true;
+                setOutputButtonLabel(openOutput, "Opening…");
+                try {
+                    const response = await api.fetchApi(
+                        "/minimax_h3_context_loop/open-run-folder",
+                        {
+                            method: "POST",
+                            headers: {"Content-Type": "application/json"},
+                            body: JSON.stringify({run_name: runName}),
+                        },
+                    );
+                    const payload = await response.json();
+                    if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+                    openOutput.title = payload.path;
+                    if (payload.opened) {
+                        setOutputButtonLabel(openOutput, "Opened ✓");
+                    } else {
+                        try {
+                            await navigator.clipboard.writeText(payload.path);
+                            setOutputButtonLabel(openOutput, "Path copied");
+                        } catch (_error) {
+                            setOutputButtonLabel(openOutput, "See tooltip");
+                        }
+                        if (payload.error) openOutput.title += `\n${payload.error}`;
+                    }
+                } catch (error) {
+                    setOutputButtonLabel(openOutput, "Open failed");
+                    openOutput.title = String(error?.message || error);
+                } finally {
+                    setTimeout(() => {
+                        setOutputButtonLabel(openOutput, "Output", true);
+                        openOutput.disabled = false;
+                    }, 2200);
+                }
+            },
+        );
+        openOutput.classList.add("h3c-open-output");
+        openOutput.setAttribute("aria-label", "Open project output folder");
+        setOutputButtonLabel(openOutput, "Output", true);
+        const headerActions = element("div", "h3c-header-actions");
+        headerActions.append(openOutput, element("div", "h3c-summary"));
+        header.append(element("div", "h3c-title", "MiniMax H3 Scene Plan"), headerActions);
 
         const prefix = element("textarea", "h3c-prefix");
         prefix.value = sharedPrompt(state.plan).text;

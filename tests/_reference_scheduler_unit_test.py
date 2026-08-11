@@ -5,6 +5,7 @@ import importlib.util
 import json
 import pathlib
 import sys
+import tempfile
 import types
 
 
@@ -113,6 +114,35 @@ base_seed_help = plan_inputs["base_seed"][1]["tooltip"]
 assert "Reroll seed does NOT change base_seed" in base_seed_help
 assert "Show advanced > Seed" in base_seed_help
 assert "audio_tag" in video_inputs
+
+original_output_root = chain._output_root
+original_launch_directory = chain._launch_directory
+try:
+    with tempfile.TemporaryDirectory() as output_root:
+        opened_paths = []
+        chain._output_root = lambda: output_root
+        chain._launch_directory = lambda path: (
+            opened_paths.append(path) or True, None)
+        folder_result = chain._open_run_output_directory("Project Name")
+        expected_folder = pathlib.Path(
+            output_root, "h3_chains", "Project_Name")
+        assert folder_result["opened"] is True
+        assert pathlib.Path(folder_result["path"]) == expected_folder
+        assert expected_folder.is_dir()
+        assert opened_paths == [str(expected_folder)]
+        chain._launch_directory = lambda _path: (False, "headless host")
+        fallback_result = chain._open_run_output_directory("Project Name")
+        assert fallback_result["opened"] is False
+        assert fallback_result["error"] == "headless host"
+        try:
+            chain._open_run_output_directory("../../")
+        except ValueError as exc:
+            assert "run_name" in str(exc)
+        else:
+            raise AssertionError("unsafe empty run_name was accepted")
+finally:
+    chain._output_root = original_output_root
+    chain._launch_directory = original_launch_directory
 
 i2va_workflow = json.loads((
     ROOT / "example_workflows" /
