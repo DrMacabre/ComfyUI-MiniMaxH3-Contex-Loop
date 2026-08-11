@@ -4369,6 +4369,7 @@ class MiniMaxH3ChainReview:
             "token": token,
             "node_id": _review_display_id(unique_id, dynprompt),
             "execution_id": str(unique_id),
+            "run_name": str(plan["run_name"]),
             "clip_index": index,
             "clip_count": len(plan["shots"]),
             "shot_id": shot["id"],

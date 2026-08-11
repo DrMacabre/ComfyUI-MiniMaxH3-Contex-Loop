@@ -74,6 +74,16 @@ assert.match(reviewSource, /setInterval[\s\S]*fetchPending/);
 assert.match(reviewSource, /addEventListener\("status", fetchPending\)/);
 assert.match(reviewSource, /async nodeCreated\(node\)/);
 assert.match(reviewSource, /gates\.length === 1/);
+assert.match(reviewSource, /data\?\.run_name/);
+assert.match(reviewSource, /mountedReviewNodes/);
+assert.match(reviewSource, /split\(\/\[\.:\]\//);
+assert.match(reviewSource, /No pending review is available for this project yet/);
+assert.match(reviewSource, /button\.disabled = false/);
+assert.doesNotMatch(
+    reviewSource,
+    /await fetchPending\(\);\s*return;/,
+    "an action click must continue after recovering its pending token",
+);
 assert.match(reviewSource, /"pointerdown", "pointerup", "mousedown", "mouseup", "click"/);
 assert.match(reviewSource, /preview_revision/);
 assert.match(reviewSource, /sameToken/);

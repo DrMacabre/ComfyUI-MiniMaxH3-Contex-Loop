@@ -1575,6 +1575,7 @@ def main():
                     review_events = [
                         payload for event, payload, _client in sent
                         if event == "minimax_h3_context_loop_review"]
+                    assert review_events[0]["run_name"] == prepared_plan["run_name"]
                     assert review_events[0]["preview_pending"]
                     assert review_events[0]["preview_revision"] == 0
                     assert not review_events[-1]["preview_pending"]
