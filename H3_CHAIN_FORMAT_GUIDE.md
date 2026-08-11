@@ -418,6 +418,94 @@ ID or moving it to another position changes its derived seed.
 | `base_seed` | Unsigned 64-bit integer | Source for deterministic seeds when a scene omits `seed`. |
 | `segment_crf` | `0`–`51` | H.264 checkpoint-segment quality. Lower is higher quality and larger. Start around `18`–`20`. |
 
+## Scene-scheduled Ref2VA references
+
+Use the scheduled reference nodes when a picture, video, or audio reference
+should apply to selected scenes instead of every recursive iteration.
+
+```text
+Scheduled Picture Ref ─→ Scheduled Video Ref ─→ Scheduled Audio Ref
+                                                    ↓
+Current Shot ─ prompt, clip_index, clip_count ─→ Scheduled Ref2VA
+Current Shot ─ width, height, length ───────────→ Scheduled Ref2VA
+CLIP + video VAE + audio VAE ──────────────────→ Scheduled Ref2VA
+```
+
+Each entry has a stable human alias. A Plan prompt can say `@hero_face`,
+`@performance`, or `@voice` without knowing which native H3 ordinal that
+reference will receive in a particular scene. Do not manually mix native and
+alias names for the same source; let the compiler own its native label.
+
+The `scenes` field uses one-based scene numbers:
+
+| Value | Active scenes |
+|---|---|
+| blank, `all`, or `*` | every scene |
+| `3` | scene 3 |
+| `1:5` | scenes 1 through 5 |
+| `1,3,5:8` | scenes 1, 3, and 5 through 8 |
+
+Overlapping or adjacent ranges are normalized. Zero, reversed ranges, malformed
+tokens, and selections beyond `clip_count` stop before model execution with a
+specific error. Unlike Loop Start's render range, disjoint reference selections
+are safe because they do not skip the chain's motion dependency.
+
+### Declarations and native labels
+
+Use `{ref}` inside an entry declaration as the placeholder for its assigned
+native label:
+
+```text
+Picture tag: @hero_face
+Declaration: <Subject 1> is the woman in {ref}; preserve her facial identity,
+             hairstyle, skin tone, age, and distinctive physical features.
+
+Video tag: @performance
+Declaration: {ref} provides the performance timing and camera motion.
+```
+
+For one active picture and one active video, the compiled prompt receives:
+
+```text
+<Subject 1> is the woman in <Picture 1>; preserve her facial identity,
+hairstyle, skin tone, age, and distinctive physical features.
+<Video 1> provides the performance timing and camera motion.
+```
+
+The wrapper replaces every active `@tag` in both declarations and the scene
+prompt. If the prompt already has a `subject_definitions:` line, generated
+declarations are inserted immediately below it; otherwise they are prepended as
+plain reference-definition lines. Unknown tags and tags scheduled for another
+scene are rejected rather than leaking unresolved aliases into H3.
+
+ComfyUI's stock Ref2VA presents media in a fixed order, and the compiler mirrors
+it exactly:
+
+1. active pictures, numbered `<Picture 1>`, `<Picture 2>`, and so on;
+2. active videos, with each paired soundtrack's `<Audio N>` presented directly
+   before that video's `<Video N>`;
+3. active standalone audio, continuing the independent `<Audio N>` numbering.
+
+Picture, video, and audio ordinals are independent. A video soundtrack therefore
+receives its own audio tag; if `audio_tag` is blank, `@performance` derives
+`@performance_audio`. The stock limits are validated per scene: 9 pictures,
+3 videos, and 3 standalone audios. Scenes with no active references remain
+valid and expand to stock Ref2VA without dynamic reference sockets.
+
+### Checkpoint compatibility
+
+Every schedule entry fingerprints its normalized selector, declarations, and
+actual media bytes. For a schedule made entirely from static loaders, connect
+its `schedule_fingerprint` output to Plan `generation_fingerprint`. Changing a
+reference file, its selector, its tag, or its declaration will then invalidate
+incompatible saved predecessors.
+
+An entry may instead consume a per-iteration output—for example Current Shot's
+frame-exact `source_audio_slice`. Keep that entry inside the recursive body and
+do not connect its changing fingerprint backward to Plan. Source-track mode
+already fingerprints the complete source waveform at Loop Start, so its scene
+slices remain resume-safe without creating a graph cycle.
+
 ## Extending an existing video
 
 Use **MiniMax H3 Existing Video Context** when scene 1 must continue a decoded

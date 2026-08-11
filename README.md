@@ -20,6 +20,10 @@ huge cumulative image tensor.
 Newest first. Recent additions stay visible; older milestones are folded away
 so this page remains a useful starting point rather than a changelog wall.
 
+- **v0.3.10 — Scene-scheduled Ref2VA.** Chain picture, video, paired-video
+  audio, and standalone-audio references under stable `@tags`; each scene
+  receives only its active sockets while native `<Picture N>`, `<Video N>`,
+  and `<Audio N>` labels and declarations compile automatically.
 - **v0.3.8 — One-pass performance re-filming.** A Reference Video Prep node
   converts native VIDEO or decoded IMAGE/AUDIO to exact 24 fps Ref2VA input,
   copies its soundtrack without padding or time-stretching, and powers a new
@@ -113,6 +117,7 @@ inspired by **nkxx188’s**
 | 🎯 | Scene ranges such as `3` or `3:8` |
 | ⏩ | Continue an existing video, with optional original-video prepend |
 | 🎸 | Re-film one synchronized performance from new camera angles |
+| 🗓️ | Schedule Ref2VA sources per scene with stable human-readable tags |
 
 The runtime changes are opt-in. Loading this pack does not alter ordinary
 ComfyUI workflows; its guarded patches activate only when a Contex Loop Context
@@ -160,6 +165,31 @@ The Assemble `filename` field accepts ComfyUI-style date tokens such as
 `%minute%`, and `%second%`. Assemble preserves existing exports: when the
 requested MP4 already exists, the next file receives `_001`, `_002`, and so on
 instead of replacing it.
+
+To vary references by scene, replace the stock Ref2VA conditioning node with
+**MiniMax H3 Scheduled Ref2VA** and build its typed schedule:
+
+```text
+Load Image ─→ Scheduled Picture Ref ─┐
+24 fps IMAGE (+ paired AUDIO) ─→ Scheduled Video Ref ─┐
+Standalone AUDIO ─→ Scheduled Audio Ref ──────────────┴→ Scheduled Ref2VA
+
+Current Shot prompt / clip_index / clip_count / width / height / length ───↗
+CLIP + video VAE + audio VAE ─────────────────────────────────────────────↗
+```
+
+Give each entry a stable tag such as `@hero`, `@performance`, or `@voice`.
+Its `scenes` field accepts blank/all, `1`, `1:4`, or `1,3,5:8`. The wrapper
+passes only active media into core Ref2VA, replaces tags with that scene's
+native labels, and inserts each entry's declaration above the scene prompt.
+If the prompt already contains `subject_definitions:`, declarations are
+inserted directly below it so the six-section Ref2VA format stays intact.
+
+For static references, connect the final schedule fingerprint to the Plan's
+`generation_fingerprint` so changed media or declarations invalidate resume.
+When an entry consumes a Current Shot output such as `source_audio_slice`, keep
+that entry inside the loop and do not create a fingerprint cycle back to Plan;
+the Plan already fingerprints the full source track.
 
 For a non-looping experiment, open the
 [three-angle guitar Ref2VA workflow](<example_workflows/EXPERIMENTAL MiniMax H3 Three-Angle Guitar Ref2VA.json>).

@@ -133,6 +133,10 @@ def main():
     required = {
         "MiniMaxH3ChainPlan", "MiniMaxH3ChainScenePromptEditor",
         "MiniMaxH3ReferenceVideoPrepare",
+        "MiniMaxH3ScheduledPictureReference",
+        "MiniMaxH3ScheduledVideoReference",
+        "MiniMaxH3ScheduledAudioReference",
+        "MiniMaxH3ScheduledReferenceToVideo",
         "MiniMaxH3ChainExternalVideo",
         "MiniMaxH3ChainLoopStart",
         "MiniMaxH3ChainCurrent", "MiniMaxH3ChainContext",
@@ -331,6 +335,141 @@ def main():
         else:
             raise AssertionError("scene_range accepted %r" % invalid)
     print("scene range: blank, single scene, and one inclusive range validated")
+
+    assert chain._parse_reference_selector("") == ()
+    assert chain._parse_reference_selector("all") == ()
+    assert chain._parse_reference_selector(" 1, 3, 5:8 ") == (
+        (1, 1), (3, 3), (5, 8))
+    assert chain._parse_reference_selector("1,2:4,3,8") == (
+        (1, 4), (8, 8))
+    for invalid in ("0", "4:2", "1;3", "hello"):
+        try:
+            chain._parse_reference_selector(invalid)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(
+                "reference selector accepted %r" % invalid)
+
+    picture = torch.zeros((2, 8, 8, 3), dtype=torch.float32)
+    video = torch.zeros((22, 8, 8, 3), dtype=torch.float32)
+    paired_audio = audio_for_frames(22)
+    voice_audio = audio_for_frames(22)
+    picture_node = chain.MiniMaxH3ScheduledPictureReference()
+    video_node = chain.MiniMaxH3ScheduledVideoReference()
+    audio_node = chain.MiniMaxH3ScheduledAudioReference()
+    picture_schedule = picture_node.add(
+        picture, "@hero", "1,3,5:8",
+        "<Subject 1> is the performer in {ref}.")[0]
+    video_schedule = video_node.add(
+        video, "performance", "2:4",
+        "{ref} provides motion for <Subject 1>.",
+        "performance_sound",
+        "{ref} is synchronized with @performance.",
+        audio=paired_audio, previous=picture_schedule)[0]
+    schedule, schedule_fingerprint, _status = audio_node.add(
+        voice_audio, "voice", "3",
+        "{ref} provides voice timing.", previous=video_schedule)
+    assert schedule_fingerprint == schedule["fingerprint"]
+    assert len(schedule["entries"]) == 3
+    assert schedule["entries"][0]["value"].shape[0] == 1
+
+    source_prompt = (
+        "subject_definitions:\n"
+        "<Subject 1> follows @hero and @performance.\n\n"
+        "summary:\n"
+        "Use @performance_sound and @voice in scene 3."
+    )
+    compiled, active_summary, bindings = (
+        chain._compile_scheduled_reference_prompt(
+            schedule, 3, 8, source_prompt))
+    assert active_summary == (
+        "scene 3/8: @hero -> <Picture 1>; "
+        "@performance_sound -> <Audio 1>; "
+        "@performance -> <Video 1>; @voice -> <Audio 2>")
+    assert compiled.startswith(
+        "subject_definitions:\n"
+        "<Subject 1> is the performer in <Picture 1>.\n"
+        "<Audio 1> is synchronized with <Video 1>.\n"
+        "<Video 1> provides motion for <Subject 1>.\n"
+        "<Audio 2> provides voice timing.\n")
+    assert "@hero" not in compiled
+    assert "@performance" not in compiled
+    assert "@voice" not in compiled
+    assert bindings["aliases"] == {
+        "hero": "<Picture 1>",
+        "performance_sound": "<Audio 1>",
+        "performance": "<Video 1>",
+        "voice": "<Audio 2>",
+    }
+
+    expanded = chain.MiniMaxH3ScheduledReferenceToVideo().apply(
+        "clip", "video-vae", "audio-vae", schedule, 3, 8,
+        source_prompt, 960, 544, 124, "match")
+    graph_node = next(iter(expanded["expand"].values()))
+    assert graph_node["class_type"] == "MiniMaxH3ReferenceToVideo"
+    graph_inputs = graph_node["inputs"]
+    assert graph_inputs["prompt"] == compiled
+    assert graph_inputs["ref_images.ref_image_0"] is schedule[
+        "entries"][0]["value"]
+    assert graph_inputs["ref_videos.ref_video_0"] is video
+    assert graph_inputs[
+        "ref_video_audios.ref_video_audio_0"] is paired_audio
+    assert graph_inputs["ref_audios.ref_audio_0"] is voice_audio
+    assert expanded["result"][2:] == (
+        compiled, active_summary, schedule_fingerprint)
+
+    picture_only = picture_node.add(
+        picture, "single", "1", "{ref} is used only in scene 1.")[0]
+    unreferenced = chain.MiniMaxH3ScheduledReferenceToVideo().apply(
+        "clip", "video-vae", "audio-vae", picture_only, 2, 2,
+        "A text-only second scene.", 960, 544, 124, "match")
+    unreferenced_inputs = next(iter(unreferenced["expand"].values()))[
+        "inputs"]
+    assert not any(
+        key.startswith(("ref_images.", "ref_videos.",
+                        "ref_video_audios.", "ref_audios."))
+        for key in unreferenced_inputs)
+    assert unreferenced["result"][3] == (
+        "scene 2/2: no scheduled references")
+    try:
+        chain._compile_scheduled_reference_prompt(
+            picture_only, 2, 2, "Use @single here.")
+    except ValueError as exc:
+        assert "not active in scene 2" in str(exc)
+    else:
+        raise AssertionError("compiler accepted an inactive reference tag")
+    try:
+        chain._compile_scheduled_reference_prompt(
+            picture_only, 1, 2, "Use @unknown here.")
+    except ValueError as exc:
+        assert "unknown scheduled reference tag" in str(exc)
+    else:
+        raise AssertionError("compiler accepted an unknown reference tag")
+    try:
+        audio_node.add(
+            voice_audio, "hero", "", "duplicate", picture_schedule)
+    except ValueError as exc:
+        assert "already in this chain" in str(exc)
+    else:
+        raise AssertionError("scheduler accepted a duplicate tag")
+    try:
+        video_node.add(
+            video, "same", "1", "video", "same", "audio",
+            audio=paired_audio)
+    except ValueError as exc:
+        assert "must be different" in str(exc)
+    else:
+        raise AssertionError(
+            "video scheduler accepted the same video and audio tag")
+    try:
+        chain._active_reference_bindings(picture_schedule, 1, 4)
+    except ValueError as exc:
+        assert "exceeds this plan's 4 scenes" in str(exc)
+    else:
+        raise AssertionError("scheduler accepted an out-of-plan selector")
+    print("reference schedule: disjoint selectors, stable tags, native label "
+          "compilation, dynamic Ref2VA sockets, and validation pass")
 
     # ComfyUI rounds H3's 40 Hz audio grid to the nearest step. Depending on
     # frame length, the decoded stream can land 1/3 step above or below the

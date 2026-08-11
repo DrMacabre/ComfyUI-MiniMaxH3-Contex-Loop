@@ -1,5 +1,25 @@
 # Example workflows
 
+## Scheduled Ref2VA wiring
+
+Version 0.3.10 adds a typed reference chain which can replace the stock
+**MiniMax H3 Reference to Video** node inside the primary loop workflow:
+
+```text
+Picture Ref (scenes 1,3,5:8) ─→ Video Ref (scenes 1:4)
+  ─→ Audio Ref (scene 3) ─→ Scheduled Ref2VA
+
+Current Shot ─ prompt, clip_index, clip_count, width, height, length ─────↗
+```
+
+Write stable aliases such as `@hero_face` in Plan scene prompts. Scheduled
+Ref2VA compiles them to the active scene's exact `<Picture N>`, `<Video N>`,
+and `<Audio N>` numbering before expanding to ComfyUI's stock Ref2VA node.
+Video-paired soundtracks remain paired on the same dynamic index and receive a
+separate tag (blank `audio_tag` derives `@<video_tag>_audio`). A scene may have
+no active references; it still expands through the stock node with no dynamic
+reference sockets.
+
 ## Experimental: MiniMax H3 Three-Angle Guitar Ref2VA
 
 A one-pass performance re-filming experiment, rather than a recursive loop.
