@@ -1189,37 +1189,38 @@ def _atomic_text(path: str, value: str) -> None:
         _safe_unlink(temporary)
 
 
-def _cleanup_previous_artifacts(plan: dict[str, Any], index: int,
-                                previous_metadata: Any,
-                                keep: set[str]) -> None:
+def _preserve_previous_revision(plan: dict[str, Any], index: int,
+                                previous_metadata: Any) -> str | None:
+    """Keep the superseded scene metadata beside its immutable artifacts."""
     if not isinstance(previous_metadata, dict):
-        return
+        return None
     previous = previous_metadata.get("segment")
     if not isinstance(previous, dict):
-        return
+        return None
     canonical = _artifact_paths(plan, index)
-    allowed = {
-        "segment": os.path.dirname(canonical["segment"]),
-        "checkpoint": os.path.dirname(canonical["checkpoint"]),
-        "prompt_file": os.path.dirname(canonical["segment"]),
-    }
-    prefix = "clip_%04d" % index
-    for key in ("segment", "checkpoint", "prompt_file"):
-        value = previous.get(key)
-        if not isinstance(value, str):
-            continue
+    existing = previous.get("revision_metadata")
+    if isinstance(existing, str):
         try:
-            path = _absolute_output_path(value)
+            path = _absolute_output_path(existing)
         except (ValueError, OSError):
-            continue
-        if (path in keep or os.path.dirname(path) != allowed[key] or
-                not os.path.basename(path).startswith(prefix)):
-            continue
-        try:
-            _safe_unlink(path)
-        except OSError as exc:
-            _LOG.warning("H3 Chain could not clean old %s artifact %s: %s",
-                         key, path, exc)
+            path = ""
+        if (path and os.path.isfile(path)):
+            return _relative_output_path(path)
+
+    revision = str(previous.get("revision") or "")
+    if re.fullmatch(r"[0-9a-f]{32}", revision) is None:
+        name = os.path.basename(str(previous.get("segment") or ""))
+        match = re.fullmatch(
+            r"clip_%04d\.([0-9a-f]{32})\.mp4" % index, name)
+        revision = match.group(1) if match is not None else uuid.uuid4().hex
+    snapshot_path = _versioned_path(canonical["metadata"], revision)
+    snapshot = dict(previous_metadata)
+    snapshot_segment = dict(previous)
+    snapshot_segment["revision"] = revision
+    snapshot_segment["revision_metadata"] = _relative_output_path(snapshot_path)
+    snapshot["segment"] = snapshot_segment
+    _atomic_json(snapshot_path, snapshot)
+    return _relative_output_path(snapshot_path)
 
 
 def _atomic_json(path: str, value: Any) -> None:
@@ -1413,7 +1414,8 @@ def _compact_latent(latent: dict[str, Any]) -> dict[str, Any]:
 def _public_segment(value: dict[str, Any]) -> dict[str, Any]:
     return {key: value[key] for key in (
         "index", "id", "segment", "checkpoint", "metadata",
-        "prompt_file", "raw_frames", "delivered_frames", "history_hash",
+        "revision", "revision_metadata", "supersedes", "prompt_file",
+        "raw_frames", "delivered_frames", "history_hash",
         "prompt_prefix", "scene_prompt", "prompt", "prompt_hash", "archives",
         "seed", "steps", "sample_rate", "segment_sha256",
         "checkpoint_sha256", "prompt_file_sha256") if key in value}
@@ -2929,11 +2931,14 @@ class MiniMaxH3ChainSegmentSave:
             except (OSError, ValueError, json.JSONDecodeError) as exc:
                 _LOG.warning("H3 Chain is replacing unreadable clip %d metadata: %s",
                              index, exc)
+        previous_revision = _preserve_previous_revision(
+            plan, index, previous_metadata)
 
         transaction = uuid.uuid4().hex
         published_segment = _versioned_path(paths["segment"], transaction)
         published_checkpoint = _versioned_path(paths["checkpoint"], transaction)
         published_prompt = os.path.splitext(published_segment)[0] + ".prompt.txt"
+        published_metadata = _versioned_path(paths["metadata"], transaction)
         checkpoint_tmp = "%s.%s.tmp" % (published_checkpoint, uuid.uuid4().hex)
         committed = False
         try:
@@ -2966,9 +2971,11 @@ class MiniMaxH3ChainSegmentSave:
             segment = {
                 "index": index,
                 "id": shot["id"],
+                "revision": transaction,
                 "segment": _relative_output_path(published_segment),
                 "checkpoint": _relative_output_path(published_checkpoint),
                 "metadata": _relative_output_path(paths["metadata"]),
+                "revision_metadata": _relative_output_path(published_metadata),
                 "prompt_file": _relative_output_path(published_prompt),
                 "raw_frames": shot["raw_frames"],
                 "delivered_frames": shot["delivered_frames"],
@@ -2982,6 +2989,8 @@ class MiniMaxH3ChainSegmentSave:
                 "checkpoint_sha256": _file_sha256(published_checkpoint),
                 "prompt_file_sha256": _file_sha256(published_prompt),
             }
+            if previous_revision is not None:
+                segment["supersedes"] = previous_revision
             metadata = {
                 "format": "h3_chain_segment_v3",
                 "run_name": plan["run_name"],
@@ -2993,6 +3002,7 @@ class MiniMaxH3ChainSegmentSave:
             }
             # This metadata replacement is the transaction's commit point. Until
             # it succeeds, resume keeps referencing the previous immutable pair.
+            _atomic_json(published_metadata, metadata)
             _atomic_json(paths["metadata"], metadata)
             committed = True
         finally:
@@ -3001,13 +3011,12 @@ class MiniMaxH3ChainSegmentSave:
                 _safe_unlink(published_segment)
                 _safe_unlink(published_checkpoint)
                 _safe_unlink(published_prompt)
+                _safe_unlink(published_metadata)
 
-        _cleanup_previous_artifacts(
-            plan, index, previous_metadata,
-            {published_segment, published_checkpoint, published_prompt})
-        status = ("saved clip %d/%d: %s + checkpoint %s" %
-                  (index, len(plan["shots"]), published_segment,
-                   published_checkpoint))
+        retained = "; previous revision retained" if previous_revision else ""
+        status = ("saved clip %d/%d revision %s: %s + checkpoint %s%s" %
+                  (index, len(plan["shots"]), transaction, published_segment,
+                   published_checkpoint, retained))
         _LOG.info("H3 Chain %s", status)
         return {"ui": {"text": [status]}, "result": (segment, status)}
 
@@ -3591,9 +3600,9 @@ class MiniMaxH3ChainLoopEnd:
                 int(review.get("seed", plan["shots"][index - 1]["seed"])))
             retry_state = dict(state)
             retry_state["plan"] = revised_plan
-            # Keep the predecessor context and accepted segment list unchanged;
-            # the just-saved rejected artifact is transactionally replaced by
-            # Segment Save when this same index completes again.
+            # Keep the predecessor context and accepted segment list unchanged.
+            # Segment Save makes the new take active when this index completes
+            # again while retaining the rejected take as an immutable revision.
             return self._recurse(flow, retry_state, dynprompt, unique_id)
         context_length = int(plan["compatibility"]["context_length"])
         next_state = {

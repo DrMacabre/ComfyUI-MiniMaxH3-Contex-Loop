@@ -1168,9 +1168,14 @@ def main():
             segment_metadata = json.loads(pathlib.Path(
                 chain._absolute_output_path(segment1["metadata"])
             ).read_text(encoding="utf-8"))
+            revision_metadata_path = pathlib.Path(
+                chain._absolute_output_path(segment1["revision_metadata"]))
             assert segment_metadata["format"] == "h3_chain_segment_v3"
             assert segment_metadata["segment"]["prompt"] == "first"
             assert segment_metadata["archives"] == segment1["archives"]
+            assert revision_metadata_path.is_file()
+            assert json.loads(revision_metadata_path.read_text(
+                encoding="utf-8"))["segment"]["revision"] == segment1["revision"]
 
             run_dir = pathlib.Path(tempdir, "h3_chains", "smoke")
             exact_text_path = run_dir / "exact-lf.txt"
@@ -1257,10 +1262,18 @@ def main():
             replacement = saver.save(
                 state1, images1, av_latent(), audio_for_frames(5))["result"][0]
             assert replacement["segment"] != segment1["segment"]
-            assert not segment1_path.exists()
-            assert not checkpoint1_path.exists()
+            assert segment1_path.exists()
+            assert checkpoint1_path.exists()
+            assert prompt_path.exists()
+            assert revision_metadata_path.exists()
+            assert replacement["supersedes"] == segment1["revision_metadata"]
+            active_metadata = json.loads(pathlib.Path(
+                chain._absolute_output_path(replacement["metadata"])
+            ).read_text(encoding="utf-8"))
+            assert active_metadata["segment"]["revision"] == replacement["revision"]
             segment1 = replacement
-            print("atomic save: interruption preserved old pair; retry switched + cleaned")
+            print("atomic save: interruption preserved old pair; retry switched "
+                  "+ retained prior revision")
 
             review_item, has_audio, warning = chain._review_video(
                 prepared_plan, segment1, audio_for_frames(5))

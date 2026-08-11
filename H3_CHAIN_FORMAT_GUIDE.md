@@ -739,9 +739,15 @@ manifest.json                     completed segment manifest
 segments/clip_0001.<id>.mp4       video with the full prompt in MP4 metadata
 segments/clip_0001.<id>.prompt.txt
 checkpoints/clip_0001.json        structured prompt, seed, paths and hashes
+checkpoints/clip_0001.<id>.json   immutable metadata for each saved revision
 checkpoints/clip_0001.<id>.safetensors
 final/<filename>.mp4              workflow, API graph and manifest embedded
 ```
+
+Saving the same scene again updates `checkpoints/clip_0001.json` to the active
+revision but retains every earlier MP4, prompt sidecar, safetensors checkpoint,
+and versioned metadata file. Each current record links to the previous one via
+`supersedes`, so rerolling or regenerating a scene is non-destructive.
 
 The segment record and manifest store `prompt_prefix`, `scene_prompt`, the
 combined `prompt`, `prompt_hash`, `prompt_file_sha256`, `seed`, and paths to the

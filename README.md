@@ -20,6 +20,12 @@ huge cumulative image tensor.
 Newest first. Recent additions stay visible; older milestones are folded away
 so this page remains a useful starting point rather than a changelog wall.
 
+- **v0.3.11 — Invisible legacy widget-width repair.** While any Contex Loop
+  node is on the canvas, the pack repairs the LiteGraph widget-width regression
+  across every node, including nodes from other packs. No dedicated fix node is
+  required, and a ComfyUI compatibility setting can disable the workaround.
+  Regenerated scenes now retain every previous segment/checkpoint revision
+  instead of deleting the superseded take.
 - **v0.3.10 — Scene-scheduled Ref2VA.** Chain picture, video, paired-video
   audio, and standalone-audio references under stable `@tags`; each scene
   receives only its active sockets while native `<Picture N>`, `<Video N>`,
@@ -123,7 +129,9 @@ inspired by **nkxx188’s**
 
 The runtime changes are opt-in. Loading this pack does not alter ordinary
 ComfyUI workflows; its guarded patches activate only when a Contex Loop Context
-node executes and self-test before touching H3 conditioning.
+node executes and self-test before touching H3 conditioning. The frontend
+widget-width compatibility layer likewise activates only while a node from this
+pack is present on the canvas.
 
 ## Install
 
@@ -421,6 +429,12 @@ also use ComfyUI's standard embedded `workflow` and `prompt` tags.
 
 ## Compatibility and guardrails
 
+- In legacy LiteGraph rendering, this pack automatically works around
+  [ComfyUI frontend issue #12443](https://github.com/Comfy-Org/ComfyUI_frontend/issues/12443)
+  for every node on the current canvas. The standalone **Legacy Widget Width
+  Fix** node is no longer required in H3 workflows, but remains compatible if
+  present. Disable the embedded workaround under **Settings → MiniMax H3
+  Contex Loop → Compatibility → Widget widths** if needed.
 - Upstream H3 Motion Context and this pack share patch-ownership markers; the
   second compatible copy stands down.
 - ComfyUI’s native **MiniMax H3 Add Guide** API is detected automatically. On

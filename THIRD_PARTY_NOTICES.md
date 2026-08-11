@@ -1,5 +1,15 @@
 # Third-party notices
 
+## ComfyUI-LegacyWidgetWidthFix
+
+The canvas-wide LiteGraph widget-width compatibility layer is adapted with
+permission from
+[ComfyUI-LegacyWidgetWidthFix](https://github.com/pekkAi-dev/ComfyUI-LegacyWidgetWidthFix)
+by **pekkAi-dev**. This pack embeds the repair behind its existing H3 nodes and
+does not claim or register the standalone project's `LegacyWidgetWidthFix`
+node id. Shared legacy widget marker names are retained deliberately so both
+extensions can coexist without stacking incompatible widget descriptors.
+
 ## ComfyUI-H3-Motion-Context
 
 This repository grew from the original H3 Motion Context implementation by
