@@ -26,6 +26,10 @@ const ACTIVE_SCENE_PROPERTY = "h3_scene_prompt_editor_active_scene";
 const FONT_SIZE_PROPERTY = "h3_scene_prompt_editor_font_size";
 const ASSIST_PROVIDER_PROPERTY = "h3_scene_prompt_editor_assist_provider";
 const ASSIST_MODE_PROPERTY = "h3_scene_prompt_editor_assist_mode";
+// Keep the complete prompt-assistant implementation available for a future
+// revisit, but ship the original focused editor experience for now. Re-enabling
+// it is intentionally a one-line change.
+const PROMPT_ASSISTANT_ENABLED = false;
 const DEFAULT_FONT_SIZE = 18;
 const MIN_FONT_SIZE = 12;
 const MAX_FONT_SIZE = 36;
@@ -44,7 +48,7 @@ function injectStyles() {
             --h3sp-accent: #84aaff;
             --h3sp-font-size: 18px;
             box-sizing:border-box; width:100%; height:100%; min-height:420px;
-            display:flex; flex-direction:column; gap:8px; overflow:auto; padding:10px;
+            display:flex; flex-direction:column; gap:8px; overflow:hidden; padding:10px;
             border:1px solid var(--h3sp-border); border-radius:8px; background:var(--h3sp-bg);
             color:var(--h3sp-text); font:12px/1.35 system-ui,sans-serif;
         }
@@ -68,7 +72,7 @@ function injectStyles() {
         .h3sp-font { margin-left:auto; }
         .h3sp-font-value { min-width:38px; color:var(--h3sp-muted); text-align:center; }
         .h3sp-textarea {
-            width:100%; min-height:220px; flex:1 1 auto; resize:vertical; padding:12px 14px;
+            width:100%; min-height:240px; flex:1 1 auto; resize:none; padding:12px 14px;
             border:1px solid var(--h3sp-border); border-radius:7px;
             outline:none; background:var(--comfy-input-bg,#11141a); color:var(--h3sp-text);
             font:var(--h3sp-font-size)/1.55 ui-monospace,SFMono-Regular,Consolas,monospace;
@@ -76,6 +80,10 @@ function injectStyles() {
         }
         .h3sp-textarea:focus { border-color:var(--h3sp-accent);
             box-shadow:0 0 0 1px color-mix(in srgb,var(--h3sp-accent) 45%,transparent); }
+        .h3sp-root.h3sp-assistant-enabled { overflow:auto; }
+        .h3sp-root.h3sp-assistant-enabled .h3sp-textarea {
+            min-height:220px; resize:vertical;
+        }
         .h3sp-tools { position:relative; flex-wrap:wrap; }
         .h3sp-hint { color:var(--h3sp-muted); margin-left:auto; }
         .h3sp-refs { display:none; flex:0 0 auto; max-height:118px; overflow:auto;
@@ -223,6 +231,7 @@ function mount(node) {
 
     node.properties ??= {};
     const root = element("div", "h3sp-root");
+    root.classList.toggle("h3sp-assistant-enabled", PROMPT_ASSISTANT_ENABLED);
     root.title = "Edit the active scene prompt stored in the connected H3 Chain Plan.";
     for (const eventName of [
         "pointerdown", "pointerup", "mousedown", "mouseup", "click", "dblclick",
@@ -271,27 +280,29 @@ function mount(node) {
     node._h3ScenePromptEditorState = state;
 
     const assistant = state.assistant;
-    assistant.client = new PromptAssistantClient({
-        identityKey: promptAssistantIdentityKey(node),
-        onFrame: (frame) => handleAssistantFrame(frame),
-        onStatus: (status, detail) => {
-            assistant.status = status;
-            if (status === "connected") {
-                clearAssistantReconnect();
-                assistant.statusDetail = "Connected · isolated prompt session";
-            } else if (status === "connecting") {
-                assistant.statusDetail = "Connecting to comfyui-mcp…";
-            } else if (assistant.activeRequest) {
-                assistant.statusDetail = "Disconnected · reconnecting to recover the active draft…";
-                scheduleAssistantReconnect();
-            } else {
-                assistant.statusDetail = "Disconnected · send to reconnect";
-            }
-            if (detail?.providers) assistant.providers = detail.providers;
-            refreshAssistant();
-        },
-    });
-    assistant.pendingStorageKey = `h3.prompt-assistant.pending.${assistant.client.identity}`;
+    if (PROMPT_ASSISTANT_ENABLED) {
+        assistant.client = new PromptAssistantClient({
+            identityKey: promptAssistantIdentityKey(node),
+            onFrame: (frame) => handleAssistantFrame(frame),
+            onStatus: (status, detail) => {
+                assistant.status = status;
+                if (status === "connected") {
+                    clearAssistantReconnect();
+                    assistant.statusDetail = "Connected · isolated prompt session";
+                } else if (status === "connecting") {
+                    assistant.statusDetail = "Connecting to comfyui-mcp…";
+                } else if (assistant.activeRequest) {
+                    assistant.statusDetail = "Disconnected · reconnecting to recover the active draft…";
+                    scheduleAssistantReconnect();
+                } else {
+                    assistant.statusDetail = "Disconnected · send to reconnect";
+                }
+                if (detail?.providers) assistant.providers = detail.providers;
+                refreshAssistant();
+            },
+        });
+        assistant.pendingStorageKey = `h3.prompt-assistant.pending.${assistant.client.identity}`;
+    }
 
     function dirty() {
         node.graph?.setDirtyCanvas?.(true, true);
@@ -966,10 +977,14 @@ function mount(node) {
             }
         });
 
-        const assistantHost = element("div", "h3sp-assist");
-        assistant.host = assistantHost;
-        renderAssistant(assistantHost, textarea);
-        root.append(head, nav, tools, refs, textarea, assistantHost, footer);
+        root.append(head, nav, tools, refs, textarea);
+        if (PROMPT_ASSISTANT_ENABLED) {
+            const assistantHost = element("div", "h3sp-assist");
+            assistant.host = assistantHost;
+            renderAssistant(assistantHost, textarea);
+            root.append(assistantHost);
+        }
+        root.append(footer);
     }
 
     function loadPlan(force = false) {
@@ -1000,12 +1015,26 @@ function mount(node) {
 
     const widget = node.addDOMWidget(
         "h3_scene_prompt_editor", "h3-scene-prompt-editor", root,
-        {serialize: false, hideOnZoom: false, getMinHeight: () => 760},
+        {
+            serialize: false,
+            hideOnZoom: false,
+            getMinHeight: () => PROMPT_ASSISTANT_ENABLED ? 760 : 420,
+        },
     );
     widget.serialize = false;
+    const minimumWidth = PROMPT_ASSISTANT_ENABLED ? 760 : 700;
+    const minimumHeight = PROMPT_ASSISTANT_ENABLED ? 900 : 620;
+    const currentWidth = Number(node.size?.[0]);
+    const currentHeight = Number(node.size?.[1]);
+    // Undo only the exact assistant-era default dimensions. Preserve any node
+    // the user deliberately made larger.
+    const targetWidth = !PROMPT_ASSISTANT_ENABLED && currentWidth === 760
+        ? minimumWidth : Math.max(currentWidth || minimumWidth, minimumWidth);
+    const targetHeight = !PROMPT_ASSISTANT_ENABLED && currentHeight === 900
+        ? minimumHeight : Math.max(currentHeight || minimumHeight, minimumHeight);
     node.setSize?.([
-        Math.max(node.size?.[0] ?? 760, 760),
-        Math.max(node.size?.[1] ?? 900, 900),
+        targetWidth,
+        targetHeight,
     ]);
 
     const connectionsChanged = node.onConnectionsChange;
@@ -1017,16 +1046,18 @@ function mount(node) {
     const removed = node.onRemoved;
     node.onRemoved = function () {
         if (state.pollTimer != null) window.clearInterval(state.pollTimer);
-        assistant.preparingRequest = null;
-        clearAssistantReconnect();
-        clearPendingRequest();
-        assistant.client?.close();
+        if (PROMPT_ASSISTANT_ENABLED) {
+            assistant.preparingRequest = null;
+            clearAssistantReconnect();
+            clearPendingRequest();
+            assistant.client?.close();
+        }
         return removed?.apply(this, arguments);
     };
     node._h3ScenePromptEditorRefresh = () => loadPlan(true);
     state.pollTimer = window.setInterval(() => loadPlan(false), 500);
     loadPlan(true);
-    restorePendingRequest();
+    if (PROMPT_ASSISTANT_ENABLED) restorePendingRequest();
 }
 
 app.registerExtension({

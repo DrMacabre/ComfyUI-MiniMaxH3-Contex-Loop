@@ -286,10 +286,15 @@ The node may sit inline before Loop Start or on an editor-only branch.
 
 ### Prompt Assistant (Codex or Hermes)
 
-The Scene Prompt Editor also contains an optional **Prompt Assistant**. It uses
-the local `comfyui-mcp` panel orchestrator as a bridge, so agent authentication
-and execution stay on the machine where Codex or Hermes is installed. Start the
-current prompt-assist-capable `comfyui-mcp` build with:
+> **Currently disabled:** the embedded Prompt Assistant UI is dormant so the
+> Scene Prompt Editor retains its original compact manual-editing experience.
+> The implementation and tests remain in the repository for a future revisit;
+> use the comfyui-mcp sidebar Agent panel for prompt assistance in the meantime.
+
+When enabled, the Scene Prompt Editor contains an optional **Prompt Assistant**.
+It uses the local `comfyui-mcp` panel orchestrator as a bridge, so agent
+authentication and execution stay on the machine where Codex or Hermes is
+installed. Start the current prompt-assist-capable `comfyui-mcp` build with:
 
 ```bash
 comfyui-mcp --panel-orchestrator
