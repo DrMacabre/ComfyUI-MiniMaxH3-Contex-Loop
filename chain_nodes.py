@@ -248,6 +248,10 @@ _REFERENCE_TAG_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,63}")
 _REFERENCE_ALIAS_RE = re.compile(
     r"(?<![A-Za-z0-9_])@([A-Za-z][A-Za-z0-9_-]{0,63})")
 REFERENCE_COMPLIANCE_MODES = ("strict", "soft", "disabled")
+REFERENCE_VIDEO_TIMELINE_MODES = (
+    "restart_each_scene",
+    "sequential",
+)
 
 
 def _reference_compliance_mode(value: Any) -> str:
@@ -386,7 +390,13 @@ def _reference_entry_contract(entry: dict[str, Any]) -> dict[str, Any]:
         "kind", "tag", "scenes", "content_hash", "audio_tag",
         "audio_hash",
     )
-    return {key: entry[key] for key in keys if key in entry}
+    contract = {key: entry[key] for key in keys if key in entry}
+    # Keep the compatibility default bit-identical to schedules created before
+    # timeline modes existed. Only sequential playback changes checkpoints.
+    timeline_mode = str(entry.get("timeline_mode") or "restart_each_scene")
+    if timeline_mode != "restart_each_scene":
+        contract["timeline_mode"] = timeline_mode
+    return contract
 
 
 def _reference_schedule_entries(value: Any) -> list[dict[str, Any]]:
@@ -425,13 +435,14 @@ def _append_scheduled_reference(
         previous: Any, *, kind: str, tag: Any, scenes: Any,
         value: Any, content_hash: str, audio: Any = None,
         audio_tag: Any = "", audio_hash: str = "",
-        compliance_mode: str = "strict") -> dict[str, Any]:
-    mode = _reference_compliance_mode(compliance_mode)
+        compliance_mode: str = "strict",
+        timeline_mode: Any = "restart_each_scene") -> dict[str, Any]:
+    compliance = _reference_compliance_mode(compliance_mode)
     entries = _reference_schedule_entries(previous)
     try:
         normalized_tag = _normalize_reference_tag(tag, "Reference tag")
     except ValueError as exc:
-        if mode != "disabled":
+        if compliance != "disabled":
             raise
         normalized_tag = "reference_%s" % str(content_hash)[:12]
         _LOG.warning(
@@ -440,7 +451,7 @@ def _append_scheduled_reference(
     try:
         ranges = _parse_reference_selector(scenes)
     except ValueError as exc:
-        if mode != "disabled":
+        if compliance != "disabled":
             raise
         ranges = ()
         _LOG.warning(
@@ -454,13 +465,21 @@ def _append_scheduled_reference(
         "value": value,
         "content_hash": str(content_hash),
     }
+    if kind == "video":
+        normalized_timeline = str(
+            timeline_mode or "restart_each_scene").strip().lower()
+        if normalized_timeline not in REFERENCE_VIDEO_TIMELINE_MODES:
+            raise ValueError(
+                "Scheduled video timeline_mode must be one of %s." %
+                (REFERENCE_VIDEO_TIMELINE_MODES,))
+        entry["timeline_mode"] = normalized_timeline
     if audio is not None:
         try:
             normalized_audio_tag = _normalize_reference_tag(
                 audio_tag or (normalized_tag + "_audio"),
                 "Paired video-audio tag")
         except ValueError as exc:
-            if mode != "disabled":
+            if compliance != "disabled":
                 raise
             normalized_audio_tag = "%s_audio" % normalized_tag
             _LOG.warning(
@@ -477,17 +496,100 @@ def _append_scheduled_reference(
         for alias in _reference_entry_tags(existing)
     }
     new_tags = _reference_entry_tags(entry)
-    if mode != "disabled" and len(set(new_tags)) != len(new_tags):
+    if compliance != "disabled" and len(set(new_tags)) != len(new_tags):
         raise ValueError(
             "A scheduled video's @tag and paired @audio_tag must be "
             "different.")
     duplicates = existing_tags.intersection(new_tags)
-    if mode != "disabled" and duplicates:
+    if compliance != "disabled" and duplicates:
         duplicate = sorted(duplicates)[0]
         raise ValueError(
             "Scheduled reference tag @%s is already in this chain." %
             duplicate)
     return _make_reference_schedule(entries + [entry])
+
+
+def _scheduled_video_reference_slice(
+        entry: dict[str, Any], state: Any, scene: int, scene_count: int,
+        length: int) -> tuple[Any, Any, str]:
+    """Resolve one active video ref without silently restarting its timeline."""
+    timeline_mode = str(
+        entry.get("timeline_mode") or "restart_each_scene")
+    video = entry["value"]
+    audio = entry.get("audio")
+    if timeline_mode == "restart_each_scene":
+        return video, audio, ""
+    if timeline_mode != "sequential":
+        raise ValueError(
+            "Scheduled video @%s has unknown timeline mode %r." %
+            (entry.get("tag", "video"), timeline_mode))
+    if not isinstance(state, dict) or not isinstance(state.get("plan"), dict):
+        raise ValueError(
+            "Sequential scheduled video @%s requires Current Shot state on "
+            "Scheduled Ref2VA's state input." % entry.get("tag", "video"))
+    if int(state.get("index", -1)) != int(scene):
+        raise ValueError(
+            "Scheduled Ref2VA received scene %d but Current Shot state is at "
+            "scene %s." % (int(scene), state.get("index")))
+    shots = state["plan"].get("shots")
+    if not isinstance(shots, list) or len(shots) != int(scene_count):
+        raise ValueError(
+            "Sequential scheduled video requires state from the same %d-scene "
+            "Plan connected to Scheduled Ref2VA." % int(scene_count))
+    current = shots[int(scene) - 1]
+    if int(current.get("raw_frames", -1)) != int(length):
+        raise ValueError(
+            "Scheduled Ref2VA length %d does not match scene %d's %s raw "
+            "frames in Current Shot state." %
+            (int(length), int(scene), current.get("raw_frames")))
+
+    ranges = entry.get("ranges") or ()
+    origin_scene = int(ranges[0][0]) if ranges else 1
+    if origin_scene < 1 or origin_scene > len(shots):
+        raise ValueError(
+            "Sequential scheduled video @%s has an invalid first active "
+            "scene %d." % (entry.get("tag", "video"), origin_scene))
+    origin_start = int(shots[origin_scene - 1]["generation_start_frame"])
+    current_start = int(current["generation_start_frame"])
+    source_start = current_start - origin_start
+    source_end = source_start + int(length)
+    if source_start < 0:
+        raise ValueError(
+            "Sequential scheduled video @%s resolved a negative source "
+            "window for scene %d." %
+            (entry.get("tag", "video"), int(scene)))
+    available = int(video.shape[0])
+    if source_end > available:
+        raise ValueError(
+            "Sequential scheduled video @%s needs source frames %d:%d for "
+            "scene %d, but the 24 fps reference contains only %d frames. "
+            "Supply a longer reference, shorten the Plan, or use "
+            "restart_each_scene." %
+            (entry.get("tag", "video"), source_start, source_end,
+             int(scene), available))
+    sliced_video = video[source_start:source_end]
+    sliced_audio = None
+    if audio is not None:
+        waveform, sample_rate = _validate_audio(
+            audio, "Sequential scheduled video @%s audio" % entry.get(
+                "tag", "video"))
+        sample_start = int(round(source_start / float(FPS) * sample_rate))
+        sample_end = int(round(source_end / float(FPS) * sample_rate))
+        available_samples = int(waveform.shape[-1])
+        if sample_end > available_samples:
+            raise ValueError(
+                "Sequential scheduled video @%s needs paired-audio samples "
+                "%d:%d for scene %d, but the soundtrack contains only %d "
+                "samples at %d Hz." %
+                (entry.get("tag", "video"), sample_start, sample_end,
+                 int(scene), available_samples, sample_rate))
+        sliced_audio = {
+            "waveform": waveform[..., sample_start:sample_end],
+            "sample_rate": sample_rate,
+        }
+    detail = "@%s sequential frames %d:%d (origin scene %d)" % (
+        entry.get("tag", "video"), source_start, source_end, origin_scene)
+    return sliced_video, sliced_audio, detail
 
 
 def _active_reference_bindings(
@@ -2425,6 +2527,15 @@ class MiniMaxH3ScheduledVideoReference:
                                "is connected. Blank derives @<video_tag>_audio. "
                                "This is also a stable alias, not a reserved "
                                "<Audio N> number."}),
+                "timeline_mode": (list(REFERENCE_VIDEO_TIMELINE_MODES), {
+                    "default": "restart_each_scene",
+                    "tooltip": "restart_each_scene preserves the original "
+                               "behavior: every active scene receives the "
+                               "reference from frame 0. sequential advances "
+                               "the 24 fps source along the Plan timeline, "
+                               "repeating the same overlap as Motion Context. "
+                               "Sequential mode requires Current Shot state "
+                               "connected to Scheduled Ref2VA."}),
             },
             "optional": {
                 "audio": ("AUDIO", {
@@ -2460,7 +2571,8 @@ class MiniMaxH3ScheduledVideoReference:
                    "never inserts prompt text. Do not treat a tag suffix as a "
                    "fixed native number.")
 
-    def add(self, video, tag, scenes, audio_tag, audio=None, previous=None,
+    def add(self, video, tag, scenes, audio_tag,
+            timeline_mode="restart_each_scene", audio=None, previous=None,
             dynprompt=None, unique_id=None):
         mode = _downstream_reference_compliance(dynprompt, unique_id)
         try:
@@ -2477,7 +2589,7 @@ class MiniMaxH3ScheduledVideoReference:
                 previous, kind="video", tag=tag, scenes=scenes,
                 value=video, content_hash=_tensor_fingerprint(video), audio=audio,
                 audio_tag=audio_tag, audio_hash=paired_hash,
-                compliance_mode=mode)
+                compliance_mode=mode, timeline_mode=timeline_mode)
         except (TypeError, ValueError) as exc:
             if mode == "disabled":
                 return _skipped_reference_result(previous, "Video reference", exc)
@@ -2485,8 +2597,8 @@ class MiniMaxH3ScheduledVideoReference:
         entry = schedule["entries"][-1]
         paired = (" + @%s" % entry["audio_tag"]
                   if entry.get("audio_tag") else "")
-        status = "@%s%s video on %s; %d sources; %s" % (
-            entry["tag"], paired, entry["scenes"],
+        status = "@%s%s video on %s; %s; %d sources; %s" % (
+            entry["tag"], paired, entry["scenes"], entry["timeline_mode"],
             len(schedule["entries"]), schedule["fingerprint"][:12])
         return schedule, schedule["fingerprint"], status
 
@@ -2633,6 +2745,11 @@ class MiniMaxH3ScheduledReferenceToVideo:
                                "uses its high-fidelity 2048px-short-edge path."}),
             },
             "optional": {
+                "state": (STATE_TYPE, {
+                    "tooltip": "Current Shot state. Required only when an "
+                               "active Scheduled Video Ref uses sequential "
+                               "timeline mode; it supplies exact scene starts "
+                               "and Motion Context overlap timing."}),
                 "prompt_compliance": (list(REFERENCE_COMPLIANCE_MODES), {
                     "default": "strict",
                     "tooltip": "strict: compile active @tags and block unknown "
@@ -2682,7 +2799,8 @@ class MiniMaxH3ScheduledReferenceToVideo:
 
     def apply(self, clip, vae, audio_vae, reference_schedule, clip_index,
               clip_count, prompt, width, height, length,
-              ref_image_size="match", prompt_compliance="strict"):
+              ref_image_size="match", state=None,
+              prompt_compliance="strict"):
         if GraphBuilder is None:
             raise RuntimeError(
                 "Scheduled H3 Ref2VA requires ComfyUI GraphBuilder.")
@@ -2700,13 +2818,18 @@ class MiniMaxH3ScheduledReferenceToVideo:
         for index, entry in enumerate(bindings["pictures"]):
             ref2va.set_input(
                 "ref_images.ref_image_%d" % index, entry["value"])
+        slice_details = []
         for index, entry in enumerate(bindings["videos"]):
+            video, paired_audio, detail = _scheduled_video_reference_slice(
+                entry, state, clip_index, clip_count, length)
             ref2va.set_input(
-                "ref_videos.ref_video_%d" % index, entry["value"])
-            if entry.get("audio") is not None:
+                "ref_videos.ref_video_%d" % index, video)
+            if paired_audio is not None:
                 ref2va.set_input(
                     "ref_video_audios.ref_video_audio_%d" % index,
-                    entry["audio"])
+                    paired_audio)
+            if detail:
+                slice_details.append(detail)
         for index, entry in enumerate(bindings["audios"]):
             ref2va.set_input(
                 "ref_audios.ref_audio_%d" % index, entry["value"])
@@ -2721,6 +2844,8 @@ class MiniMaxH3ScheduledReferenceToVideo:
         else:
             raise ValueError(
                 "Scheduled references have no valid schedule fingerprint.")
+        if slice_details:
+            summary += "; " + "; ".join(slice_details)
         return {
             "result": (
                 ref2va.out(0), ref2va.out(1), compiled, summary, fingerprint),

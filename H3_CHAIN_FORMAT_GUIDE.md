@@ -503,7 +503,7 @@ should apply to selected scenes instead of every recursive iteration.
 ```text
 Scheduled Picture Ref ─→ Scheduled Video Ref ─→ Scheduled Audio Ref
                                                     ↓
-Current Shot ─ prompt, clip_index, clip_count ─→ Scheduled Ref2VA
+Current Shot ─ state, prompt, clip_index, clip_count ─→ Scheduled Ref2VA
 Current Shot ─ width, height, length ───────────→ Scheduled Ref2VA
 CLIP + video VAE + audio VAE ──────────────────→ Scheduled Ref2VA
 ```
@@ -520,7 +520,7 @@ edit, not a runtime monkeypatch. It:
 - creates one schedule entry for every connected picture, video, paired video
   soundtrack, and standalone audio socket;
 - keeps same-index video/audio inputs together in one Video Schedule node;
-- connects Current Shot `clip_index` and `clip_count` when the loop node is
+- connects Current Shot `state`, `clip_index`, and `clip_count` when the loop node is
   already connected to the core prompt/dimensions, or is the only Current Shot;
 - connects a static schedule fingerprint to the only Plan when safe and leaves
   it disconnected when a reference depends on Current Shot, avoiding a cycle;
@@ -552,6 +552,37 @@ Overlapping or adjacent ranges are normalized. Zero, reversed ranges, malformed
 tokens, and selections beyond `clip_count` stop before model execution with a
 specific error. Unlike Loop Start's render range, disjoint reference selections
 are safe because they do not skip the chain's motion dependency.
+
+### Video-reference timeline modes
+
+Each Scheduled Video Ref chooses one of two source-timeline behaviors:
+
+| Mode | Behavior |
+|---|---|
+| `restart_each_scene` | Every active scene receives the reference beginning at source frame 0. This is the compatibility default for existing workflows and short reusable motion examples. |
+| `sequential` | The source advances on the Plan timeline. Each scene receives an exact source slice beginning at that scene's `generation_start_frame`, relative to the first scene where this reference is active. |
+
+Sequential mode requires Current Shot `state` connected to Scheduled Ref2VA.
+It uses the same overlap already represented in the Plan. With 243 raw frames
+and 22 head-context frames, scene 1 uses reference frames `0:243`; scene 2
+starts at generation frame 221 and therefore uses `221:464`. This overlap is
+intentional: the reference motion shown beneath the pinned continuation frames
+is the same motion, rather than frame 0 replaying against a later scene.
+
+If the selector begins at scene 4, reference source frame 0 aligns with scene
+4. Later active scenes follow the Plan's elapsed generation time, including
+inactive gaps. The video must already be 24 fps and contain every requested
+frame. Paired video audio is sliced to the same time interval with sample-exact
+rounding. A short source, missing state, changed Plan timing, or mismatched
+scene state stops with an explicit error; the scheduler never wraps or pads a
+motion reference silently.
+
+Motion Context is not `<Video 0>` and does not consume one of stock Ref2VA's
+three external video slots. It travels as an H3 guide/keyframe and has no
+prompt-visible label; scheduled references remain `<Video 1>` through
+`<Video 3>`. Internally all visual conditioning blocks are presented to the
+model, so additional references may still cost VRAM and introduce competing
+motion instructions.
 
 ### Prompt definitions and native labels
 

@@ -307,6 +307,56 @@ base_seed_help = plan_inputs["base_seed"][1]["tooltip"]
 assert "Reroll seed does NOT change base_seed" in base_seed_help
 assert "always-visible Scene seed" in base_seed_help
 assert "audio_tag" in video_inputs
+assert video_inputs["timeline_mode"][0] == [
+    "restart_each_scene", "sequential"]
+assert "state" in chain.MiniMaxH3ScheduledReferenceToVideo.INPUT_TYPES()[
+    "optional"]
+assert "timeline_mode" not in chain._reference_entry_contract({
+    "kind": "video", "tag": "motion", "scenes": "all",
+    "content_hash": "video", "timeline_mode": "restart_each_scene",
+})
+assert chain._reference_entry_contract({
+    "kind": "video", "tag": "motion", "scenes": "all",
+    "content_hash": "video", "timeline_mode": "sequential",
+})["timeline_mode"] == "sequential"
+
+sequential_video = chain.torch.arange(
+    500, dtype=chain.torch.float32).reshape(500, 1, 1, 1).expand(-1, 2, 2, 3)
+sequential_audio = {
+    "waveform": chain.torch.arange(
+        5000, dtype=chain.torch.float32).reshape(1, 1, 5000),
+    "sample_rate": 240,
+}
+sequential_schedule = chain.MiniMaxH3ScheduledVideoReference().add(
+    sequential_video, "motion", "", "motion_audio", "sequential",
+    audio=sequential_audio)[0]
+sequential_entry = sequential_schedule["entries"][0]
+assert sequential_entry["timeline_mode"] == "sequential"
+sequential_state = {
+    "index": 2,
+    "plan": {
+        "shots": [
+            {"raw_frames": 243, "generation_start_frame": 0},
+            {"raw_frames": 243, "generation_start_frame": 221},
+        ],
+    },
+}
+video_slice, audio_slice, slice_detail = (
+    chain._scheduled_video_reference_slice(
+        sequential_entry, sequential_state, 2, 2, 243))
+assert tuple(video_slice.shape) == (243, 2, 2, 3)
+assert float(video_slice[0, 0, 0, 0]) == 221
+assert float(video_slice[-1, 0, 0, 0]) == 463
+assert tuple(audio_slice["waveform"].shape) == (1, 1, 2430)
+assert float(audio_slice["waveform"][0, 0, 0]) == 2210
+assert slice_detail == "@motion sequential frames 221:464 (origin scene 1)"
+try:
+    chain._scheduled_video_reference_slice(
+        sequential_entry, None, 2, 2, 243)
+except ValueError as exc:
+    assert "Current Shot state" in str(exc)
+else:
+    raise AssertionError("sequential reference accepted missing state")
 conditioning = object()
 priority_result = chain.MiniMaxH3PatchPriority().claim(conditioning)
 assert priority_result == (conditioning, "test patch owner")

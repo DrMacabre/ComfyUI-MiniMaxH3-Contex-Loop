@@ -654,6 +654,38 @@ def main():
     assert expanded["result"][2:] == (
         compiled, active_summary, schedule_fingerprint)
 
+    sequential_video = torch.arange(
+        500, dtype=torch.float32).reshape(500, 1, 1, 1).expand(-1, 8, 8, 3)
+    sequential_audio = {
+        "waveform": torch.arange(
+            5000, dtype=torch.float32).reshape(1, 1, 5000),
+        "sample_rate": 240,
+    }
+    sequential_schedule = video_node.add(
+        sequential_video, "motion", "", "motion_audio", "sequential",
+        audio=sequential_audio)[0]
+    sequential_state = {
+        "index": 2,
+        "plan": {"shots": [
+            {"raw_frames": 243, "generation_start_frame": 0},
+            {"raw_frames": 243, "generation_start_frame": 221},
+        ]},
+    }
+    sequential_expanded = chain.MiniMaxH3ScheduledReferenceToVideo().apply(
+        "clip", "video-vae", "audio-vae", sequential_schedule, 2, 2,
+        "Use @motion and @motion_audio.", 960, 544, 243, "match",
+        state=sequential_state)
+    sequential_inputs = next(iter(
+        sequential_expanded["expand"].values()))["inputs"]
+    sequential_video_slice = sequential_inputs["ref_videos.ref_video_0"]
+    sequential_audio_slice = sequential_inputs[
+        "ref_video_audios.ref_video_audio_0"]
+    assert float(sequential_video_slice[0, 0, 0, 0]) == 221
+    assert float(sequential_video_slice[-1, 0, 0, 0]) == 463
+    assert float(sequential_audio_slice["waveform"][0, 0, 0]) == 2210
+    assert "@motion sequential frames 221:464" in (
+        sequential_expanded["result"][3])
+
     first_picture_schedule = picture_node.add(
         picture, "picture_1", "1")[0]
     renumbering_schedule = picture_node.add(
