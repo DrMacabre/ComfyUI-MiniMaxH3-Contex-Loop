@@ -11,18 +11,6 @@ export const AUTO_SCENE_COLORS = Object.freeze([
     "#83c5ff", "#b7db68", "#d991ff", "#72d4c2",
 ]);
 
-export function localFileUrl(path) {
-    const normalized = String(path ?? "").replaceAll("\\", "/");
-    if (!normalized) return "";
-    const encoded = normalized.split("/").map((part, index) => {
-        if (index === 0 && /^[A-Za-z]:$/.test(part)) return part;
-        return encodeURIComponent(part);
-    }).join("/");
-    if (normalized.startsWith("//")) return `file:${encoded}`;
-    if (normalized.startsWith("/")) return `file://${encoded}`;
-    return `file:///${encoded}`;
-}
-
 export function automaticSceneColor(index) {
     const ordinal = Number.isFinite(Number(index)) ? Math.trunc(Number(index)) : 0;
     return AUTO_SCENE_COLORS[((ordinal % AUTO_SCENE_COLORS.length)
