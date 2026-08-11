@@ -761,6 +761,15 @@ available, or the saved predecessor scene otherwise. **Approve & stop** also
 writes a partial joined video through the accepted scene when
 `assemble_partial_on_stop` is enabled.
 
+During active sampling, the floating **Cancel & reroll scene N** action uses
+the scene index emitted by Current Shot. It cancels that exact ComfyUI prompt
+ID, waits for an `execution_interrupted` confirmation, stores a new explicit
+seed in scene N, sets `start_clip` to N, and queues normally. Scene N > 1 is
+only cancelled after checkpoint N - 1 is confirmed ready. For a bounded run,
+the remaining range becomes `N:end`; otherwise `scene_range` is cleared so it
+cannot override the adjusted `start_clip`. If the prompt finishes during the
+request, no Plan value is changed and nothing is automatically requeued.
+
 ### Generate a bounded scene range
 
 `scene_range` is inclusive and overrides `start_clip` when non-empty:

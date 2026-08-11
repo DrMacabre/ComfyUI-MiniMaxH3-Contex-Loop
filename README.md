@@ -20,6 +20,16 @@ huge cumulative image tensor.
 Newest first. Recent additions stay visible; older milestones are folded away
 so this page remains a useful starting point rather than a changelog wall.
 
+- **v0.3.20 — Cancel and reroll the active scene.** While an H3 scene is
+  generating, a guarded floating action can cancel only that prompt, assign a
+  new explicit scene seed, move Loop Start to the interrupted scene, preserve
+  the selected range end, and requeue through ComfyUI's normal queue. Later
+  scenes require their preceding checkpoint; Review Gate keeps ownership once
+  generation has finished.
+- **v0.3.19 — Plan and review UX pass.** Plan controls retain pointer input,
+  editor and preview sizes persist, scene seeds are always visible with derived
+  and random controls, and reference menus show only sources active in the
+  selected scene. Documentation now states that `@aliases` are optional.
 - **v0.3.14 — Explicit compatible patch priority.** The optional wired
   **MiniMax H3 Patch Priority** pass-through can promote this pack over an
   older compatible H3 Motion Context patch copy. It leaves conditioning
@@ -432,6 +442,13 @@ are optional. The same node can preview and load **Resume scene N**; resume
 validates the plan, audio hash, fingerprint, and predecessor artifacts first.
 Drag the thin bar directly below the video to resize the preview; its height is
 saved with the workflow. Double-click the bar to restore the default height.
+
+While sampling is still in progress, a floating **Cancel & reroll scene N**
+button is available. It targets only the active H3 prompt, waits for ComfyUI to
+confirm interruption, writes a new explicit seed into that scene, and queues a
+checkpoint resume from the same scene. It never falls back to ComfyUI's global
+interrupt. Once Segment Save or Review Gate begins, the floating action hides
+and Review Gate's normal reroll owns the retry.
 
 ## Archival PNG export
 

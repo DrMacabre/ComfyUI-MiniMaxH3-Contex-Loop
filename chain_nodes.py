@@ -2949,10 +2949,28 @@ class MiniMaxH3ChainCurrent:
                   (index, len(plan["shots"]), shot["id"], shot["raw_frames"],
                    shot["delivered_frames"], audio_status, shot["seed"]))
         cfg = plan["compatibility"]
-        return (state, index, len(plan["shots"]), shot["id"], shot["prompt"],
-                shot["seed"], shot["raw_frames"], shot["steps"], cfg["width"],
-                cfg["height"], shot["audio_start_seconds"],
-                shot["audio_duration_seconds"], audio_slice, status)
+        result = (
+            state, index, len(plan["shots"]), shot["id"], shot["prompt"],
+            shot["seed"], shot["raw_frames"], shot["steps"], cfg["width"],
+            cfg["height"], shot["audio_start_seconds"],
+            shot["audio_duration_seconds"], audio_slice, status,
+        )
+        # ComfyUI adds prompt_id and display_node to the resulting `executed`
+        # event. The frontend therefore receives an authoritative loop index
+        # without this pack reaching into ComfyUI's executor or changing its
+        # queue semantics.
+        active_scene = {
+            "run_name": str(plan["run_name"]),
+            "clip_index": index,
+            "clip_count": len(plan["shots"]),
+            "end_clip": int(state.get("end_clip", len(plan["shots"]))),
+            "shot_id": str(shot["id"]),
+            "seed": str(shot["seed"]),
+        }
+        return {
+            "ui": {"h3_chain_active_scene": [active_scene]},
+            "result": result,
+        }
 
 
 class MiniMaxH3PatchPriority:

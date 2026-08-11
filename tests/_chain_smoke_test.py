@@ -166,6 +166,8 @@ def main():
     assert package.WEB_DIRECTORY == "./web"
     assert (ROOT / "web" / "h3_chain_plan_editor.js").is_file()
     assert (ROOT / "web" / "h3_chain_plan_core.mjs").is_file()
+    assert (ROOT / "web" / "h3_chain_cancel_reroll.js").is_file()
+    assert (ROOT / "web" / "h3_chain_cancel_reroll_core.mjs").is_file()
     assert (ROOT / "web" / "h3_chain_scene_prompt_editor.js").is_file()
     assert (ROOT / "web" / "h3_reference_autoconnect.js").is_file()
     assert (ROOT / "web" / "h3_reference_autoconnect_core.mjs").is_file()
@@ -896,7 +898,17 @@ def main():
             })
             started = chain.MiniMaxH3ChainLoopStart().start(plan, 1, source)
             assert started[1]["plan"]["compatibility"]["source_audio_hash"]
-            current = chain.MiniMaxH3ChainCurrent().current(started[1], source)
+            current_payload = chain.MiniMaxH3ChainCurrent().current(
+                started[1], source)
+            assert current_payload["ui"]["h3_chain_active_scene"] == [{
+                "run_name": prepared_plan["run_name"],
+                "clip_index": 1,
+                "clip_count": 2,
+                "end_clip": 2,
+                "shot_id": prepared_plan["shots"][0]["id"],
+                "seed": str(prepared_plan["shots"][0]["seed"]),
+            }]
+            current = current_payload["result"]
             assert current[1:3] == (1, 2)
             assert current[6:10] == (5, 2, 32, 32)
             assert int(current[12]["waveform"].shape[-1]) == round(5 / 24 * 8000)
@@ -913,7 +925,7 @@ def main():
             assert short_started[1]["plan"]["compatibility"][
                 "source_audio_silent_padding"]
             short_current = chain.MiniMaxH3ChainCurrent().current(
-                short_started[1], short_source)
+                short_started[1], short_source)["result"]
             assert int(short_current[12]["waveform"].shape[-1]) == round(
                 5 / 24 * 8000)
             assert not torch.count_nonzero(short_current[12]["waveform"])
@@ -1053,7 +1065,7 @@ def main():
             assert tuple(external_state1["previous_frames"].shape) == (
                 1, 32, 32, 3)
             first_current = chain.MiniMaxH3ChainCurrent().current(
-                external_state1, extension_audio)
+                external_state1, extension_audio)["result"]
             first_slice = first_current[12]["waveform"]
             first_lead_samples = round(1 / 24 * 8000)
             assert int(first_slice.shape[-1]) == round(5 / 24 * 8000)
