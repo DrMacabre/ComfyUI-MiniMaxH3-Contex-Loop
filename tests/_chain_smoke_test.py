@@ -421,6 +421,30 @@ def main():
     assert expanded["result"][2:] == (
         compiled, active_summary, schedule_fingerprint)
 
+    first_picture_schedule = picture_node.add(
+        picture, "picture_1", "1",
+        "Use {ref} as the first identity reference.")[0]
+    renumbering_schedule = picture_node.add(
+        picture, "picture_2", "",
+        "Use {ref} as the second identity reference.",
+        previous=first_picture_schedule)[0]
+    scene_one_compiled, scene_one_summary, _ = (
+        chain._compile_scheduled_reference_prompt(
+            renumbering_schedule, 1, 2, "Follow @picture_2."))
+    assert scene_one_summary == (
+        "scene 1/2: @picture_1 -> <Picture 1>; "
+        "@picture_2 -> <Picture 2>")
+    assert "Use <Picture 2> as the second identity reference." in (
+        scene_one_compiled)
+    assert "Follow <Picture 2>." in scene_one_compiled
+    scene_two_compiled, scene_two_summary, _ = (
+        chain._compile_scheduled_reference_prompt(
+            renumbering_schedule, 2, 2, "Follow @picture_2."))
+    assert scene_two_summary == "scene 2/2: @picture_2 -> <Picture 1>"
+    assert "Use <Picture 1> as the second identity reference." in (
+        scene_two_compiled)
+    assert "Follow <Picture 1>." in scene_two_compiled
+
     picture_only = picture_node.add(
         picture, "single", "1", "{ref} is used only in scene 1.")[0]
     unreferenced = chain.MiniMaxH3ScheduledReferenceToVideo().apply(

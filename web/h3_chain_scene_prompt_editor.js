@@ -1,4 +1,5 @@
 import {app} from "/scripts/app.js";
+import {api} from "/scripts/api.js";
 import {
     parsePlanJson,
     planToJson,
@@ -16,6 +17,7 @@ import {
     promptSourceRevision,
 } from "./h3_prompt_assistant_core.mjs";
 import {PromptAssistantClient} from "./h3_prompt_assistant_client.mjs";
+import {scheduledReferenceRecords} from "./h3_reference_preview_core.mjs";
 
 // The compact @ reference and # dialogue authoring interactions are inspired
 // by nkxx188/ComfyUI-MiniMaxH3-Easy (MIT); see THIRD_PARTY_NOTICES.md.
@@ -86,11 +88,25 @@ function injectStyles() {
         }
         .h3sp-tools { position:relative; flex-wrap:wrap; }
         .h3sp-hint { color:var(--h3sp-muted); margin-left:auto; }
-        .h3sp-refs { display:none; flex:0 0 auto; max-height:118px; overflow:auto;
+        .h3sp-refs { display:none; flex:0 0 auto; max-height:340px; overflow:auto;
             padding:7px; gap:5px; flex-wrap:wrap; border:1px solid var(--h3sp-border);
             border-radius:6px; background:var(--h3sp-panel); }
         .h3sp-refs.h3sp-open { display:flex; }
         .h3sp-refs button { padding:4px 7px; }
+        .h3sp-ref-help { flex:1 0 100%; color:var(--h3sp-muted); }
+        .h3sp-ref-chip.h3sp-inactive { opacity:.48; }
+        .h3sp-ref-chip.h3sp-active { border-color:#658b77; }
+        .h3sp-ref-preview { display:none; flex:1 0 100%; min-height:58px;
+            padding:8px; border:1px solid color-mix(in srgb,var(--h3sp-border) 74%,transparent);
+            border-radius:6px; background:var(--comfy-input-bg,#11141a); }
+        .h3sp-ref-preview.h3sp-visible { display:grid; grid-template-columns:minmax(120px,220px) 1fr;
+            align-items:start; gap:9px; }
+        .h3sp-ref-preview-media { width:100%; max-height:190px; display:block;
+            border-radius:5px; object-fit:contain; background:#08090c; }
+        audio.h3sp-ref-preview-media { min-width:190px; height:38px; background:transparent; }
+        .h3sp-ref-preview-copy { min-width:0; color:var(--h3sp-muted);
+            white-space:pre-wrap; overflow-wrap:anywhere; }
+        .h3sp-ref-preview-title { color:var(--h3sp-text); font-weight:700; }
         .h3sp-footer { justify-content:space-between; color:var(--h3sp-muted); }
         .h3sp-error { padding:12px; border:1px solid #a76565; border-radius:6px;
             color:#ffb3b3; background:#351f24; white-space:pre-wrap; }
@@ -182,6 +198,88 @@ function upstreamPlanNode(start) {
         }
     }
     return null;
+}
+
+function inputSource(node, name) {
+    const input = node?.inputs?.find((item) => item.name === name);
+    const link = input?.link == null ? null : node.graph?.links?.[input.link];
+    return link ? node.graph?.getNodeById?.(link.origin_id) ?? null : null;
+}
+
+function mediaExtension(kind) {
+    if (kind === "image") return /\.(?:avif|bmp|gif|jpe?g|png|webp)$/i;
+    if (kind === "video") return /\.(?:m4v|mkv|mov|mp4|webm)$/i;
+    return /\.(?:aac|flac|m4a|mp3|ogg|opus|wav)$/i;
+}
+
+function widgetAsset(value, kind) {
+    if (value && typeof value === "object" && value.filename) {
+        return {
+            filename: String(value.filename),
+            subfolder: String(value.subfolder ?? ""),
+            type: String(value.type ?? "input"),
+        };
+    }
+    let text = typeof value === "string" ? value.trim() : "";
+    if (!text) return null;
+    if (/^(?:blob:|data:|https?:|\/api\/view\?|\/view\?)/i.test(text)) {
+        return {url: text};
+    }
+    let type = "input";
+    const annotated = text.match(/\s+\[(input|output|temp)\]\s*$/i);
+    if (annotated) {
+        type = annotated[1].toLowerCase();
+        text = text.slice(0, annotated.index).trim();
+    }
+    text = text.replaceAll("\\", "/").replace(/^\/+/, "");
+    if (!mediaExtension(kind).test(text)) return null;
+    const slash = text.lastIndexOf("/");
+    return {
+        filename: slash >= 0 ? text.slice(slash + 1) : text,
+        subfolder: slash >= 0 ? text.slice(0, slash) : "",
+        type,
+    };
+}
+
+function assetUrl(asset) {
+    if (!asset) return null;
+    if (asset.url) return asset.url;
+    const query = new URLSearchParams({
+        filename: asset.filename,
+        subfolder: asset.subfolder ?? "",
+        type: asset.type ?? "input",
+    });
+    return api.apiURL(`/view?${query.toString()}`);
+}
+
+function previewFromNode(node, kind) {
+    if (kind === "image") {
+        const rendered = node?.imgs?.[0];
+        const src = typeof rendered === "string" ? rendered : rendered?.src;
+        if (src) return src;
+    }
+    for (const widget of node?.widgets ?? []) {
+        const asset = widgetAsset(widget.value, kind);
+        if (asset) return assetUrl(asset);
+    }
+    return null;
+}
+
+function findMediaPreview(start, kind) {
+    const queue = [start];
+    const seen = new Set();
+    while (queue.length) {
+        const node = queue.shift();
+        if (!node || seen.has(node)) continue;
+        seen.add(node);
+        const url = previewFromNode(node, kind);
+        if (url) return {url, source: node};
+        for (const input of node.inputs ?? []) {
+            const parent = inputSource(node, input.name);
+            if (parent) queue.push(parent);
+        }
+    }
+    return {url: null, source: start};
 }
 
 function insertText(textarea, text, selectionOffset = text.length) {
@@ -868,6 +966,98 @@ function mount(node) {
         root.querySelector(".h3sp-textarea")?.focus();
     }
 
+    function showReferencePreview(record, preview) {
+        preview.replaceChildren();
+        preview.classList.add("h3sp-visible");
+        const media = findMediaPreview(record.source, record.kind);
+        if (media.url) {
+            const mediaElement = element(record.kind === "image" ? "img"
+                : record.kind === "video" ? "video" : "audio",
+            "h3sp-ref-preview-media");
+            mediaElement.src = media.url;
+            if (record.kind !== "image") {
+                mediaElement.controls = true;
+                mediaElement.preload = "metadata";
+            } else {
+                mediaElement.alt = `Preview for @${record.tag}`;
+                mediaElement.loading = "lazy";
+            }
+            preview.append(mediaElement);
+        } else {
+            preview.append(element(
+                "div", "h3sp-ref-preview-copy",
+                "No browser-playable source was found. Dynamic tensors can " +
+                "still run in Ref2VA, but need an upstream loaded file for an editor preview.",
+            ));
+        }
+
+        const sourceTitle = media.source?.title || nodeType(media.source) || "unresolved source";
+        const declarationName = record.pairedWith ? "audio_declaration" : "declaration";
+        const declaration = String(
+            record.node?.widgets?.find((item) => item.name === declarationName)?.value ?? "",
+        ).trim();
+        const mapping = record.active
+            ? `${record.label} in scene ${state.active + 1}`
+            : `inactive in scene ${state.active + 1}`;
+        const copy = element("div", "h3sp-ref-preview-copy");
+        copy.append(
+            element("div", "h3sp-ref-preview-title", `@${record.tag} → ${mapping}`),
+            document.createTextNode(
+                `\n${record.kind.toUpperCase()} · scenes ${record.selector}` +
+                `\nSource: ${sourceTitle}` +
+                (declaration ? `\nDeclaration: ${declaration}` : ""),
+            ),
+        );
+        preview.append(copy);
+    }
+
+    function renderReferenceTray(refs, textarea) {
+        refs.replaceChildren();
+        const {records} = scheduledReferenceRecords(node, state.active + 1);
+        const preview = element("div", "h3sp-ref-preview");
+        if (!records.length) {
+            refs.append(element(
+                "div", "h3sp-ref-help",
+                "No connected Scheduled Ref2VA was found. Native labels are shown instead.",
+            ));
+            for (const [kind, count] of [["Picture", 9], ["Video", 3], ["Audio", 6]]) {
+                for (let ordinal = 1; ordinal <= count; ordinal += 1) {
+                    const tag = `<${kind} ${ordinal}>`;
+                    refs.append(button(tag, `Insert ${tag}`, () => {
+                        insertText(textarea, tag);
+                        refs.classList.remove("h3sp-open");
+                    }));
+                }
+            }
+            return;
+        }
+
+        refs.append(element(
+            "div", "h3sp-ref-help",
+            `Scheduled references for scene ${state.active + 1}. Hover to preview; ` +
+            "click to insert the stable @tag. Audio never autoplays.",
+        ));
+        const icons = {picture: "▧", video: "▶", audio: "♫"};
+        for (const record of records) {
+            const mapping = record.active ? ` → ${record.label}` : " · inactive";
+            const chip = button(
+                `${icons[record.kind] ?? "@"} @${record.tag}${mapping}`,
+                record.active
+                    ? `Insert @${record.tag}; it compiles to ${record.label} in this scene.`
+                    : `Insert @${record.tag}. Warning: it is inactive in this scene.`,
+                () => {
+                    insertText(textarea, `@${record.tag}`);
+                    refs.classList.remove("h3sp-open");
+                },
+            );
+            chip.classList.add("h3sp-ref-chip", record.active ? "h3sp-active" : "h3sp-inactive");
+            chip.addEventListener("pointerenter", () => showReferencePreview(record, preview));
+            chip.addEventListener("focus", () => showReferencePreview(record, preview));
+            refs.append(chip);
+        }
+        refs.append(preview);
+    }
+
     function render() {
         if (!state.plan?.shots?.length) {
             showFailure("The connected Plan has no scenes.");
@@ -927,8 +1117,10 @@ function mount(node) {
 
         const tools = element("div", "h3sp-tools");
         const refs = element("div", "h3sp-refs");
-        const referenceButton = button("@ Reference", "Open MiniMax reference tags (@)", () => {
-            refs.classList.toggle("h3sp-open");
+        const referenceButton = button("@ Reference", "Open scheduled reference tags and previews (@)", () => {
+            const opening = !refs.classList.contains("h3sp-open");
+            if (opening) renderReferenceTray(refs, textarea);
+            refs.classList.toggle("h3sp-open", opening);
         });
         const dialogueButton = button("# Dialogue", "Wrap selection in <d> dialogue tags (#)", () => {
             insertDialogue(textarea);
@@ -938,16 +1130,6 @@ function mount(node) {
             dialogueButton,
             element("span", "h3sp-hint", "Alt+←/→ scenes · @ refs · # dialogue"),
         );
-        for (const [kind, count] of [["Picture", 9], ["Video", 3], ["Audio", 6]]) {
-            for (let ordinal = 1; ordinal <= count; ordinal += 1) {
-                const tag = `<${kind} ${ordinal}>`;
-                refs.append(button(tag, `Insert ${tag}`, () => {
-                    insertText(textarea, tag);
-                    refs.classList.remove("h3sp-open");
-                }));
-            }
-        }
-
         const footer = element("div", "h3sp-footer");
         const identity = element(
             "span", "", `Scene ${state.active + 1}/${state.plan.shots.length} · ${shotId}`,
@@ -969,8 +1151,9 @@ function mount(node) {
                 navigate(1);
             } else if (!event.ctrlKey && !event.metaKey && !event.altKey && event.key === "@") {
                 event.preventDefault();
+                renderReferenceTray(refs, textarea);
                 refs.classList.add("h3sp-open");
-                referenceButton.focus();
+                refs.querySelector(".h3sp-ref-chip, button")?.focus();
             } else if (!event.ctrlKey && !event.metaKey && !event.altKey && event.key === "#") {
                 event.preventDefault();
                 insertDialogue(textarea);

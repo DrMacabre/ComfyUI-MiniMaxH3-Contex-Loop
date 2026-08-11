@@ -1910,26 +1910,39 @@ class MiniMaxH3ScheduledPictureReference:
                                "first image when a batch is connected."}),
                 "tag": ("STRING", {
                     "default": "hero_face",
-                    "tooltip": "Stable human alias used in scene prompts, "
-                               "for example @hero_face. Native <Picture N> "
-                               "labels are assigned automatically per scene."}),
+                    "tooltip": "Stable alias used as @tag in prompts, for "
+                               "example tag hero_face becomes @hero_face. "
+                               "The tag is NOT a native Picture number. "
+                               "Active pictures are renumbered from "
+                               "<Picture 1> in every scene: if an earlier "
+                               "picture is removed or inactive, @picture_2 "
+                               "can correctly compile to <Picture 1>."}),
                 "scenes": ("STRING", {
                     "default": "",
                     "tooltip": "Scenes where this picture is active. Leave "
                                "blank for all scenes; use 1, 1:4, or "
-                               "1,3,5:8 for selected scenes."}),
+                               "1,3,5:8 for selected scenes. Only active "
+                               "pictures consume <Picture N> numbers, so the "
+                               "same @tag may receive a different native "
+                               "number in different scenes."}),
                 "declaration": ("STRING", {
                     "default": "Use {ref} as the visual identity reference.",
                     "multiline": True, "dynamicPrompts": False,
                     "tooltip": "Prompt line inserted before the scene prompt. "
-                               "Use {ref} for the assigned <Picture N> label "
-                               "and any active @tag to cross-reference it."}),
+                               "Here {ref} means this picture's native label "
+                               "for the current scene. Example: 'Use {ref} "
+                               "as the identity for <Subject 1>.' Use stable "
+                               "@tags in scene prompts or to cross-reference "
+                               "other active entries; do not hard-code "
+                               "<Picture N> when the schedule can change."}),
             },
             "optional": {
                 "previous": (REFERENCE_SCHEDULE_TYPE, {
                     "tooltip": "Optional schedule from another Picture, "
                                "Video, or Audio Schedule node. Chain nodes in "
-                               "the stable order you want within each type."}),
+                               "the stable priority order you want. Native "
+                               "numbers are assigned only after inactive "
+                               "entries are removed for the current scene."}),
             },
         }
 
@@ -1943,8 +1956,14 @@ class MiniMaxH3ScheduledPictureReference:
     )
     FUNCTION = "add"
     CATEGORY = "conditioning/minimax/contex_loop/references"
-    DESCRIPTION = ("Add one scene-scheduled picture using a stable @tag. The "
-                   "final wrapper assigns its native <Picture N> label.")
+    DESCRIPTION = ("Add one scene-scheduled picture using a stable @tag. "
+                   "Tags identify assets; they do not reserve native H3 "
+                   "numbers. The final wrapper keeps only pictures active "
+                   "in the current scene and numbers them compactly from "
+                   "<Picture 1>. For example, if @picture_1 is removed or "
+                   "inactive, @picture_2 automatically becomes <Picture 1>. "
+                   "Write @picture_2 in scene prompts and {ref} in this "
+                   "node's declaration so both are rewritten safely.")
 
     def add(self, image, tag, scenes, declaration, previous=None):
         if (torch is None or not torch.is_tensor(image) or image.ndim != 4 or
@@ -1975,28 +1994,37 @@ class MiniMaxH3ScheduledVideoReference:
                                "has another frame rate."}),
                 "tag": ("STRING", {
                     "default": "performance",
-                    "tooltip": "Stable alias such as @performance. The "
-                               "wrapper assigns <Video N> per active scene."}),
+                    "tooltip": "Stable alias such as @performance. It is "
+                               "NOT a native Video number. Active videos are "
+                               "renumbered from <Video 1> per scene, so this "
+                               "@tag remains valid if an earlier entry is "
+                               "removed or inactive."}),
                 "scenes": ("STRING", {
                     "default": "",
                     "tooltip": "Scenes where this video and its optional "
                                "paired soundtrack are active. Blank means all; "
-                               "1, 1:4, and 1,3,5:8 are supported."}),
+                               "1, 1:4, and 1,3,5:8 are supported. Only "
+                               "active videos consume <Video N> numbers."}),
                 "declaration": ("STRING", {
                     "default": "Use {ref} as the motion and temporal reference.",
                     "multiline": True, "dynamicPrompts": False,
                     "tooltip": "Prompt line for the assigned <Video N>. Use "
-                               "{ref} for its native label and active @tags "
-                               "for other scheduled references."}),
+                               "{ref} for this video's current native label "
+                               "and stable @tags for other active scheduled "
+                               "references. Avoid hard-coded <Video N> labels "
+                               "when the schedule can change."}),
                 "audio_tag": ("STRING", {
                     "default": "",
                     "tooltip": "Alias for the paired soundtrack when audio "
-                               "is connected. Blank derives @<video_tag>_audio."}),
+                               "is connected. Blank derives @<video_tag>_audio. "
+                               "This is also a stable alias, not a reserved "
+                               "<Audio N> number."}),
                 "audio_declaration": ("STRING", {
                     "default": "Use {ref} as the synchronized audio reference.",
                     "multiline": True, "dynamicPrompts": False,
                     "tooltip": "Prompt line for the paired <Audio N>. It is "
-                               "ignored when no paired audio is connected."}),
+                               "ignored when no paired audio is connected. "
+                               "Use {ref} for its current native audio label."}),
             },
             "optional": {
                 "audio": ("AUDIO", {
@@ -2004,7 +2032,9 @@ class MiniMaxH3ScheduledVideoReference:
                                "video. It stays index-paired with the video in "
                                "stock Ref2VA and receives its own audio tag."}),
                 "previous": (REFERENCE_SCHEDULE_TYPE, {
-                    "tooltip": "Optional preceding scheduled reference chain."}),
+                    "tooltip": "Optional preceding scheduled reference chain. "
+                               "It sets stable priority order, not permanent "
+                               "native label numbers."}),
             },
         }
 
@@ -2018,7 +2048,11 @@ class MiniMaxH3ScheduledVideoReference:
     FUNCTION = "add"
     CATEGORY = "conditioning/minimax/contex_loop/references"
     DESCRIPTION = ("Add one scene-scheduled 24 fps video and an optional "
-                   "index-paired soundtrack using stable @tags.")
+                   "index-paired soundtrack using stable @tags. Tags identify "
+                   "assets while the wrapper assigns compact <Video N> and "
+                   "<Audio N> labels from the entries active in each scene. "
+                   "Use @tags in prompts and {ref} in declarations; do not "
+                   "treat a tag suffix as a fixed native number.")
 
     def add(self, video, tag, scenes, declaration, audio_tag,
             audio_declaration, audio=None, previous=None):
@@ -2057,21 +2091,31 @@ class MiniMaxH3ScheduledAudioReference:
                                "socket on Video Schedule instead."}),
                 "tag": ("STRING", {
                     "default": "voice",
-                    "tooltip": "Stable alias such as @voice. The wrapper "
-                               "assigns <Audio N> per active scene."}),
+                    "tooltip": "Stable alias such as @voice. It is NOT a "
+                               "native Audio number. Active audio references "
+                               "are renumbered from <Audio 1> per scene, so "
+                               "the @tag survives earlier entries being "
+                               "removed or inactive."}),
                 "scenes": ("STRING", {
                     "default": "",
                     "tooltip": "Scenes where this audio reference is active. "
-                               "Blank means all; use 1, 1:4, or 1,3,5:8."}),
+                               "Blank means all; use 1, 1:4, or 1,3,5:8. "
+                               "Only active audio references consume "
+                               "<Audio N> numbers."}),
                 "declaration": ("STRING", {
                     "default": "Use {ref} as the audio reference.",
                     "multiline": True, "dynamicPrompts": False,
                     "tooltip": "Prompt line inserted before the scene prompt. "
-                               "Use {ref} for its assigned <Audio N> label."}),
+                               "Use {ref} for this audio's current native "
+                               "label and stable @tags in scene prompts. Avoid "
+                               "hard-coded <Audio N> labels when the schedule "
+                               "can change."}),
             },
             "optional": {
                 "previous": (REFERENCE_SCHEDULE_TYPE, {
-                    "tooltip": "Optional preceding scheduled reference chain."}),
+                    "tooltip": "Optional preceding scheduled reference chain. "
+                               "It sets stable priority order, not permanent "
+                               "native label numbers."}),
             },
         }
 
@@ -2085,7 +2129,10 @@ class MiniMaxH3ScheduledAudioReference:
     FUNCTION = "add"
     CATEGORY = "conditioning/minimax/contex_loop/references"
     DESCRIPTION = ("Add one scene-scheduled standalone audio reference using "
-                   "a stable @tag.")
+                   "a stable @tag. The wrapper compactly renumbers active "
+                   "audio as <Audio N> in each scene. Use the @tag in prompts "
+                   "and {ref} in this declaration so removing or disabling "
+                   "an earlier entry cannot stale the prompt label.")
 
     def add(self, audio, tag, scenes, declaration, previous=None):
         _validate_audio(audio, "Scheduled H3 standalone audio")
@@ -2115,7 +2162,10 @@ class MiniMaxH3ScheduledReferenceToVideo:
                                "standalone or video-paired audio references."}),
                 "reference_schedule": (REFERENCE_SCHEDULE_TYPE, {
                     "tooltip": "Final chain from the scheduled Picture, "
-                               "Video, and Audio reference nodes."}),
+                               "Video, and Audio reference nodes. For each "
+                               "scene it removes inactive entries, compactly "
+                               "assigns native labels by type, then resolves "
+                               "stable @tags and {ref} declarations."}),
                 "clip_index": ("INT", {
                     "default": 1, "min": 1, "max": MAX_SHOTS,
                     "tooltip": "Current one-based scene. Connect Current "
@@ -2130,7 +2180,10 @@ class MiniMaxH3ScheduledReferenceToVideo:
                     "dynamicPrompts": True,
                     "tooltip": "Scene prompt using stable aliases such as "
                                "@hero_face and @performance. The wrapper "
-                               "replaces them with native H3 labels."}),
+                               "replaces them with native H3 labels for the "
+                               "current scene. Example: @picture_2 becomes "
+                               "<Picture 1> if it is the only active picture. "
+                               "Use {ref} only in a schedule node's declaration."}),
                 "width": ("INT", {
                     "default": 960, "min": 32, "max": 4096, "step": 32,
                     "tooltip": "Generation width forwarded unchanged to "
@@ -2158,7 +2211,8 @@ class MiniMaxH3ScheduledReferenceToVideo:
         "Positive conditioning produced by stock MiniMax H3 Ref2VA.",
         "Empty MiniMax H3 AV latent produced by stock Ref2VA.",
         "Exact prompt sent to H3 after declarations and native labels compile.",
-        "Human-readable mapping from stable @tags to this scene's labels.",
+        "Human-readable mapping for this scene, for example "
+        "@picture_2 -> <Picture 1>. Use it to verify renumbering.",
         "Full schedule fingerprint. Connect the schedule node's matching "
         "fingerprint to Plan generation_fingerprint when all scheduled "
         "sources are static.",
@@ -2166,8 +2220,12 @@ class MiniMaxH3ScheduledReferenceToVideo:
     FUNCTION = "apply"
     CATEGORY = "conditioning/minimax/contex_loop/references"
     DESCRIPTION = ("Select scheduled references for the current scene, "
-                   "compile @tags to native H3 labels, then expand to core "
-                   "MiniMax H3 Reference to Video with only active sockets.")
+                   "remove inactive entries, and compactly number each media "
+                   "type from 1. Stable @tags in the prompt and {ref} in each "
+                   "declaration are then compiled to those scene-local native "
+                   "labels before core MiniMax H3 Ref2VA runs. A tag named "
+                   "@picture_2 may therefore map to <Picture 1>; inspect the "
+                   "active_references output for the exact mapping.")
 
     def apply(self, clip, vae, audio_vae, reference_schedule, clip_index,
               clip_count, prompt, width, height, length,

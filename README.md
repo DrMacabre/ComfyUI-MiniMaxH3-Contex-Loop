@@ -186,6 +186,24 @@ native labels, and inserts each entry's declaration above the scene prompt.
 If the prompt already contains `subject_definitions:`, declarations are
 inserted directly below it so the six-section Ref2VA format stays intact.
 
+Tags identify references; their names do not reserve native H3 numbers. Native
+labels are compactly assigned by media type from the entries active in the
+current scene. For example, suppose two picture nodes use tags `picture_1` and
+`picture_2`. If `picture_1` is removed or inactive in scene 3, write
+`@picture_2` in that scene's prompt: the wrapper safely compiles it to
+`<Picture 1>`. Write `{ref}` only inside a schedule node's `declaration`; it is
+replaced with that node's current native label. The `active_references` output
+shows the exact mapping for the current scene.
+
+The **Scene Prompt Editor** discovers the Scheduled Ref2VA connected downstream
+without adding an execution socket or a graph cycle. Open its **@ Reference**
+tray to see the stable tags and their native mapping for the selected scene.
+Hover a tag to preview an upstream loaded image, video, or audio file, then
+click it to insert the stable `@tag`. Audio uses visible playback controls and
+never autoplays. A computed media tensor can still be scheduled, but its hover
+preview is available only when the editor can trace it to a browser-playable
+upstream file.
+
 For static references, connect the final schedule fingerprint to the Plan's
 `generation_fingerprint` so changed media or declarations invalidate resume.
 When an entry consumes a Current Shot output such as `source_audio_slice`, keep
