@@ -128,6 +128,20 @@ assert lazy_schedule["fingerprint"] == lazy_fingerprint
 assert "@lazy_voice audio on 1:2" in lazy_status
 try:
     chain.MiniMaxH3ScheduledAudioReference().add(
+        None, "missing_voice", "1")
+except ValueError as exc:
+    message = str(exc)
+    assert "received no audio (None)" in message
+    assert "source_audio_slice" in message
+    assert "generated_audio" in message
+    assert "connect Load Audio directly" in message
+    assert "source_plus_timeline" in message
+    assert "muted or bypassed" in message
+    assert "playable browser preview" in message
+else:
+    raise AssertionError("missing scheduled audio was accepted")
+try:
+    chain.MiniMaxH3ScheduledAudioReference().add(
         lambda: b"legacy VHS_AUDIO", "legacy", "1")
 except ValueError as exc:
     assert "ComfyUI AUDIO" in str(exc)

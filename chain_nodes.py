@@ -2149,6 +2149,20 @@ class MiniMaxH3ScheduledAudioReference:
                    "definition in the Plan prompt; this node inserts no text.")
 
     def add(self, audio, tag, scenes, previous=None):
+        if audio is None:
+            raise ValueError(
+                "Scheduled H3 standalone audio received no audio (None). "
+                "Most likely, this input is connected to Current Shot's "
+                "source_audio_slice while the Plan uses generated_audio; that "
+                "output is intentionally empty in generated_audio mode. For a "
+                "short voice/timbre reference, connect Load Audio directly to "
+                "Scheduled Audio Ref. For frame-exact source slices plus "
+                "generated-audio continuity, use source_plus_timeline and set "
+                "Assemble audio_source to generated if that is the final track "
+                "you want. Otherwise check that the upstream audio node is not "
+                "muted or bypassed, reconnect the AUDIO link, and queue again. "
+                "A playable browser preview does not guarantee that the socket "
+                "emitted AUDIO during this execution.")
         _validate_audio(audio, "Scheduled H3 standalone audio")
         schedule = _append_scheduled_reference(
             previous, kind="audio", tag=tag, scenes=scenes,
