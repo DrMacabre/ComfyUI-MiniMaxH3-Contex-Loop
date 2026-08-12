@@ -20,6 +20,10 @@ huge cumulative image tensor.
 Newest first. Recent additions stay visible; older milestones are folded away
 so this page remains a useful starting point rather than a changelog wall.
 
+- **v0.3.22 — Optional floating reroll control.** A ComfyUI setting under
+  **MiniMax H3 Contex Loop → Interface → Cancel & reroll** can hide and disable
+  the floating in-progress Cancel & reroll action. Review Gate retry and reroll
+  controls remain available.
 - **v0.3.21 — Upstream continuity update and exact assembly.** Motion Context
   now preserves a stock H3 `last_frame` target while replacing a conflicting
   first-frame anchor with its carried head. Advanced 56-frame visual context
@@ -484,6 +488,11 @@ confirm interruption, writes a new explicit seed into that scene, and queues a
 checkpoint resume from the same scene. It never falls back to ComfyUI's global
 interrupt. Once Segment Save or Review Gate begins, the floating action hides
 and Review Gate's normal reroll owns the retry.
+
+To remove the floating action, disable **Show floating Cancel & reroll control**
+under **Settings → MiniMax H3 Contex Loop → Interface → Cancel & reroll**. This
+only disables the floating in-progress action; Review Gate controls are
+unchanged.
 
 ## Archival PNG export
 

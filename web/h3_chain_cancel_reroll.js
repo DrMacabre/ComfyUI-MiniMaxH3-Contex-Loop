@@ -10,6 +10,7 @@ import {
 const CURRENT_TYPE = "MiniMaxH3ChainCurrent";
 const PLAN_TYPE = "MiniMaxH3ChainPlan";
 const START_TYPE = "MiniMaxH3ChainLoopStart";
+const SETTING_ID = "MiniMaxH3ContexLoop.cancelRerollControl";
 const GENERATION_FINISHED_TYPES = new Set([
     "MiniMaxH3ChainSegmentSave",
     "MiniMaxH3ChainReview",
@@ -21,6 +22,8 @@ let actionButton = null;
 let status = null;
 let active = null;
 let busy = false;
+let controlAllowed = true;
+let wantsVisible = false;
 const interruptionWaiters = new Map();
 
 function nodeType(node) {
@@ -82,7 +85,8 @@ function injectStyles() {
             stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
         .h3cr-status { padding:5px 9px; border:1px solid #4a4f5d; border-radius:7px;
             background:#181a20ee; color:#d9dce5; box-shadow:0 3px 12px #0008;
-            text-align:right; white-space:pre-wrap; }
+            box-sizing:border-box; max-width:100%; min-width:0;
+            text-align:right; white-space:pre-wrap; overflow-wrap:anywhere; }
         .h3cr-status:empty { display:none; }
         .h3cr-error { color:#ffd0bc; border-color:#a86148; }
     `;
@@ -125,6 +129,20 @@ function ensureControl() {
     });
 }
 
+function settingEnabled() {
+    return app.ui?.settings?.getSettingValue?.(SETTING_ID) !== false;
+}
+
+function setControlAllowed(value) {
+    controlAllowed = value !== false;
+    if (root) root.hidden = !controlAllowed || !wantsVisible;
+}
+
+function setControlVisible(value) {
+    wantsVisible = Boolean(value);
+    if (root) root.hidden = !controlAllowed || !wantsVisible;
+}
+
 function showActive(record) {
     ensureControl();
     active = record;
@@ -134,13 +152,13 @@ function showActive(record) {
         `Cancel & reroll scene ${record.scene.clipIndex}`;
     status.className = "h3cr-status";
     status.textContent = `${record.scene.shotId} · current seed ${record.scene.seed}`;
-    root.hidden = false;
+    setControlVisible(true);
 }
 
 function hideControl() {
     active = null;
     busy = false;
-    if (root) root.hidden = true;
+    setControlVisible(false);
 }
 
 function showFailure(message, retryable = Boolean(active)) {
@@ -149,7 +167,7 @@ function showFailure(message, retryable = Boolean(active)) {
     actionButton.disabled = !retryable;
     status.className = "h3cr-status h3cr-error";
     status.textContent = String(message);
-    root.hidden = false;
+    setControlVisible(true);
 }
 
 function waitForInterruption(promptId, timeoutMilliseconds = 30000) {
@@ -244,7 +262,7 @@ function updateWorkflowForReroll(record, seed) {
 }
 
 async function cancelAndReroll() {
-    if (!active || busy) return;
+    if (!controlAllowed || !active || busy) return;
     const record = active;
     busy = true;
     actionButton.disabled = true;
@@ -296,7 +314,7 @@ async function cancelAndReroll() {
         actionButton.disabled = true;
         status.textContent = `Scene ${record.scene.clipIndex} requeued with seed ${seed}.`;
         window.setTimeout(() => {
-            if (!active && !busy) root.hidden = true;
+            if (!active && !busy) setControlVisible(false);
         }, 5000);
     } catch (error) {
         waiter?.cancel();
@@ -350,8 +368,23 @@ function onTerminal(kind, data) {
 
 app.registerExtension({
     name: "minimax_h3_context_loop.cancel_reroll",
+    init() {
+        app.ui?.settings?.addSetting?.({
+            id: SETTING_ID,
+            category: ["MiniMax H3 Contex Loop", "Interface", "Cancel & reroll"],
+            name: "Show floating Cancel & reroll control",
+            tooltip: "Show the guarded floating action while an H3 scene is sampling. Disabling it does not remove Review Gate retry or reroll controls.",
+            type: "boolean",
+            defaultValue: true,
+            onChange(value) {
+                setControlAllowed(value);
+            },
+        });
+        setControlAllowed(settingEnabled());
+    },
     setup() {
         ensureControl();
+        setControlAllowed(settingEnabled());
         api.addEventListener("executed", (event) => onCurrentExecuted(event.detail));
         api.addEventListener("executing", (event) => onExecuting(event.detail));
         api.addEventListener("execution_interrupted", (event) =>

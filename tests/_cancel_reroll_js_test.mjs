@@ -70,6 +70,13 @@ assert.match(source, /resumeSelection/);
 assert.match(source, /await app\.queuePrompt\(0, 1\)/);
 assert.match(source, /checkpoint \$\{predecessor\} is not ready/);
 assert.match(source, /queue the workflow manually/);
+assert.match(source, /MiniMaxH3ContexLoop\.cancelRerollControl/);
+assert.match(source, /Show floating Cancel & reroll control/);
+assert.match(source, /defaultValue:\s*true/);
+assert.match(source, /onChange\(value\)[\s\S]*setControlAllowed\(value\)/);
+assert.match(source, /if \(!controlAllowed \|\| !active \|\| busy\) return/);
+assert.match(source, /root\.hidden = !controlAllowed \|\| !wantsVisible/);
+assert.match(source, /\.h3cr-status[\s\S]*max-width:100%[\s\S]*overflow-wrap:anywhere/);
 assert.doesNotMatch(source, /fetchApi\("\/interrupt"/);
 
 console.log("H3 cancel-and-reroll helpers: ok");
