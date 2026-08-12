@@ -37,14 +37,15 @@ export function richGuideInstruction(guide, generationMode) {
     const selected = normalizeRichGuide(guide);
     const mode = String(generationMode || "H3 chain scene");
     const schema = mode === "Ref2VA"
-        ? "Use the Ref2VA section order when a structured rewrite is appropriate: subject_definitions, summary, retention_analysis, detailed_description, overall_soundscape, non_diegetic_music. Keep every reference label or @alias stable."
-        : "When a structured rewrite is appropriate, use integrated_multimodal_description, overall_soundscape, and non_diegetic_music. Do not force headings onto a deliberately compact prompt.";
+        ? "If the source already uses the Ref2VA six-section format, preserve its order: subject_definitions, summary, retention_analysis, detailed_description, overall_soundscape, non_diegetic_music. Introduce that complete format only when the user explicitly asks for a full H3 rewrite. Keep every reference label or @alias stable."
+        : "If the source already uses the base H3 format, preserve integrated_multimodal_description, overall_soundscape, and non_diegetic_music. Introduce the complete format or keyframe-alignment sentence only when the user explicitly asks for a full H3 rewrite; do not force headings onto a compact prompt.";
     return [
-        `Rewrite the current scene as a complete MiniMax H3 ${mode} prompt.`,
+        `Return a complete replacement string for the current MiniMax H3 ${mode} scene, but change only what the request requires.`,
         schema,
         GUIDE_RULES[selected],
         "Preserve exact dialogue and lyrics inside <d> tags, their language, explicit timing, subject identity, wardrobe, camera continuity, and all valid media references unless the source explicitly asks to change them.",
-        "Do not invent details from media you cannot inspect. Preserve its reference token and use only facts stated in the prompt or shared/adjacent context.",
+        "Connected references prove only that an asset and its media type are available; their previews are not uploaded to the optimizer. Do not invent image content, motion, lyrics, voice, timbre, or an audio copy/reference role. Use only facts stated in the prompt or shared/adjacent context and otherwise preserve the reference token without elaboration.",
+        "Keep all described events and cut times inside the supplied scene duration.",
         "Return a complete replacement rather than commentary, a patch, or an ellipsis.",
     ].join(" ");
 }
