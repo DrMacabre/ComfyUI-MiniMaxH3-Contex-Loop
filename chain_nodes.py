@@ -3017,6 +3017,37 @@ class MiniMaxH3ChainScenePromptEditor:
         return (plan,)
 
 
+class MiniMaxH3ChainPlanStudio:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "plan": (PLAN_TYPE, {
+                    "tooltip": "Connect the H3 Chain Plan output. Plan Studio "
+                               "provides an optional timeline-based authoring "
+                               "interface and writes edits back to the connected "
+                               "Plan; this socket passes the validated Plan "
+                               "through unchanged."}),
+            }
+        }
+
+    RETURN_TYPES = (PLAN_TYPE,)
+    RETURN_NAMES = ("plan",)
+    OUTPUT_TOOLTIPS = (
+        "The connected validated Plan, unchanged at execution time. Plan "
+        "Studio may be inline before Loop Start or connected as an editor-only "
+        "branch.",
+    )
+    FUNCTION = "passthrough"
+    CATEGORY = "conditioning/minimax/contex_loop"
+    DESCRIPTION = ("Optional timeline-oriented H3 Plan authoring studio with "
+                   "scene navigation, prompt revisions, saved-segment status, "
+                   "and preview playback. The original Plan node is unchanged.")
+
+    def passthrough(self, plan):
+        return (plan,)
+
+
 class MiniMaxH3ChainRunManager:
     @classmethod
     def INPUT_TYPES(cls):
@@ -5354,6 +5385,21 @@ async def _list_saved_checkpoints(request):
                 }
                 if os.path.isfile(segment_path):
                     item["video"] = _video_output_item(segment_path)
+                    review_dir = os.path.join(
+                        _output_root(), "h3_chains", run_name, "reviews")
+                    video_hash = str(segment.get("segment_sha256") or "")[:12]
+                    review_prefix = "clip_%04d.%s." % (index, video_hash)
+                    if video_hash and os.path.isdir(review_dir):
+                        previews = [
+                            os.path.join(review_dir, candidate)
+                            for candidate in os.listdir(review_dir)
+                            if candidate.startswith(review_prefix)
+                            and candidate.endswith(".review.mp4")
+                            and os.path.isfile(os.path.join(review_dir, candidate))
+                        ]
+                        if previews:
+                            newest = max(previews, key=os.path.getmtime)
+                            item["preview_video"] = _video_output_item(newest)
                 partial_path = os.path.join(
                     _output_root(), "h3_chains", run_name, "final",
                     "partial_through_clip_%04d.mp4" % index)
@@ -5507,6 +5553,7 @@ if (PromptServer is not None and web is not None and
 CHAIN_NODE_CLASS_MAPPINGS = {
     "MiniMaxH3ChainPlan": MiniMaxH3ChainPlan,
     "MiniMaxH3ChainScenePromptEditor": MiniMaxH3ChainScenePromptEditor,
+    "MiniMaxH3ChainPlanStudio": MiniMaxH3ChainPlanStudio,
     "MiniMaxH3ChainRunManager": MiniMaxH3ChainRunManager,
     "MiniMaxH3ChainFirstSceneImage": MiniMaxH3ChainFirstSceneImage,
     "MiniMaxH3ReferenceVideoPrepare": MiniMaxH3ReferenceVideoPrepare,
@@ -5530,6 +5577,7 @@ CHAIN_NODE_CLASS_MAPPINGS = {
 CHAIN_NODE_DISPLAY_NAME_MAPPINGS = {
     "MiniMaxH3ChainPlan": "MiniMax H3 Contex Loop Plan",
     "MiniMaxH3ChainScenePromptEditor": "MiniMax H3 Scene Prompt Editor",
+    "MiniMaxH3ChainPlanStudio": "MiniMax H3 Plan Studio (Experimental)",
     "MiniMaxH3ChainRunManager": "MiniMax H3 Run Manager",
     "MiniMaxH3ChainFirstSceneImage": "MiniMax H3 First-Scene Image Gate",
     "MiniMaxH3ReferenceVideoPrepare": "MiniMax H3 Reference Video Prep",
