@@ -133,6 +133,7 @@ def main():
     print("review: async decision route preserves exact uint64 seeds")
     required = {
         "MiniMaxH3ChainPlan", "MiniMaxH3ChainScenePromptEditor",
+        "MiniMaxH3ChainRunManager",
         "MiniMaxH3ChainFirstSceneImage",
         "MiniMaxH3ReferenceVideoPrepare",
         "MiniMaxH3ScheduledPictureReference",
@@ -472,6 +473,8 @@ def main():
     prompt_editor = package.NODE_CLASS_MAPPINGS[
         "MiniMaxH3ChainScenePromptEditor"]()
     assert prompt_editor.passthrough(readable_prompts)[0] is readable_prompts
+    run_manager = package.NODE_CLASS_MAPPINGS["MiniMaxH3ChainRunManager"]()
+    assert run_manager.passthrough(readable_prompts)[0] is readable_prompts
     opening_image = object()
     first_scene_gate = package.NODE_CLASS_MAPPINGS[
         "MiniMaxH3ChainFirstSceneImage"]()

@@ -20,6 +20,11 @@ huge cumulative image tensor.
 Newest first. Recent additions stay visible; older milestones are folded away
 so this page remains a useful starting point rather than a changelog wall.
 
+- **v0.3.24 — Saved Run Manager.** A companion node browses projects under the
+  ComfyUI host's `output/h3_chains`, reports scene/checkpoint/archive details,
+  and restores all archived prompts and Plan settings into the connected Plan
+  after confirmation. Exact API/workflow inputs are preferred with `plan.json`
+  as the older-run fallback.
 - **v0.3.23 — Branching scene-prompt history.** The Scene Prompt Editor keeps
   lazy per-scene prompt revisions outside the workflow and Plan JSON. Its
   compact ChatGPT-style `‹ 2 / 5 ›` control swaps versions, shows a light
@@ -430,6 +435,25 @@ and branch parent. The readable Plan JSON still contains only the active
 prompt. History is loaded only for the selected scene and stored as a small
 index plus one human-readable file per revision under
 `output/h3_chains/<run_name>/prompt_history/<scene_id>/`.
+
+### Restoring a saved run
+
+Add **MiniMax H3 Run Manager** and connect the active Plan output to its `plan`
+input. The manager discovers projects on the ComfyUI host, so it also works
+when ComfyUI runs in a remote Docker container. Select a run and click **Load
+into Plan**; after confirmation it replaces the connected Plan's shared prompt,
+scene IDs/prompts/lengths/steps/seeds, `run_name`, generation fingerprint,
+dimensions, context/anchor/crop/audio modes, defaults, base seed, and segment
+quality whenever those exact archived inputs are available. Existing Plan
+connections are not changed.
+
+The loader prefers `api_prompt.json`, then `workflow.json`, and finally derives
+an effective Plan from `plan.json` for older runs. The fallback retains exact
+per-scene effective lengths, steps, and seeds, though obsolete archives may not
+contain the original unused default-widget values. Prompt-history folders are
+not read during run discovery; choosing the restored scene in the Scene Prompt
+Editor loads that scene's history normally through its restored `run_name` and
+scene ID.
 
 ### Prompt Assistant (Codex or Hermes)
 

@@ -77,6 +77,7 @@ from .nodes import (
     _streams_from_latent,
 )
 from .prompt_history import PromptHistoryStore
+from .run_manager import RunArchiveManager
 
 
 _LOG = logging.getLogger("minimax_h3_context_loop.chain")
@@ -2736,6 +2737,35 @@ class MiniMaxH3ChainScenePromptEditor:
         return (plan,)
 
 
+class MiniMaxH3ChainRunManager:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "plan": (PLAN_TYPE, {
+                    "tooltip": "Connect the active H3 Chain Plan. The Run "
+                               "Manager can replace that Plan's prompts and "
+                               "settings with a saved run after confirmation; "
+                               "execution passes the current Plan through."}),
+            }
+        }
+
+    RETURN_TYPES = (PLAN_TYPE,)
+    RETURN_NAMES = ("plan",)
+    OUTPUT_TOOLTIPS = (
+        "The connected Plan, unchanged at execution time. The browser-side "
+        "manager edits the upstream Plan only when Load into Plan is clicked.",
+    )
+    FUNCTION = "passthrough"
+    CATEGORY = "conditioning/minimax/contex_loop"
+    DESCRIPTION = ("Browse output/h3_chains projects and restore a saved "
+                   "run's complete archived Plan prompts and settings into "
+                   "the connected active Plan.")
+
+    def passthrough(self, plan):
+        return (plan,)
+
+
 class MiniMaxH3ChainFirstSceneImage:
     @classmethod
     def INPUT_TYPES(cls):
@@ -5065,6 +5095,26 @@ async def _update_prompt_history(request):
     return web.json_response(payload)
 
 
+async def _list_saved_runs(_request):
+    try:
+        runs = await asyncio.to_thread(
+            RunArchiveManager(_output_root()).list_runs)
+    except OSError as exc:
+        return web.json_response(
+            {"error": "Could not scan H3 runs: %s" % exc}, status=500)
+    return web.json_response({"runs": runs})
+
+
+async def _load_saved_run(request):
+    run_name = request.query.get("run_name", "")
+    try:
+        payload = await asyncio.to_thread(
+            RunArchiveManager(_output_root()).load_run, run_name)
+    except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        return web.json_response({"error": str(exc)}, status=400)
+    return web.json_response(payload)
+
+
 if (PromptServer is not None and web is not None and
         getattr(PromptServer, "instance", None) is not None):
     PromptServer.instance.routes.post(
@@ -5079,11 +5129,16 @@ if (PromptServer is not None and web is not None and
         "/minimax_h3_context_loop/prompt-history")(_get_prompt_history)
     PromptServer.instance.routes.post(
         "/minimax_h3_context_loop/prompt-history")(_update_prompt_history)
+    PromptServer.instance.routes.get(
+        "/minimax_h3_context_loop/runs")(_list_saved_runs)
+    PromptServer.instance.routes.get(
+        "/minimax_h3_context_loop/run")(_load_saved_run)
 
 
 CHAIN_NODE_CLASS_MAPPINGS = {
     "MiniMaxH3ChainPlan": MiniMaxH3ChainPlan,
     "MiniMaxH3ChainScenePromptEditor": MiniMaxH3ChainScenePromptEditor,
+    "MiniMaxH3ChainRunManager": MiniMaxH3ChainRunManager,
     "MiniMaxH3ChainFirstSceneImage": MiniMaxH3ChainFirstSceneImage,
     "MiniMaxH3ReferenceVideoPrepare": MiniMaxH3ReferenceVideoPrepare,
     "MiniMaxH3ScheduledPictureReference": MiniMaxH3ScheduledPictureReference,
@@ -5106,6 +5161,7 @@ CHAIN_NODE_CLASS_MAPPINGS = {
 CHAIN_NODE_DISPLAY_NAME_MAPPINGS = {
     "MiniMaxH3ChainPlan": "MiniMax H3 Contex Loop Plan",
     "MiniMaxH3ChainScenePromptEditor": "MiniMax H3 Scene Prompt Editor",
+    "MiniMaxH3ChainRunManager": "MiniMax H3 Run Manager",
     "MiniMaxH3ChainFirstSceneImage": "MiniMax H3 First-Scene Image Gate",
     "MiniMaxH3ReferenceVideoPrepare": "MiniMax H3 Reference Video Prep",
     "MiniMaxH3ScheduledPictureReference": "MiniMax H3 Scheduled Picture Ref",

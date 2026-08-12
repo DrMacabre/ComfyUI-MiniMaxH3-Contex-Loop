@@ -348,6 +348,50 @@ export function h3FrameLength(seconds) {
     return length;
 }
 
+export function shotLengthMode(shot) {
+    if (shot?.length !== undefined || shot?.frames !== undefined) return "frames";
+    if (shot?.duration_seconds !== undefined) return "seconds";
+    return "default";
+}
+
+export function setShotLengthMode(shot, mode, fallbackSeconds = 15) {
+    if (!shot || typeof shot !== "object" || Array.isArray(shot)) {
+        throw new Error("Scene length settings require a scene object.");
+    }
+    if (!["default", "seconds", "frames"].includes(mode)) {
+        throw new Error(`Unknown scene length mode “${mode}”.`);
+    }
+
+    const currentMode = shotLengthMode(shot);
+    if (currentMode === mode) return shot;
+
+    let currentSeconds;
+    if (currentMode === "frames") {
+        const frames = Number(shot.length ?? shot.frames);
+        currentSeconds = Number.isFinite(frames) && frames > 0
+            ? frames / FPS : Number(fallbackSeconds);
+    } else if (currentMode === "seconds") {
+        currentSeconds = Number(shot.duration_seconds);
+    } else {
+        currentSeconds = Number(fallbackSeconds);
+    }
+    if (!Number.isFinite(currentSeconds) || currentSeconds <= 0) {
+        currentSeconds = 15;
+    }
+
+    // Compute the replacement before deleting the active representation. If
+    // conversion fails (for example an out-of-range duration), the scene stays
+    // untouched and the editor can continue to report the original problem.
+    const replacement = mode === "frames" ? h3FrameLength(currentSeconds)
+        : mode === "seconds" ? currentSeconds : null;
+    delete shot.length;
+    delete shot.frames;
+    delete shot.duration_seconds;
+    if (mode === "frames") shot.length = replacement;
+    if (mode === "seconds") shot.duration_seconds = replacement;
+    return shot;
+}
+
 export function validateH3Length(value) {
     const length = Number(value);
     if (!Number.isInteger(length) || length < 5 || length > MAX_H3_FRAMES || length % 17 !== 5) {

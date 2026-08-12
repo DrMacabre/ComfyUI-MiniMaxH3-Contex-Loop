@@ -7,7 +7,6 @@ import {
     derivedSceneSeed,
     duplicateShot,
     formatClock,
-    h3FrameLength,
     makeShot,
     moveShot,
     parsePlanJson,
@@ -16,7 +15,9 @@ import {
     promptValueToText,
     randomSceneSeed,
     safeShotId,
+    setShotLengthMode,
     setSharedPrompt,
+    shotLengthMode,
     sharedPrompt,
 } from "./h3_chain_plan_core.mjs";
 import {availableReferenceRecords} from "./h3_reference_preview_core.mjs";
@@ -304,23 +305,6 @@ function insertDialogue(textarea) {
     const markup = `<d>${selected}</d>`;
     const offset = selected ? markup.length : 3;
     insertText(textarea, markup, offset);
-}
-
-function lengthMode(shot) {
-    if (shot.length !== undefined || shot.frames !== undefined) return "frames";
-    if (shot.duration_seconds !== undefined) return "seconds";
-    return "default";
-}
-
-function updateShotLengthMode(shot, mode, fallbackSeconds) {
-    delete shot.length;
-    delete shot.frames;
-    delete shot.duration_seconds;
-    const numericFallback = Number(fallbackSeconds);
-    const seconds = Number.isFinite(numericFallback) && numericFallback > 0
-        ? numericFallback : 15;
-    if (mode === "seconds") shot.duration_seconds = seconds;
-    if (mode === "frames") shot.length = h3FrameLength(seconds);
 }
 
 function downloadJson(value, filename) {
@@ -670,11 +654,11 @@ function mountEditor(node) {
             option.value = value;
             mode.append(option);
         }
-        mode.value = lengthMode(shot);
+        mode.value = shotLengthMode(shot);
         const value = numberInput("", {min: "0.01", step: "0.01"});
         const lengthHelp = element("span", "h3c-help");
         function refreshLengthControl() {
-            const selected = lengthMode(shot);
+            const selected = shotLengthMode(shot);
             mode.value = selected;
             value.disabled = selected === "default";
             if (selected === "seconds") {
@@ -700,7 +684,7 @@ function mountEditor(node) {
         mode.addEventListener("change", () => {
             const fallback = state.plan.defaults?.duration_seconds
                 ?? widgetValue(node, "default_duration_seconds", 15);
-            updateShotLengthMode(shot, mode.value, fallback);
+            setShotLengthMode(shot, mode.value, fallback);
             refreshLengthControl();
             syncPlan();
         });

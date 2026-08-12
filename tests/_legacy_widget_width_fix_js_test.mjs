@@ -162,6 +162,7 @@ const integrationSource = fs.readFileSync(
 assert.match(integrationSource, /MiniMaxH3ContexLoop\.legacyWidgetWidthFix/);
 assert.match(integrationSource, /LegacyWidgetWidthFix/);
 assert.match(integrationSource, /MiniMaxH3ChainScenePromptEditor/);
+assert.match(integrationSource, /MiniMaxH3ChainRunManager/);
 assert.match(integrationSource, /MiniMaxH3ContexLoopSeamProbe/);
 assert.match(integrationSource, /afterConfigureGraph/);
 assert.match(integrationSource, /controller\.syncHosts/);

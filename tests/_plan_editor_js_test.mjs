@@ -14,7 +14,9 @@ import {
     planToJson,
     promptValueToText,
     randomSceneSeed,
+    setShotLengthMode,
     setSharedPrompt,
+    shotLengthMode,
     sharedPrompt,
     validateH3Length,
 } from "../web/h3_chain_plan_core.mjs";
@@ -37,6 +39,31 @@ assert.equal(randomSceneSeed({
         return words;
     },
 }), "1311768467463790320");
+
+const exactLengthShot = {length: 209};
+assert.equal(shotLengthMode(exactLengthShot), "frames");
+setShotLengthMode(exactLengthShot, "seconds", 15);
+assert.equal(shotLengthMode(exactLengthShot), "seconds");
+assert.equal(exactLengthShot.duration_seconds, 209 / 24);
+assert.equal(exactLengthShot.length, undefined);
+setShotLengthMode(exactLengthShot, "frames", 15);
+assert.deepEqual(exactLengthShot, {length: 209});
+
+const requestedSecondsShot = {duration_seconds: 10};
+setShotLengthMode(requestedSecondsShot, "frames", 15);
+assert.deepEqual(requestedSecondsShot, {length: 243});
+setShotLengthMode(requestedSecondsShot, "seconds", 15);
+assert.deepEqual(requestedSecondsShot, {duration_seconds: 243 / 24});
+
+const inheritedLengthShot = {};
+setShotLengthMode(inheritedLengthShot, "frames", 15);
+assert.deepEqual(inheritedLengthShot, {length: 362});
+setShotLengthMode(inheritedLengthShot, "default", 15);
+assert.deepEqual(inheritedLengthShot, {});
+
+const invalidDurationShot = {duration_seconds: 999};
+assert.throws(() => setShotLengthMode(invalidDurationShot, "frames", 15));
+assert.deepEqual(invalidDurationShot, {duration_seconds: 999});
 
 const plan = parsePlanJson(JSON.stringify({
     prompt_prefix: ["Identity.", "", "Wardrobe."],
