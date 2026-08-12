@@ -67,6 +67,8 @@ assert.match(source, /restorePendingRequest/);
 assert.match(source, /Accept only a request this editor incarnation/);
 assert.match(source, /assistant\.preparingRequest !== preparation/);
 assert.match(source, /Snapshot the selected scene before the asynchronous bridge handshake/);
+assert.match(source, /rebaseActivePromptOntoLivePlan/);
+assert.match(source, /publishCompanionScene/);
 assert.match(source, /prompt_assist_cancel_ack/);
 assert.match(source, /empty assistant draft cannot replace/i);
 assert.match(source, /Undo last apply/);

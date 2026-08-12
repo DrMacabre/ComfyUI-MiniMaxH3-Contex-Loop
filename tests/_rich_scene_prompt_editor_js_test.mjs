@@ -64,6 +64,8 @@ assert.match(source, /optimizerProviders/);
 assert.match(source, /providers before the user opens it/);
 assert.match(source, /direct HTTP/);
 assert.match(source, /Endpoint:/);
+assert.match(source, /rebaseActivePromptOntoLivePlan/);
+assert.match(source, /publishCompanionScene/);
 assert.doesNotMatch(source, /state\.provider === "hermes"/);
 assert.match(source, /Optimize/);
 assert.match(source, /Apply changed result/);

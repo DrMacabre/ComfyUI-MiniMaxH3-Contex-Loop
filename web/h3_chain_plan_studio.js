@@ -30,6 +30,10 @@ import {
     studioCheckpointSignature,
     studioSceneStartSeconds,
 } from "./h3_chain_plan_studio_core.mjs";
+import {
+    connectedPromptEditors,
+    publishCompanionScene,
+} from "./h3_prompt_companion_sync.mjs";
 
 const NODE_NAME = "MiniMaxH3ChainPlanStudio";
 const PLAN_NAME = "MiniMaxH3ChainPlan";
@@ -105,6 +109,9 @@ function injectStyles() {
         .h3studio-length { display:grid; grid-template-columns:112px minmax(80px,1fr); gap:5px; }
         .h3studio-prompt { min-height:250px; width:100%; font:15px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace !important; }
         .h3studio-prompt-tools { display:flex; align-items:center; gap:6px; margin:7px 0; flex-wrap:wrap; }
+        .h3studio-prompt-delegated { margin-top:10px; padding:12px; border:1px dashed var(--hs-border);
+            border-radius:7px; color:var(--hs-muted); background:var(--hs-bg); }
+        .h3studio-prompt-delegated strong { display:block; margin-bottom:4px; color:var(--hs-text); }
         .h3studio-hint,.h3studio-message { color:var(--hs-muted); }
         .h3studio-history { justify-content:center; min-height:26px; }
         .h3studio-history-count { min-width:44px; text-align:center; font-variant-numeric:tabular-nums; }
@@ -292,6 +299,7 @@ function mount(node) {
         history:{sceneKey:"", data:null, revisionId:null, host:null, textarea:null,
             status:null, loadToken:0, loadPromise:null, saveTimer:null,
             pendingDraft:null, savePromise:null, error:""},
+        promptEditors:[], lastPromptEditorsSignature:"",
     };
     node._h3PlanStudioState = state;
 
@@ -332,8 +340,43 @@ function mount(node) {
         return calculatePlanTiming(state.plan, settings());
     }
 
+    function promptEditorsSignature(editors = state.promptEditors) {
+        return editors.map((editor) => `${nodeType(editor)}:${String(editor.id ?? "")}`).sort().join("|");
+    }
+
+    function promptEditorLabel() {
+        if (state.promptEditors.length > 1) return `${state.promptEditors.length} linked prompt editors`;
+        return nodeType(state.promptEditors[0]) === "MiniMaxH3ChainRichScenePromptEditor"
+            ? "Rich Scene Prompt Editor" : "Scene Prompt Editor";
+    }
+
+    function preserveDelegatedPrompts() {
+        if (!state.promptEditors.length || !state.planWidget || !state.plan) return;
+        let live;
+        try { live = parsePlanJson(String(state.planWidget.value ?? "")); }
+        catch (_error) { return; }
+        const byId = new Map();
+        for (const shot of live.shots) {
+            const id = String(shot?.id ?? "").trim();
+            if (id && !byId.has(id)) byId.set(id, shot);
+        }
+        state.plan.shots.forEach((shot, index) => {
+            const id = String(shot?.id ?? "").trim();
+            const current = (id ? byId.get(id) : null) ?? live.shots[index];
+            if (current) shot.prompt = promptTextToLines(promptValueToText(current.prompt));
+        });
+    }
+
+    function publishActiveScene() {
+        if (state.planNode) publishCompanionScene(node, state.planNode, state.active);
+    }
+
     function writePlan(message = null) {
         if (!state.plan || !state.planWidget) return;
+        // A linked dedicated editor owns scene prompts. Re-read those fields at
+        // the last possible moment so a Studio seed/length edit cannot overwrite
+        // prompt text typed since Studio's 500 ms polling snapshot.
+        preserveDelegatedPrompts();
         const value = planToJson(state.plan);
         state.lastValue = value;
         state.planWidget.value = value;
@@ -589,13 +632,14 @@ function mount(node) {
         );
     }
 
-    async function selectScene(index) {
+    async function selectScene(index, synchronize = true) {
         await flushHistoryDraft();
         state.active = Math.max(0, Math.min(state.plan.shots.length - 1, Number(index)));
         if (state.view === "player") {
             state.timelinePosition = studioSceneStartSeconds(timing().shots, state.active);
         }
         persistView(); updateTimelineSelection(); renderPanel();
+        if (synchronize) publishActiveScene();
     }
 
     function field(label, control) {
@@ -687,6 +731,19 @@ function mount(node) {
         const form = element("div", "h3studio-form");
         form.append(field("Scene ID", id), field("Length", lengthControl), field("Steps", steps), field("Seed", seedWrap));
 
+        if (state.promptEditors.length) {
+            const delegated = element("div", "h3studio-prompt-delegated");
+            delegated.append(
+                element("strong", "", `Prompt editing delegated to ${promptEditorLabel()}`),
+                document.createTextNode(
+                    "Use the linked editor for prompt text and revision history. " +
+                    "Scene selection is synchronized in both directions; Studio keeps scene ID, length, steps, seed, timeline, and playback controls.",
+                ),
+            );
+            panel.append(head, form, delegated);
+            return panel;
+        }
+
         const prompt = element("textarea", "h3studio-prompt");
         prompt.value = promptValueToText(shot.prompt, `Scene ${state.active + 1} prompt`);
         prompt.placeholder = "Write this scene's action, camera, performance, dialogue, sound, and ending continuity…";
@@ -767,6 +824,7 @@ function mount(node) {
         state.timelinePosition = target;
         if (state.active !== index) {
             state.active = index; persistView(); updateTimelineSelection();
+            publishActiveScene();
         }
         if (state.playerSlider) state.playerSlider.value = String(target);
         if (state.playhead) state.playhead.style.left = `${result.totalSeconds ? target / result.totalSeconds * 100 : 0}%`;
@@ -846,7 +904,7 @@ function mount(node) {
         const status = element("span", "h3studio-message", "Raw JSON escape hatch");
         const actions = element("div", "h3studio-json-actions");
         actions.append(button("Apply JSON", "Validate and replace the current plan JSON", () => {
-            try { state.plan = parsePlanJson(textarea.value); state.active = Math.min(state.active, state.plan.shots.length - 1); writePlan(); status.textContent = "JSON applied"; renderShell(); }
+            try { state.plan = parsePlanJson(textarea.value); state.active = Math.min(state.active, state.plan.shots.length - 1); writePlan(); status.textContent = "JSON applied"; renderShell(); publishActiveScene(); }
             catch (error) { status.textContent = error.message; status.classList.add("h3studio-error"); }
         }), button("Copy", "Copy plan JSON", async () => {
             try { await navigator.clipboard.writeText(textarea.value); status.textContent = "Copied"; }
@@ -882,35 +940,36 @@ function mount(node) {
             if (state.plan.shots.length >= MAX_SHOTS) return;
             await flushHistoryDraft();
             state.plan.shots.splice(state.active + 1, 0, makeShot(state.plan.shots));
-            state.active += 1; state.timelinePosition = null; persistView(); writePlan(); renderShell();
+            state.active += 1; state.timelinePosition = null; persistView(); writePlan(); renderShell(); publishActiveScene();
         });
         add.disabled = state.plan.shots.length >= MAX_SHOTS;
         const duplicate = button("Duplicate", "Duplicate the selected scene", async () => {
             if (state.plan.shots.length >= MAX_SHOTS) return;
             await flushHistoryDraft();
             duplicateShot(state.plan.shots, state.active); state.active += 1;
-            state.timelinePosition = null; persistView(); writePlan(); renderShell();
+            state.timelinePosition = null; persistView(); writePlan(); renderShell(); publishActiveScene();
         });
         const remove = button("Delete", "Delete the selected scene", async () => {
             if (state.plan.shots.length <= 1 || !confirm(`Delete scene ${state.active + 1}?`)) return;
             await flushHistoryDraft();
             state.plan.shots.splice(state.active, 1);
             state.active = Math.min(state.active, state.plan.shots.length - 1);
-            state.timelinePosition = null; persistView(); writePlan(); renderShell();
+            state.timelinePosition = null; persistView(); writePlan(); renderShell(); publishActiveScene();
         });
         remove.disabled = state.plan.shots.length <= 1;
         const left = button("←", "Move selected scene earlier", async () => {
             if (!state.active) return; await flushHistoryDraft();
             moveShot(state.plan.shots, state.active, state.active - 1); state.active -= 1;
-            state.timelinePosition = null; persistView(); writePlan(); renderShell();
+            state.timelinePosition = null; persistView(); writePlan(); renderShell(); publishActiveScene();
         }); left.disabled = !state.active;
         const right = button("→", "Move selected scene later", async () => {
             if (state.active >= state.plan.shots.length - 1) return; await flushHistoryDraft();
             moveShot(state.plan.shots, state.active, state.active + 1); state.active += 1;
-            state.timelinePosition = null; persistView(); writePlan(); renderShell();
+            state.timelinePosition = null; persistView(); writePlan(); renderShell(); publishActiveScene();
         }); right.disabled = state.active >= state.plan.shots.length - 1;
         toolbar.append(add, duplicate, remove, left, right, element("span", "h3studio-spacer"));
-        for (const [value,label] of [["scene","Scene prompt"],["shared","Shared prompt"],["player","Player"],["json","JSON"]]) {
+        const sceneViewLabel = state.promptEditors.length ? "Scene settings" : "Scene prompt";
+        for (const [value,label] of [["scene",sceneViewLabel],["shared","Shared prompt"],["player","Player"],["json","JSON"]]) {
             const item = button(label, `Open ${label.toLowerCase()} view`, () => {
                 void flushHistoryDraft();
                 if (value === "player" && state.timelinePosition == null) {
@@ -947,14 +1006,21 @@ function mount(node) {
         const value = String(planWidget.value ?? "");
         const currentRun = String(widget(planNode, "run_name")?.value ?? "").trim();
         const currentSettings = settingsSignature(planNode);
+        const promptEditors = connectedPromptEditors(node).filter(
+            (editor) => upstreamPlanNode(editor) === planNode,
+        );
+        const currentPromptEditors = promptEditorsSignature(promptEditors);
         if (!force && planNode === state.planNode && value === state.lastValue
                 && currentRun === state.lastRunName
-                && currentSettings === state.lastSettingsSignature) return;
+                && currentSettings === state.lastSettingsSignature
+                && currentPromptEditors === state.lastPromptEditorsSignature) return;
         try {
             const runChanged = planNode !== state.planNode || currentRun !== state.lastRunName;
             state.plan = parsePlanJson(value); state.planNode = planNode; state.planWidget = planWidget;
             state.lastValue = value; state.lastRunName = currentRun;
             state.lastSettingsSignature = currentSettings;
+            state.promptEditors = promptEditors;
+            state.lastPromptEditorsSignature = currentPromptEditors;
             if (runChanged) {
                 state.checkpoints = new Map(); state.checkpointSignature = "";
                 state.checkpointError = ""; state.timelinePosition = null;
@@ -970,7 +1036,9 @@ function mount(node) {
     node.setSize?.([Math.max(Number(node.size?.[0]) || 0, MIN_WIDTH), Math.max(Number(node.size?.[1]) || 0, MIN_HEIGHT)]);
     const connectionsChanged = node.onConnectionsChange;
     node.onConnectionsChange = function () {
-        const result = connectionsChanged?.apply(this, arguments); setTimeout(() => loadPlan(true), 0); return result;
+        const result = connectionsChanged?.apply(this, arguments);
+        setTimeout(() => { loadPlan(true); publishActiveScene(); }, 0);
+        return result;
     };
     const onPromptExecuted = (event) => {
         const values = event.detail?.output?.h3_chain_active_scene;
@@ -993,10 +1061,19 @@ function mount(node) {
         if (state.checkpointTimer != null) clearInterval(state.checkpointTimer);
         if (state.planNotifyTimer != null) clearTimeout(state.planNotifyTimer);
         api.removeEventListener("executed", onPromptExecuted);
+        delete node._h3PromptCompanionSetActiveScene;
         disposePlayer();
         void flushHistoryDraft(); return removed?.apply(this, arguments);
     };
-    node._h3PlanStudioRefresh = () => loadPlan(true);
+    node._h3PromptCompanionSetActiveScene = (planNode, index) => {
+        if (planNode !== state.planNode || !state.plan?.shots?.length) return false;
+        void selectScene(index, false);
+        return true;
+    };
+    node._h3PlanStudioRefresh = () => {
+        loadPlan(true);
+        publishActiveScene();
+    };
     state.pollTimer = setInterval(() => loadPlan(false), 500);
     state.checkpointTimer = setInterval(() => void refreshCheckpoints(), 5000);
     loadPlan(true);

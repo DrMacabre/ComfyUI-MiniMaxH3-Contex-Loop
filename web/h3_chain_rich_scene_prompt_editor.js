@@ -25,6 +25,10 @@ import {
     richGuideInstruction,
     tokenizeRichPrompt,
 } from "./h3_rich_prompt_editor_core.mjs";
+import {
+    publishCompanionScene,
+    rebaseScenePrompt,
+} from "./h3_prompt_companion_sync.mjs";
 
 // The rich mention presentation and compact optimizer interaction are inspired
 // by nkxx188/ComfyUI-MiniMaxH3-Easy (MIT). Graph discovery, scene scheduling,
@@ -398,12 +402,31 @@ function mount(node) {
         dirty();
     }
 
+    function rebaseActivePromptOntoLivePlan() {
+        if (!state.plan || !state.planWidget) return false;
+        let live;
+        try { live = parsePlanJson(String(state.planWidget.value ?? "")); }
+        catch (_error) { return false; }
+        const index = rebaseScenePrompt(state.plan, live, state.active);
+        if (index < 0) return false;
+        state.active = index;
+        node.properties[ACTIVE_PROPERTY] = index;
+        return true;
+    }
+
     function planRunName() {
         return String(state.planNode?.widgets?.find((item) => item.name === "run_name")?.value ?? "").trim();
     }
 
     function writePlan(message = "Saved to connected Plan") {
         if (!state.plan || !state.planWidget || !state.planNode) return;
+        // Rich Editor owns only the selected prompt. Preserve every live Plan
+        // setting and every other scene by rebasing that one field immediately
+        // before the write.
+        if (!rebaseActivePromptOntoLivePlan()) {
+            if (state.status) state.status.textContent = "Plan structure changed; waiting to resynchronize";
+            return;
+        }
         const value = planToJson(state.plan);
         state.lastValue = value;
         state.planWidget.value = value;
@@ -938,7 +961,7 @@ function mount(node) {
         );
     }
 
-    function navigate(offset, absolute = null) {
+    function navigate(offset, absolute = null, {synchronize = true, focus = true} = {}) {
         if (!state.plan?.shots?.length || optimizerBusy()) return;
         void (async () => {
             await flushHistoryDraft();
@@ -946,7 +969,8 @@ function mount(node) {
             state.active = Math.max(0, Math.min(state.plan.shots.length - 1, requested));
             persistView();
             render();
-            state.editor?.focus();
+            if (synchronize) publishCompanionScene(node, state.planNode, state.active);
+            if (focus) state.editor?.focus();
         })();
     }
 
@@ -1172,9 +1196,15 @@ function mount(node) {
         hidePopover();
         state.popover?.remove();
         api.removeEventListener("executed", onPromptExecuted);
+        delete node._h3PromptCompanionSetActiveScene;
         void flushHistoryDraft();
         state.optimizer.client?.close();
         return removed?.apply(this, arguments);
+    };
+    node._h3PromptCompanionSetActiveScene = (planNode, index) => {
+        if (planNode !== state.planNode || !state.plan?.shots?.length || optimizerBusy()) return false;
+        navigate(0, index, {synchronize:false, focus:false});
+        return true;
     };
     node._h3RichPromptRefresh = () => loadPlan(true);
     state.pollTimer = window.setInterval(() => loadPlan(false), 500);

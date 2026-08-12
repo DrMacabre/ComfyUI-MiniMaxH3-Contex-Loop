@@ -59,5 +59,9 @@ assert.match(source, /h3_chain_active_scene/);
 assert.match(source, /api\.removeEventListener\("executed", onPromptExecuted\)/);
 assert.match(source, /renderShell\(\)/);
 assert.match(source, /serialize:false/);
+assert.match(source, /connectedPromptEditors/);
+assert.match(source, /Prompt editing delegated to/);
+assert.match(source, /preserveDelegatedPrompts\(\)/);
+assert.match(source, /publishCompanionScene/);
 
 console.log("H3 Plan Studio: separate timeline editor contract passes");

@@ -22,6 +22,10 @@ import {
     promptRevisionNavigation,
 } from "./h3_prompt_history_core.mjs";
 import {availableReferenceRecords} from "./h3_reference_preview_core.mjs";
+import {
+    publishCompanionScene,
+    rebaseScenePrompt,
+} from "./h3_prompt_companion_sync.mjs";
 
 // The compact @ reference and # dialogue authoring interactions are inspired
 // by nkxx188/ComfyUI-MiniMaxH3-Easy (MIT); see THIRD_PARTY_NOTICES.md.
@@ -447,8 +451,28 @@ function mount(node) {
         dirty();
     }
 
+    function rebaseActivePromptOntoLivePlan() {
+        if (!state.plan || !state.planWidget) return false;
+        let live;
+        try { live = parsePlanJson(String(state.planWidget.value ?? "")); }
+        catch (_error) { return false; }
+        const index = rebaseScenePrompt(state.plan, live, state.active);
+        if (index < 0) return false;
+        state.active = index;
+        node.properties[ACTIVE_SCENE_PROPERTY] = index;
+        return true;
+    }
+
     function writePlan(status) {
         if (!state.plan || !state.planWidget || !state.planNode) return;
+        // This node owns only one scene prompt. Rebase that field onto the
+        // current Plan widget before every write so concurrent Studio edits to
+        // timing, seed, ordering, or other scenes cannot be rolled back by a
+        // briefly stale editor snapshot.
+        if (!rebaseActivePromptOntoLivePlan()) {
+            if (status) status.textContent = "Plan structure changed; waiting to resynchronize";
+            return;
+        }
         const value = planToJson(state.plan);
         state.lastValue = value;
         state.planWidget.value = value;
@@ -1196,7 +1220,7 @@ function mount(node) {
         );
     }
 
-    function navigate(offset, absolute = null) {
+    function navigate(offset, absolute = null, {synchronize = true, focus = true} = {}) {
         if (!state.plan?.shots?.length) return;
         void (async () => {
             await flushHistoryDraft();
@@ -1204,7 +1228,8 @@ function mount(node) {
             state.active = Math.max(0, Math.min(state.plan.shots.length - 1, requested));
             persistView();
             render();
-            root.querySelector(".h3sp-textarea")?.focus();
+            if (synchronize) publishCompanionScene(node, state.planNode, state.active);
+            if (focus) root.querySelector(".h3sp-textarea")?.focus();
         })();
     }
 
@@ -1502,6 +1527,7 @@ function mount(node) {
     node.onRemoved = function () {
         if (state.pollTimer != null) window.clearInterval(state.pollTimer);
         api.removeEventListener("executed", onPromptExecuted);
+        delete node._h3PromptCompanionSetActiveScene;
         void flushHistoryDraft();
         if (PROMPT_ASSISTANT_ENABLED) {
             assistant.preparingRequest = null;
@@ -1510,6 +1536,11 @@ function mount(node) {
             assistant.client?.close();
         }
         return removed?.apply(this, arguments);
+    };
+    node._h3PromptCompanionSetActiveScene = (planNode, index) => {
+        if (planNode !== state.planNode || !state.plan?.shots?.length) return false;
+        navigate(0, index, {synchronize:false, focus:false});
+        return true;
     };
     node._h3ScenePromptEditorRefresh = () => loadPlan(true);
     state.pollTimer = window.setInterval(() => loadPlan(false), 500);
