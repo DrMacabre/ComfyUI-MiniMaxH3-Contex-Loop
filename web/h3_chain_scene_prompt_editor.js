@@ -111,9 +111,12 @@ function injectStyles() {
         .h3sp-ref-preview-copy { min-width:0; color:var(--h3sp-muted);
             white-space:pre-wrap; overflow-wrap:anywhere; }
         .h3sp-ref-preview-title { color:var(--h3sp-text); font-weight:700; }
-        .h3sp-footer { justify-content:space-between; color:var(--h3sp-muted); }
-        .h3sp-history { min-height:28px; display:flex; align-items:center;
-            justify-content:flex-end; gap:6px; color:var(--h3sp-muted); }
+        .h3sp-footer { display:grid; grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);
+            align-items:center; gap:8px; color:var(--h3sp-muted); }
+        .h3sp-footer-status { min-width:0; overflow:hidden; text-align:right;
+            text-overflow:ellipsis; white-space:nowrap; }
+        .h3sp-history { min-width:0; display:flex; align-items:center;
+            justify-content:center; gap:6px; color:var(--h3sp-muted); }
         .h3sp-history-nav { display:flex; align-items:center; gap:2px;
             border:1px solid color-mix(in srgb,var(--h3sp-border) 72%,transparent);
             border-radius:999px; padding:1px 3px; background:var(--comfy-input-bg,#11141a); }
@@ -121,7 +124,7 @@ function injectStyles() {
             border-radius:999px; background:transparent; }
         .h3sp-history-count { min-width:42px; text-align:center; color:var(--h3sp-text);
             font-variant-numeric:tabular-nums; }
-        .h3sp-history-meta { min-width:0; max-width:70%; overflow:hidden;
+        .h3sp-history-meta { min-width:0; max-width:280px; overflow:hidden;
             text-overflow:ellipsis; white-space:nowrap; font-size:11px; }
         .h3sp-history-error { color:#ffb3b3; }
         .h3sp-error { padding:12px; border:1px solid #a76565; border-radius:6px;
@@ -1374,9 +1377,9 @@ function mount(node) {
         const identity = element(
             "span", "", `Scene ${state.active + 1}/${state.plan.shots.length} · ${shotId}`,
         );
-        const status = element("span", "", "Synchronized with Plan");
-        footer.append(identity, status);
+        const status = element("span", "h3sp-footer-status", "Synchronized with Plan");
         const historyHost = element("div", "h3sp-history");
+        footer.append(identity, historyHost, status);
         state.history.host = historyHost;
         state.history.textarea = textarea;
         state.history.status = status;
@@ -1405,7 +1408,7 @@ function mount(node) {
             }
         });
 
-        root.append(head, nav, tools, refs, textarea, historyHost);
+        root.append(head, nav, tools, refs, textarea);
         if (PROMPT_ASSISTANT_ENABLED) {
             const assistantHost = element("div", "h3sp-assist");
             assistant.host = assistantHost;

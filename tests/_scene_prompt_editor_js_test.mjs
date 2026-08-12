@@ -82,5 +82,7 @@ assert.match(source, /scheduleHistoryDraft\(shotId, textarea\.value\)/);
 assert.match(source, /navigation\.position.*navigation\.total/);
 assert.match(source, /Loading prompt versions/);
 assert.match(source, /runName === state\.lastRunName/);
+assert.match(source, /grid-template-columns:minmax\(0,1fr\) auto minmax\(0,1fr\)/);
+assert.match(source, /footer\.append\(identity, historyHost, status\)/);
 
 console.log("H3 Scene Prompt companion: Plan synchronization and controls pass");
