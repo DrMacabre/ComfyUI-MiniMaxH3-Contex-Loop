@@ -104,7 +104,7 @@ function injectStyles() {
       .h3rp-token-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
       .h3rp-toolbar { flex-wrap:wrap; }
       .h3rp-toolbar .h3rp-guide { min-width:150px; }
-      .h3rp-toolbar .h3rp-provider { width:82px; }
+      .h3rp-toolbar .h3rp-provider { width:150px; }
       .h3rp-toolbar-spacer { flex:1; }
       .h3rp-status { min-width:0; color:var(--h3rp-muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
       .h3rp-status-error { color:#ffaaaa; }
@@ -375,7 +375,8 @@ function mount(node) {
         active:Math.max(0, Number(node.properties[ACTIVE_PROPERTY]) || 0),
         fontSize:clamp(node.properties[FONT_PROPERTY], MIN_FONT, MAX_FONT, DEFAULT_FONT),
         guide:normalizeRichGuide(node.properties[GUIDE_PROPERTY]),
-        provider:node.properties[PROVIDER_PROPERTY] === "hermes" ? "hermes" : "codex",
+        provider:/^[a-z][a-z0-9_-]*$/.test(String(node.properties[PROVIDER_PROPERTY] ?? ""))
+            ? String(node.properties[PROVIDER_PROPERTY]) : "codex",
         records:[], referenceMode:null, editor:null, refs:null, status:null, optimizerStatus:null,
         history:{sceneKey:"", data:null, revisionId:null, host:null, loadToken:0, loadPromise:null,
             saveTimer:null, pendingDraft:null, savePromise:null, error:""},
@@ -723,6 +724,40 @@ function mount(node) {
         return Boolean(state.optimizer.preparing || state.optimizer.requestId);
     }
 
+    function optimizerProviders() {
+        const advertised = Array.isArray(state.optimizer.providers)
+            ? state.optimizer.providers.filter((item) => item && typeof item.id === "string") : [];
+        const providers = advertised.length ? advertised : [
+            {id:"claude", label:"Claude", available:true},
+            {id:"codex", label:"Codex", available:true},
+            {id:"gemini", label:"Gemini", available:true},
+            {id:"hermes", label:"Hermes", available:true},
+        ];
+        if (!providers.some((item) => item.id === state.provider)) {
+            providers.push({id:state.provider, label:state.provider, available:false, reason:"not advertised by the bridge"});
+        }
+        return providers;
+    }
+
+    function optimizerProviderLabel(id = state.provider) {
+        return optimizerProviders().find((item) => item.id === id)?.label || id;
+    }
+
+    function refreshProviderSelect(select = root.querySelector(".h3rp-provider")) {
+        if (!select) return;
+        select.replaceChildren();
+        for (const item of optimizerProviders()) {
+            const suffix = item.available === false ? " — unavailable" : item.experimental ? " — experimental" : "";
+            const option = element("option", "", `${item.label || item.id}${suffix}`);
+            option.value = item.id;
+            option.disabled = item.available === false;
+            option.title = item.reason || "";
+            select.append(option);
+        }
+        select.value = state.provider;
+        select.title = "Isolated text-only agent used by Optimize. Available providers come from the connected comfyui-mcp orchestrator.";
+    }
+
     function refreshOptimizerUi() {
         const busy = optimizerBusy();
         if (state.editor) state.editor.contentEditable = busy ? "false" : "true";
@@ -743,8 +778,9 @@ function mount(node) {
         if (!frame || typeof frame !== "object") return;
         if (frame.type === "prompt_assist_ready") {
             state.optimizer.providers = Array.isArray(frame.providers) ? frame.providers : null;
+            refreshProviderSelect();
         } else if (frame.type === "prompt_assist_started" && frame.request_id === state.optimizer.requestId) {
-            state.optimizer.message = `Optimizing with ${state.provider === "hermes" ? "Hermes" : "Codex"}…`;
+            state.optimizer.message = `Optimizing with ${optimizerProviderLabel()}…`;
         } else if (frame.type === "prompt_assist_progress" && frame.request_id === state.optimizer.requestId) {
             state.optimizer.message = "Agent is drafting…";
         } else if (frame.type === "prompt_assist_result" && frame.request_id === state.optimizer.requestId) {
@@ -838,7 +874,10 @@ function mount(node) {
         try {
             await state.optimizer.client.connect();
             const selected = state.optimizer.providers?.find((item) => item.id === state.provider);
-            if (selected?.available === false) throw new Error(`${state.provider === "hermes" ? "Hermes" : "Codex"} is unavailable.`);
+            if (!selected) throw new Error(`${optimizerProviderLabel()} is not supported by this comfyui-mcp prompt bridge.`);
+            if (selected.available === false) {
+                throw new Error(`${selected.label || state.provider} is unavailable${selected.reason ? `: ${selected.reason}` : "."}`);
+            }
             state.optimizer.client.reset();
             const referenceSummary = refs.records.length
                 ? refs.records.map((record) => {
@@ -859,7 +898,7 @@ function mount(node) {
             state.optimizer.preparing = false;
             state.optimizer.meta = {sceneIndex, sceneId, sceneKey, source,
                 currentAtRequest:current};
-            state.optimizer.message = `Optimizing with ${state.provider === "hermes" ? "Hermes" : "Codex"}…`;
+            state.optimizer.message = `Optimizing with ${optimizerProviderLabel()}…`;
             refreshOptimizerUi();
             await state.optimizer.client.send(request);
         } catch (error) {
@@ -969,12 +1008,7 @@ function mount(node) {
         guide.value = state.guide;
         guide.addEventListener("change", () => { state.guide = normalizeRichGuide(guide.value); persistView(); });
         const provider = element("select", "h3rp-provider");
-        provider.title = "Isolated local agent used by Optimize";
         provider.dataset.h3rpLock = "";
-        for (const [id, label] of [["codex", "Codex"], ["hermes", "Hermes"]]) {
-            const option = element("option", "", label); option.value = id; provider.append(option);
-        }
-        provider.value = state.provider;
         provider.addEventListener("change", () => { state.provider = provider.value; persistView(); });
         const optimize = button("Optimize", "Rewrite from prompt text, scene context, and reference mappings with the selected H3 guide; media previews are not uploaded. The result becomes a reversible prompt revision.", () => void optimizePrompt(), "sparkle");
         optimize.classList.add("h3rp-optimize");
@@ -986,7 +1020,8 @@ function mount(node) {
         applyPending.hidden = true;
         const optimizerStatus = element("span", "h3rp-status");
         state.optimizerStatus = optimizerStatus;
-        toolbar.append(refsButton, dialogue, guide, provider, optimize, stop, applyPending, optimizerStatus);
+        toolbar.replaceChildren(refsButton, dialogue, guide, provider, optimize, stop, applyPending, optimizerStatus);
+        refreshProviderSelect(provider);
 
         const refs = element("div", "h3rp-ref-tray");
         state.refs = refs;
@@ -1070,7 +1105,10 @@ function mount(node) {
         identityKey:promptAssistantIdentityKey(node),
         onFrame:handleOptimizerFrame,
         onStatus:(status, detail) => {
-            if (detail?.providers) state.optimizer.providers = detail.providers;
+            if (detail?.providers) {
+                state.optimizer.providers = detail.providers;
+                refreshProviderSelect();
+            }
             if (status === "disconnected" && state.optimizer.requestId) {
                 state.optimizer.error = "Prompt-agent bridge disconnected.";
                 state.optimizer.requestId = null;
@@ -1078,6 +1116,13 @@ function mount(node) {
             }
             refreshOptimizerUi();
         },
+    });
+    // Provider discovery is cheap and text-only: connect the auxiliary bridge
+    // now so the selector reflects the orchestrator's real installed/authenticated
+    // providers before the user opens it. No agent turn starts until Optimize.
+    void state.optimizer.client.connect().catch((error) => {
+        state.optimizer.error = `Prompt-agent bridge: ${error?.message || String(error)}`;
+        refreshOptimizerUi();
     });
 
     const widget = node.addDOMWidget("h3_rich_scene_prompt_editor", "h3-rich-scene-prompt-editor", root,
