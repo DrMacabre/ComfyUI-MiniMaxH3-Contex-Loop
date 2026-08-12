@@ -24,6 +24,12 @@ import {
     promptRevisionNavigation,
 } from "./h3_prompt_history_core.mjs";
 import {availableReferenceRecords} from "./h3_reference_preview_core.mjs";
+import {
+    locateStudioTimelineSecond,
+    matchingStudioCheckpoint,
+    studioCheckpointSignature,
+    studioSceneStartSeconds,
+} from "./h3_chain_plan_studio_core.mjs";
 
 const NODE_NAME = "MiniMaxH3ChainPlanStudio";
 const PLAN_NAME = "MiniMaxH3ChainPlan";
@@ -274,12 +280,15 @@ function mount(node) {
 
     const state = {
         plan:null, planNode:null, planWidget:null, lastValue:"", lastRunName:"",
+        lastSettingsSignature:"",
         active:Math.max(0, Number(node.properties[ACTIVE_PROPERTY]) || 0),
         view:["scene","shared","player","json"].includes(node.properties[VIEW_PROPERTY])
             ? node.properties[VIEW_PROPERTY] : "scene",
         checkpoints:new Map(), checkpointSignature:"", checkpointError:"", checkpointToken:0,
         pollTimer:null, checkpointTimer:null, timelineHost:null, panelHost:null,
-        playhead:null, player:null, playerSlider:null, playerIndex:-1, pendingSeek:0,
+        planNotifyTimer:null,
+        playhead:null, player:null, playerSlider:null, playerIndex:-1,
+        timelinePosition:null, pendingSeek:0,
         history:{sceneKey:"", data:null, revisionId:null, host:null, textarea:null,
             status:null, loadToken:0, loadPromise:null, saveTimer:null,
             pendingDraft:null, savePromise:null, error:""},
@@ -310,6 +319,15 @@ function mount(node) {
         };
     }
 
+    function settingsSignature(planNode = state.planNode) {
+        return JSON.stringify([
+            widget(planNode, "context_length")?.value ?? 22,
+            widget(planNode, "anchor_mode")?.value ?? "head",
+            widget(planNode, "default_duration_seconds")?.value ?? 15,
+            widget(planNode, "default_steps")?.value ?? 20,
+        ]);
+    }
+
     function timing() {
         return calculatePlanTiming(state.plan, settings());
     }
@@ -319,8 +337,13 @@ function mount(node) {
         const value = planToJson(state.plan);
         state.lastValue = value;
         state.planWidget.value = value;
-        state.planWidget.callback?.(value);
-        state.planNode?._h3ChainEditorRefresh?.();
+        if (state.planNotifyTimer != null) clearTimeout(state.planNotifyTimer);
+        const targetWidget = state.planWidget;
+        state.planNotifyTimer = setTimeout(() => {
+            state.planNotifyTimer = null;
+            if (targetWidget !== state.planWidget) return;
+            targetWidget.callback?.(targetWidget.value);
+        }, 75);
         state.planNode?.graph?.setDirtyCanvas?.(true, true);
         if (message) message.textContent = "Saved to connected Plan";
         renderStatus();
@@ -448,7 +471,14 @@ function mount(node) {
     async function refreshCheckpoints() {
         const currentRun = runName();
         const token = ++state.checkpointToken;
-        if (!currentRun) { state.checkpoints = new Map(); state.checkpointError = ""; renderTimeline(); renderStatus(); return; }
+        if (!currentRun) {
+            const changed = state.checkpoints.size > 0
+                || Boolean(state.checkpointSignature) || Boolean(state.checkpointError);
+            state.checkpoints = new Map(); state.checkpointSignature = "";
+            state.checkpointError = "";
+            if (changed) { renderTimeline(); renderStatus(); }
+            return;
+        }
         try {
             const query = new URLSearchParams({run_name:currentRun});
             const response = await api.fetchApi(`/minimax_h3_context_loop/checkpoints?${query.toString()}`);
@@ -456,22 +486,26 @@ function mount(node) {
             if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
             if (token !== state.checkpointToken || currentRun !== runName()) return;
             const records = payload.checkpoints ?? [];
-            const signature = JSON.stringify(records.map((item) => ({
-                scene:item.scene, ready:item.ready, video:item.video,
-                preview_video:item.preview_video, partial_video:item.partial_video,
-            })));
-            if (signature === state.checkpointSignature) return;
+            const signature = studioCheckpointSignature(currentRun, records);
+            const recoveredFromError = Boolean(state.checkpointError);
+            state.checkpointError = "";
+            if (signature === state.checkpointSignature) {
+                if (recoveredFromError) renderStatus();
+                return;
+            }
             state.checkpointSignature = signature;
             state.checkpoints = new Map(records.map((item) => [Number(item.scene), item]));
-            state.checkpointError = "";
         } catch (error) {
             if (token !== state.checkpointToken) return;
             state.checkpointError = error?.message || String(error);
+            renderStatus();
+            return;
         }
         renderTimeline(); renderStatus();
-        if (state.view === "player" && state.player
-                && !state.player.dataset.source && state.player.paused) {
-            renderPanel();
+        if (state.view === "player" && state.player?.paused) {
+            const source = playerCheckpoint(state.playerIndex);
+            const desired = source ? videoUrl(source) : "";
+            if (desired !== String(state.player.dataset.source ?? "")) renderPanel();
         }
     }
 
@@ -479,7 +513,9 @@ function mount(node) {
         const host = root.querySelector(".h3studio-statusline");
         if (!host || !state.plan) return;
         const result = timing();
-        const ready = [...state.checkpoints.values()].filter((item) => item.ready).length;
+        const ready = result.shots.filter(
+            (row, index) => matchingStudioCheckpoint(state.checkpoints, index, row),
+        ).length;
         host.replaceChildren();
         host.append(
             element("strong", "", `${result.shots.length} scenes`),
@@ -508,8 +544,8 @@ function mount(node) {
             if (!totalSeconds) return;
             const rect = ruler.getBoundingClientRect();
             const target = Math.max(0, Math.min(totalSeconds, (event.clientX - rect.left) / rect.width * totalSeconds));
+            state.timelinePosition = target;
             state.view = "player"; persistView(); renderToolbarState(); renderPanel();
-            seekTimeline(target, false);
         });
     }
 
@@ -521,7 +557,7 @@ function mount(node) {
         for (let index = 0; index < state.plan.shots.length; index += 1) {
             const shot = state.plan.shots[index];
             const row = result.shots[index];
-            const checkpoint = state.checkpoints.get(index + 1);
+            const checkpoint = matchingStudioCheckpoint(state.checkpoints, index, row);
             const card = button("", `Scene ${index + 1}: ${row.id}`, () => void selectScene(index));
             card.className = `h3studio-card${index === state.active ? " h3studio-selected" : ""}${checkpoint?.ready ? " h3studio-rendered" : ""}`;
             card.style.setProperty("--scene", automaticSceneColor(index));
@@ -531,7 +567,10 @@ function mount(node) {
                 const media = element("video");
                 media.muted = true; media.playsInline = true; media.preload = "metadata"; media.src = videoUrl(preview);
                 media.addEventListener("loadedmetadata", () => {
-                    if (Number.isFinite(media.duration) && media.duration > .1) media.currentTime = Math.min(.15, media.duration / 2);
+                    if (Number.isFinite(media.duration) && media.duration > .1) {
+                        try { media.currentTime = Math.min(.15, media.duration / 2); }
+                        catch (_error) {}
+                    }
                 }, {once:true});
                 card.append(media);
             }
@@ -553,6 +592,9 @@ function mount(node) {
     async function selectScene(index) {
         await flushHistoryDraft();
         state.active = Math.max(0, Math.min(state.plan.shots.length - 1, Number(index)));
+        if (state.view === "player") {
+            state.timelinePosition = studioSceneStartSeconds(timing().shots, state.active);
+        }
         persistView(); updateTimelineSelection(); renderPanel();
     }
 
@@ -564,7 +606,9 @@ function mount(node) {
 
     function renderReferenceTray(tray, textarea) {
         tray.replaceChildren();
-        const {records, wrapper} = availableReferenceRecords(node, state.active + 1);
+        const {records, wrapper} = availableReferenceRecords(
+            state.planNode ?? node, state.active + 1,
+        );
         if (!records.length) {
             tray.append(element("span", "h3studio-message", wrapper
                 ? `No connected references are active in scene ${state.active + 1}.`
@@ -696,21 +740,31 @@ function mount(node) {
     }
 
     function playerCheckpoint(index) {
-        const item = state.checkpoints.get(index + 1);
-        return item?.ready ? (item.preview_video ?? item.video) : null;
+        const item = matchingStudioCheckpoint(
+            state.checkpoints, index, timing().shots[index],
+        );
+        return item ? (item.preview_video ?? item.video) : null;
+    }
+
+    function disposePlayer() {
+        const current = state.player;
+        state.player = null;
+        state.playerSlider = null;
+        if (!current) return;
+        try { current.pause(); } catch (_error) {}
+        current.removeAttribute("src");
+        delete current.dataset.source;
+        try { current.load(); } catch (_error) {}
     }
 
     function seekTimeline(seconds, autoplay = false) {
         const result = timing();
-        const target = Math.max(0, Math.min(result.totalSeconds, Number(seconds) || 0));
-        let elapsed = 0;
-        let index = result.shots.length - 1;
-        for (let offset = 0; offset < result.shots.length; offset += 1) {
-            if (target < elapsed + result.shots[offset].deliveredSeconds || offset === result.shots.length - 1) { index = offset; break; }
-            elapsed += result.shots[offset].deliveredSeconds;
-        }
+        const location = locateStudioTimelineSecond(result.shots, seconds);
+        if (location.index < 0) return;
+        const {index, localSeconds, targetSeconds:target} = location;
         const source = playerCheckpoint(index);
-        state.playerIndex = index; state.pendingSeek = Math.max(0, target - elapsed);
+        state.playerIndex = index; state.pendingSeek = localSeconds;
+        state.timelinePosition = target;
         if (state.active !== index) {
             state.active = index; persistView(); updateTimelineSelection();
         }
@@ -718,20 +772,25 @@ function mount(node) {
         if (state.playhead) state.playhead.style.left = `${result.totalSeconds ? target / result.totalSeconds * 100 : 0}%`;
         if (!state.player) return;
         if (!source) {
+            delete state.player.dataset.source;
             state.player.removeAttribute("src"); state.player.load();
             const label = root.querySelector(".h3studio-player-label");
             if (label) label.textContent = `Scene ${index + 1} has no saved segment.`;
             return;
         }
         const url = videoUrl(source);
+        const targetPlayer = state.player;
+        const requestedSeek = state.pendingSeek;
         const applySeek = () => {
-            const duration = Number.isFinite(state.player.duration) ? state.player.duration : state.pendingSeek;
-            state.player.currentTime = Math.min(state.pendingSeek, Math.max(0, duration - .02));
-            if (autoplay) void state.player.play().catch(() => {});
+            if (state.player !== targetPlayer || !targetPlayer?.isConnected) return;
+            const duration = Number.isFinite(targetPlayer.duration) ? targetPlayer.duration : requestedSeek;
+            try { targetPlayer.currentTime = Math.min(requestedSeek, Math.max(0, duration - .02)); }
+            catch (_error) {}
+            if (autoplay) void targetPlayer.play().catch(() => {});
         };
-        if (state.player.dataset.source !== url) {
-            state.player.dataset.source = url; state.player.src = url; state.player.load();
-            state.player.addEventListener("loadedmetadata", applySeek, {once:true});
+        if (targetPlayer.dataset.source !== url) {
+            targetPlayer.dataset.source = url; targetPlayer.src = url; targetPlayer.load();
+            targetPlayer.addEventListener("loadedmetadata", applySeek, {once:true});
         } else applySeek();
         const label = root.querySelector(".h3studio-player-label");
         if (label) label.textContent = `Scene ${index + 1} · ${timing().shots[index].id}`;
@@ -742,7 +801,9 @@ function mount(node) {
         const label = element("div", "h3studio-player-label", "Saved scene preview");
         const video = element("video"); video.controls = true; video.playsInline = true; video.preload = "metadata";
         const controls = element("div", "h3studio-player-controls");
-        const play = button("▶", "Play the delivered timeline from the current position", () => void video.play());
+        const play = button("▶", "Play the delivered timeline from the current position", () => {
+            void video.play().catch(() => {});
+        });
         const slider = element("input"); slider.type = "range"; slider.min = "0"; slider.max = String(timing().totalSeconds); slider.step = String(1 / 24); slider.value = "0";
         const clock = element("span", "", `0 / ${formatClock(timing().totalSeconds)}`);
         slider.addEventListener("input", () => seekTimeline(Number(slider.value), false));
@@ -751,14 +812,15 @@ function mount(node) {
             let prior = 0;
             for (let index = 0; index < state.playerIndex; index += 1) prior += result.shots[index].deliveredSeconds;
             const current = Math.min(result.totalSeconds, prior + video.currentTime);
+            state.timelinePosition = current;
             slider.value = String(current); clock.textContent = `${formatClock(current)} / ${formatClock(result.totalSeconds)}`;
             if (state.playhead) state.playhead.style.left = `${result.totalSeconds ? current / result.totalSeconds * 100 : 0}%`;
         });
         video.addEventListener("ended", () => {
             const next = state.playerIndex + 1;
             if (next >= state.plan.shots.length) return;
-            let start = 0; const result = timing();
-            for (let index = 0; index < next; index += 1) start += result.shots[index].deliveredSeconds;
+            const result = timing();
+            const start = studioSceneStartSeconds(result.shots, next);
             seekTimeline(start, true);
         });
         state.player = video; state.playerSlider = slider;
@@ -768,8 +830,11 @@ function mount(node) {
         wrapper.append(label, video, controls,
             element("div", "h3studio-message", "Playback uses saved delivered segments. A scene is silent unless a synchronized Review preview exists."));
         setTimeout(() => {
-            let start = 0; const result = timing();
-            for (let index = 0; index < state.active; index += 1) start += result.shots[index].deliveredSeconds;
+            if (state.player !== video || !video.isConnected) return;
+            const result = timing();
+            const start = state.timelinePosition == null
+                ? studioSceneStartSeconds(result.shots, state.active)
+                : state.timelinePosition;
             seekTimeline(start, false);
         }, 0);
         return wrapper;
@@ -793,7 +858,7 @@ function mount(node) {
     function renderPanel() {
         if (!state.panelHost || !state.plan) return;
         state.history.host = null; state.history.textarea = null; state.history.status = null;
-        state.player = null; state.playerSlider = null;
+        disposePlayer();
         const content = state.view === "shared" ? renderSharedPanel()
             : state.view === "player" ? renderPlayerPanel()
               : state.view === "json" ? renderJsonPanel() : renderScenePanel();
@@ -807,35 +872,51 @@ function mount(node) {
     }
 
     function renderShell() {
+        disposePlayer();
         root.replaceChildren();
         const head = element("div", "h3studio-head");
         head.append(element("span", "h3studio-title", "MiniMax H3 Plan Studio"),
             element("span", "h3studio-run", runName() ? `run · ${runName()}` : "connect a named Plan"));
         const toolbar = element("div", "h3studio-toolbar");
-        const add = button("+ Scene", "Insert a new scene after the selected scene", () => {
+        const add = button("+ Scene", "Insert a new scene after the selected scene", async () => {
             if (state.plan.shots.length >= MAX_SHOTS) return;
-            state.plan.shots.splice(state.active + 1, 0, makeShot(state.plan.shots)); state.active += 1; writePlan(); renderShell();
+            await flushHistoryDraft();
+            state.plan.shots.splice(state.active + 1, 0, makeShot(state.plan.shots));
+            state.active += 1; state.timelinePosition = null; persistView(); writePlan(); renderShell();
         });
         add.disabled = state.plan.shots.length >= MAX_SHOTS;
-        const duplicate = button("Duplicate", "Duplicate the selected scene", () => {
+        const duplicate = button("Duplicate", "Duplicate the selected scene", async () => {
             if (state.plan.shots.length >= MAX_SHOTS) return;
-            duplicateShot(state.plan.shots, state.active); state.active += 1; writePlan(); renderShell();
+            await flushHistoryDraft();
+            duplicateShot(state.plan.shots, state.active); state.active += 1;
+            state.timelinePosition = null; persistView(); writePlan(); renderShell();
         });
-        const remove = button("Delete", "Delete the selected scene", () => {
+        const remove = button("Delete", "Delete the selected scene", async () => {
             if (state.plan.shots.length <= 1 || !confirm(`Delete scene ${state.active + 1}?`)) return;
-            state.plan.shots.splice(state.active, 1); state.active = Math.min(state.active, state.plan.shots.length - 1); writePlan(); renderShell();
+            await flushHistoryDraft();
+            state.plan.shots.splice(state.active, 1);
+            state.active = Math.min(state.active, state.plan.shots.length - 1);
+            state.timelinePosition = null; persistView(); writePlan(); renderShell();
         });
         remove.disabled = state.plan.shots.length <= 1;
-        const left = button("←", "Move selected scene earlier", () => {
-            if (!state.active) return; moveShot(state.plan.shots, state.active, state.active - 1); state.active -= 1; writePlan(); renderShell();
+        const left = button("←", "Move selected scene earlier", async () => {
+            if (!state.active) return; await flushHistoryDraft();
+            moveShot(state.plan.shots, state.active, state.active - 1); state.active -= 1;
+            state.timelinePosition = null; persistView(); writePlan(); renderShell();
         }); left.disabled = !state.active;
-        const right = button("→", "Move selected scene later", () => {
-            if (state.active >= state.plan.shots.length - 1) return; moveShot(state.plan.shots, state.active, state.active + 1); state.active += 1; writePlan(); renderShell();
+        const right = button("→", "Move selected scene later", async () => {
+            if (state.active >= state.plan.shots.length - 1) return; await flushHistoryDraft();
+            moveShot(state.plan.shots, state.active, state.active + 1); state.active += 1;
+            state.timelinePosition = null; persistView(); writePlan(); renderShell();
         }); right.disabled = state.active >= state.plan.shots.length - 1;
         toolbar.append(add, duplicate, remove, left, right, element("span", "h3studio-spacer"));
         for (const [value,label] of [["scene","Scene prompt"],["shared","Shared prompt"],["player","Player"],["json","JSON"]]) {
             const item = button(label, `Open ${label.toLowerCase()} view`, () => {
-                void flushHistoryDraft(); state.view = value; persistView(); renderToolbarState(); renderPanel();
+                void flushHistoryDraft();
+                if (value === "player" && state.timelinePosition == null) {
+                    state.timelinePosition = studioSceneStartSeconds(timing().shots, state.active);
+                }
+                state.view = value; persistView(); renderToolbarState(); renderPanel();
             });
             item.dataset.studioView = value; toolbar.append(item);
         }
@@ -850,6 +931,7 @@ function mount(node) {
     }
 
     function showFailure(message) {
+        disposePlayer();
         root.replaceChildren(element("div", "h3studio-title", "MiniMax H3 Plan Studio"),
             element("div", "h3studio-error", message),
             element("div", "h3studio-message", "Connect the original H3 Chain Plan output to this node's plan input."));
@@ -864,10 +946,19 @@ function mount(node) {
         }
         const value = String(planWidget.value ?? "");
         const currentRun = String(widget(planNode, "run_name")?.value ?? "").trim();
-        if (!force && planNode === state.planNode && value === state.lastValue && currentRun === state.lastRunName) return;
+        const currentSettings = settingsSignature(planNode);
+        if (!force && planNode === state.planNode && value === state.lastValue
+                && currentRun === state.lastRunName
+                && currentSettings === state.lastSettingsSignature) return;
         try {
+            const runChanged = planNode !== state.planNode || currentRun !== state.lastRunName;
             state.plan = parsePlanJson(value); state.planNode = planNode; state.planWidget = planWidget;
             state.lastValue = value; state.lastRunName = currentRun;
+            state.lastSettingsSignature = currentSettings;
+            if (runChanged) {
+                state.checkpoints = new Map(); state.checkpointSignature = "";
+                state.checkpointError = ""; state.timelinePosition = null;
+            }
             state.active = Math.min(state.active, state.plan.shots.length - 1); renderShell(); void refreshCheckpoints();
         } catch (error) { showFailure(`Connected Plan JSON is invalid:\n${error.message}`); }
     }
@@ -881,10 +972,28 @@ function mount(node) {
     node.onConnectionsChange = function () {
         const result = connectionsChanged?.apply(this, arguments); setTimeout(() => loadPlan(true), 0); return result;
     };
+    const onPromptExecuted = (event) => {
+        const values = event.detail?.output?.h3_chain_active_scene;
+        const scene = Array.isArray(values) ? values.at(-1) : null;
+        if (!scene || String(scene.run_name ?? "") !== runName()) return;
+        const shot = state.plan?.shots?.[state.active];
+        const sceneId = safeShotId(
+            shot?.id, `clip_${String(state.active + 1).padStart(4, "0")}`,
+        );
+        if (String(scene.shot_id ?? "") !== sceneId) return;
+        setTimeout(() => {
+            if (state.view !== "scene" || state.history.sceneKey !== historyKey(sceneId)) return;
+            void loadHistory(sceneId, promptValueToText(shot.prompt), false);
+        }, 50);
+    };
+    api.addEventListener("executed", onPromptExecuted);
     const removed = node.onRemoved;
     node.onRemoved = function () {
         if (state.pollTimer != null) clearInterval(state.pollTimer);
         if (state.checkpointTimer != null) clearInterval(state.checkpointTimer);
+        if (state.planNotifyTimer != null) clearTimeout(state.planNotifyTimer);
+        api.removeEventListener("executed", onPromptExecuted);
+        disposePlayer();
         void flushHistoryDraft(); return removed?.apply(this, arguments);
     };
     node._h3PlanStudioRefresh = () => loadPlan(true);

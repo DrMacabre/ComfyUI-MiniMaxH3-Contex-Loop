@@ -174,6 +174,7 @@ def main():
     assert (ROOT / "web" / "h3_chain_cancel_reroll_core.mjs").is_file()
     assert (ROOT / "web" / "h3_chain_scene_prompt_editor.js").is_file()
     assert (ROOT / "web" / "h3_chain_plan_studio.js").is_file()
+    assert (ROOT / "web" / "h3_chain_plan_studio_core.mjs").is_file()
     assert (ROOT / "web" / "h3_reference_autoconnect.js").is_file()
     assert (ROOT / "web" / "h3_reference_autoconnect_core.mjs").is_file()
     workflow_path = (ROOT / "example_workflows" /
