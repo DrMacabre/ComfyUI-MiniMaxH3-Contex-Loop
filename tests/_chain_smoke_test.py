@@ -146,6 +146,7 @@ def main():
         "MiniMaxH3ChainManifestLoad", "MiniMaxH3ChainExportPNG",
         "MiniMaxH3ChainAssemble",
         "MiniMaxH3LoopTrim",
+        "MiniMaxH3ContexLoopSeamProbe",
     }
     assert required <= set(package.NODE_CLASS_MAPPINGS)
     upstream_ids = {
@@ -715,7 +716,9 @@ def main():
         "waveform": torch.ones((1, 2, short_samples), dtype=torch.float32),
         "sample_rate": 32000,
     }
-    _, padded = trim_node.trim(short_images, 0, short_audio, 24.0, True)
+    _, padded, _, retained = trim_node.trim(
+        short_images, 0, short_audio, 24.0, True)
+    assert retained == 0
     assert int(padded["waveform"].shape[-1]) == 346667
     assert torch.count_nonzero(padded["waveform"][..., short_samples:]) == 0
     chain._validate_audio(padded, "260-frame regression", expected_frames=260)
@@ -726,9 +729,67 @@ def main():
         "waveform": torch.ones((1, 2, long_samples), dtype=torch.float32),
         "sample_rate": 32000,
     }
-    _, truncated = trim_node.trim(long_images, 0, long_audio, 24.0, True)
+    _, truncated, _, retained = trim_node.trim(
+        long_images, 0, long_audio, 24.0, True)
+    assert retained == 0
     assert int(truncated["waveform"].shape[-1]) == 165333
-    print("trim: 260-frame shortage padded and 124-frame excess truncated")
+    numbered = torch.arange(10, dtype=torch.float32).reshape(10, 1, 1, 1)
+    delivered, _, with_overlap, retained = trim_node.trim(
+        numbered, 4, retain_overlap_frames=2)
+    assert delivered[:, 0, 0, 0].tolist() == list(range(4, 10))
+    assert with_overlap[:, 0, 0, 0].tolist() == list(range(2, 10))
+    assert retained == 2
+    delivered, _, with_overlap, retained = trim_node.trim(
+        numbered, 4, retain_overlap_frames=99)
+    assert delivered[:, 0, 0, 0].tolist() == list(range(4, 10))
+    assert with_overlap[:, 0, 0, 0].tolist() == list(range(10))
+    assert retained == 4
+    print("trim: AV tails frame-locked; optional visual overlap is clamped and "
+          "does not alter the hard-trim output")
+
+    real_st_load = chain._st_load
+    try:
+        loads = iter([
+            {"delivered_audio": torch.ones((1, 2, 1667))},
+            {"delivered_audio": torch.ones((1, 2, 1667))},
+        ])
+        chain._st_load = lambda _path: next(loads)
+        cumulative_trimmed = chain._generated_audio({"segments": [
+            {"index": 1, "checkpoint": "one", "sample_rate": 8000,
+             "delivered_frames": 5},
+            {"index": 2, "checkpoint": "two", "sample_rate": 8000,
+             "delivered_frames": 5},
+        ]})
+        assert cumulative_trimmed["waveform"].shape[-1] == round(10 / 24 * 8000)
+
+        loads = iter([
+            {"delivered_audio": torch.ones((1, 2, 1333))},
+            {"delivered_audio": torch.ones((1, 2, 1333))},
+        ])
+        cumulative_padded = chain._generated_audio({"segments": [
+            {"index": 1, "checkpoint": "one", "sample_rate": 8000,
+             "delivered_frames": 4},
+            {"index": 2, "checkpoint": "two", "sample_rate": 8000,
+             "delivered_frames": 4},
+        ]})
+        assert cumulative_padded["waveform"].shape[-1] == round(8 / 24 * 8000)
+        assert torch.count_nonzero(cumulative_padded["waveform"][..., -1:]) == 0
+
+        real_prelude_audio = chain._prelude_audio
+        chain._prelude_audio = lambda _record: {
+            "waveform": torch.ones((1, 2, 1667)), "sample_rate": 8000}
+        try:
+            joined = chain._audio_with_prelude(
+                {"waveform": torch.ones((1, 2, 1667)),
+                 "sample_rate": 8000},
+                5, {"frame_count": 5})
+        finally:
+            chain._prelude_audio = real_prelude_audio
+        assert joined["waveform"].shape[-1] == round(10 / 24 * 8000)
+    finally:
+        chain._st_load = real_st_load
+    print("generated audio: per-scene rounding reconciled at cumulative frame "
+          "boundaries for both trim and pad cases")
 
     giant_plan = chain._normalize_plan(
         json.dumps({

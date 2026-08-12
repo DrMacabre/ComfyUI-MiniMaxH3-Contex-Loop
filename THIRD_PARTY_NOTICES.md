@@ -29,6 +29,21 @@ from upstream revision `c140ae99b8c3` (`0.2.0`, 2026-08-09). This loop fork
 extends the layout implementation with native-guide capability detection while
 preserving that ownership ABI for safe co-installation on legacy ComfyUI.
 
+Upstream revision `658ba11ae917` (`0.3.0`, 2026-08-12) by **NikoDemon80** is
+also the source of the retained `last_frame` design, 56-frame context option,
+and the in-graph Seam Probe adapted here. This fork gives the probe a distinct
+public node id so both packs can remain installed together, and retains its own
+native-guide and recursive-chain integration.
+
+## ComfyUI-H3-Motion-Context-MultiRef
+
+The cumulative audio-sample budgeting approach was inspired by
+[ComfyUI-H3-Motion-Context-MultiRef](https://github.com/seitanism/ComfyUI-H3-Motion-Context-MultiRef)
+by **seitanism**. This repository implements the idea independently for its
+checkpointed generated-audio and saved-prelude assembly, using cumulative
+delivered video-frame boundaries so per-scene rounding cannot accumulate into
+long-run A/V drift.
+
 ## ComfyUI MiniMax H3 Add Guide
 
 Native-guide compatibility targets

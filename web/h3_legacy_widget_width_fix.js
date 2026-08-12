@@ -12,6 +12,7 @@ const LEGACY_LIFECYCLE_PATCH = "__h3_lwwf_legacy_lifecycle";
 
 const H3_NODE_TYPES = new Set([
     "MiniMaxH3LoopTrim",
+    "MiniMaxH3ContexLoopSeamProbe",
     "MiniMaxH3ChainPlan",
     "MiniMaxH3ChainScenePromptEditor",
     "MiniMaxH3ReferenceVideoPrepare",

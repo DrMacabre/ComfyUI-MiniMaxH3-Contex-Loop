@@ -8,8 +8,8 @@ ComfyUI-H3-Motion-Context. It intentionally uses distinct public node ids and
 vendors upstream's shared runtime-patch ABI so both packs can be installed
 together without wrapping ComfyUI twice. The
 original Motion Context, Save Latent, and Load Latent ids remain exclusively
-owned by Niko's upstream pack; this pack exports its stricter Loop Trim and the
-specialized H3 Chain nodes.
+owned by Niko's upstream pack; this pack exports its stricter Loop Trim, a
+distinctly named Seam Probe adaptation, and the specialized H3 Chain nodes.
 
 Registers the loop nodes without changing ComfyUI's runtime behavior. Chain
 On current ComfyUI, Context activates both internal patches inline on first
@@ -42,12 +42,18 @@ from .chain_nodes import (
     CHAIN_NODE_CLASS_MAPPINGS,
     CHAIN_NODE_DISPLAY_NAME_MAPPINGS,
 )
+from .probe_node import (
+    NODE_CLASS_MAPPINGS as _PROBE_NODE_CLASS_MAPPINGS,
+    NODE_DISPLAY_NAME_MAPPINGS as _PROBE_NODE_DISPLAY_NAME_MAPPINGS,
+)
 
 NODE_CLASS_MAPPINGS = dict(_CONTEXT_NODE_CLASS_MAPPINGS)
 NODE_CLASS_MAPPINGS.update(CHAIN_NODE_CLASS_MAPPINGS)
+NODE_CLASS_MAPPINGS.update(_PROBE_NODE_CLASS_MAPPINGS)
 
 NODE_DISPLAY_NAME_MAPPINGS = dict(_CONTEXT_NODE_DISPLAY_NAME_MAPPINGS)
 NODE_DISPLAY_NAME_MAPPINGS.update(CHAIN_NODE_DISPLAY_NAME_MAPPINGS)
+NODE_DISPLAY_NAME_MAPPINGS.update(_PROBE_NODE_DISPLAY_NAME_MAPPINGS)
 
 WEB_DIRECTORY = "./web"
 

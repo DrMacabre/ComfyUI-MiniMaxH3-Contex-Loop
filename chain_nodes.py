@@ -85,7 +85,7 @@ PLAN_VERSION = 2
 MAX_SHOTS = 128
 MAX_SEED = 0xFFFFFFFFFFFFFFFF
 MAX_H3_FRAMES = 3592  # largest 17k+5 value accepted by H3's 3600-frame socket
-H3_CONTEXT_LENGTHS = (1, 5, 22, 39)
+H3_CONTEXT_LENGTHS = (1, 5, 22, 39, 56)
 AUDIO_MODES = ("source_track", "generated_audio", "source_plus_timeline")
 
 PLAN_TYPE = "H3_CHAIN_PLAN"
@@ -3967,6 +3967,11 @@ def _generated_audio(manifest: dict[str, Any]) -> dict[str, Any]:
         raise RuntimeError("Generated-audio assembly requires safetensors and torch.")
     waveforms = []
     sample_rate = None
+    # Cumulative boundary budgeting was inspired by seitanism's
+    # ComfyUI-H3-Motion-Context-MultiRef. Reconcile each saved scene against
+    # the full delivered timeline so independent rounding cannot accumulate.
+    cumulative_frames = 0
+    cumulative_samples = 0
     for segment in manifest["segments"]:
         checkpoint = _absolute_output_path(segment["checkpoint"])
         tensors = _st_load(checkpoint)
@@ -3991,7 +3996,17 @@ def _generated_audio(manifest: dict[str, Any]) -> dict[str, Any]:
                 "%d for %d frames." %
                 (segment["index"], int(waveform.shape[-1]), expected,
                  int(segment["delivered_frames"])))
+        cumulative_frames += int(segment["delivered_frames"])
+        next_boundary = int(round(
+            cumulative_frames / float(FPS) * current_rate))
+        budget = next_boundary - cumulative_samples
+        have = int(waveform.shape[-1])
+        if have > budget:
+            waveform = waveform[..., :budget]
+        elif have < budget:
+            waveform = torch.nn.functional.pad(waveform, (0, budget - have))
         waveforms.append(waveform)
+        cumulative_samples = next_boundary
     return {"waveform": torch.cat(waveforms, dim=-1),
             "sample_rate": int(sample_rate)}
 
@@ -4061,14 +4076,17 @@ def _audio_with_prelude(
     waveform, sample_rate = _audio_waveform_3d(
         audio, "H3 extension assembly audio")
     channels = int(waveform.shape[1])
-    extension_samples = int(round(
-        int(extension_frames) / float(FPS) * sample_rate))
+    prelude_frames = int(prelude["frame_count"])
+    prelude_samples = int(round(
+        prelude_frames / float(FPS) * sample_rate))
+    total_samples = int(round(
+        (prelude_frames + int(extension_frames)) /
+        float(FPS) * sample_rate))
+    extension_samples = total_samples - prelude_samples
     normalized_extension = _resample_audio_exact(
         {"waveform": waveform, "sample_rate": sample_rate},
         sample_rate, extension_samples, channels,
         "H3 extension assembly audio")
-    prelude_samples = int(round(
-        int(prelude["frame_count"]) / float(FPS) * sample_rate))
     saved = _prelude_audio(prelude)
     if saved is None:
         prefix = torch.zeros(

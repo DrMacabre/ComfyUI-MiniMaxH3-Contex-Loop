@@ -144,7 +144,7 @@ def _prepare_native_guide_conditioning(conditioning):
 # clip instead of [-5..-1]. The pinned run would end five frames early and the
 # delivered clip would continue from the wrong instant. So off-grid requests
 # are snapped DOWN before slicing, keeping content and coverage in agreement.
-VIDEO_RUN_GRID = (39, 22, 5, 1)
+VIDEO_RUN_GRID = (56, 39, 22, 5, 1)
 
 
 def _pixel_frames(latent_t):
@@ -294,9 +294,10 @@ class MiniMaxH3MotionContext:
                                "clip. Supplying the whole clip is safe: only "
                                "the requested tail is used."}),
                 "context_length": ("INT", {
-                    "default": 5, "min": 1, "max": 39,
+                    "default": 5, "min": 1, "max": 56,
                     "tooltip": "Frames of the previous clip to carry over. In "
-                               "video mode only 1, 5, 22 and 39 are distinct; "
+                               "video mode only 1, 5, 22, 39 and 56 are "
+                               "distinct; "
                                "anything else is snapped DOWN to the nearest so "
                                "the pinned run always ends at the clip's last "
                                "frame."}),
@@ -370,7 +371,8 @@ class MiniMaxH3MotionContext:
     CATEGORY = "conditioning/minimax"
     DESCRIPTION = ("Pin a run of consecutive frames from a previous clip as "
                    "never-denoised conditioning rows, so the model reads real "
-                   "motion instead of guessing it from a single still.")
+                   "motion instead of guessing it from a single still. A stock "
+                   "last_frame target is preserved outside the carried head.")
 
     def apply(self, conditioning, vae, latent, context_frames, context_length,
               encode_mode, anchor_mode, crop, audio_context_length=22,
@@ -403,7 +405,8 @@ class MiniMaxH3MotionContext:
             if run != n:
                 _LOG.warning(
                     "h3_motion_context: %d frames is off the VAE grid; pinning "
-                    "the last %d instead (usable runs: 1, 5, 22, 39)", n, run)
+                    "the last %d instead (usable runs: 1, 5, 22, 39, 56)",
+                    n, run)
             n = run
 
         if n >= frame_count:
@@ -540,11 +543,47 @@ class MiniMaxH3MotionContext:
                     "audio_latent": audio_latent,
                 }
 
-        values = {"minimax_keyframes": keyframes}
-        if not native_guides:
-            values["minimax_frame_count"] = frame_count
-
-        out = node_helpers.conditioning_set_values(conditioning, values)
+        # Preserve a stock last_frame guide. The carried head already owns any
+        # first-frame guide at the same coordinates, so guides inside that
+        # repeated span are removed. Tag retained guides with MC_KEY so legacy
+        # reference compensation and native-guide alignment treat the complete
+        # target-relative set consistently. Ported from NikoDemon80 upstream
+        # 0.3.0 while retaining this fork's native-guide path.
+        head_end = span if anchor_mode == "head" else 0
+        out = []
+        dropped = []
+        for embedding, extra in conditioning:
+            metadata = extra.copy()
+            prior = metadata.get("minimax_keyframes") or []
+            prior_frame_count = metadata.get("minimax_frame_count")
+            if (prior and prior_frame_count is not None
+                    and int(prior_frame_count) != frame_count):
+                raise ValueError(
+                    "h3_motion_context: the conditioning carries keyframes "
+                    "resolved for a %d frame clip, but the latent is %d "
+                    "frames. Wire the conditioning and latent from the same "
+                    "stock H3 node."
+                    % (int(prior_frame_count), frame_count))
+            kept = []
+            for prior_keyframe in prior:
+                position = float(prior_keyframe.get(
+                    MC_KEY, prior_keyframe.get("resolved_frame_index", 0)))
+                if position < head_end:
+                    dropped.append(position)
+                    continue
+                retained = dict(prior_keyframe)
+                retained[MC_KEY] = position
+                kept.append(retained)
+            metadata["minimax_keyframes"] = kept + keyframes
+            if not native_guides:
+                metadata["minimax_frame_count"] = frame_count
+            out.append([embedding, metadata])
+        if dropped:
+            _LOG.warning(
+                "h3_motion_context: dropped %d keyframe anchor(s) at "
+                "frame(s) %s because the carried head already owns frames "
+                "0..%d; a last_frame anchor is preserved.",
+                len(dropped), sorted(set(dropped)), head_end - 1)
         if motion_context_audio_ref is not None:
             # Ref2VA multi-reference coexistence design contributed by
             # seitanism in the Banodoco seamless-extension thread. Append so
@@ -619,22 +658,37 @@ class MiniMaxH3LoopTrim:
                                "equals frames/fps exactly. H3 rounds its 40 Hz "
                                "audio grid to the nearest step, producing about "
                                "8ms of excess or shortage on some lengths."}),
+                "retain_overlap_frames": ("INT", {
+                    "default": 0, "min": 0, "max": 4096,
+                    "tooltip": "Optional visual-only overlap for an external "
+                               "stitcher. 0 keeps the normal hard-trim output "
+                               "only. A positive value makes the extra image "
+                               "output retain up to that many of the final "
+                               "repeated context frames. Audio always removes "
+                               "the complete overlap."}),
             },
         }
 
-    RETURN_TYPES = ("IMAGE", "AUDIO")
-    RETURN_NAMES = ("images", "audio")
+    RETURN_TYPES = ("IMAGE", "AUDIO", "IMAGE", "INT")
+    RETURN_NAMES = ("images", "audio", "images_with_overlap",
+                    "overlap_frames")
     OUTPUT_TOOLTIPS = (
         "Delivered frames with the repeated leading context removed.",
         "Audio trimmed by the same duration and, when match_tail is enabled, "
         "fitted exactly to the delivered image duration.",
+        "Optional blend-ready image stream. When overlap_frames is positive, "
+        "this retains only the final requested part of the repeated visual "
+        "context before the delivered frames. Audio remains fully trimmed.",
+        "Number of repeated leading frames retained in images_with_overlap. "
+        "Use as an overlap count in a compatible video stitcher.",
     )
     FUNCTION = "trim"
     CATEGORY = "conditioning/minimax/contex_loop"
     DESCRIPTION = ("Remove the leading pinned frames from a decoded H3 clip, "
                    "trimming picture and sound by the same duration.")
 
-    def trim(self, images, trim_frames, audio=None, fps=24.0, match_tail=True):
+    def trim(self, images, trim_frames, audio=None, fps=24.0, match_tail=True,
+             retain_overlap_frames=0):
         n = max(0, int(trim_frames))
         total = int(images.shape[0])
         if n >= total:
@@ -642,6 +696,8 @@ class MiniMaxH3LoopTrim:
                 "h3_motion_context: asked to trim %d frames from a %d frame clip"
                 % (n, total))
         out_images = images[n:] if n else images
+        retained = min(n, max(0, int(retain_overlap_frames)))
+        overlap_images = images[n - retained:] if retained else out_images
 
         out_audio = audio
         if audio is not None:
@@ -686,7 +742,7 @@ class MiniMaxH3LoopTrim:
                       "this node or it will run %.3fs ahead of the picture.",
                       n, total - n, n / float(fps))
 
-        return (out_images, out_audio)
+        return (out_images, out_audio, overlap_images, retained)
 
 
 def _resolve_latent_path(path, clip_index=0):

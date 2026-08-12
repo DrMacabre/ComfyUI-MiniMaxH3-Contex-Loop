@@ -199,6 +199,9 @@ i2va_workflow = json.loads((
 ).read_text(encoding="utf-8"))
 i2va_plan_node = next(node for node in i2va_workflow["nodes"]
                        if node.get("type") == "MiniMaxH3ChainPlan")
+context_choices = chain.MiniMaxH3ChainPlan.INPUT_TYPES()["required"][
+    "context_length"][0]
+assert context_choices == [1, 5, 22, 39, 56]
 normalized = chain.MiniMaxH3ChainPlan().build(
     *i2va_plan_node["widgets_values"])[0]
 assert [shot["raw_frames"] for shot in normalized["shots"]] == [243, 243]

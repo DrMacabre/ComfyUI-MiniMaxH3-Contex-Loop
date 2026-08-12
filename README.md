@@ -20,6 +20,15 @@ huge cumulative image tensor.
 Newest first. Recent additions stay visible; older milestones are folded away
 so this page remains a useful starting point rather than a changelog wall.
 
+- **v0.3.21 — Upstream continuity update and exact assembly.** Motion Context
+  now preserves a stock H3 `last_frame` target while replacing a conflicting
+  first-frame anchor with its carried head. Advanced 56-frame visual context
+  and an in-graph Seam Probe are available from NikoDemon80's upstream 0.3.0.
+  Generated audio budgets samples from cumulative delivered-frame boundaries,
+  and Loop Trim can expose optional stitcher-ready visual overlap without
+  changing its normal outputs. The cumulative-budgeting approach was inspired
+  by **seitanism's**
+  [ComfyUI-H3-Motion-Context-MultiRef](https://github.com/seitanism/ComfyUI-H3-Motion-Context-MultiRef).
 - **v0.3.20 — Cancel and reroll the active scene.** While an H3 scene is
   generating, a guarded floating action can cancel only that prompt, assign a
   new explicit scene seed, move Loop Start to the interrupted scene, preserve
@@ -145,7 +154,9 @@ inspired by **nkxx188’s**
 | 🎬 | Visual multiline scene planner with exact H3 timing |
 | 🔁 | One recursive sampling body for the whole plan |
 | 🧬 | Motion and optional audio continuity |
+| 📐 | Optional last-frame destination and 56-frame long motion context |
 | 👀 | Video-with-sound review, edit, reroll, or approve |
+| 🔬 | In-graph audio seam correlation, lag, and level diagnostics |
 | 💾 | Atomic checkpoints, partial assembly, and resume |
 | 🖼️ | Re-decode saved latents into a continuous PNG sequence |
 | 🎯 | Scene ranges such as `3` or `3:8` |
@@ -344,10 +355,34 @@ Loop Trim match_tail true
 Spectrum             off
 ```
 
+`56` is also a valid advanced visual context. It carries 2.33 seconds of
+motion in 17 latent steps, but head mode regenerates and trims all 56 frames
+from every continuation. Prefer `22`; use `56` for longer clips where a complex
+camera move or performance needs more history.
+
+When stock H3 Image to Video supplies a `last_frame`, Motion Context preserves
+that end target. Its repeated head replaces a conflicting `first_frame` anchor
+on continuation scenes, because both cannot own the same opening coordinates.
+
 Use this pack’s **MiniMax H3 Contex Loop Trim** after decoding. With
 `match_tail=true`, it removes repeated leading context and corrects H3’s
 fractional audio-step difference by truncating or zero-padding the final few
 milliseconds.
+
+For an external stitcher, set `retain_overlap_frames` to expose an additional
+visual stream containing part of the repeated context before the clean scene.
+The normal `images` output and all audio remain fully trimmed, so leaving the
+setting at `0` preserves the existing hard-cut workflow exactly.
+
+### Measure an audio join in the graph
+
+**MiniMax H3 Contex Loop Seam Probe** is an optional diagnostic adapted from
+NikoDemon80's upstream 0.3.0. Put it between the current clip's untrimmed audio
+decode and Loop Trim, then connect the previous sampler AV latent, the H3 audio
+VAE, and the same `trim_frames`. Its AUDIO output is an unchanged pass-through;
+the report measures correlation, timing offset, broadband level, and ambience
+floor across the join. Strongly periodic music can produce a whole-cycle lag
+alias, which the report calls out as a known limitation.
 
 ## Scene plans
 
@@ -482,6 +517,11 @@ when audio is connected to Segment Save, each scene gets an uncompressed WAV in
 `output/h3_chains/<run_name>/generated_audio/`, and a completed assembly also
 writes `<final-name>.generated.wav` beside the final MP4. This leaves H3's
 ambience, effects, and regenerated performance available for post-production.
+Generated WAV assembly budgets samples from cumulative delivered video frames,
+so rounding at individual scene boundaries cannot accumulate into audio drift.
+This approach was inspired by **seitanism's**
+[MultiRef implementation](https://github.com/seitanism/ComfyUI-H3-Motion-Context-MultiRef);
+this pack applies it to its checkpointed generated-audio and prelude assembly.
 
 Every segment also keeps its exact prompt in the MP4 metadata, a matching
 `.prompt.txt`, its checkpoint JSON, and the safetensors metadata. The run stores
@@ -524,8 +564,9 @@ restart fully so wrapper ownership is rebuilt cleanly.
 - [Prompt, timing, audio, and resume format guide](H3_CHAIN_FORMAT_GUIDE.md)
 - [Workflow notes](example_workflows/README.md)
 - [Third-party notices and attribution](THIRD_PARTY_NOTICES.md)
-- `tests/seam_probe.py` for measured audio-join analysis; `tests/` for the
-  standalone node, patch, chain, and frontend checks
+- **MiniMax H3 Contex Loop Seam Probe** for an in-graph audio-join report;
+  `tests/seam_probe.py` for file-based analysis; `tests/` for the standalone
+  node, patch, chain, and frontend checks
 
 ## License
 

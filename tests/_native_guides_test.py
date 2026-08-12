@@ -305,15 +305,55 @@ def main():
     assert not payload_patch.is_applied()
     priority_status = nodes._claim_inline_patch_ownership()
     assert priority_status == "native guides; layout owned by this pack"
-    assert "minimax_frame_count" not in captured
-    assert captured["minimax_refs"] == refs
-    keyframes = captured["minimax_keyframes"]
+    output_metadata = output[0][1]
+    assert "minimax_frame_count" not in output_metadata
+    assert output_metadata["minimax_refs"] == refs
+    keyframes = output_metadata["minimax_keyframes"]
     assert len(keyframes) == 2
     assert keyframes[0]["resolved_frame_index"] == 0
     assert tuple(keyframes[0]["latent"].shape)[2] == 7
     assert keyframes[1].get("latent") is None
     assert tuple(keyframes[1]["audio_latent"].shape)[-1] == 37
     assert abs(keyframes[1]["resolved_frame_index"]) < 1e-6
+
+    first_anchor = T(np.zeros((1, 16, 1, height, width)))
+    last_anchor = T(np.zeros((1, 16, 1, height, width)))
+    anchored_output, anchored_trim = nodes.MiniMaxH3MotionContext().apply(
+        conditioning=[["conditioning", {
+            "minimax_refs": refs,
+            "minimax_keyframes": [
+                {"resolved_frame_index": 0, "latent": first_anchor},
+                {"resolved_frame_index": frame_count - 1,
+                 "latent": last_anchor},
+            ],
+            "minimax_frame_count": frame_count,
+        }]],
+        vae=VAE(), latent=target, context_frames=context, context_length=22,
+        encode_mode="video", anchor_mode="head", crop="disabled",
+        audio_context_length=22, audio_mode="timeline",
+        context_latent=previous,
+    )
+    anchored_metadata = anchored_output[0][1]
+    anchored_keyframes = anchored_metadata["minimax_keyframes"]
+    assert anchored_trim == 22
+    assert len(anchored_keyframes) == 3
+    assert anchored_keyframes[0]["latent"] is last_anchor
+    assert anchored_keyframes[0][nodes.MC_KEY] == frame_count - 1
+    assert first_anchor not in [value.get("latent")
+                                for value in anchored_keyframes]
+    anchored_layout = mm.PackedLayout(
+        7, latent_t, height, width, audio_t,
+        keyframes=anchored_keyframes, refs=refs)
+    anchored_origin = layout_patch._target_origin(anchored_layout)
+    anchored_segments = [
+        start for start, _stop, kind in anchored_layout.segments
+        if kind in ("cond", "cond_audio")]
+    assert len(anchored_segments) == len(anchored_keyframes)
+    for value, start in zip(anchored_keyframes, anchored_segments):
+        expected = (anchored_origin + FRAME_RESCALE
+                    * float(value["resolved_frame_index"]))
+        assert abs(float(anchored_layout.position_ids[start, 0])
+                   - expected) < 1e-9
 
     # Simulate the official Add Guide node chained after Loop Context.
     keyframes.append({
@@ -362,9 +402,10 @@ def main():
     assert len(ref_payload["cond_video_latents"]) == 2
     assert len(ref_payload["cond_audio_latents"]) == 2
 
-    print("native guides: AV continuation + chained Add Guide align after "
-          "Ref2VA on scene 1 and continuations; timeline and reference audio "
-          "modes retain core payload merging; legacy payload patch skipped")
+    print("native guides: AV continuation, retained last_frame and chained "
+          "Add Guide align after Ref2VA on scene 1 and continuations; timeline "
+          "and reference audio modes retain core payload merging; legacy "
+          "payload patch skipped")
 
 
 if __name__ == "__main__":

@@ -169,11 +169,28 @@ def main():
     patch_layout = sys.modules["h3mc_pkg.patch_layout"]
     patch_payload = sys.modules["h3mc_pkg.patch_payload"]
     assert pkg.NODE_CLASS_MAPPINGS
+    assert "MiniMaxH3ContexLoopSeamProbe" in pkg.NODE_CLASS_MAPPINGS
+    assert "MiniMaxH3MotionContextSeamProbe" not in pkg.NODE_CLASS_MAPPINGS
     assert mm.PackedLayout.__init__ is stock_layout_init
     assert MiniMaxH3.extra_conds is stock_extra_conds
     assert not patch_layout.is_applied()
     assert not patch_payload.is_applied()
     print("import isolation: registering the pack leaves stock H3 untouched")
+
+    trim = nodes.MiniMaxH3LoopTrim()
+    numbered = T(np.arange(10, dtype=np.float32).reshape(10, 1, 1, 1))
+    delivered, _, with_overlap, retained = trim.trim(
+        numbered, 4, retain_overlap_frames=2)
+    assert delivered.a[:, 0, 0, 0].tolist() == list(range(4, 10))
+    assert with_overlap.a[:, 0, 0, 0].tolist() == list(range(2, 10))
+    assert retained == 2
+    delivered, _, with_overlap, retained = trim.trim(
+        numbered, 4, retain_overlap_frames=99)
+    assert delivered.a[:, 0, 0, 0].tolist() == list(range(4, 10))
+    assert with_overlap.a[:, 0, 0, 0].tolist() == list(range(10))
+    assert retained == 4
+    print("trim overlap: hard output unchanged; optional prefix retained and "
+          "clamped to repeated context")
 
     # a 124-frame clip: latent_t 37 (7 full 17-frame groups + 1 + 4),
     # audio grid ceil(124 * 5/3) = 207 steps, overhang exactly 1/3
@@ -283,6 +300,74 @@ def main():
     print("Ref2VA latent path: image/video/audio refs preserved + MC audio; "
           "7 cond blocks at %s, audio 37 steps sliced from latent tail, "
           "end_frame %.4f (overhang-compensated)" % (idx, got_end))
+
+    # Upstream 0.3.0 compatibility: keep a stock last_frame guide while the
+    # carried head replaces a conflicting first_frame guide.
+    import logging as _logging
+
+    class _Catcher(_logging.Handler):
+        def __init__(self):
+            _logging.Handler.__init__(self)
+            self.messages = []
+
+        def emit(self, record):
+            self.messages.append(record.getMessage())
+
+    incoming_keyframes = [
+        {"resolved_frame_index": 0, "latent": "first"},
+        {"resolved_frame_index": frames - 1, "latent": "last"},
+    ]
+    anchored = [["c", {
+        "minimax_keyframes": [dict(value) for value in incoming_keyframes],
+        "minimax_frame_count": frames,
+    }]]
+    catcher = _Catcher()
+    nodes._LOG.addHandler(catcher)
+    captured.clear()
+    try:
+        anchored_out, anchored_trim = node.apply(
+            conditioning=anchored, vae=VAE(), latent=target,
+            context_frames=context, context_length=22, encode_mode="video",
+            anchor_mode="head", crop="disabled", audio_context_length=22,
+            audio_mode="timeline", context_latent=prev)
+    finally:
+        nodes._LOG.removeHandler(catcher)
+    merged = anchored_out[0][1]["minimax_keyframes"]
+    assert anchored_trim == 22
+    assert len(merged) == 8
+    assert merged[0]["latent"] == "last"
+    assert merged[0][nodes.MC_KEY] == frames - 1
+    assert [value[nodes.MC_KEY] for value in merged[1:]] == idx
+    assert any("dropped 1 keyframe anchor" in message
+               for message in catcher.messages)
+    assert nodes.MC_KEY not in anchored[0][1]["minimax_keyframes"][1]
+    try:
+        node.apply(
+            conditioning=[["c", {
+                "minimax_keyframes": [dict(incoming_keyframes[1])],
+                "minimax_frame_count": frames + 17,
+            }]],
+            vae=VAE(), latent=target, context_frames=context,
+            context_length=22, encode_mode="video", anchor_mode="head",
+            crop="disabled", audio_context_length=22,
+            audio_mode="timeline", context_latent=prev)
+    except ValueError as exc:
+        assert "resolved for a" in str(exc)
+    else:
+        raise AssertionError("mismatched last_frame conditioning was accepted")
+    print("last_frame: final anchor retained, conflicting first anchor dropped, "
+          "and mismatched frame-count wiring refused")
+
+    captured.clear()
+    _, trim_56 = node.apply(
+        conditioning=[["c", {}]], vae=VAE(), latent=target,
+        context_frames=context, context_length=56, encode_mode="video",
+        anchor_mode="head", crop="disabled", audio_context_length=22,
+        audio_mode="timeline", context_latent=prev)
+    context_56 = captured["minimax_keyframes"]
+    assert trim_56 == 56 and len(context_56) == 17
+    assert [value[nodes.MC_KEY] for value in context_56][-1] == 52
+    print("56-frame context: represented by 17 aligned video latent steps")
 
     # decoded-audio path must still work and carry integer end_frame
     captured.clear()

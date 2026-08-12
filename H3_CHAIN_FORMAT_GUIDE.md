@@ -309,6 +309,17 @@ clip 1 delivered frames = raw_frames
 later delivered frames  = raw_frames - context_length
 ```
 
+The Trim node's optional `images_with_overlap` output can retain the requested
+number of repeated visual frames for an external stitcher. Its standard
+`images` output remains fully trimmed, and audio always removes the complete
+overlap. The built-in recursive assembly therefore keeps its existing hard-cut
+behavior unless a separate visual stitcher is connected explicitly.
+
+Generated-audio assembly derives each scene's sample budget from cumulative
+delivered frame boundaries. This distributes fractional samples across the run
+instead of independently rounding every scene, preventing boundary rounding
+from accumulating into long-run A/V drift.
+
 For `context_length: 22`, a later scene with `length: 362` contributes 340 new
 frames, or 14.167 seconds, to the final video. The source-audio window still
 covers all 362 raw frames and begins 22 frames before the prior delivered end,
@@ -436,7 +447,7 @@ ID or moving it to another position changes its derived seed.
 | `run_name` | Filename-safe text; normalized to at most 96 characters | Give each independent render a unique name. Keep it unchanged only when resuming. |
 | `generation_fingerprint` | Any stable version string | Include model, VAE, LoRA, global-reference, CFG, sampler, and scheduler versions. Change it when any external generation dependency changes. |
 | `width`, `height` | Positive multiples of 32, UI range 32–4096 | `960 × 544` is the supplied long-form workflow setting. |
-| `context_length` | `1`, `5`, `22`, or `39` | Use `22` for the tested balance of continuity and delivered footage. |
+| `context_length` | `1`, `5`, `22`, `39`, or `56` | Use `22` for the tested balance. `56` carries 2.33 seconds/17 latent steps for difficult long motion, but every continuation regenerates and trims those frames in head mode. |
 | `encode_mode` | `video` or `frames` | Use `video`. It preserves motion inside the VAE latent and is more efficient. |
 | `anchor_mode` | `head` or `before` | Use `head`; wire `trim_frames` into MiniMax H3 Contex Loop Trim. |
 | `crop` | `disabled` or `center` | Use `disabled` when references and output already share the intended framing. |
