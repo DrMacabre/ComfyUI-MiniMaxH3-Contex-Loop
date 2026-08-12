@@ -62,6 +62,8 @@ assert.match(source, /PromptAssistantClient/);
 assert.match(source, /prompt_assist_ready/);
 assert.match(source, /optimizerProviders/);
 assert.match(source, /providers before the user opens it/);
+assert.match(source, /direct HTTP/);
+assert.match(source, /Endpoint:/);
 assert.doesNotMatch(source, /state\.provider === "hermes"/);
 assert.match(source, /Optimize/);
 assert.match(source, /Apply changed result/);

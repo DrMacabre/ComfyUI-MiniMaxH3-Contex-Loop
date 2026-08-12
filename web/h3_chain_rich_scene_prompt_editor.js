@@ -747,15 +747,25 @@ function mount(node) {
         if (!select) return;
         select.replaceChildren();
         for (const item of optimizerProviders()) {
-            const suffix = item.available === false ? " — unavailable" : item.experimental ? " — experimental" : "";
+            const suffix = item.available === false
+                ? " — unavailable"
+                : item.transport === "direct_http"
+                    ? " — direct HTTP"
+                    : item.experimental ? " — experimental" : "";
             const option = element("option", "", `${item.label || item.id}${suffix}`);
             option.value = item.id;
             option.disabled = item.available === false;
-            option.title = item.reason || "";
+            option.title = [item.reason, item.endpoint ? `Endpoint: ${item.endpoint}` : ""].filter(Boolean).join(" · ");
             select.append(option);
         }
         select.value = state.provider;
-        select.title = "Isolated text-only agent used by Optimize. Available providers come from the connected comfyui-mcp orchestrator.";
+        const selected = optimizerProviders().find((item) => item.id === state.provider);
+        select.title = [
+            "Text-only agent used by Optimize. Available providers come from the connected comfyui-mcp orchestrator.",
+            selected?.transport === "direct_http" ? "Direct HTTP provider enabled globally in comfyui-mcp Settings." : "Isolated runtime.",
+            selected?.endpoint ? `Endpoint: ${selected.endpoint}` : "",
+            selected?.reason || "",
+        ].filter(Boolean).join(" ");
     }
 
     function refreshOptimizerUi() {
@@ -1009,7 +1019,11 @@ function mount(node) {
         guide.addEventListener("change", () => { state.guide = normalizeRichGuide(guide.value); persistView(); });
         const provider = element("select", "h3rp-provider");
         provider.dataset.h3rpLock = "";
-        provider.addEventListener("change", () => { state.provider = provider.value; persistView(); });
+        provider.addEventListener("change", () => {
+            state.provider = provider.value;
+            persistView();
+            refreshProviderSelect(provider);
+        });
         const optimize = button("Optimize", "Rewrite from prompt text, scene context, and reference mappings with the selected H3 guide; media previews are not uploaded. The result becomes a reversible prompt revision.", () => void optimizePrompt(), "sparkle");
         optimize.classList.add("h3rp-optimize");
         const stop = button("Stop", "Cancel prompt optimization", stopOptimizer, "stop");
