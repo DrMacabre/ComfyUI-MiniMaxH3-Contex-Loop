@@ -25,6 +25,8 @@ assert.match(source, /collectAssetBindings\(node\)/);
 assert.match(source, /applyAssetBinding\(graph, binding\)/);
 assert.match(source, /Connect loader asset/);
 assert.match(source, /Archive video/);
+assert.match(source, /removeLegacyStatusOutput/);
+assert.match(source, /output\.name === "asset_status"/);
 const backend = fs.readFileSync(
     new URL("../chain_nodes.py", import.meta.url), "utf8",
 );

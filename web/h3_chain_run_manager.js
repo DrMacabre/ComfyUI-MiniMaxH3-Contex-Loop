@@ -121,6 +121,11 @@ function collapseWidget(widget) {
     }
 }
 
+function removeLegacyStatusOutput(node) {
+    const index = node.outputs?.findIndex((output) => output.name === "asset_status") ?? -1;
+    if (index >= 0) node.removeOutput?.(index);
+}
+
 function stabilizeAssetInputs(node) {
     const connected = (node.inputs ?? []).filter((input) =>
         assetInputNumber(input) != null && input.link != null);
@@ -197,6 +202,7 @@ function mount(node) {
     if (node._h3RunManagerMounted || typeof node.addDOMWidget !== "function") return;
     node._h3RunManagerMounted = true;
     injectStyles();
+    removeLegacyStatusOutput(node);
 
     const root = element("div", "h3rm-root");
     for (const eventName of [
@@ -589,6 +595,7 @@ function mount(node) {
         return removed?.apply(this, arguments);
     };
     node._h3RunManagerRefresh = () => {
+        removeLegacyStatusOutput(node);
         for (const name of ASSET_WIDGETS) collapseWidget(widgetByName(node, name));
         stabilizeAssetInputs(node);
         syncAssetBindings();

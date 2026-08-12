@@ -476,8 +476,7 @@ def main():
     run_manager = package.NODE_CLASS_MAPPINGS["MiniMaxH3ChainRunManager"]()
     run_manager_result = run_manager.passthrough(
         readable_prompts, True, True, False, "[]")
-    assert run_manager_result[0] is readable_prompts
-    assert run_manager_result[1] == "No connected asset bindings."
+    assert run_manager_result == (readable_prompts,)
     opening_image = object()
     first_scene_gate = package.NODE_CLASS_MAPPINGS[
         "MiniMaxH3ChainFirstSceneImage"]()

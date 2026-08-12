@@ -20,10 +20,13 @@ huge cumulative image tensor.
 Newest first. Recent additions stay visible; older milestones are folded away
 so this page remains a useful starting point rather than a changelog wall.
 
+- **v0.3.27 — True disabled scheduler compliance.** Disabled policy now reaches
+  upstream Schedule nodes, converts every scheduler-owned validation into a
+  warning, and omits unusable media. An empty `source_audio_slice` left wired
+  in `generated_audio` mode therefore no longer stops a render.
 - **v0.3.26 — Three-level prompt compliance.** Scheduled Ref2VA now offers
-  strict, soft, and disabled authoring policy. Strict blocks unresolved aliases;
-  soft compiles valid aliases while warning about unresolved ones; disabled
-  passes prompt text through without interpreting `@tags`.
+  strict, soft, and disabled policy. Strict blocks scheduler mistakes; soft
+  relaxes prompt aliases; disabled passes prompt text through unchanged.
 - **v0.3.25 — Portable run assets and optional tag warnings.** Run Manager
   accepts dynamic loader-asset
   connections, records persistent binding identities plus original input paths,
@@ -294,12 +297,17 @@ Scheduled Ref2VA's **prompt_compliance** control has three levels:
   a scheduled tag that is inactive for the current scene.
 - **soft** compiles valid active aliases, but preserves unresolved tags, emits
   warnings in the ComfyUI log and `active_references` status, and continues.
-- **disabled** performs no alias compilation or checking; the exact prompt and
-  every `@tag` are left to the user and passed through unchanged.
+- **disabled** makes every scheduler-authored check non-blocking. The exact
+  prompt and every `@tag` are passed through unchanged; missing or invalid
+  scheduled media is omitted, selector/capacity problems are reduced to log
+  warnings, and excess references are limited to stock H3's supported slots.
+  In particular, a Scheduled Audio node still connected to Current Shot's empty
+  `source_audio_slice` in `generated_audio` mode is skipped instead of stopping
+  the render.
 
-This control governs prompt-tag compliance only. Invalid media tensors,
-reference capacity, dimensions, and checkpoint compatibility still fail safely
-because those are execution requirements rather than authoring policy.
+This does not hide failures outside the scheduler: invalid CLIP/VAE/model
+wiring, sampling failures, incompatible continuation tensors, and checkpoint
+integrity errors remain real execution errors.
 
 The **Scene Prompt Editor** discovers the Scheduled Ref2VA connected downstream
 without adding an execution socket or a graph cycle. Open its **@ Reference**

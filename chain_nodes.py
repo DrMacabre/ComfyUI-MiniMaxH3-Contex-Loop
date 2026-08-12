@@ -250,6 +250,65 @@ def _reference_compliance_mode(value: Any) -> str:
     return mode
 
 
+def _downstream_reference_compliance(
+        dynprompt: Any, unique_id: Any) -> str:
+    """Find the strictest Scheduled Ref2VA policy consuming this schedule.
+
+    Schedule-builder nodes execute before the wrapper. Looking downstream is
+    therefore the only way an upstream missing source_audio_slice can honor a
+    disabled policy without changing ComfyUI's execution semantics.
+    """
+    if dynprompt is None or unique_id is None:
+        return "strict"
+    try:
+        node_ids = list(dynprompt.all_node_ids())
+    except (AttributeError, TypeError):
+        return "strict"
+    queue = [unique_id]
+    visited = {str(unique_id)}
+    modes = []
+    while queue:
+        parent = queue.pop(0)
+        for node_id in node_ids:
+            if str(node_id) in visited:
+                continue
+            try:
+                node = dynprompt.get_node(node_id)
+            except Exception:
+                continue
+            inputs = node.get("inputs") if isinstance(node, dict) else None
+            if not isinstance(inputs, dict) or not any(
+                    isinstance(value, list) and len(value) == 2
+                    and str(value[0]) == str(parent)
+                    for value in inputs.values()):
+                continue
+            visited.add(str(node_id))
+            if node.get("class_type") == "MiniMaxH3ScheduledReferenceToVideo":
+                try:
+                    modes.append(_reference_compliance_mode(
+                        inputs.get("prompt_compliance", "strict")))
+                except ValueError:
+                    modes.append("strict")
+            else:
+                queue.append(node_id)
+    if not modes or "strict" in modes:
+        return "strict"
+    return "soft" if "soft" in modes else "disabled"
+
+
+def _skipped_reference_result(
+        previous: Any, label: str, reason: Any) -> tuple[Any, str, str]:
+    try:
+        schedule = _make_reference_schedule(
+            _reference_schedule_entries(previous))
+    except (TypeError, ValueError):
+        schedule = _make_reference_schedule([])
+    message = "%s skipped because compliance is disabled: %s" % (
+        label, str(reason))
+    _LOG.warning("H3 scheduled-reference warning: %s", message)
+    return schedule, schedule["fingerprint"], message
+
+
 def _normalize_reference_tag(value: Any, label: str) -> str:
     tag = str(value or "").strip()
     if tag.startswith("@"):
@@ -352,10 +411,28 @@ def _make_reference_schedule(
 def _append_scheduled_reference(
         previous: Any, *, kind: str, tag: Any, scenes: Any,
         value: Any, content_hash: str, audio: Any = None,
-        audio_tag: Any = "", audio_hash: str = "") -> dict[str, Any]:
+        audio_tag: Any = "", audio_hash: str = "",
+        compliance_mode: str = "strict") -> dict[str, Any]:
+    mode = _reference_compliance_mode(compliance_mode)
     entries = _reference_schedule_entries(previous)
-    normalized_tag = _normalize_reference_tag(tag, "Reference tag")
-    ranges = _parse_reference_selector(scenes)
+    try:
+        normalized_tag = _normalize_reference_tag(tag, "Reference tag")
+    except ValueError as exc:
+        if mode != "disabled":
+            raise
+        normalized_tag = "reference_%s" % str(content_hash)[:12]
+        _LOG.warning(
+            "H3 scheduled-reference warning: %s Using internal tag @%s.",
+            exc, normalized_tag)
+    try:
+        ranges = _parse_reference_selector(scenes)
+    except ValueError as exc:
+        if mode != "disabled":
+            raise
+        ranges = ()
+        _LOG.warning(
+            "H3 scheduled-reference warning: %s Treating the reference as "
+            "active in every scene.", exc)
     entry = {
         "kind": str(kind),
         "tag": normalized_tag,
@@ -365,9 +442,17 @@ def _append_scheduled_reference(
         "content_hash": str(content_hash),
     }
     if audio is not None:
-        normalized_audio_tag = _normalize_reference_tag(
-            audio_tag or (normalized_tag + "_audio"),
-            "Paired video-audio tag")
+        try:
+            normalized_audio_tag = _normalize_reference_tag(
+                audio_tag or (normalized_tag + "_audio"),
+                "Paired video-audio tag")
+        except ValueError as exc:
+            if mode != "disabled":
+                raise
+            normalized_audio_tag = "%s_audio" % normalized_tag
+            _LOG.warning(
+                "H3 scheduled-reference warning: %s Using internal tag @%s.",
+                exc, normalized_audio_tag)
         entry.update({
             "audio": audio,
             "audio_tag": normalized_audio_tag,
@@ -379,12 +464,12 @@ def _append_scheduled_reference(
         for alias in _reference_entry_tags(existing)
     }
     new_tags = _reference_entry_tags(entry)
-    if len(set(new_tags)) != len(new_tags):
+    if mode != "disabled" and len(set(new_tags)) != len(new_tags):
         raise ValueError(
             "A scheduled video's @tag and paired @audio_tag must be "
             "different.")
     duplicates = existing_tags.intersection(new_tags)
-    if duplicates:
+    if mode != "disabled" and duplicates:
         duplicate = sorted(duplicates)[0]
         raise ValueError(
             "Scheduled reference tag @%s is already in this chain." %
@@ -393,15 +478,25 @@ def _append_scheduled_reference(
 
 
 def _active_reference_bindings(
-        schedule: Any, scene: int, scene_count: int) -> dict[str, Any]:
+        schedule: Any, scene: int, scene_count: int,
+        compliance_mode: str = "strict",
+        warnings: list[str] | None = None) -> dict[str, Any]:
     scene, scene_count = int(scene), int(scene_count)
+    mode = _reference_compliance_mode(compliance_mode)
+    warnings = warnings if warnings is not None else []
     if scene_count < 1 or scene < 1 or scene > scene_count:
         raise ValueError(
             "Scheduled Ref2VA scene index must be between 1 and %d; got %d." %
             (scene_count, scene))
     entries = _reference_schedule_entries(schedule)
     for entry in entries:
-        _parse_reference_selector(entry.get("scenes", "all"), scene_count)
+        try:
+            _parse_reference_selector(entry.get("scenes", "all"), scene_count)
+        except ValueError as exc:
+            if mode != "disabled":
+                raise
+            warnings.append(str(exc))
+            _LOG.warning("H3 scheduled-reference warning: %s", exc)
     active = [entry for entry in entries if _reference_is_active(entry, scene)]
     pictures = [entry for entry in active if entry.get("kind") == "picture"]
     videos = [entry for entry in active if entry.get("kind") == "video"]
@@ -409,19 +504,44 @@ def _active_reference_bindings(
     unknown = [entry.get("kind") for entry in active
                if entry.get("kind") not in ("picture", "video", "audio")]
     if unknown:
-        raise ValueError("Unknown scheduled reference kind %r." % unknown[0])
+        message = "Unknown scheduled reference kind %r." % unknown[0]
+        if mode != "disabled":
+            raise ValueError(message)
+        warnings.append(message)
+        _LOG.warning("H3 scheduled-reference warning: %s", message)
     if len(pictures) > 9:
-        raise ValueError(
-            "Scene %d activates %d pictures; stock H3 Ref2VA supports 9." %
+        message = (
+            "Scene %d activates %d pictures; only the first 9 were kept." %
             (scene, len(pictures)))
+        if mode != "disabled":
+            raise ValueError(
+                "Scene %d activates %d pictures; stock H3 Ref2VA supports 9." %
+                (scene, len(pictures)))
+        warnings.append(message)
+        _LOG.warning("H3 scheduled-reference warning: %s", message)
+        pictures = pictures[:9]
     if len(videos) > 3:
-        raise ValueError(
-            "Scene %d activates %d videos; stock H3 Ref2VA supports 3." %
+        message = (
+            "Scene %d activates %d videos; only the first 3 were kept." %
             (scene, len(videos)))
+        if mode != "disabled":
+            raise ValueError(
+                "Scene %d activates %d videos; stock H3 Ref2VA supports 3." %
+                (scene, len(videos)))
+        warnings.append(message)
+        _LOG.warning("H3 scheduled-reference warning: %s", message)
+        videos = videos[:3]
     if len(audios) > 3:
-        raise ValueError(
-            "Scene %d activates %d standalone audios; stock H3 Ref2VA "
-            "supports 3." % (scene, len(audios)))
+        message = (
+            "Scene %d activates %d standalone audios; only the first 3 "
+            "were kept." % (scene, len(audios)))
+        if mode != "disabled":
+            raise ValueError(
+                "Scene %d activates %d standalone audios; stock H3 Ref2VA "
+                "supports 3." % (scene, len(audios)))
+        warnings.append(message)
+        _LOG.warning("H3 scheduled-reference warning: %s", message)
+        audios = audios[:3]
 
     aliases: dict[str, str] = {}
     presentation: list[dict[str, Any]] = []
@@ -511,11 +631,23 @@ def _compile_scheduled_reference_prompt(
         schedule: Any, scene: int, scene_count: int,
         prompt: Any,
         compliance_mode: str = "strict") -> tuple[str, str, dict[str, Any]]:
-    bindings = _active_reference_bindings(schedule, scene, scene_count)
     mode = _reference_compliance_mode(compliance_mode)
+    warnings: list[str] = []
+    try:
+        bindings = _active_reference_bindings(
+            schedule, scene, scene_count, mode, warnings)
+    except (TypeError, ValueError) as exc:
+        if mode != "disabled":
+            raise
+        message = "Reference schedule ignored: %s" % exc
+        warnings.append(message)
+        _LOG.warning("H3 scheduled-reference warning: %s", message)
+        bindings = {
+            "pictures": [], "videos": [], "audios": [], "aliases": {},
+            "presentation": [], "all_tags": set(),
+        }
     normalized_prompt = str(prompt or "").replace(
         "\r\n", "\n").replace("\r", "\n").strip()
-    warnings: list[str] = []
     compiled_body = _replace_reference_aliases(
         normalized_prompt, bindings, scene, mode, warnings)
     mapping_lines = []
@@ -2034,6 +2166,10 @@ class MiniMaxH3ScheduledPictureReference:
                                "numbers are assigned only after inactive "
                                "entries are removed for the current scene."}),
             },
+            "hidden": {
+                "dynprompt": "DYNPROMPT",
+                "unique_id": "UNIQUE_ID",
+            },
         }
 
     RETURN_TYPES = (REFERENCE_SCHEDULE_TYPE, "STRING", "STRING")
@@ -2055,16 +2191,24 @@ class MiniMaxH3ScheduledPictureReference:
                    "Write @picture_2 in the Plan prompt; the scheduler only "
                    "resolves aliases and never inserts prompt text.")
 
-    def add(self, image, tag, scenes, previous=None):
-        if (torch is None or not torch.is_tensor(image) or image.ndim != 4 or
-                int(image.shape[0]) < 1 or int(image.shape[-1]) < 3):
-            raise ValueError(
-                "Scheduled H3 picture must be an IMAGE tensor with shape "
-                "[batch,height,width,channels].")
-        picture = image[:1]
-        schedule = _append_scheduled_reference(
-            previous, kind="picture", tag=tag, scenes=scenes,
-            value=picture, content_hash=_tensor_fingerprint(picture))
+    def add(self, image, tag, scenes, previous=None,
+            dynprompt=None, unique_id=None):
+        mode = _downstream_reference_compliance(dynprompt, unique_id)
+        try:
+            if (torch is None or not torch.is_tensor(image) or image.ndim != 4 or
+                    int(image.shape[0]) < 1 or int(image.shape[-1]) < 3):
+                raise ValueError(
+                    "Scheduled H3 picture must be an IMAGE tensor with shape "
+                    "[batch,height,width,channels].")
+            picture = image[:1]
+            schedule = _append_scheduled_reference(
+                previous, kind="picture", tag=tag, scenes=scenes,
+                value=picture, content_hash=_tensor_fingerprint(picture),
+                compliance_mode=mode)
+        except (TypeError, ValueError) as exc:
+            if mode == "disabled":
+                return _skipped_reference_result(previous, "Picture reference", exc)
+            raise
         entry = schedule["entries"][-1]
         status = "@%s picture on %s; %d sources; %s" % (
             entry["tag"], entry["scenes"], len(schedule["entries"]),
@@ -2111,6 +2255,10 @@ class MiniMaxH3ScheduledVideoReference:
                                "It sets stable priority order, not permanent "
                                "native label numbers."}),
             },
+            "hidden": {
+                "dynprompt": "DYNPROMPT",
+                "unique_id": "UNIQUE_ID",
+            },
         }
 
     RETURN_TYPES = (REFERENCE_SCHEDULE_TYPE, "STRING", "STRING")
@@ -2131,20 +2279,28 @@ class MiniMaxH3ScheduledVideoReference:
                    "never inserts prompt text. Do not treat a tag suffix as a "
                    "fixed native number.")
 
-    def add(self, video, tag, scenes, audio_tag, audio=None, previous=None):
-        if (torch is None or not torch.is_tensor(video) or video.ndim != 4 or
-                int(video.shape[0]) < 5 or int(video.shape[-1]) < 3):
-            raise ValueError(
-                "Scheduled H3 video must be an IMAGE batch containing at "
-                "least 5 frames.")
-        paired_hash = ""
-        if audio is not None:
-            _validate_audio(audio, "Scheduled H3 reference-video audio")
-            paired_hash = _audio_fingerprint(audio)
-        schedule = _append_scheduled_reference(
-            previous, kind="video", tag=tag, scenes=scenes,
-            value=video, content_hash=_tensor_fingerprint(video), audio=audio,
-            audio_tag=audio_tag, audio_hash=paired_hash)
+    def add(self, video, tag, scenes, audio_tag, audio=None, previous=None,
+            dynprompt=None, unique_id=None):
+        mode = _downstream_reference_compliance(dynprompt, unique_id)
+        try:
+            if (torch is None or not torch.is_tensor(video) or video.ndim != 4 or
+                    int(video.shape[0]) < 5 or int(video.shape[-1]) < 3):
+                raise ValueError(
+                    "Scheduled H3 video must be an IMAGE batch containing at "
+                    "least 5 frames.")
+            paired_hash = ""
+            if audio is not None:
+                _validate_audio(audio, "Scheduled H3 reference-video audio")
+                paired_hash = _audio_fingerprint(audio)
+            schedule = _append_scheduled_reference(
+                previous, kind="video", tag=tag, scenes=scenes,
+                value=video, content_hash=_tensor_fingerprint(video), audio=audio,
+                audio_tag=audio_tag, audio_hash=paired_hash,
+                compliance_mode=mode)
+        except (TypeError, ValueError) as exc:
+            if mode == "disabled":
+                return _skipped_reference_result(previous, "Video reference", exc)
+            raise
         entry = schedule["entries"][-1]
         paired = (" + @%s" % entry["audio_tag"]
                   if entry.get("audio_tag") else "")
@@ -2183,6 +2339,10 @@ class MiniMaxH3ScheduledAudioReference:
                                "It sets stable priority order, not permanent "
                                "native label numbers."}),
             },
+            "hidden": {
+                "dynprompt": "DYNPROMPT",
+                "unique_id": "UNIQUE_ID",
+            },
         }
 
     RETURN_TYPES = (REFERENCE_SCHEDULE_TYPE, "STRING", "STRING")
@@ -2200,25 +2360,33 @@ class MiniMaxH3ScheduledAudioReference:
                    "definition in the Plan prompt if you use the optional alias; "
                    "this node inserts no text.")
 
-    def add(self, audio, tag, scenes, previous=None):
-        if audio is None:
-            raise ValueError(
-                "Scheduled H3 standalone audio received no audio (None). "
-                "Most likely, this input is connected to Current Shot's "
-                "source_audio_slice while the Plan uses generated_audio; that "
-                "output is intentionally empty in generated_audio mode. For a "
-                "short voice/timbre reference, connect Load Audio directly to "
-                "Scheduled Audio Ref. For frame-exact source slices plus "
-                "generated-audio continuity, use source_plus_timeline and set "
-                "Assemble audio_source to generated if that is the final track "
-                "you want. Otherwise check that the upstream audio node is not "
-                "muted or bypassed, reconnect the AUDIO link, and queue again. "
-                "A playable browser preview does not guarantee that the socket "
-                "emitted AUDIO during this execution.")
-        _validate_audio(audio, "Scheduled H3 standalone audio")
-        schedule = _append_scheduled_reference(
-            previous, kind="audio", tag=tag, scenes=scenes,
-            value=audio, content_hash=_audio_fingerprint(audio))
+    def add(self, audio, tag, scenes, previous=None,
+            dynprompt=None, unique_id=None):
+        mode = _downstream_reference_compliance(dynprompt, unique_id)
+        try:
+            if audio is None:
+                raise ValueError(
+                    "Scheduled H3 standalone audio received no audio (None). "
+                    "Most likely, this input is connected to Current Shot's "
+                    "source_audio_slice while the Plan uses generated_audio; that "
+                    "output is intentionally empty in generated_audio mode. For a "
+                    "short voice/timbre reference, connect Load Audio directly to "
+                    "Scheduled Audio Ref. For frame-exact source slices plus "
+                    "generated-audio continuity, use source_plus_timeline and set "
+                    "Assemble audio_source to generated if that is the final track "
+                    "you want. Otherwise check that the upstream audio node is not "
+                    "muted or bypassed, reconnect the AUDIO link, and queue again. "
+                    "A playable browser preview does not guarantee that the socket "
+                    "emitted AUDIO during this execution.")
+            _validate_audio(audio, "Scheduled H3 standalone audio")
+            schedule = _append_scheduled_reference(
+                previous, kind="audio", tag=tag, scenes=scenes,
+                value=audio, content_hash=_audio_fingerprint(audio),
+                compliance_mode=mode)
+        except (TypeError, ValueError) as exc:
+            if mode == "disabled":
+                return _skipped_reference_result(previous, "Audio reference", exc)
+            raise
         entry = schedule["entries"][-1]
         status = "@%s audio on %s; %d sources; %s" % (
             entry["tag"], entry["scenes"], len(schedule["entries"]),
@@ -2289,10 +2457,13 @@ class MiniMaxH3ScheduledReferenceToVideo:
                     "tooltip": "strict: compile active @tags and block unknown "
                                "or inactive tags. soft: compile active tags but "
                                "warn and preserve unresolved tags. disabled: "
-                               "perform no @tag compilation or checking and "
-                               "pass the prompt unchanged. This setting does "
-                               "not bypass media tensor, reference capacity, "
-                               "shape, or checkpoint safety requirements."}),
+                               "make every scheduler-authored check non-blocking, "
+                               "pass the prompt unchanged, omit missing/invalid "
+                               "scheduled media (including an empty generated-"
+                               "audio source slice), and keep only stock H3's "
+                               "supported reference capacity. Failures in CLIP, "
+                               "VAE, sampling, or checkpoint execution remain "
+                               "real execution errors."}),
             },
         }
 
@@ -2358,7 +2529,17 @@ class MiniMaxH3ScheduledReferenceToVideo:
         for index, entry in enumerate(bindings["audios"]):
             ref2va.set_input(
                 "ref_audios.ref_audio_%d" % index, entry["value"])
-        fingerprint = str(reference_schedule["fingerprint"])
+        if isinstance(reference_schedule, dict) and reference_schedule.get(
+                "fingerprint"):
+            fingerprint = str(reference_schedule["fingerprint"])
+        elif _reference_compliance_mode(prompt_compliance) == "disabled":
+            fingerprint = _fingerprint({
+                "reference_schedule": "ignored",
+                "prompt_compliance": "disabled",
+            })
+        else:
+            raise ValueError(
+                "Scheduled references have no valid schedule fingerprint.")
         return {
             "result": (
                 ref2va.out(0), ref2va.out(1), compiled, summary, fingerprint),
@@ -2844,12 +3025,11 @@ class MiniMaxH3ChainRunManager:
                            "link without decoding or retaining the media."})
         return inputs
 
-    RETURN_TYPES = (PLAN_TYPE, "STRING")
-    RETURN_NAMES = ("plan", "asset_status")
+    RETURN_TYPES = (PLAN_TYPE,)
+    RETURN_NAMES = ("plan",)
     OUTPUT_TOOLTIPS = (
         "The connected Plan, unchanged. Put the manager inline when connected "
         "asset bindings should be archived automatically on execution.",
-        "Asset-manifest save result for the current run.",
     )
     FUNCTION = "passthrough"
     CATEGORY = "conditioning/minimax/contex_loop"
@@ -2859,7 +3039,6 @@ class MiniMaxH3ChainRunManager:
 
     def passthrough(self, plan, archive_images, archive_audio, archive_video,
                     asset_bindings_json, **_assets):
-        status = "No connected asset bindings."
         try:
             bindings = json.loads(str(asset_bindings_json or "[]"))
             if not isinstance(bindings, list):
@@ -2871,18 +3050,15 @@ class MiniMaxH3ChainRunManager:
                         "audio": bool(archive_audio),
                         "video": bool(archive_video),
                     })
-                status = "%d bindings; %d archived; %s" % (
-                    result["asset_count"],
-                    result.get("archived_asset_count", 0),
-                    result["manifest"])
                 if result.get("warnings"):
-                    status += "; " + "; ".join(result["warnings"])
+                    _LOG.warning(
+                        "H3 Run Manager asset archive warnings for %s: %s",
+                        plan["run_name"], "; ".join(result["warnings"]))
         except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
             # Recovery metadata is supplementary and must never waste a long
             # H3 generation that already reached this pass-through.
-            status = "Asset archive warning: %s" % exc
             _LOG.warning("H3 Run Manager could not archive assets: %s", exc)
-        return (plan, status)
+        return (plan,)
 
 
 class MiniMaxH3ChainFirstSceneImage:

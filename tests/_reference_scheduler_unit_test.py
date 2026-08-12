@@ -49,6 +49,17 @@ class LazyAudio:
         self.reads += 1
         return self.value[key]
 
+
+class FakeDynamicPrompt:
+    def __init__(self, nodes):
+        self.nodes = nodes
+
+    def all_node_ids(self):
+        return set(self.nodes)
+
+    def get_node(self, node_id):
+        return self.nodes[node_id]
+
 def schedule():
     return chain._make_reference_schedule([
         {
@@ -134,6 +145,82 @@ assert chain.MiniMaxH3ScheduledReferenceToVideo.VALIDATE_INPUTS(True) is True
 assert chain.MiniMaxH3ScheduledReferenceToVideo.VALIDATE_INPUTS(False) is True
 assert "must be strict, soft, or disabled" in (
     chain.MiniMaxH3ScheduledReferenceToVideo.VALIDATE_INPUTS("unknown"))
+
+disabled_graph = FakeDynamicPrompt({
+    "audio": {
+        "class_type": "MiniMaxH3ScheduledAudioReference", "inputs": {}},
+    "wrapper": {
+        "class_type": "MiniMaxH3ScheduledReferenceToVideo",
+        "inputs": {
+            "reference_schedule": ["audio", 0],
+            "prompt_compliance": "disabled",
+        },
+    },
+})
+skipped_schedule, skipped_fingerprint, skipped_status = (
+    chain.MiniMaxH3ScheduledAudioReference().add(
+        None, "song", "all", dynprompt=disabled_graph, unique_id="audio"))
+assert skipped_schedule["entries"] == []
+assert skipped_schedule["fingerprint"] == skipped_fingerprint
+assert "skipped because compliance is disabled" in skipped_status
+
+disabled_picture_graph = FakeDynamicPrompt({
+    "picture": {
+        "class_type": "MiniMaxH3ScheduledPictureReference", "inputs": {}},
+    "wrapper": disabled_graph.nodes["wrapper"] | {
+        "inputs": {
+            "reference_schedule": ["picture", 0],
+            "prompt_compliance": "disabled",
+        },
+    },
+})
+unchecked_picture = chain.MiniMaxH3ScheduledPictureReference().add(
+    chain.torch.zeros((1, 4, 4, 3)), "!!!", "not-a-selector",
+    dynprompt=disabled_picture_graph, unique_id="picture")[0]
+assert len(unchecked_picture["entries"]) == 1
+assert unchecked_picture["entries"][0]["tag"].startswith("reference_")
+assert unchecked_picture["entries"][0]["scenes"] == "all"
+
+too_many_audio = chain._make_reference_schedule([
+    {
+        "kind": "audio", "tag": "audio_%d" % index, "scenes": "all",
+        "ranges": (), "value": object(), "content_hash": str(index),
+    }
+    for index in range(4)
+])
+capacity_prompt, capacity_summary, capacity_bindings = (
+    chain._compile_scheduled_reference_prompt(
+        too_many_audio, 1, 1, "User-managed <Audio 1>.",
+        compliance_mode="disabled"))
+assert capacity_prompt == "User-managed <Audio 1>."
+assert len(capacity_bindings["audios"]) == 3
+assert "only the first 3 were kept" in capacity_summary
+
+malformed_prompt, malformed_summary, malformed_bindings = (
+    chain._compile_scheduled_reference_prompt(
+        {"version": -1, "entries": "broken"}, 99, 0,
+        "Entirely user-managed prompt.", compliance_mode="disabled"))
+assert malformed_prompt == "Entirely user-managed prompt."
+assert malformed_bindings["pictures"] == []
+assert "Reference schedule ignored" in malformed_summary
+
+soft_graph = FakeDynamicPrompt({
+    "audio": disabled_graph.nodes["audio"],
+    "wrapper": {
+        "class_type": "MiniMaxH3ScheduledReferenceToVideo",
+        "inputs": {
+            "reference_schedule": ["audio", 0],
+            "prompt_compliance": "soft",
+        },
+    },
+})
+try:
+    chain.MiniMaxH3ScheduledAudioReference().add(
+        None, "song", "all", dynprompt=soft_graph, unique_id="audio")
+except ValueError as exc:
+    assert "received no audio (None)" in str(exc)
+else:
+    raise AssertionError("soft compliance accepted missing scheduled audio")
 
 picture_inputs = chain.MiniMaxH3ScheduledPictureReference.INPUT_TYPES()[
     "required"]
