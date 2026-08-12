@@ -105,6 +105,21 @@ for scene in (1, 4, 8):
         assert "<Audio 1> is the current frame-exact" in compiled
     assert mapping.startswith("scene %d/14:" % scene)
 
+warning_prompt, warning_summary, warning_bindings = (
+    chain._compile_scheduled_reference_prompt(
+        schedule(), 1, 14,
+        "Resolve @hero_face; preserve @missing and @missing.",
+        strict_reference_tags=False))
+assert warning_prompt == (
+    "Resolve <Picture 1>; preserve @missing and @missing.")
+assert len(warning_bindings["compliance_warnings"]) == 1
+assert "unknown scheduled reference tag @missing" in warning_summary
+strict_tag_options = (
+    chain.MiniMaxH3ScheduledReferenceToVideo.INPUT_TYPES()["optional"]
+    ["strict_reference_tags"][1])
+assert strict_tag_options["default"] is True
+assert strict_tag_options["label_off"] == "warn only: generate"
+
 picture_inputs = chain.MiniMaxH3ScheduledPictureReference.INPUT_TYPES()[
     "required"]
 video_inputs = chain.MiniMaxH3ScheduledVideoReference.INPUT_TYPES()["required"]

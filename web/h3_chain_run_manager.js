@@ -1,12 +1,19 @@
 import {app} from "/scripts/app.js";
 import {api} from "/scripts/api.js";
+import {
+    ASSET_ROLES,
+    MAX_ASSET_BINDINGS,
+    applyAssetBinding,
+    assetInputNumber,
+    collectAssetBindings,
+    nodeType,
+} from "./h3_run_assets_core.mjs";
 
 const NODE_NAME = "MiniMaxH3ChainRunManager";
 const PLAN_NAME = "MiniMaxH3ChainPlan";
-
-function nodeType(node) {
-    return node?.comfyClass ?? node?.type ?? null;
-}
+const ASSET_WIDGETS = [
+    "archive_images", "archive_audio", "archive_video", "asset_bindings_json",
+];
 
 function upstreamPlanNode(start) {
     const queue = [start];
@@ -59,6 +66,23 @@ function injectStyles() {
             font:12px/1.4 system-ui,sans-serif; }
         .h3rm-root *, .h3rm-root *::before, .h3rm-root *::after { box-sizing:border-box; }
         .h3rm-title { font-size:15px; font-weight:750; }
+        .h3rm-section { padding:8px; border:1px solid color-mix(in srgb,var(--h3rm-border) 72%,transparent);
+            border-radius:6px; background:var(--h3rm-panel); }
+        .h3rm-section-title { display:flex; justify-content:space-between; align-items:center;
+            gap:8px; margin-bottom:6px; font-weight:700; }
+        .h3rm-policy { display:flex; flex-wrap:wrap; gap:8px; color:var(--h3rm-muted); font-weight:400; }
+        .h3rm-policy label { display:inline-flex; align-items:center; gap:4px; }
+        .h3rm-policy input { margin:0; }
+        .h3rm-assets { display:flex; flex-direction:column; gap:5px; }
+        .h3rm-asset { display:grid; grid-template-columns:minmax(120px,1fr) 125px;
+            align-items:center; gap:6px; min-width:0; }
+        .h3rm-asset-main { min-width:0; overflow:hidden; text-overflow:ellipsis;
+            white-space:nowrap; }
+        .h3rm-asset-path { display:block; color:var(--h3rm-muted); font-size:11px;
+            overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .h3rm-asset select { min-width:0; width:100%; padding:4px; border:1px solid var(--h3rm-border);
+            border-radius:5px; background:var(--h3rm-bg); color:var(--h3rm-text); }
+        .h3rm-empty { color:var(--h3rm-muted); }
         .h3rm-select { width:100%; min-width:0; padding:7px 8px; border:1px solid var(--h3rm-border);
             border-radius:6px; background:var(--h3rm-panel); color:var(--h3rm-text); }
         .h3rm-details { min-height:48px; padding:8px; border:1px solid color-mix(in srgb,var(--h3rm-border) 72%,transparent);
@@ -82,6 +106,42 @@ function formatBytes(value) {
     if (!Number.isFinite(bytes) || bytes < 1) return "0 KB";
     if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function collapseWidget(widget) {
+    if (!widget) return;
+    widget._h3OriginalType ??= widget.type;
+    widget._h3OriginalComputeSize ??= widget.computeSize;
+    widget.type = "hidden";
+    widget.computeSize = () => [0, -4];
+    for (const item of new Set([widget.inputEl, widget.element])) {
+        if (!item?.style) continue;
+        item.style.setProperty("display", "none", "important");
+        item.setAttribute?.("aria-hidden", "true");
+    }
+}
+
+function stabilizeAssetInputs(node) {
+    const connected = (node.inputs ?? []).filter((input) =>
+        assetInputNumber(input) != null && input.link != null);
+    const used = new Set(connected.map((input) => assetInputNumber(input)));
+    let next = 0;
+    while (used.has(next) && next < MAX_ASSET_BINDINGS) next += 1;
+    for (let index = (node.inputs?.length ?? 0) - 1; index >= 0; index -= 1) {
+        const input = node.inputs[index];
+        const number = assetInputNumber(input);
+        if (number != null && input.link == null && number !== next) {
+            node.removeInput(index);
+        }
+    }
+    if (next < MAX_ASSET_BINDINGS
+            && !node.inputs?.some((input) => input.name === `asset_${next}`)) {
+        node.addInput(`asset_${next}`, "*");
+    }
+    const empty = node.inputs?.find((input) =>
+        assetInputNumber(input) === next && input.link == null);
+    if (empty) empty.label = "Connect loader asset";
+    node.graph?.setDirtyCanvas?.(true, true);
 }
 
 function localTime(value) {
@@ -144,13 +204,129 @@ function mount(node) {
     ]) root.addEventListener(eventName, (event) => event.stopPropagation());
     root.addEventListener("wheel", (event) => event.stopPropagation());
 
-    const state = {runs: [], selected: "", busy: false};
+    for (const name of ASSET_WIDGETS) collapseWidget(widgetByName(node, name));
+    const state = {
+        runs: [], selected: "", busy: false, bindings: [], watchedSources: new Set(),
+    };
     const title = element("div", "h3rm-title", "H3 Run Manager");
     const select = element("select", "h3rm-select");
     select.title = "Saved projects discovered under the ComfyUI host's output/h3_chains folder.";
     const details = element("div", "h3rm-details", "Loading saved runs…");
+    const assetSection = element("div", "h3rm-section");
+    const assetHeader = element("div", "h3rm-section-title");
+    const assetList = element("div", "h3rm-assets");
+    const policies = element("div", "h3rm-policy");
     const actions = element("div", "h3rm-actions");
     const status = element("span", "h3rm-status");
+
+    function policyCheckbox(widgetName, label) {
+        const wrap = element("label");
+        const control = element("input");
+        control.type = "checkbox";
+        const widget = widgetByName(node, widgetName);
+        control.checked = Boolean(widget?.value);
+        control.addEventListener("change", () => {
+            if (widget) {
+                widget.value = control.checked;
+                widget.callback?.(control.checked);
+            }
+            node.graph?.setDirtyCanvas?.(true, true);
+        });
+        wrap.append(control, document.createTextNode(label));
+        return wrap;
+    }
+
+    policies.append(
+        policyCheckbox("archive_images", "Archive images"),
+        policyCheckbox("archive_audio", "Archive audio"),
+        policyCheckbox("archive_video", "Archive video"),
+    );
+    assetHeader.append(element("span", "", "Reference assets"), policies);
+
+    function writeBindingsWidget() {
+        const widget = widgetByName(node, "asset_bindings_json");
+        if (!widget) return;
+        const value = JSON.stringify(state.bindings);
+        if (widget.value === value) return;
+        widget.value = value;
+        widget.callback?.(value);
+        node.graph?.setDirtyCanvas?.(true, true);
+    }
+
+    const sourceChanged = () => {
+        const defer = window.queueMicrotask ?? ((callback) => window.setTimeout(callback, 0));
+        defer(() => syncAssetBindings());
+    };
+
+    function updateSourceWatches() {
+        const current = new Set();
+        for (const input of node.inputs ?? []) {
+            if (assetInputNumber(input) == null || input.link == null) continue;
+            const link = node.graph?.links?.[input.link];
+            const source = link ? node.graph?.getNodeById?.(link.origin_id) : null;
+            if (!source) continue;
+            current.add(source);
+            source._h3AssetWatchers ??= new Set();
+            if (!source._h3AssetWatchWrapped) {
+                source._h3AssetWatchWrapped = true;
+                const changed = source.onWidgetChanged;
+                source.onWidgetChanged = function () {
+                    const result = changed?.apply(this, arguments);
+                    for (const listener of this._h3AssetWatchers ?? []) listener();
+                    return result;
+                };
+            }
+            source._h3AssetWatchers.add(sourceChanged);
+        }
+        for (const source of state.watchedSources) {
+            if (!current.has(source)) source._h3AssetWatchers?.delete(sourceChanged);
+        }
+        state.watchedSources = current;
+    }
+
+    function renderAssetBindings() {
+        assetList.replaceChildren();
+        if (!state.bindings.length) {
+            assetList.append(element(
+                "div", "h3rm-empty",
+                "Connect an image, video, or audio loader to the asset socket.",
+            ));
+            return;
+        }
+        for (const binding of state.bindings) {
+            const row = element("div", "h3rm-asset");
+            const main = element("div", "h3rm-asset-main", binding.label);
+            const path = element(
+                "span", "h3rm-asset-path",
+                binding.original_value || "No loader filename detected",
+            );
+            main.title = `${binding.node_type} #${binding.node_id}`;
+            path.title = binding.original_value || main.title;
+            main.append(path);
+            const role = element("select");
+            for (const [value, label] of ASSET_ROLES) {
+                const option = element("option", "", label);
+                option.value = value;
+                role.append(option);
+            }
+            role.value = binding.role;
+            role.addEventListener("change", () => {
+                node.properties ??= {};
+                node.properties.h3_asset_roles ??= {};
+                node.properties.h3_asset_roles[binding.binding_id] = role.value;
+                syncAssetBindings();
+            });
+            row.append(main, role);
+            assetList.append(row);
+        }
+    }
+
+    function syncAssetBindings() {
+        updateSourceWatches();
+        state.bindings = collectAssetBindings(node);
+        writeBindingsWidget();
+        renderAssetBindings();
+    }
 
     function selectedRun() {
         return state.runs.find((item) => item.run_name === state.selected) ?? null;
@@ -162,6 +338,7 @@ function mount(node) {
         refresh.disabled = state.busy;
         load.disabled = state.busy || !selectedRun()?.restorable;
         open.disabled = state.busy || !selectedRun();
+        saveAssets.disabled = state.busy || !state.bindings.length;
     }
 
     function renderSelection() {
@@ -177,7 +354,7 @@ function mount(node) {
         const source = Object.entries(run.sources ?? {}).filter(([, ready]) => ready)
             .map(([name]) => name.replace("_", " ")).join(", ") || "no archive";
         details.textContent =
-            `${scenes} · ${run.checkpoint_count} checkpoints · ${formatBytes(run.archive_bytes)}\n` +
+            `${scenes} · ${run.checkpoint_count} checkpoints · ${run.asset_count ?? 0} assets · ${formatBytes(run.archive_bytes)}\n` +
             `Modified ${localTime(run.modified_at)} · ${source}`;
         load.disabled = state.busy || !run.restorable;
         open.disabled = state.busy;
@@ -228,8 +405,11 @@ function mount(node) {
             return;
         }
         const current = String(widgetByName(planNode, "run_name")?.value ?? "").trim();
+        const assetNotice = run.asset_count
+            ? ` It will also attempt to restore ${run.asset_count} loader asset${run.asset_count === 1 ? "" : "s"}.`
+            : "";
         const message = `Load saved run “${run.run_name}” into the connected Plan?\n\n` +
-            `This replaces all active scene prompts and archived Plan settings${current ? ` from “${current}”` : ""}.`;
+            `This replaces all active scene prompts and archived Plan settings${current ? ` from “${current}”` : ""}.${assetNotice}`;
         if (!window.confirm(message)) return;
         setBusy(true);
         status.className = "h3rm-status";
@@ -238,16 +418,32 @@ function mount(node) {
             const query = new URLSearchParams({run_name: run.run_name});
             const payload = await jsonRequest(`/minimax_h3_context_loop/run?${query}`);
             const result = applyPlanInputs(planNode, payload.plan_inputs);
+            const assetResults = [];
+            const graph = node.graph ?? app.graph;
+            graph?.beforeChange?.();
+            try {
+                for (const binding of payload.assets?.bindings ?? []) {
+                    assetResults.push(applyAssetBinding(graph, binding));
+                }
+            } finally {
+                graph?.afterChange?.();
+            }
+            const assetFailures = assetResults.filter((item) => !item.applied);
+            const assetApplied = assetResults.length - assetFailures.length;
             const warning = [
                 ...(payload.warnings ?? []),
                 ...(result.unavailable.length
                     ? [`Unavailable current widgets: ${result.unavailable.join(", ")}`] : []),
+                ...assetFailures.map((item) =>
+                    `${item.binding?.label ?? "Asset"}: ${item.reason.replaceAll("_", " ")}`),
             ];
             status.className = warning.length
                 ? "h3rm-status h3rm-error" : "h3rm-status";
             status.textContent = warning.length
-                ? `Loaded ${payload.scene_count ?? "saved"} scenes · ${warning.join(" · ")}`
-                : `Loaded ${payload.scene_count ?? "saved"} scenes into Plan`;
+                ? `Loaded ${payload.scene_count ?? "saved"} scenes and ${assetApplied} assets · ${warning.join(" · ")}`
+                : `Loaded ${payload.scene_count ?? "saved"} scenes and ${assetApplied} assets`;
+            syncAssetBindings();
+            graph?.setDirtyCanvas?.(true, true);
         } catch (error) {
             status.className = "h3rm-status h3rm-error";
             status.textContent = error?.message || String(error);
@@ -291,6 +487,49 @@ function mount(node) {
         }
     }
 
+    async function saveRunAssets() {
+        const planNode = upstreamPlanNode(node);
+        const runName = String(widgetByName(planNode, "run_name")?.value ?? "").trim();
+        if (!planNode || !runName || !state.bindings.length || state.busy) {
+            status.className = "h3rm-status h3rm-error";
+            status.textContent = planNode
+                ? "Connect at least one loader asset." : "Connect the active Plan first.";
+            return;
+        }
+        syncAssetBindings();
+        setBusy(true);
+        status.className = "h3rm-status";
+        status.textContent = "Saving asset manifest…";
+        try {
+            const response = await api.fetchApi(
+                "/minimax_h3_context_loop/run-assets",
+                {
+                    method: "POST",
+                    headers: {"Content-Type": "application/json"},
+                    body: JSON.stringify({
+                        run_name: runName,
+                        bindings: state.bindings,
+                        archive_images: Boolean(widgetByName(node, "archive_images")?.value),
+                        archive_audio: Boolean(widgetByName(node, "archive_audio")?.value),
+                        archive_video: Boolean(widgetByName(node, "archive_video")?.value),
+                    }),
+                },
+            );
+            const payload = await response.json();
+            if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+            const warning = payload.warnings?.length
+                ? ` · ${payload.warnings.join(" · ")}` : "";
+            await refreshRuns();
+            status.className = warning ? "h3rm-status h3rm-error" : "h3rm-status";
+            status.textContent = `Saved ${payload.asset_count} bindings, ${payload.archived_asset_count ?? 0} archived${warning}`;
+        } catch (error) {
+            status.className = "h3rm-status h3rm-error";
+            status.textContent = error?.message || String(error);
+        } finally {
+            setBusy(false);
+        }
+    }
+
     select.addEventListener("change", () => {
         state.selected = select.value;
         status.className = "h3rm-status";
@@ -307,25 +546,57 @@ function mount(node) {
     const open = button("Open folder", "Open the selected run folder on the ComfyUI host", () => {
         void openRunFolder();
     });
-    actions.append(load, refresh, open, status);
-    root.append(title, select, details, actions);
+    const saveAssets = button(
+        "Save/update assets",
+        "Write loader paths and enabled fallback copies into the active run folder",
+        () => { void saveRunAssets(); },
+    );
+    actions.append(load, refresh, open, saveAssets, status);
+    assetSection.append(assetHeader, assetList);
+    root.append(title, select, details, assetSection, actions);
 
     const widget = node.addDOMWidget("h3_run_manager", "h3-run-manager", root, {
         serialize: false,
         hideOnZoom: false,
-        getMinHeight: () => 210,
+        getMinHeight: () => 340,
     });
     widget.serialize = false;
     node.setSize?.([
         Math.max(Number(node.size?.[0]) || 0, 520),
-        Math.max(Number(node.size?.[1]) || 0, 330),
+        Math.max(Number(node.size?.[1]) || 0, 500),
     ]);
     const connectionsChanged = node.onConnectionsChange;
     node.onConnectionsChange = function () {
         const result = connectionsChanged?.apply(this, arguments);
-        window.setTimeout(renderSelection, 0);
+        window.setTimeout(() => {
+            stabilizeAssetInputs(node);
+            syncAssetBindings();
+            renderSelection();
+        }, 0);
         return result;
     };
+    const serialized = node.onSerialize;
+    node.onSerialize = function () {
+        syncAssetBindings();
+        return serialized?.apply(this, arguments);
+    };
+    const removed = node.onRemoved;
+    node.onRemoved = function () {
+        for (const source of state.watchedSources) {
+            source._h3AssetWatchers?.delete(sourceChanged);
+        }
+        state.watchedSources.clear();
+        return removed?.apply(this, arguments);
+    };
+    node._h3RunManagerRefresh = () => {
+        for (const name of ASSET_WIDGETS) collapseWidget(widgetByName(node, name));
+        stabilizeAssetInputs(node);
+        syncAssetBindings();
+        renderSelection();
+    };
+    window.setTimeout(() => {
+        node._h3RunManagerRefresh?.();
+    }, 100);
     void refreshRuns();
 }
 
@@ -337,6 +608,18 @@ app.registerExtension({
         nodeTypeClass.prototype.onNodeCreated = function () {
             const result = created?.apply(this, arguments);
             window.setTimeout(() => mount(this), 0);
+            return result;
+        };
+        const configured = nodeTypeClass.prototype.onConfigure;
+        nodeTypeClass.prototype.onConfigure = function () {
+            const result = configured?.apply(this, arguments);
+            window.setTimeout(() => this._h3RunManagerRefresh?.(), 0);
+            return result;
+        };
+    const graphConfigured = nodeTypeClass.prototype.onGraphConfigured;
+        nodeTypeClass.prototype.onGraphConfigured = function () {
+            const result = graphConfigured?.apply(this, arguments);
+            window.setTimeout(() => this._h3RunManagerRefresh?.(), 0);
             return result;
         };
     },

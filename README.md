@@ -20,6 +20,15 @@ huge cumulative image tensor.
 Newest first. Recent additions stay visible; older milestones are folded away
 so this page remains a useful starting point rather than a changelog wall.
 
+- **v0.3.25 — Portable run assets and optional tag warnings.** Run Manager
+  accepts dynamic loader-asset
+  connections, records persistent binding identities plus original input paths,
+  and can retain content-addressed image/audio/video fallbacks under the run
+  folder. Restore prefers the original input file, materializes an archived
+  fallback into ComfyUI input only when needed, and reassigns an unambiguous
+  compatible loader without relying solely on its numeric node ID. Scheduled
+  Ref2VA can also downgrade unresolved prompt `@tag` failures to visible log
+  warnings while passing the original tag text through to H3.
 - **v0.3.24 — Saved Run Manager.** A companion node browses projects under the
   ComfyUI host's `output/h3_chains`, reports scene/checkpoint/archive details,
   and restores all archived prompts and Plan settings into the connected Plan
@@ -275,6 +284,13 @@ current scene. For example, suppose two picture nodes use tags `picture_1` and
 `<Picture 1>`. The `active_references` output shows the exact mapping for the
 current scene.
 
+Scheduled Ref2VA's **strict_reference_tags** switch defaults on. In strict mode,
+an unknown `@tag` or a scheduled tag that is inactive for the current scene
+stops the workflow before sampling. Disable the switch to leave that tag text
+unchanged, emit a warning in the ComfyUI log and `active_references` status, and
+continue generation. This only relaxes prompt-tag compliance; invalid media,
+reference counts, dimensions, and checkpoint compatibility still block safely.
+
 The **Scene Prompt Editor** discovers the Scheduled Ref2VA connected downstream
 without adding an execution socket or a graph cycle. Open its **@ Reference**
 tray to see only references connected and active for the selected scene, with
@@ -454,6 +470,29 @@ contain the original unused default-widget values. Prompt-history folders are
 not read during run discovery; choosing the restored scene in the Scene Prompt
 Editor loads that scene's history normally through its restored `run_name` and
 scene ID.
+
+Connect media-loader outputs to Run Manager's trailing **Connect loader asset**
+socket. Another empty socket appears automatically, up to 12 assets. Each row
+can be classified as Picture, Video, Audio reference, or Source track. This
+classification matters: a project soundtrack and a short Ref2VA voice reference
+may both originate from Load Audio but are restored as different project roles.
+
+**Archive images** and **Archive audio** default on. **Archive video** defaults
+off because reference videos can make a project folder very large. With Run
+Manager placed inline, its manifest is refreshed when the workflow executes;
+**Save/update assets** also writes it immediately when the manager is used as a
+side branch. Files are content-addressed, so unchanged media is deduplicated and
+changed media becomes a recoverable new version rather than overwriting its
+predecessor. Only files inside ComfyUI's input directory are eligible for these
+fallback copies.
+
+During restore, the original input-relative loader value wins when that file
+still exists. If it is missing and a fallback was enabled, the manager copies
+the archived file to a uniquely named top-level ComfyUI input file, then updates
+the loader. Targets are matched in order by persistent binding identity,
+archived node ID and type, one unambiguous same-type loader, then one
+unambiguous compatible loader. Ambiguous or missing targets are reported and
+left unchanged.
 
 ### Prompt Assistant (Codex or Hermes)
 

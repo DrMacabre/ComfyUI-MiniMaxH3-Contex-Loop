@@ -474,7 +474,10 @@ def main():
         "MiniMaxH3ChainScenePromptEditor"]()
     assert prompt_editor.passthrough(readable_prompts)[0] is readable_prompts
     run_manager = package.NODE_CLASS_MAPPINGS["MiniMaxH3ChainRunManager"]()
-    assert run_manager.passthrough(readable_prompts)[0] is readable_prompts
+    run_manager_result = run_manager.passthrough(
+        readable_prompts, True, True, False, "[]")
+    assert run_manager_result[0] is readable_prompts
+    assert run_manager_result[1] == "No connected asset bindings."
     opening_image = object()
     first_scene_gate = package.NODE_CLASS_MAPPINGS[
         "MiniMaxH3ChainFirstSceneImage"]()
@@ -685,6 +688,22 @@ def main():
         assert "unknown scheduled reference tag" in str(exc)
     else:
         raise AssertionError("compiler accepted an unknown reference tag")
+    warning_prompt, warning_summary, warning_bindings = (
+        chain._compile_scheduled_reference_prompt(
+            picture_only, 1, 2,
+            "Keep @unknown and @unknown; resolve @single.",
+            strict_reference_tags=False))
+    assert warning_prompt == (
+        "Keep @unknown and @unknown; resolve <Picture 1>.")
+    assert len(warning_bindings["compliance_warnings"]) == 1
+    assert "unknown scheduled reference tag @unknown" in warning_summary
+    inactive_prompt, _, inactive_bindings = (
+        chain._compile_scheduled_reference_prompt(
+            picture_only, 2, 2, "Keep @single here.",
+            strict_reference_tags=False))
+    assert inactive_prompt == "Keep @single here."
+    assert "not active in scene 2" in (
+        inactive_bindings["compliance_warnings"][0])
     try:
         audio_node.add(
             voice_audio, "hero", "", previous=picture_schedule)
@@ -707,7 +726,8 @@ def main():
     else:
         raise AssertionError("scheduler accepted an out-of-plan selector")
     print("reference schedule: disjoint selectors, stable tags, native label "
-          "compilation, dynamic Ref2VA sockets, and validation pass")
+          "compilation, strict/warning-only compliance, dynamic Ref2VA "
+          "sockets, and validation pass")
 
     # ComfyUI rounds H3's 40 Hz audio grid to the nearest step. Depending on
     # frame length, the decoded stream can land 1/3 step above or below the

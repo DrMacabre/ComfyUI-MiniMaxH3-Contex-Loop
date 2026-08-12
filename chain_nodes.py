@@ -78,6 +78,7 @@ from .nodes import (
 )
 from .prompt_history import PromptHistoryStore
 from .run_manager import RunArchiveManager
+from .asset_store import MAX_ASSET_BINDINGS, RunAssetStore
 
 
 _LOG = logging.getLogger("minimax_h3_context_loop.chain")
@@ -455,32 +456,50 @@ def _active_reference_bindings(
 
 
 def _replace_reference_aliases(
-        text: str, bindings: dict[str, Any], scene: int) -> str:
+        text: str, bindings: dict[str, Any], scene: int,
+        strict_reference_tags: bool = True,
+        warnings: list[str] | None = None) -> str:
     aliases = bindings["aliases"]
     all_tags = bindings["all_tags"]
+    warnings = warnings if warnings is not None else []
+
+    def compliance_error(message: str, original: str) -> str:
+        if strict_reference_tags:
+            raise ValueError(message)
+        if message not in warnings:
+            warnings.append(message)
+            _LOG.warning(
+                "H3 scheduled-reference prompt compliance warning: %s "
+                "The unresolved tag is being passed to H3 unchanged.",
+                message)
+        return original
 
     def replace(match):
         tag = match.group(1)
         if tag in aliases:
             return aliases[tag]
         if tag in all_tags:
-            raise ValueError(
+            return compliance_error(
                 "Scheduled reference @%s is not active in scene %d." %
-                (tag, int(scene)))
-        raise ValueError(
-            "Prompt uses unknown scheduled reference tag @%s." % tag)
+                (tag, int(scene)), match.group(0))
+        return compliance_error(
+            "Prompt uses unknown scheduled reference tag @%s." % tag,
+            match.group(0))
 
     return _REFERENCE_ALIAS_RE.sub(replace, str(text))
 
 
 def _compile_scheduled_reference_prompt(
         schedule: Any, scene: int, scene_count: int,
-        prompt: Any) -> tuple[str, str, dict[str, Any]]:
+        prompt: Any,
+        strict_reference_tags: bool = True) -> tuple[str, str, dict[str, Any]]:
     bindings = _active_reference_bindings(schedule, scene, scene_count)
     normalized_prompt = str(prompt or "").replace(
         "\r\n", "\n").replace("\r", "\n").strip()
+    warnings: list[str] = []
     compiled_body = _replace_reference_aliases(
-        normalized_prompt, bindings, scene)
+        normalized_prompt, bindings, scene,
+        bool(strict_reference_tags), warnings)
     mapping_lines = []
     for item in bindings["presentation"]:
         mapping_lines.append("@%s -> %s" % (
@@ -489,6 +508,9 @@ def _compile_scheduled_reference_prompt(
         int(scene), int(scene_count),
         "; ".join(mapping_lines) if mapping_lines
         else "no scheduled references")
+    if warnings:
+        summary += "; warning-only: %s" % " ".join(warnings)
+    bindings["compliance_warnings"] = warnings
     return compiled_body, summary, bindings
 
 
@@ -1109,6 +1131,10 @@ def _normalize_plan(
 
 def _output_root() -> str:
     return os.path.abspath(folder_paths.get_output_directory())
+
+
+def _input_root() -> str:
+    return os.path.abspath(folder_paths.get_input_directory())
 
 
 def _run_dir(plan: dict[str, Any]) -> str:
@@ -2236,6 +2262,19 @@ class MiniMaxH3ScheduledReferenceToVideo:
                                "each picture to generation pixel area; max "
                                "uses its high-fidelity 2048px-short-edge path."}),
             },
+            "optional": {
+                "strict_reference_tags": ("BOOLEAN", {
+                    "default": True,
+                    "label_on": "strict: block",
+                    "label_off": "warn only: generate",
+                    "tooltip": "When enabled, an unknown @tag or a scheduled "
+                               "tag inactive in the current scene blocks the "
+                               "workflow before sampling. Disable it to log a "
+                               "compliance warning and pass unresolved @tag "
+                               "text to H3 unchanged. Reference count, media, "
+                               "shape, and checkpoint safety checks remain "
+                               "strict."}),
+            },
         }
 
     RETURN_TYPES = ("CONDITIONING", "LATENT", "STRING", "STRING", "STRING")
@@ -2264,12 +2303,13 @@ class MiniMaxH3ScheduledReferenceToVideo:
 
     def apply(self, clip, vae, audio_vae, reference_schedule, clip_index,
               clip_count, prompt, width, height, length,
-              ref_image_size="match"):
+              ref_image_size="match", strict_reference_tags=True):
         if GraphBuilder is None:
             raise RuntimeError(
                 "Scheduled H3 Ref2VA requires ComfyUI GraphBuilder.")
         compiled, summary, bindings = _compile_scheduled_reference_prompt(
-            reference_schedule, clip_index, clip_count, prompt)
+            reference_schedule, clip_index, clip_count, prompt,
+            strict_reference_tags)
         graph = GraphBuilder()
         ref2va = graph.node("MiniMaxH3ReferenceToVideo", "ScheduledRef2VA")
         for key, value in (
@@ -2740,30 +2780,82 @@ class MiniMaxH3ChainScenePromptEditor:
 class MiniMaxH3ChainRunManager:
     @classmethod
     def INPUT_TYPES(cls):
-        return {
+        inputs = {
             "required": {
                 "plan": (PLAN_TYPE, {
                     "tooltip": "Connect the active H3 Chain Plan. The Run "
                                "Manager can replace that Plan's prompts and "
                                "settings with a saved run after confirmation; "
                                "execution passes the current Plan through."}),
-            }
+                "archive_images": ("BOOLEAN", {
+                    "default": True,
+                    "tooltip": "Keep content-addressed fallback copies of "
+                               "connected picture assets in the run folder."}),
+                "archive_audio": ("BOOLEAN", {
+                    "default": True,
+                    "tooltip": "Keep fallback copies of connected audio "
+                               "references and source tracks."}),
+                "archive_video": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Keep fallback copies of connected video "
+                               "assets. Disabled by default because videos "
+                               "can make a run archive very large."}),
+                "asset_bindings_json": ("STRING", {
+                    "default": "[]", "multiline": False,
+                    "dynamicPrompts": False,
+                    "tooltip": "Internal loader-binding manifest maintained "
+                               "by the Run Manager interface."}),
+            },
+            "optional": {},
         }
+        for index in range(MAX_ASSET_BINDINGS):
+            inputs["optional"]["asset_%d" % index] = ("*", {
+                "rawLink": True,
+                "lazy": True,
+                "tooltip": "Connect a loader output to register its source "
+                           "file for this run. The manager reads the graph "
+                           "link without decoding or retaining the media."})
+        return inputs
 
-    RETURN_TYPES = (PLAN_TYPE,)
-    RETURN_NAMES = ("plan",)
+    RETURN_TYPES = (PLAN_TYPE, "STRING")
+    RETURN_NAMES = ("plan", "asset_status")
     OUTPUT_TOOLTIPS = (
-        "The connected Plan, unchanged at execution time. The browser-side "
-        "manager edits the upstream Plan only when Load into Plan is clicked.",
+        "The connected Plan, unchanged. Put the manager inline when connected "
+        "asset bindings should be archived automatically on execution.",
+        "Asset-manifest save result for the current run.",
     )
     FUNCTION = "passthrough"
     CATEGORY = "conditioning/minimax/contex_loop"
-    DESCRIPTION = ("Browse output/h3_chains projects and restore a saved "
-                   "run's complete archived Plan prompts and settings into "
-                   "the connected active Plan.")
+    DESCRIPTION = ("Browse output/h3_chains projects; restore a saved run's "
+                   "Plan and loader-backed reference assets; optionally keep "
+                   "content-addressed image, audio, and video fallbacks.")
 
-    def passthrough(self, plan):
-        return (plan,)
+    def passthrough(self, plan, archive_images, archive_audio, archive_video,
+                    asset_bindings_json, **_assets):
+        status = "No connected asset bindings."
+        try:
+            bindings = json.loads(str(asset_bindings_json or "[]"))
+            if not isinstance(bindings, list):
+                raise ValueError("asset_bindings_json must contain a list")
+            if bindings:
+                result = RunAssetStore(_output_root(), _input_root()).save(
+                    plan["run_name"], bindings, {
+                        "images": bool(archive_images),
+                        "audio": bool(archive_audio),
+                        "video": bool(archive_video),
+                    })
+                status = "%d bindings; %d archived; %s" % (
+                    result["asset_count"],
+                    result.get("archived_asset_count", 0),
+                    result["manifest"])
+                if result.get("warnings"):
+                    status += "; " + "; ".join(result["warnings"])
+        except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            # Recovery metadata is supplementary and must never waste a long
+            # H3 generation that already reached this pass-through.
+            status = "Asset archive warning: %s" % exc
+            _LOG.warning("H3 Run Manager could not archive assets: %s", exc)
+        return (plan, status)
 
 
 class MiniMaxH3ChainFirstSceneImage:
@@ -5098,7 +5190,7 @@ async def _update_prompt_history(request):
 async def _list_saved_runs(_request):
     try:
         runs = await asyncio.to_thread(
-            RunArchiveManager(_output_root()).list_runs)
+            RunArchiveManager(_output_root(), _input_root()).list_runs)
     except OSError as exc:
         return web.json_response(
             {"error": "Could not scan H3 runs: %s" % exc}, status=500)
@@ -5109,7 +5201,29 @@ async def _load_saved_run(request):
     run_name = request.query.get("run_name", "")
     try:
         payload = await asyncio.to_thread(
-            RunArchiveManager(_output_root()).load_run, run_name)
+            RunArchiveManager(_output_root(), _input_root()).load_run, run_name)
+    except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        return web.json_response({"error": str(exc)}, status=400)
+    return web.json_response(payload)
+
+
+async def _save_run_assets(request):
+    try:
+        body = await request.json()
+    except (json.JSONDecodeError, TypeError):
+        return web.json_response(
+            {"error": "The asset request must contain JSON."}, status=400)
+    if not isinstance(body, dict):
+        return web.json_response(
+            {"error": "The asset request must contain a JSON object."}, status=400)
+    try:
+        payload = await asyncio.to_thread(
+            RunAssetStore(_output_root(), _input_root()).save,
+            body.get("run_name"), body.get("bindings"), {
+                "images": bool(body.get("archive_images", True)),
+                "audio": bool(body.get("archive_audio", True)),
+                "video": bool(body.get("archive_video", False)),
+            })
     except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
         return web.json_response({"error": str(exc)}, status=400)
     return web.json_response(payload)
@@ -5133,6 +5247,8 @@ if (PromptServer is not None and web is not None and
         "/minimax_h3_context_loop/runs")(_list_saved_runs)
     PromptServer.instance.routes.get(
         "/minimax_h3_context_loop/run")(_load_saved_run)
+    PromptServer.instance.routes.post(
+        "/minimax_h3_context_loop/run-assets")(_save_run_assets)
 
 
 CHAIN_NODE_CLASS_MAPPINGS = {

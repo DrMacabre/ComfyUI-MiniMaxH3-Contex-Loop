@@ -8,6 +8,11 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
+try:
+    from .asset_store import RunAssetStore
+except ImportError:  # Standalone unit tests import this module without a package.
+    from asset_store import RunAssetStore
+
 
 PLAN_NODE_TYPE = "MiniMaxH3ChainPlan"
 PLAN_WIDGET_NAMES = (
@@ -201,9 +206,10 @@ def _iso_mtime(path: str) -> str:
 
 
 class RunArchiveManager:
-    def __init__(self, output_root: str):
+    def __init__(self, output_root: str, input_root: str | None = None):
         self.output_root = os.path.abspath(output_root)
         self.chains_root = os.path.join(self.output_root, "h3_chains")
+        self.assets = RunAssetStore(self.output_root, input_root)
 
     def _run_dir(self, run_name: Any) -> tuple[str, str]:
         run = _safe_name(run_name)
@@ -232,6 +238,7 @@ class RunArchiveManager:
             archive_paths = [path for path in (plan_path, api_path, workflow_path)
                              if os.path.isfile(path)]
             checkpoint_dir = os.path.join(directory, "checkpoints")
+            asset_manifest = os.path.join(directory, "references", "manifest.json")
             checkpoints = 0
             if os.path.isdir(checkpoint_dir):
                 checkpoints = sum(
@@ -240,15 +247,24 @@ class RunArchiveManager:
             modified_paths = [directory]
             if os.path.isdir(checkpoint_dir):
                 modified_paths.append(checkpoint_dir)
+            if os.path.isfile(asset_manifest):
+                modified_paths.append(asset_manifest)
             modified_paths.extend(archive_paths)
             newest = max(modified_paths, key=os.path.getmtime)
+            try:
+                asset_summary = self.assets.summary(run_name)
+            except (OSError, ValueError, json.JSONDecodeError):
+                asset_summary = {"asset_count": 0, "asset_bytes": 0}
             runs.append({
                 "run_name": run_name,
                 "modified_at": _iso_mtime(newest),
                 "scene_count": _scene_count_from_plan(plan_path),
                 "checkpoint_count": checkpoints,
                 "restorable": bool(archive_paths),
-                "archive_bytes": sum(os.path.getsize(path) for path in archive_paths),
+                "archive_bytes": (
+                    sum(os.path.getsize(path) for path in archive_paths)
+                    + int(asset_summary.get("asset_bytes") or 0)),
+                **asset_summary,
                 "sources": {
                     "api_prompt": os.path.isfile(api_path),
                     "workflow": os.path.isfile(workflow_path),
@@ -301,10 +317,16 @@ class RunArchiveManager:
             raise ValueError("Could not restore H3 run %r: %s." % (run, detail))
         parsed = json.loads(restored["plan_json"])
         shots = parsed.get("shots") if isinstance(parsed, dict) else parsed
+        try:
+            assets = self.assets.prepare_restore(run)
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            assets = {"run_name": run, "bindings": [], "warnings": [str(exc)]}
+        warnings.extend(assets.get("warnings") or [])
         return {
             "run_name": run,
             "scene_count": len(shots) if isinstance(shots, list) else None,
             "plan_inputs": restored,
             "sources": sources,
             "warnings": warnings,
+            "assets": assets,
         }
