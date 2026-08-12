@@ -616,6 +616,13 @@ can also carry the archived ComfyUI workflow and manifest.
 Core ComfyUI AUDIO dictionaries and compatible lazy/proxy AUDIO values are
 supported for source tracks and scheduled audio references.
 
+Current Shot's optional `align_audio_reference` switch caps only its
+`source_audio_slice` to H3's rounded 40 Hz target-audio grid. At 362 frames this
+uses 603 steps (15.075 seconds) instead of allowing the exact 15.083333-second
+window to pad to 604 reference steps. Audio shorter than the grid target passes
+through unchanged, and the full source track wired to Assemble is never trimmed.
+The switch is experimental and off by default.
+
 `source_track` is recommended for music video. The final MP4 still follows the
 selected audio source, but H3's own decoded output is never hidden by that mux:
 when audio is connected to Segment Save, each scene gets an uncompressed WAV in

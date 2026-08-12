@@ -1857,6 +1857,32 @@ def _slice_audio(audio: dict[str, Any], start_seconds: float,
     return {"waveform": waveform[..., start:end], "sample_rate": sample_rate}
 
 
+def _align_audio_reference_to_h3_grid(
+        audio: Any, frame_count: int) -> tuple[Any, str]:
+    waveform, sample_rate = _validate_audio(
+        audio, "H3 aligned source-audio reference")
+    # Stock H3 builds the generated audio stream with round(seconds * 40). Its
+    # audio VAE then consumes 800 samples per latent at 32 kHz. Use floor at
+    # other input rates so the later resample cannot spill into one additional
+    # reference latent.
+    target_steps = int(round(int(frame_count) / float(FPS) * 40.0))
+    target_32k_samples = target_steps * 800
+    target_samples = max(1, int(math.floor(
+        target_32k_samples * sample_rate / 32000.0)))
+    current_samples = int(waveform.shape[-1])
+    if current_samples <= target_samples:
+        return audio, (
+            "audio ref unchanged at %d samples (target %d steps, %.6fs)" %
+            (current_samples, target_steps, target_steps / 40.0))
+    return {
+        "waveform": waveform[..., :target_samples],
+        "sample_rate": sample_rate,
+    }, (
+        "audio ref aligned %d->%d samples (target %d steps, %.6fs)" %
+        (current_samples, target_samples, target_steps,
+         target_steps / 40.0))
+
+
 def _slice_audio_after_external_context(
     source_audio: dict[str, Any],
     external_audio: dict[str, Any] | None,
@@ -3202,6 +3228,14 @@ class MiniMaxH3ChainCurrent:
                     "tooltip": "The same full source track connected to Loop "
                                "Start. It is sliced frame-exactly for the current "
                                "scene in source-track modes."}),
+                "align_audio_reference": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Experimental. Cap only source_audio_slice to "
+                               "H3's rounded 40 Hz target-audio grid. For 362 "
+                               "frames this changes 15.083333s to 15.075s "
+                               "(604 reference steps to 603). Shorter slices are "
+                               "left unchanged. The full source track used by "
+                               "Assemble is never modified."}),
             },
         }
 
@@ -3231,21 +3265,23 @@ class MiniMaxH3ChainCurrent:
         "imported-video scene 1, its separate context lead precedes this time.",
         "Raw conditioning-audio duration in seconds, including any imported "
         "scene 1 context lead.",
-        "Frame-exact current source-audio window for Ref2VA. It is empty in "
-        "generated_audio mode.",
+        "Current source-audio window for Ref2VA. It is frame-exact normally, "
+        "or capped to the target H3 audio grid when alignment is enabled. It is "
+        "empty in generated_audio mode.",
         "Current scene timing, delivered frames, source window, and seed.",
     )
     FUNCTION = "current"
     CATEGORY = "conditioning/minimax/contex_loop"
     DESCRIPTION = ("Expose the current shot's prompt, seed, dimensions, valid "
-                   "length, steps, and frame-exact source-audio window.")
+                   "length, steps, and source-audio reference window.")
 
-    def current(self, state, source_audio=None):
+    def current(self, state, source_audio=None, align_audio_reference=False):
         plan = state["plan"]
         index = int(state["index"])
         shot = plan["shots"][index - 1]
         mode = plan["compatibility"]["audio_mode"]
         audio_slice = None
+        alignment_status = "audio ref unavailable"
         if mode in ("source_track", "source_plus_timeline"):
             _validate_source_audio_hash(
                 plan["compatibility"], source_audio, "H3 Chain Current Shot")
@@ -3262,6 +3298,12 @@ class MiniMaxH3ChainCurrent:
                     shot["audio_duration_seconds"],
                     pad_silence=bool(plan["compatibility"].get(
                         "source_audio_silent_padding")))
+            if bool(align_audio_reference):
+                audio_slice, alignment_status = (
+                    _align_audio_reference_to_h3_grid(
+                        audio_slice, int(shot["raw_frames"])))
+            else:
+                alignment_status = "audio ref frame-exact"
         external_lead = int(shot.get("external_context_frames", 0))
         if index == 1 and external_lead > 0:
             audio_status = "imported lead %.3fs + song 0..%.3fs" % (
@@ -3271,9 +3313,10 @@ class MiniMaxH3ChainCurrent:
             audio_status = "song %.3f..%.3fs" % (
                 shot["audio_start_seconds"],
                 shot["audio_start_seconds"] + shot["audio_duration_seconds"])
-        status = ("clip %d/%d %s; raw=%df delivered=%df; %s; seed=%d" %
+        status = ("clip %d/%d %s; raw=%df delivered=%df; %s; %s; seed=%d" %
                   (index, len(plan["shots"]), shot["id"], shot["raw_frames"],
-                   shot["delivered_frames"], audio_status, shot["seed"]))
+                   shot["delivered_frames"], audio_status, alignment_status,
+                   shot["seed"]))
         cfg = plan["compatibility"]
         result = (
             state, index, len(plan["shots"]), shot["id"], shot["prompt"],

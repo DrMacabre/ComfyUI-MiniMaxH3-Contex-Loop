@@ -11,6 +11,7 @@ import asyncio
 import hashlib
 import importlib.util
 import json
+import math
 import pathlib
 import subprocess
 import sys
@@ -1002,6 +1003,37 @@ def main():
             assert current[1:3] == (1, 2)
             assert current[6:10] == (5, 2, 32, 32)
             assert int(current[12]["waveform"].shape[-1]) == round(5 / 24 * 8000)
+
+            aligned_plan = chain._normalize_plan(
+                json.dumps({"shots": [
+                    {"id": "aligned", "prompt": "test", "length": 362},
+                ]}),
+                "aligned", 32, 32, 1, "video", "head", "disabled",
+                "source_track", 1, 15, 2, 1, 30,
+            )
+            aligned_source = audio_for_frames(362, 32000)
+            aligned_state = chain.MiniMaxH3ChainLoopStart().start(
+                aligned_plan, 1, aligned_source)[1]
+            frame_exact = chain.MiniMaxH3ChainCurrent().current(
+                aligned_state, aligned_source,
+                align_audio_reference=False)["result"]
+            assert int(frame_exact[12]["waveform"].shape[-1]) == 482667
+            grid_aligned = chain.MiniMaxH3ChainCurrent().current(
+                aligned_state, aligned_source,
+                align_audio_reference=True)["result"]
+            assert int(grid_aligned[12]["waveform"].shape[-1]) == 482400
+            assert "target 603 steps, 15.075000s" in grid_aligned[13]
+
+            aligned_44k_source = audio_for_frames(362, 44100)
+            aligned_44k_state = chain.MiniMaxH3ChainLoopStart().start(
+                aligned_plan, 1, aligned_44k_source)[1]
+            grid_aligned_44k = chain.MiniMaxH3ChainCurrent().current(
+                aligned_44k_state, aligned_44k_source,
+                align_audio_reference=True)["result"][12]
+            aligned_44k_samples = int(
+                grid_aligned_44k["waveform"].shape[-1])
+            assert aligned_44k_samples == 664807
+            assert math.ceil(aligned_44k_samples * 32000 / 44100) == 482400
             try:
                 chain.MiniMaxH3ChainCurrent().current(
                     started[1], changed_source)
@@ -1032,7 +1064,8 @@ def main():
             bypass = chain.MiniMaxH3ChainContext().apply(
                 started[1], conditioning, None, av_latent())
             assert bypass == (conditioning, 0, False)
-            print("current/context: source window exact; short silence pads safely")
+            print("current/context: source window exact or 40 Hz aligned; short "
+                  "silence pads safely")
 
             external_plan = chain._normalize_plan(
                 json.dumps({"shots": [

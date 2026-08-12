@@ -3,6 +3,7 @@
 
 import importlib.util
 import json
+import math
 import pathlib
 import sys
 import tempfile
@@ -36,6 +37,35 @@ spec = importlib.util.spec_from_file_location(
 chain = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = chain
 spec.loader.exec_module(chain)
+
+
+exact_362_audio = {
+    "waveform": chain.torch.ones((1, 2, 482667)),
+    "sample_rate": 32000,
+}
+aligned_362_audio, aligned_362_status = (
+    chain._align_audio_reference_to_h3_grid(exact_362_audio, 362))
+assert int(aligned_362_audio["waveform"].shape[-1]) == 482400
+assert "target 603 steps, 15.075000s" in aligned_362_status
+
+exact_362_audio_44k = {
+    "waveform": chain.torch.ones((1, 2, round(362 / 24 * 44100))),
+    "sample_rate": 44100,
+}
+aligned_362_audio_44k, _ = chain._align_audio_reference_to_h3_grid(
+    exact_362_audio_44k, 362)
+aligned_44k_samples = int(aligned_362_audio_44k["waveform"].shape[-1])
+assert aligned_44k_samples == 664807
+assert math.ceil(aligned_44k_samples * 32000 / 44100) == 482400
+
+short_audio = {
+    "waveform": chain.torch.ones((1, 2, 480000)),
+    "sample_rate": 32000,
+}
+unchanged_audio, unchanged_status = (
+    chain._align_audio_reference_to_h3_grid(short_audio, 362))
+assert unchanged_audio is short_audio
+assert "unchanged" in unchanged_status
 
 
 class LazyAudio:
