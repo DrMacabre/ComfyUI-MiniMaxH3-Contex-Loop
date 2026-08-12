@@ -134,6 +134,7 @@ def main():
     print("review: async decision route preserves exact uint64 seeds")
     required = {
         "MiniMaxH3ChainPlan", "MiniMaxH3ChainScenePromptEditor",
+        "MiniMaxH3ChainRichScenePromptEditor",
         "MiniMaxH3ChainPlanStudio",
         "MiniMaxH3ChainRunManager",
         "MiniMaxH3ChainFirstSceneImage",
@@ -173,6 +174,8 @@ def main():
     assert (ROOT / "web" / "h3_chain_cancel_reroll.js").is_file()
     assert (ROOT / "web" / "h3_chain_cancel_reroll_core.mjs").is_file()
     assert (ROOT / "web" / "h3_chain_scene_prompt_editor.js").is_file()
+    assert (ROOT / "web" / "h3_chain_rich_scene_prompt_editor.js").is_file()
+    assert (ROOT / "web" / "h3_rich_prompt_editor_core.mjs").is_file()
     assert (ROOT / "web" / "h3_chain_plan_studio.js").is_file()
     assert (ROOT / "web" / "h3_chain_plan_studio_core.mjs").is_file()
     assert (ROOT / "web" / "h3_reference_autoconnect.js").is_file()
@@ -477,6 +480,9 @@ def main():
     prompt_editor = package.NODE_CLASS_MAPPINGS[
         "MiniMaxH3ChainScenePromptEditor"]()
     assert prompt_editor.passthrough(readable_prompts)[0] is readable_prompts
+    rich_prompt_editor = package.NODE_CLASS_MAPPINGS[
+        "MiniMaxH3ChainRichScenePromptEditor"]()
+    assert rich_prompt_editor.passthrough(readable_prompts)[0] is readable_prompts
     plan_studio = package.NODE_CLASS_MAPPINGS[
         "MiniMaxH3ChainPlanStudio"]()
     assert plan_studio.passthrough(readable_prompts)[0] is readable_prompts

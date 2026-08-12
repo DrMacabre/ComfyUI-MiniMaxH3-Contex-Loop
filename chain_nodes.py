@@ -3017,6 +3017,37 @@ class MiniMaxH3ChainScenePromptEditor:
         return (plan,)
 
 
+class MiniMaxH3ChainRichScenePromptEditor:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "plan": (PLAN_TYPE, {
+                    "tooltip": "Connect the H3 Chain Plan output. This "
+                               "experimental rich editor changes only the "
+                               "selected scene's prompt in the upstream Plan. "
+                               "All other Plan fields pass through unchanged."}),
+            }
+        }
+
+    RETURN_TYPES = (PLAN_TYPE,)
+    RETURN_NAMES = ("plan",)
+    OUTPUT_TOOLTIPS = (
+        "The connected validated Plan, unchanged at execution time. The rich "
+        "editor is an authoring companion and may be inline or on an "
+        "editor-only branch.",
+    )
+    FUNCTION = "passthrough"
+    CATEGORY = "conditioning/minimax/contex_loop"
+    DESCRIPTION = ("Experimental prompt-only scene editor with color-coded "
+                   "references, media previews, prompt guides, revision "
+                   "history, and optional one-click Codex/Hermes rewriting. "
+                   "It does not edit Plan settings, schedules, or seeds.")
+
+    def passthrough(self, plan):
+        return (plan,)
+
+
 class MiniMaxH3ChainPlanStudio:
     @classmethod
     def INPUT_TYPES(cls):
@@ -5565,6 +5596,7 @@ if (PromptServer is not None and web is not None and
 CHAIN_NODE_CLASS_MAPPINGS = {
     "MiniMaxH3ChainPlan": MiniMaxH3ChainPlan,
     "MiniMaxH3ChainScenePromptEditor": MiniMaxH3ChainScenePromptEditor,
+    "MiniMaxH3ChainRichScenePromptEditor": MiniMaxH3ChainRichScenePromptEditor,
     "MiniMaxH3ChainPlanStudio": MiniMaxH3ChainPlanStudio,
     "MiniMaxH3ChainRunManager": MiniMaxH3ChainRunManager,
     "MiniMaxH3ChainFirstSceneImage": MiniMaxH3ChainFirstSceneImage,
@@ -5589,6 +5621,8 @@ CHAIN_NODE_CLASS_MAPPINGS = {
 CHAIN_NODE_DISPLAY_NAME_MAPPINGS = {
     "MiniMaxH3ChainPlan": "MiniMax H3 Contex Loop Plan",
     "MiniMaxH3ChainScenePromptEditor": "MiniMax H3 Scene Prompt Editor",
+    "MiniMaxH3ChainRichScenePromptEditor": (
+        "MiniMax H3 Rich Scene Prompt Editor (Experimental)"),
     "MiniMaxH3ChainPlanStudio": "MiniMax H3 Plan Studio (Experimental)",
     "MiniMaxH3ChainRunManager": "MiniMax H3 Run Manager",
     "MiniMaxH3ChainFirstSceneImage": "MiniMax H3 First-Scene Image Gate",

@@ -1,0 +1,1144 @@
+import {app} from "/scripts/app.js";
+import {api} from "/scripts/api.js";
+import {
+    parsePlanJson,
+    planToJson,
+    promptTextToLines,
+    promptValueToText,
+    sharedPrompt,
+} from "./h3_chain_plan_core.mjs";
+import {
+    buildPromptAssistantContext,
+    makePromptAssistRequest,
+} from "./h3_prompt_assistant_core.mjs";
+import {PromptAssistantClient} from "./h3_prompt_assistant_client.mjs";
+import {
+    promptRevisionLabel,
+    promptRevisionNavigation,
+} from "./h3_prompt_history_core.mjs";
+import {availableReferenceRecords} from "./h3_reference_preview_core.mjs";
+import {
+    RICH_PROMPT_GUIDES,
+    normalizeRichGuide,
+    optimizerSource,
+    richGenerationMode,
+    richGuideInstruction,
+    tokenizeRichPrompt,
+} from "./h3_rich_prompt_editor_core.mjs";
+
+// The rich mention presentation and compact optimizer interaction are inspired
+// by nkxx188/ComfyUI-MiniMaxH3-Easy (MIT). Graph discovery, scene scheduling,
+// revision storage, and Codex/Hermes bridge integration are implemented here.
+
+const NODE_NAME = "MiniMaxH3ChainRichScenePromptEditor";
+const PLAN_NAME = "MiniMaxH3ChainPlan";
+const ACTIVE_PROPERTY = "h3_rich_prompt_active_scene";
+const FONT_PROPERTY = "h3_rich_prompt_font_size";
+const GUIDE_PROPERTY = "h3_rich_prompt_guide";
+const PROVIDER_PROPERTY = "h3_rich_prompt_provider";
+const DEFAULT_FONT = 17;
+const MIN_FONT = 12;
+const MAX_FONT = 32;
+
+const ICONS = Object.freeze({
+    picture: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9" r="1.5"/><path d="m5 17 4.5-4.5 3.2 3.2 2.3-2.3 4 3.6"/></svg>',
+    video: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="13" height="14" rx="2"/><path d="m16 10 5-3v10l-5-3z"/></svg>',
+    audio: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 13v-2M8 17V7M12 20V4M16 16V8M20 13v-2"/></svg>',
+    subject: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M5 21c.8-4.2 3.1-6.3 7-6.3s6.2 2.1 7 6.3"/></svg>',
+    dialogue: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h14v11H9l-4 3z"/><path d="M8 9h8M8 12h6"/></svg>',
+    reference: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.1.1l2-2a5 5 0 0 0-7.1-7.1l-1.1 1.1"/><path d="M14 11a5 5 0 0 0-7.1-.1l-2 2A5 5 0 0 0 12 20l1.1-1.1"/></svg>',
+    sparkle: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 2 1.4 5.1L18 9l-4.6 1.9L12 16l-1.4-5.1L6 9l4.6-1.9zM19 15l.7 2.3L22 18l-2.3.7L19 21l-.7-2.3L16 18l2.3-.7z"/></svg>',
+    stop: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>',
+});
+
+function injectStyles() {
+    if (document.getElementById("h3-rich-prompt-editor-style")) return;
+    const style = document.createElement("style");
+    style.id = "h3-rich-prompt-editor-style";
+    style.textContent = `
+      .h3rp-root { --h3rp-bg:color-mix(in srgb,var(--comfy-menu-bg,#202124) 94%,#101727);
+        --h3rp-panel:color-mix(in srgb,var(--comfy-input-bg,#111827) 86%,#26334d);
+        --h3rp-border:color-mix(in srgb,var(--border-color,#555) 70%,#7591bd);
+        --h3rp-text:var(--input-text,#edf2fa); --h3rp-muted:color-mix(in srgb,var(--h3rp-text) 57%,transparent);
+        --h3rp-accent:#8eb5ff; --h3rp-font-size:17px; box-sizing:border-box; width:100%; height:100%;
+        min-height:560px; display:flex; flex-direction:column; gap:8px; overflow:hidden; padding:10px;
+        border:1px solid var(--h3rp-border); border-radius:9px; background:var(--h3rp-bg);
+        color:var(--h3rp-text); font:12px/1.35 system-ui,sans-serif; }
+      .h3rp-root *, .h3rp-root *::before, .h3rp-root *::after { box-sizing:border-box; }
+      .h3rp-row,.h3rp-head,.h3rp-nav,.h3rp-toolbar,.h3rp-footer,.h3rp-history { display:flex; align-items:center; gap:6px; }
+      .h3rp-head { justify-content:space-between; }
+      .h3rp-title { color:var(--h3rp-accent); font-size:15px; font-weight:760; }
+      .h3rp-context,.h3rp-muted { color:var(--h3rp-muted); }
+      .h3rp-context { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+      .h3rp-root button,.h3rp-root select { min-height:30px; color:var(--h3rp-text); font:inherit;
+        border:1px solid var(--h3rp-border); border-radius:6px; background:var(--comfy-input-bg,#171a21); }
+      .h3rp-root button { display:inline-flex; align-items:center; justify-content:center; gap:5px; padding:5px 8px;
+        cursor:pointer; white-space:nowrap; }
+      .h3rp-root button:hover,.h3rp-root button:focus-visible { border-color:var(--h3rp-accent); outline:none; }
+      .h3rp-root button:disabled,.h3rp-root select:disabled { opacity:.42; cursor:not-allowed; }
+      .h3rp-root select { min-width:0; padding:4px 7px; }
+      .h3rp-nav select { flex:1; }
+      .h3rp-icon { width:16px; height:16px; display:inline-flex; flex:0 0 16px; color:currentColor; }
+      .h3rp-icon svg { width:100%; height:100%; fill:none; stroke:currentColor; stroke-width:1.7;
+        stroke-linecap:round; stroke-linejoin:round; }
+      .h3rp-editor-shell { position:relative; flex:1 1 auto; min-height:300px; overflow:hidden;
+        border:1px solid var(--h3rp-border); border-radius:8px; background:var(--comfy-input-bg,#11141a); }
+      .h3rp-editor-shell:focus-within { border-color:var(--h3rp-accent);
+        box-shadow:0 0 0 1px color-mix(in srgb,var(--h3rp-accent) 40%,transparent); }
+      .h3rp-editor { width:100%; height:100%; min-height:300px; overflow:auto; padding:13px 14px;
+        outline:none; white-space:pre-wrap; overflow-wrap:anywhere; caret-color:var(--h3rp-text);
+        font:var(--h3rp-font-size)/1.58 ui-monospace,SFMono-Regular,Consolas,monospace; }
+      .h3rp-editor:empty::before { content:attr(data-placeholder); color:var(--h3rp-muted); pointer-events:none; }
+      .h3rp-editor[contenteditable="false"] { opacity:.68; cursor:wait; }
+      .h3rp-token { display:inline-flex; align-items:center; gap:3px; max-width:320px; margin:0 1px;
+        padding:1px 4px 1px 2px; border:1px solid currentColor; border-radius:5px; vertical-align:1px;
+        line-height:1.25; cursor:pointer; user-select:all; }
+      .h3rp-token-picture { color:#76c7ff; background:rgba(55,145,205,.14); }
+      .h3rp-token-video { color:#c7a0ff; background:rgba(133,82,195,.15); }
+      .h3rp-token-audio { color:#ffbd72; background:rgba(205,124,45,.14); }
+      .h3rp-token-subject { color:#8ed7a4; background:rgba(64,155,92,.14); }
+      .h3rp-token-dialogue { color:#ff9fc7; background:rgba(190,63,119,.13); }
+      .h3rp-token-unknown,.h3rp-token-inactive { color:#ff9999; border-style:dashed; background:rgba(185,56,56,.12); }
+      .h3rp-token-thumb { width:18px; height:18px; flex:0 0 18px; object-fit:cover; border-radius:3px;
+        background:rgba(255,255,255,.09); }
+      .h3rp-token-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+      .h3rp-toolbar { flex-wrap:wrap; }
+      .h3rp-toolbar .h3rp-guide { min-width:150px; }
+      .h3rp-toolbar .h3rp-provider { width:82px; }
+      .h3rp-toolbar-spacer { flex:1; }
+      .h3rp-status { min-width:0; color:var(--h3rp-muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+      .h3rp-status-error { color:#ffaaaa; }
+      .h3rp-status-success { color:#9bdab0; }
+      .h3rp-spinner .h3rp-icon { animation:h3rp-spin .9s linear infinite; }
+      @keyframes h3rp-spin { to { transform:rotate(360deg); } }
+      .h3rp-ref-tray { display:none; max-height:260px; overflow:auto; padding:8px; gap:6px;
+        border:1px solid var(--h3rp-border); border-radius:7px; background:var(--h3rp-panel); }
+      .h3rp-ref-tray.h3rp-open { display:grid; grid-template-columns:repeat(auto-fill,minmax(205px,1fr)); }
+      .h3rp-ref-help { grid-column:1/-1; color:var(--h3rp-muted); }
+      .h3rp-ref-card { justify-content:flex-start !important; min-width:0; text-align:left; }
+      .h3rp-ref-card.h3rp-inactive { opacity:.46; }
+      .h3rp-ref-card-copy { min-width:0; overflow:hidden; }
+      .h3rp-ref-card-title,.h3rp-ref-card-detail { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+      .h3rp-ref-card-title { font-weight:700; }
+      .h3rp-ref-card-detail { color:var(--h3rp-muted); font-size:10px; }
+      .h3rp-footer { display:grid; grid-template-columns:minmax(0,1fr) auto minmax(0,1fr); color:var(--h3rp-muted); }
+      .h3rp-footer-status { text-align:right; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+      .h3rp-history { justify-content:center; }
+      .h3rp-history-nav { display:flex; align-items:center; border:1px solid var(--h3rp-border); border-radius:999px; padding:1px 3px; }
+      .h3rp-history-nav button { min-width:25px; min-height:22px; padding:1px 5px; border:0; border-radius:999px; background:transparent; }
+      .h3rp-history-count { min-width:43px; text-align:center; color:var(--h3rp-text); font-variant-numeric:tabular-nums; }
+      .h3rp-history-meta { max-width:240px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:11px; }
+      .h3rp-error { padding:12px; border:1px solid #a76565; border-radius:7px; color:#ffb3b3; background:#351f24; white-space:pre-wrap; }
+      .h3rp-popover { position:fixed; z-index:100000; width:min(360px,calc(100vw - 24px)); padding:9px;
+        border:1px solid #60718c; border-radius:9px; background:#171a20; color:#eef2f8;
+        box-shadow:0 14px 38px rgba(0,0,0,.48); font:12px/1.4 system-ui,sans-serif; }
+      .h3rp-popover[hidden] { display:none; }
+      .h3rp-popover-title { margin-bottom:6px; font-weight:750; }
+      .h3rp-popover-media { display:block; width:100%; max-height:240px; object-fit:contain; border-radius:6px; background:#08090c; }
+      .h3rp-popover audio.h3rp-popover-media { height:42px; background:transparent; }
+      .h3rp-popover-detail { margin-top:6px; color:rgba(238,242,248,.62); white-space:pre-wrap; overflow-wrap:anywhere; }
+    `;
+    document.head.append(style);
+}
+
+function element(tag, className = "", text) {
+    const item = document.createElement(tag);
+    if (className) item.className = className;
+    if (text !== undefined) item.textContent = text;
+    return item;
+}
+
+function icon(kind) {
+    const item = element("span", "h3rp-icon");
+    item.innerHTML = ICONS[kind] ?? ICONS.reference;
+    return item;
+}
+
+function button(label, title, action, iconKind = null) {
+    const item = element("button");
+    item.type = "button";
+    item.title = title;
+    if (iconKind) item.append(icon(iconKind));
+    if (label) item.append(document.createTextNode(label));
+    // Pointer-clicking a toolbar or reference control must not discard the
+    // contenteditable selection it is about to operate on. Keyboard focus via
+    // Tab remains available because only pointer default behavior is blocked.
+    item.addEventListener("pointerdown", (event) => event.preventDefault());
+    item.addEventListener("click", action);
+    return item;
+}
+
+function nodeType(node) {
+    return node?.comfyClass ?? node?.type ?? null;
+}
+
+function allNodes(graph, output = []) {
+    for (const node of graph?._nodes ?? []) {
+        output.push(node);
+        if (node.subgraph) allNodes(node.subgraph, output);
+    }
+    return output;
+}
+
+function upstreamPlanNode(start) {
+    const queue = [start];
+    const seen = new Set();
+    while (queue.length) {
+        const candidate = queue.shift();
+        if (!candidate || seen.has(candidate)) continue;
+        seen.add(candidate);
+        if (candidate !== start && nodeType(candidate) === PLAN_NAME) return candidate;
+        for (const input of candidate.inputs ?? []) {
+            const link = input.link == null ? null : candidate.graph?.links?.[input.link];
+            const parent = link ? candidate.graph?.getNodeById?.(link.origin_id) : null;
+            if (parent) queue.push(parent);
+        }
+    }
+    return null;
+}
+
+function inputSource(node, name) {
+    const input = node?.inputs?.find((item) => item.name === name);
+    const link = input?.link == null ? null : node.graph?.links?.[input.link];
+    return link ? node.graph?.getNodeById?.(link.origin_id) ?? null : null;
+}
+
+function mediaExtension(kind) {
+    if (kind === "image") return /\.(?:avif|bmp|gif|jpe?g|png|webp)$/i;
+    if (kind === "video") return /\.(?:m4v|mkv|mov|mp4|webm)$/i;
+    return /\.(?:aac|flac|m4a|mp3|ogg|opus|wav)$/i;
+}
+
+function widgetAsset(value, kind) {
+    if (value && typeof value === "object" && value.filename) {
+        return {filename:String(value.filename), subfolder:String(value.subfolder ?? ""), type:String(value.type ?? "input")};
+    }
+    let text = typeof value === "string" ? value.trim() : "";
+    if (!text) return null;
+    if (/^(?:blob:|data:|https?:|\/api\/view\?|\/view\?)/i.test(text)) return {url:text};
+    let type = "input";
+    const annotated = text.match(/\s+\[(input|output|temp)\]\s*$/i);
+    if (annotated) {
+        type = annotated[1].toLowerCase();
+        text = text.slice(0, annotated.index).trim();
+    }
+    text = text.replaceAll("\\", "/").replace(/^\/+/, "");
+    if (!mediaExtension(kind).test(text)) return null;
+    const slash = text.lastIndexOf("/");
+    return {filename:slash >= 0 ? text.slice(slash + 1) : text, subfolder:slash >= 0 ? text.slice(0, slash) : "", type};
+}
+
+function assetUrl(asset) {
+    if (!asset) return null;
+    if (asset.url) return asset.url;
+    const query = new URLSearchParams({filename:asset.filename, subfolder:asset.subfolder ?? "", type:asset.type ?? "input"});
+    return api.apiURL(`/view?${query.toString()}`);
+}
+
+function previewFromNode(node, kind) {
+    if (kind === "image") {
+        const rendered = node?.imgs?.[0];
+        const src = typeof rendered === "string" ? rendered : rendered?.src;
+        if (src) return src;
+    }
+    for (const widget of node?.widgets ?? []) {
+        const asset = widgetAsset(widget.value, kind);
+        if (asset) return assetUrl(asset);
+    }
+    return null;
+}
+
+function findMediaPreview(start, kind) {
+    const queue = [start];
+    const seen = new Set();
+    while (queue.length) {
+        const candidate = queue.shift();
+        if (!candidate || seen.has(candidate)) continue;
+        seen.add(candidate);
+        const url = previewFromNode(candidate, kind);
+        if (url) return {url, source:candidate};
+        for (const input of candidate.inputs ?? []) {
+            const parent = inputSource(candidate, input.name);
+            if (parent) queue.push(parent);
+        }
+    }
+    return {url:null, source:start};
+}
+
+function clamp(value, minimum, maximum, fallback) {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? Math.max(minimum, Math.min(maximum, Math.round(numeric))) : fallback;
+}
+
+function editorPlainText(editor) {
+    function read(node) {
+        if (node.nodeType === Node.TEXT_NODE) return node.textContent ?? "";
+        if (node.nodeType !== Node.ELEMENT_NODE) return "";
+        if (node.classList?.contains("h3rp-token")) return node.dataset.token ?? node.textContent ?? "";
+        if (node.tagName === "BR") return "\n";
+        let text = "";
+        for (const child of node.childNodes) text += read(child);
+        if (["DIV", "P"].includes(node.tagName) && node !== editor && !text.endsWith("\n")) text += "\n";
+        return text;
+    }
+    return read(editor).replace(/\n$/, "");
+}
+
+function selectionTextOffset(editor) {
+    const selection = globalThis.getSelection?.();
+    if (!selection?.rangeCount || !editor.contains(selection.anchorNode)) return editorPlainText(editor).length;
+    const range = selection.getRangeAt(0).cloneRange();
+    range.selectNodeContents(editor);
+    range.setEnd(selection.anchorNode, selection.anchorOffset);
+    return range.toString().length;
+}
+
+function restoreCaret(editor, requested) {
+    const target = Math.max(0, Number(requested) || 0);
+    const range = document.createRange();
+    const selection = globalThis.getSelection?.();
+    let consumed = 0;
+    let placed = false;
+    function visit(node) {
+        if (placed) return;
+        if (node.nodeType === Node.TEXT_NODE) {
+            const length = node.textContent?.length ?? 0;
+            if (target <= consumed + length) {
+                range.setStart(node, Math.max(0, target - consumed));
+                placed = true;
+                return;
+            }
+            consumed += length;
+            return;
+        }
+        if (node.nodeType !== Node.ELEMENT_NODE) return;
+        if (node.classList?.contains("h3rp-token")) {
+            const length = String(node.dataset.token ?? "").length;
+            if (target <= consumed + length) {
+                if (target <= consumed) range.setStartBefore(node);
+                else range.setStartAfter(node);
+                placed = true;
+                return;
+            }
+            consumed += length;
+            return;
+        }
+        for (const child of node.childNodes) visit(child);
+    }
+    visit(editor);
+    if (!placed) range.selectNodeContents(editor), range.collapse(false);
+    else range.collapse(true);
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+}
+
+function insertPlainText(editor, text) {
+    editor.focus();
+    const selection = globalThis.getSelection?.();
+    const range = selection?.rangeCount && editor.contains(selection.anchorNode)
+        ? selection.getRangeAt(0) : document.createRange();
+    if (!selection?.rangeCount || !editor.contains(selection.anchorNode)) {
+        range.selectNodeContents(editor);
+        range.collapse(false);
+    }
+    range.deleteContents();
+    const textNode = document.createTextNode(String(text ?? ""));
+    range.insertNode(textNode);
+    range.setStartAfter(textNode);
+    range.collapse(true);
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    editor.dispatchEvent(new Event("input", {bubbles:true}));
+}
+
+function promptAssistantIdentityKey(node) {
+    const workflow = app.extensionManager?.workflow?.activeWorkflow;
+    const workflowIdentity = workflow?.path ?? workflow?.activeState?.id ?? workflow?.filename ?? "legacy-workflow";
+    return `rich-workflow-${workflowIdentity}-node-${node.id ?? "new"}`;
+}
+
+function mount(node) {
+    if (node._h3RichPromptMounted || typeof node.addDOMWidget !== "function") return;
+    node._h3RichPromptMounted = true;
+    injectStyles();
+    node.properties ??= {};
+
+    const root = element("div", "h3rp-root");
+    root.title = "Edits only the selected scene prompt in the connected H3 Chain Plan.";
+    for (const eventName of ["pointerdown", "pointerup", "mousedown", "mouseup", "click", "dblclick"]) {
+        root.addEventListener(eventName, (event) => event.stopPropagation());
+    }
+    root.addEventListener("wheel", (event) => event.stopPropagation());
+
+    const state = {
+        plan:null, planNode:null, planWidget:null, lastValue:"", lastRunName:"",
+        active:Math.max(0, Number(node.properties[ACTIVE_PROPERTY]) || 0),
+        fontSize:clamp(node.properties[FONT_PROPERTY], MIN_FONT, MAX_FONT, DEFAULT_FONT),
+        guide:normalizeRichGuide(node.properties[GUIDE_PROPERTY]),
+        provider:node.properties[PROVIDER_PROPERTY] === "hermes" ? "hermes" : "codex",
+        records:[], referenceMode:null, editor:null, refs:null, status:null, optimizerStatus:null,
+        history:{sceneKey:"", data:null, revisionId:null, host:null, loadToken:0, loadPromise:null,
+            saveTimer:null, pendingDraft:null, savePromise:null, error:""},
+        optimizer:{client:null, preparing:false, requestId:null, meta:null, origins:new Map(), providers:null, error:"", message:"", pendingResult:null},
+        popover:null, popoverTimer:null, pollTimer:null,
+    };
+    node._h3RichPromptState = state;
+
+    function dirty() {
+        node.graph?.setDirtyCanvas?.(true, true);
+        app.graph?.setDirtyCanvas?.(true, true);
+    }
+
+    function persistView() {
+        node.properties[ACTIVE_PROPERTY] = state.active;
+        node.properties[FONT_PROPERTY] = state.fontSize;
+        node.properties[GUIDE_PROPERTY] = state.guide;
+        node.properties[PROVIDER_PROPERTY] = state.provider;
+        dirty();
+    }
+
+    function planRunName() {
+        return String(state.planNode?.widgets?.find((item) => item.name === "run_name")?.value ?? "").trim();
+    }
+
+    function writePlan(message = "Saved to connected Plan") {
+        if (!state.plan || !state.planWidget || !state.planNode) return;
+        const value = planToJson(state.plan);
+        state.lastValue = value;
+        state.planWidget.value = value;
+        state.planWidget.callback?.(value);
+        state.planNode._h3ChainEditorRefresh?.();
+        state.planNode.graph?.setDirtyCanvas?.(true, true);
+        if (state.status) state.status.textContent = message;
+        dirty();
+    }
+
+    function historySceneKey(runName, shotId) {
+        return `${runName}\u0000${shotId}`;
+    }
+
+    async function historyRequest(query = {}, body = null) {
+        const suffix = new URLSearchParams(query).toString();
+        const response = await api.fetchApi(`/minimax_h3_context_loop/prompt-history${suffix ? `?${suffix}` : ""}`,
+            body == null ? undefined : {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)});
+        let payload = {};
+        try { payload = await response.json(); } catch (_error) { /* proxy error */ }
+        if (!response.ok) throw new Error(payload.error || `Prompt history request failed (HTTP ${response.status}).`);
+        return payload;
+    }
+
+    function renderHistory() {
+        const history = state.history;
+        if (!history.host) return;
+        history.host.replaceChildren();
+        if (history.error) {
+            history.host.append(element("span", "h3rp-history-meta h3rp-status-error", history.error));
+            return;
+        }
+        if (!history.data) {
+            history.host.append(element("span", "h3rp-history-meta", "Loading versions…"));
+            return;
+        }
+        const navigation = promptRevisionNavigation(history.data, history.revisionId);
+        const controls = element("span", "h3rp-history-nav");
+        const previous = button("‹", "Previous prompt version", () => navigation.previous && void selectHistoryRevision(navigation.previous.id));
+        const count = element("span", "h3rp-history-count", `${navigation.position} / ${navigation.total}`);
+        const next = button("›", "Next prompt version", () => navigation.next && void selectHistoryRevision(navigation.next.id));
+        previous.disabled = !navigation.previous;
+        next.disabled = !navigation.next;
+        controls.append(previous, count, next);
+        const metadata = element("span", "h3rp-history-meta", promptRevisionLabel(navigation));
+        metadata.title = metadata.textContent;
+        history.host.append(controls, metadata);
+    }
+
+    async function loadHistory(shotId, prompt, synchronize = true) {
+        const runName = planRunName();
+        const history = state.history;
+        const key = historySceneKey(runName, shotId);
+        const token = ++history.loadToken;
+        history.sceneKey = key;
+        history.data = null;
+        history.revisionId = null;
+        history.error = "";
+        renderHistory();
+        if (!runName) {
+            history.error = "Set run_name for prompt history.";
+            renderHistory();
+            return;
+        }
+        const request = synchronize
+            ? historyRequest({}, {action:"save", run_name:runName, scene_id:shotId, prompt, parent_revision:null})
+            : historyRequest({run_name:runName, scene_id:shotId});
+        history.loadPromise = request;
+        try {
+            const payload = await request;
+            if (token !== history.loadToken || history.sceneKey !== key) return;
+            history.data = payload.history ?? payload;
+            history.revisionId = payload.revision?.id ?? history.data.active_revision ?? null;
+        } catch (error) {
+            if (token === history.loadToken && history.sceneKey === key) history.error = error?.message || String(error);
+        } finally {
+            if (history.loadPromise === request) history.loadPromise = null;
+            if (token === history.loadToken && history.sceneKey === key) renderHistory();
+        }
+    }
+
+    function scheduleHistoryDraft(shotId, prompt) {
+        const runName = planRunName();
+        if (!runName) return;
+        const history = state.history;
+        history.pendingDraft = {key:historySceneKey(runName, shotId), runName, shotId, prompt};
+        if (history.saveTimer != null) window.clearTimeout(history.saveTimer);
+        history.saveTimer = window.setTimeout(() => { history.saveTimer = null; void flushHistoryDraft(); }, 650);
+    }
+
+    async function flushHistoryDraft() {
+        const history = state.history;
+        if (history.saveTimer != null) window.clearTimeout(history.saveTimer), history.saveTimer = null;
+        if (history.savePromise) {
+            await history.savePromise;
+            return history.pendingDraft ? flushHistoryDraft() : undefined;
+        }
+        const draft = history.pendingDraft;
+        if (!draft) return;
+        history.pendingDraft = null;
+        if (history.loadPromise && history.sceneKey === draft.key) await history.loadPromise;
+        const parent = history.sceneKey === draft.key ? history.revisionId : null;
+        const request = historyRequest({}, {action:"save", run_name:draft.runName, scene_id:draft.shotId,
+            prompt:draft.prompt, parent_revision:parent});
+        history.savePromise = request;
+        try {
+            const payload = await request;
+            if (history.sceneKey === draft.key) {
+                history.data = payload.history;
+                history.revisionId = payload.revision?.id ?? payload.history?.active_revision;
+                history.error = "";
+                renderHistory();
+            }
+        } catch (error) {
+            if (history.sceneKey === draft.key) history.error = error?.message || String(error), renderHistory();
+        } finally {
+            if (history.savePromise === request) history.savePromise = null;
+        }
+        if (history.pendingDraft) await flushHistoryDraft();
+    }
+
+    async function selectHistoryRevision(revisionId) {
+        await flushHistoryDraft();
+        const shot = state.plan?.shots?.[state.active];
+        if (!shot || !state.editor) return;
+        const shotId = String(shot.id || `clip_${String(state.active + 1).padStart(4, "0")}`);
+        const key = historySceneKey(planRunName(), shotId);
+        try {
+            const payload = await historyRequest({}, {action:"activate", run_name:planRunName(), scene_id:shotId, revision:revisionId});
+            if (state.history.sceneKey !== key) return;
+            state.history.data = payload.history;
+            state.history.revisionId = payload.revision.id;
+            const text = String(payload.revision.prompt ?? "");
+            shot.prompt = promptTextToLines(text);
+            renderEditorText(text);
+            writePlan("Loaded prompt version");
+            renderHistory();
+            state.editor.focus();
+        } catch (error) {
+            if (state.history.sceneKey === key) state.history.error = error?.message || String(error), renderHistory();
+        }
+    }
+
+    function ensurePopover() {
+        if (state.popover) return state.popover;
+        const popover = element("div", "h3rp-popover");
+        popover.hidden = true;
+        popover.addEventListener("mouseenter", () => {
+            if (state.popoverTimer != null) window.clearTimeout(state.popoverTimer), state.popoverTimer = null;
+        });
+        popover.addEventListener("mouseleave", scheduleHidePopover);
+        document.body.append(popover);
+        state.popover = popover;
+        return popover;
+    }
+
+    function hidePopover() {
+        if (!state.popover) return;
+        for (const media of state.popover.querySelectorAll("audio,video")) media.pause?.();
+        state.popover.hidden = true;
+    }
+
+    function scheduleHidePopover() {
+        if (state.popoverTimer != null) window.clearTimeout(state.popoverTimer);
+        state.popoverTimer = window.setTimeout(() => { state.popoverTimer = null; hidePopover(); }, 220);
+    }
+
+    function showPopover(record, anchor) {
+        if (!record) return;
+        if (state.popoverTimer != null) window.clearTimeout(state.popoverTimer), state.popoverTimer = null;
+        const popover = ensurePopover();
+        popover.replaceChildren();
+        const title = record.mode === "scheduled" && record.label
+            ? `${record.token} → ${record.label}` : record.token;
+        popover.append(element("div", "h3rp-popover-title", title));
+        const mediaKind = record.kind === "picture" ? "image" : record.kind;
+        const media = findMediaPreview(record.source, mediaKind);
+        if (media.url) {
+            const mediaElement = element(mediaKind === "image" ? "img" : mediaKind);
+            mediaElement.className = "h3rp-popover-media";
+            mediaElement.src = media.url;
+            if (mediaKind !== "image") mediaElement.controls = true, mediaElement.preload = "metadata";
+            else mediaElement.alt = `Preview for ${record.token}`;
+            popover.append(mediaElement);
+        } else {
+            popover.append(element("div", "h3rp-muted", "No browser-playable file preview was found upstream."));
+        }
+        const sourceTitle = media.source?.title || nodeType(media.source) || "unresolved source";
+        popover.append(element("div", "h3rp-popover-detail",
+            `${record.kind.toUpperCase()} · scenes ${record.selector}\n${record.active ? "Active" : "Inactive"} in scene ${state.active + 1}\nSource: ${sourceTitle}`));
+        popover.hidden = false;
+        const rect = anchor.getBoundingClientRect();
+        const width = Math.min(360, globalThis.innerWidth - 24);
+        const left = Math.max(12, Math.min(globalThis.innerWidth - width - 12, rect.left));
+        popover.style.left = `${left}px`;
+        popover.style.top = `${Math.max(12, Math.min(globalThis.innerHeight - popover.offsetHeight - 12, rect.bottom + 7))}px`;
+    }
+
+    function makeToken(part) {
+        if (part.type === "text") return document.createTextNode(part.text);
+        const kind = part.type === "reference" ? part.kind : part.type;
+        const token = element("span", `h3rp-token h3rp-token-${kind}`);
+        token.contentEditable = "false";
+        token.dataset.token = part.text;
+        if (part.unresolved) token.classList.add("h3rp-token-unknown");
+        if (part.record && !part.record.active) token.classList.add("h3rp-token-inactive");
+        const mediaKind = kind === "picture" ? "image" : kind;
+        const media = part.record?.source ? findMediaPreview(part.record.source, mediaKind) : null;
+        if (kind === "picture" && media?.url) {
+            const thumb = element("img", "h3rp-token-thumb");
+            thumb.src = media.url;
+            thumb.alt = "";
+            token.append(thumb);
+        } else {
+            token.append(icon(kind));
+        }
+        token.append(element("span", "h3rp-token-label", part.text));
+        if (part.record) {
+            token.title = `${part.text} · hover for ${kind} preview`;
+            token.addEventListener("mouseenter", () => showPopover(part.record, token));
+            token.addEventListener("mouseleave", scheduleHidePopover);
+            token.addEventListener("focus", () => showPopover(part.record, token));
+        } else {
+            token.title = part.type === "reference" ? "Unresolved reference in this scene" : part.text;
+        }
+        return token;
+    }
+
+    function renderEditorText(text, caret = null) {
+        if (!state.editor) return;
+        const source = String(text ?? "");
+        const parts = tokenizeRichPrompt(source, state.records);
+        const fragment = document.createDocumentFragment();
+        for (let index = 0; index < parts.length; index += 1) {
+            const part = parts[index];
+            // Leave an unfinished unknown @word as normal text while the user
+            // is still typing it; it becomes a red unresolved chip on blur or
+            // another explicit decoration pass.
+            const unfinished = part.type === "reference" && part.unresolved
+                && part.text.startsWith("@") && index === parts.length - 1
+                && document.activeElement === state.editor;
+            fragment.append(unfinished ? document.createTextNode(part.text) : makeToken(part));
+        }
+        state.editor.replaceChildren(fragment);
+        if (caret != null) restoreCaret(state.editor, caret);
+    }
+
+    function saveEditorInput() {
+        const shot = state.plan?.shots?.[state.active];
+        if (!shot || !state.editor) return;
+        const shotId = String(shot.id || `clip_${String(state.active + 1).padStart(4, "0")}`);
+        const text = editorPlainText(state.editor);
+        shot.prompt = promptTextToLines(text);
+        writePlan();
+        scheduleHistoryDraft(shotId, text);
+        // Keep the browser's live DOM and undo transaction intact while the
+        // user types. Existing chips remain atomic; newly typed raw labels are
+        // decorated on blur. Explicit toolbar/menu insertions decorate once
+        // immediately after their own input transaction.
+    }
+
+    function decorateEditorAtCaret() {
+        if (!state.editor) return;
+        const caret = selectionTextOffset(state.editor);
+        renderEditorText(editorPlainText(state.editor), caret);
+    }
+
+    function insertDecoratedText(text) {
+        insertPlainText(state.editor, text);
+        decorateEditorAtCaret();
+    }
+
+    function renderReferenceTray() {
+        const tray = state.refs;
+        if (!tray) return;
+        tray.replaceChildren();
+        if (!state.records.length) {
+            tray.append(element("div", "h3rp-ref-help", "No connected Scheduled Ref2VA, core Ref2VA, or core I2V/FL2V references were found."));
+            return;
+        }
+        tray.append(element("div", "h3rp-ref-help",
+            `Scene ${state.active + 1}: click an active reference to insert it. Hover for image, video, or audio preview. Audio never autoplays.`));
+        for (const record of state.records) {
+            const card = button("", record.active ? `Insert ${record.token}` : `${record.token} is inactive in this scene`, () => {
+                if (!record.active) return;
+                insertDecoratedText(record.token);
+                tray.classList.remove("h3rp-open");
+            });
+            card.classList.add("h3rp-ref-card");
+            if (!record.active) card.classList.add("h3rp-inactive");
+            const mediaKind = record.kind === "picture" ? "image" : record.kind;
+            const media = findMediaPreview(record.source, mediaKind);
+            if (record.kind === "picture" && media.url) {
+                const thumb = element("img", "h3rp-token-thumb");
+                thumb.src = media.url;
+                thumb.alt = "";
+                card.append(thumb);
+            } else card.append(icon(record.kind));
+            const copy = element("span", "h3rp-ref-card-copy");
+            copy.append(
+                element("div", "h3rp-ref-card-title", record.token),
+                element("div", "h3rp-ref-card-detail", record.label && record.label !== record.token
+                    ? `${record.label} · scenes ${record.selector}` : `${record.kind} · scenes ${record.selector}`),
+            );
+            card.append(copy);
+            card.addEventListener("mouseenter", () => showPopover(record, card));
+            card.addEventListener("mouseleave", scheduleHidePopover);
+            tray.append(card);
+        }
+    }
+
+    function optimizerSceneKey(index = state.active) {
+        const shot = state.plan?.shots?.[index];
+        return `${index}:${String(shot?.id || `clip_${String(index + 1).padStart(4, "0")}`)}`;
+    }
+
+    function optimizerBusy() {
+        return Boolean(state.optimizer.preparing || state.optimizer.requestId);
+    }
+
+    function refreshOptimizerUi() {
+        const busy = optimizerBusy();
+        if (state.editor) state.editor.contentEditable = busy ? "false" : "true";
+        for (const control of root.querySelectorAll("[data-h3rp-lock]")) control.disabled = busy;
+        const optimize = root.querySelector(".h3rp-optimize");
+        if (optimize) optimize.disabled = busy;
+        const stop = root.querySelector(".h3rp-stop");
+        if (stop) stop.hidden = !state.optimizer.requestId;
+        const applyPending = root.querySelector(".h3rp-apply-pending");
+        if (applyPending) applyPending.hidden = !state.optimizer.pendingResult;
+        if (state.optimizerStatus) {
+            state.optimizerStatus.className = `h3rp-status${state.optimizer.error ? " h3rp-status-error" : state.optimizer.message ? " h3rp-status-success" : ""}`;
+            state.optimizerStatus.textContent = state.optimizer.error || state.optimizer.message || (busy ? "Optimizing…" : "");
+        }
+    }
+
+    function handleOptimizerFrame(frame) {
+        if (!frame || typeof frame !== "object") return;
+        if (frame.type === "prompt_assist_ready") {
+            state.optimizer.providers = Array.isArray(frame.providers) ? frame.providers : null;
+        } else if (frame.type === "prompt_assist_started" && frame.request_id === state.optimizer.requestId) {
+            state.optimizer.message = `Optimizing with ${state.provider === "hermes" ? "Hermes" : "Codex"}…`;
+        } else if (frame.type === "prompt_assist_progress" && frame.request_id === state.optimizer.requestId) {
+            state.optimizer.message = "Agent is drafting…";
+        } else if (frame.type === "prompt_assist_result" && frame.request_id === state.optimizer.requestId) {
+            const meta = state.optimizer.meta;
+            state.optimizer.requestId = null;
+            state.optimizer.meta = null;
+            const result = typeof frame.rewritten_prompt === "string" ? frame.rewritten_prompt : null;
+            if (!result?.trim()) {
+                state.optimizer.error = "The optimizer returned no replacement prompt.";
+            } else {
+                const shot = state.plan?.shots?.[meta.sceneIndex];
+                const current = shot ? promptValueToText(shot.prompt) : "";
+                if (!shot || String(shot.id || "") !== meta.sceneId || current !== meta.currentAtRequest) {
+                    state.optimizer.pendingResult = {...meta, result};
+                    state.optimizer.error = "The scene changed while optimizing; the result was not applied.";
+                } else {
+                    shot.prompt = promptTextToLines(result);
+                    state.optimizer.origins.set(meta.sceneKey, {source:meta.source, result});
+                    writePlan("Optimized prompt saved to Plan");
+                    if (state.active === meta.sceneIndex) {
+                        renderEditorText(result);
+                        scheduleHistoryDraft(meta.sceneId, result);
+                        void flushHistoryDraft();
+                    }
+                    state.optimizer.message = frame.message || "Optimized prompt saved as a new revision.";
+                    state.optimizer.error = "";
+                }
+            }
+        } else if (frame.type === "prompt_assist_error"
+                && (!frame.request_id || frame.request_id === state.optimizer.requestId)) {
+            state.optimizer.requestId = null;
+            state.optimizer.meta = null;
+            state.optimizer.error = String(frame.error || "Prompt optimization failed.");
+        } else if (frame.type === "prompt_assist_cancelled" && frame.request_id === state.optimizer.requestId) {
+            state.optimizer.requestId = null;
+            state.optimizer.meta = null;
+            state.optimizer.message = "Optimization stopped; the prompt was not changed.";
+        } else if (frame.type === "prompt_assist_cancel_ack" && frame.cancelled === false
+                && frame.request_id === state.optimizer.requestId) {
+            state.optimizer.requestId = null;
+            state.optimizer.meta = null;
+            state.optimizer.error = "The optimizer request is no longer active.";
+        }
+        refreshOptimizerUi();
+    }
+
+    function applyPendingOptimizerResult() {
+        const pending = state.optimizer.pendingResult;
+        if (!pending) return;
+        const shot = state.plan?.shots?.[pending.sceneIndex];
+        if (!shot || String(shot.id || "") !== pending.sceneId) {
+            state.optimizer.error = "The optimized result belongs to a scene that no longer exists.";
+            state.optimizer.pendingResult = null;
+            refreshOptimizerUi();
+            return;
+        }
+        shot.prompt = promptTextToLines(pending.result);
+        state.optimizer.origins.set(pending.sceneKey, {source:pending.source, result:pending.result});
+        state.optimizer.pendingResult = null;
+        state.optimizer.error = "";
+        state.optimizer.message = "Changed source replaced explicitly; result saved as a new revision.";
+        writePlan("Optimized prompt saved to Plan");
+        if (state.active === pending.sceneIndex) {
+            renderEditorText(pending.result);
+            scheduleHistoryDraft(pending.sceneId, pending.result);
+            void flushHistoryDraft();
+        }
+        refreshOptimizerUi();
+    }
+
+    async function optimizePrompt() {
+        if (optimizerBusy() || !state.plan?.shots?.length || !state.editor) return;
+        const sceneIndex = state.active;
+        const shot = state.plan.shots[sceneIndex];
+        const sceneId = String(shot.id || `clip_${String(sceneIndex + 1).padStart(4, "0")}`);
+        const sceneKey = optimizerSceneKey(sceneIndex);
+        const current = editorPlainText(state.editor);
+        const source = optimizerSource(current, state.optimizer.origins.get(sceneKey));
+        const refs = availableReferenceRecords(node, sceneIndex + 1, {includeInactive:true});
+        const mode = richGenerationMode(refs.mode);
+        const context = buildPromptAssistantContext(state.plan, sceneIndex, source, {
+            includeShared:true, includeAdjacent:true,
+        });
+        context.generation_mode = mode;
+        const requestId = `rich-${globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`}`;
+        state.optimizer.error = "";
+        state.optimizer.pendingResult = null;
+        state.optimizer.message = "Connecting to the isolated prompt agent…";
+        state.optimizer.preparing = true;
+        refreshOptimizerUi();
+        try {
+            await state.optimizer.client.connect();
+            const selected = state.optimizer.providers?.find((item) => item.id === state.provider);
+            if (selected?.available === false) throw new Error(`${state.provider === "hermes" ? "Hermes" : "Codex"} is unavailable.`);
+            state.optimizer.client.reset();
+            const referenceSummary = refs.records.length
+                ? refs.records.map((record) => {
+                    const mapping = record.label && record.label !== record.token
+                        ? ` -> ${record.label}` : "";
+                    return `${record.token}${mapping} (${record.kind}, ${record.active ? "active" : "inactive"})`;
+                }).join(", ")
+                : "none discovered";
+            const request = makePromptAssistRequest({
+                requestId,
+                conversationId:state.optimizer.client.conversationId,
+                provider:state.provider,
+                mode:"rewrite",
+                instruction:`${richGuideInstruction(state.guide, mode)} Connected scene references: ${referenceSummary}.`,
+                context,
+            });
+            state.optimizer.requestId = requestId;
+            state.optimizer.preparing = false;
+            state.optimizer.meta = {sceneIndex, sceneId, sceneKey, source,
+                currentAtRequest:current};
+            state.optimizer.message = `Optimizing with ${state.provider === "hermes" ? "Hermes" : "Codex"}…`;
+            refreshOptimizerUi();
+            await state.optimizer.client.send(request);
+        } catch (error) {
+            state.optimizer.preparing = false;
+            state.optimizer.requestId = null;
+            state.optimizer.meta = null;
+            state.optimizer.error = error?.message || String(error);
+            refreshOptimizerUi();
+        }
+    }
+
+    function stopOptimizer() {
+        if (!state.optimizer.requestId) return;
+        if (!state.optimizer.client.cancel(state.optimizer.requestId)) {
+            state.optimizer.error = "The bridge is disconnected; the request could not be cancelled.";
+        } else state.optimizer.message = "Stopping optimizer…";
+        refreshOptimizerUi();
+    }
+
+    function showFailure(message) {
+        state.editor = null;
+        state.history.host = null;
+        root.replaceChildren(
+            element("div", "h3rp-title", "Rich Scene Prompt Editor"),
+            element("div", "h3rp-error", message),
+            element("div", "h3rp-context", "Connect the Plan output to this node's plan input."),
+        );
+    }
+
+    function navigate(offset, absolute = null) {
+        if (!state.plan?.shots?.length || optimizerBusy()) return;
+        void (async () => {
+            await flushHistoryDraft();
+            const requested = absolute == null ? state.active + offset : Number(absolute);
+            state.active = Math.max(0, Math.min(state.plan.shots.length - 1, requested));
+            persistView();
+            render();
+            state.editor?.focus();
+        })();
+    }
+
+    function render() {
+        hidePopover();
+        if (!state.plan?.shots?.length) return showFailure("The connected Plan has no scenes.");
+        state.active = Math.max(0, Math.min(state.active, state.plan.shots.length - 1));
+        root.style.setProperty("--h3rp-font-size", `${state.fontSize}px`);
+        root.replaceChildren();
+        const shot = state.plan.shots[state.active];
+        const shotId = String(shot.id || `clip_${String(state.active + 1).padStart(4, "0")}`);
+        const referenceData = availableReferenceRecords(node, state.active + 1, {includeInactive:true});
+        state.records = referenceData.records;
+        state.referenceMode = referenceData.mode;
+
+        const head = element("div", "h3rp-head");
+        head.append(
+            element("span", "h3rp-title", "Rich Scene Prompt Editor"),
+            element("span", "h3rp-context", `${richGenerationMode(referenceData.mode)} · ${sharedPrompt(state.plan).text.trim() ? "shared prompt active" : "no shared prompt"}`),
+        );
+
+        const nav = element("div", "h3rp-nav");
+        const previous = button("←", "Previous scene (Alt+Left)", () => navigate(-1));
+        const next = button("→", "Next scene (Alt+Right)", () => navigate(1));
+        previous.disabled = state.active === 0;
+        next.disabled = state.active === state.plan.shots.length - 1;
+        previous.dataset.h3rpLock = "";
+        next.dataset.h3rpLock = "";
+        const sceneSelect = element("select");
+        sceneSelect.dataset.h3rpLock = "";
+        for (let index = 0; index < state.plan.shots.length; index += 1) {
+            const id = state.plan.shots[index].id || `clip_${String(index + 1).padStart(4, "0")}`;
+            const option = element("option", "", `Scene ${index + 1} — ${id}`);
+            option.value = String(index);
+            sceneSelect.append(option);
+        }
+        sceneSelect.value = String(state.active);
+        sceneSelect.addEventListener("change", () => navigate(0, sceneSelect.value));
+        const smaller = button("A−", "Decrease prompt font", () => {
+            state.fontSize = clamp(state.fontSize - 1, MIN_FONT, MAX_FONT, DEFAULT_FONT); persistView(); render();
+        });
+        const larger = button("A+", "Increase prompt font", () => {
+            state.fontSize = clamp(state.fontSize + 1, MIN_FONT, MAX_FONT, DEFAULT_FONT); persistView(); render();
+        });
+        smaller.dataset.h3rpLock = "";
+        larger.dataset.h3rpLock = "";
+        nav.append(previous, sceneSelect, next, smaller, element("span", "h3rp-muted", `${state.fontSize}px`), larger);
+
+        const toolbar = element("div", "h3rp-toolbar");
+        const refsButton = button("References", "Show connected references, miniatures, and media previews", () => {
+            renderReferenceTray();
+            state.refs.classList.toggle("h3rp-open");
+        }, "reference");
+        refsButton.dataset.h3rpLock = "";
+        const dialogue = button("Dialogue", "Wrap selected text in <d> tags", () => {
+            const selection = globalThis.getSelection?.();
+            const selected = selection?.rangeCount ? selection.toString() : "";
+            insertDecoratedText(`<d>${selected}</d>`);
+        }, "dialogue");
+        dialogue.dataset.h3rpLock = "";
+        const guide = element("select", "h3rp-guide");
+        guide.title = "Prompt Guide used by one-click optimization";
+        guide.dataset.h3rpLock = "";
+        for (const item of RICH_PROMPT_GUIDES) {
+            const option = element("option", "", item.label);
+            option.value = item.id;
+            guide.append(option);
+        }
+        guide.value = state.guide;
+        guide.addEventListener("change", () => { state.guide = normalizeRichGuide(guide.value); persistView(); });
+        const provider = element("select", "h3rp-provider");
+        provider.title = "Isolated local agent used by Optimize";
+        provider.dataset.h3rpLock = "";
+        for (const [id, label] of [["codex", "Codex"], ["hermes", "Hermes"]]) {
+            const option = element("option", "", label); option.value = id; provider.append(option);
+        }
+        provider.value = state.provider;
+        provider.addEventListener("change", () => { state.provider = provider.value; persistView(); });
+        const optimize = button("Optimize", "Rewrite from prompt text, scene context, and reference mappings with the selected H3 guide; media previews are not uploaded. The result becomes a reversible prompt revision.", () => void optimizePrompt(), "sparkle");
+        optimize.classList.add("h3rp-optimize");
+        const stop = button("Stop", "Cancel prompt optimization", stopOptimizer, "stop");
+        stop.classList.add("h3rp-stop");
+        stop.hidden = true;
+        const applyPending = button("Apply changed result", "Explicitly replace a scene that changed while optimization was running", applyPendingOptimizerResult, "sparkle");
+        applyPending.classList.add("h3rp-apply-pending");
+        applyPending.hidden = true;
+        const optimizerStatus = element("span", "h3rp-status");
+        state.optimizerStatus = optimizerStatus;
+        toolbar.append(refsButton, dialogue, guide, provider, optimize, stop, applyPending, optimizerStatus);
+
+        const refs = element("div", "h3rp-ref-tray");
+        state.refs = refs;
+        const editorShell = element("div", "h3rp-editor-shell");
+        const editor = element("div", "h3rp-editor");
+        editor.contentEditable = "true";
+        editor.spellcheck = true;
+        editor.tabIndex = 0;
+        editor.setAttribute("role", "textbox");
+        editor.setAttribute("aria-multiline", "true");
+        editor.dataset.placeholder = "Write this scene's action, camera, performance, dialogue, sound, and ending continuity…";
+        state.editor = editor;
+        renderEditorText(promptValueToText(shot.prompt, `Scene ${state.active + 1} prompt`));
+        editor.addEventListener("input", saveEditorInput);
+        editor.addEventListener("beforeinput", (event) => {
+            if (event.inputType === "insertParagraph" || event.inputType === "insertLineBreak") {
+                event.preventDefault(); insertPlainText(editor, "\n");
+            }
+        });
+        editor.addEventListener("paste", (event) => {
+            event.preventDefault(); insertPlainText(editor, event.clipboardData?.getData("text/plain") ?? "");
+        });
+        editor.addEventListener("keydown", (event) => {
+            if (event.altKey && event.key === "ArrowLeft") event.preventDefault(), navigate(-1);
+            else if (event.altKey && event.key === "ArrowRight") event.preventDefault(), navigate(1);
+            else if (!event.ctrlKey && !event.metaKey && !event.altKey && event.key === "@"
+                    && state.records.some((record) => record.active)) {
+                // The palette inserts the complete token. Do not leave the
+                // trigger '@' behind or selecting @hero would produce @@hero.
+                event.preventDefault();
+                renderReferenceTray();
+                refs.classList.add("h3rp-open");
+            } else if (event.key === "Escape") refs.classList.remove("h3rp-open");
+        });
+        editor.addEventListener("blur", () => {
+            const text = editorPlainText(editor);
+            renderEditorText(text);
+        });
+        editorShell.append(editor);
+
+        const footer = element("div", "h3rp-footer");
+        const identity = element("span", "", `Scene ${state.active + 1}/${state.plan.shots.length} · ${shotId}`);
+        const historyHost = element("div", "h3rp-history");
+        const status = element("span", "h3rp-footer-status", "Synchronized with Plan");
+        footer.append(identity, historyHost, status);
+        state.history.host = historyHost;
+        state.status = status;
+
+        root.append(head, nav, toolbar, refs, editorShell, footer);
+        refreshOptimizerUi();
+        void loadHistory(shotId, editorPlainText(editor));
+    }
+
+    function loadPlan(force = false) {
+        const planNode = upstreamPlanNode(node);
+        const planWidget = planNode?.widgets?.find((item) => item.name === "plan_json");
+        if (!planNode || !planWidget) {
+            if (force || state.planNode) {
+                state.plan = null; state.planNode = null; state.planWidget = null;
+                state.lastValue = ""; state.lastRunName = "";
+                showFailure("No connected H3 Chain Plan was found.");
+            }
+            return;
+        }
+        const value = String(planWidget.value ?? "");
+        const runName = String(planNode.widgets?.find((item) => item.name === "run_name")?.value ?? "").trim();
+        if (!force && planNode === state.planNode && value === state.lastValue && runName === state.lastRunName) return;
+        try {
+            state.plan = parsePlanJson(value);
+            state.planNode = planNode;
+            state.planWidget = planWidget;
+            state.lastValue = value;
+            state.lastRunName = runName;
+            render();
+        } catch (error) {
+            showFailure(`Connected Plan JSON is invalid:\n${error.message}`);
+        }
+    }
+
+    state.optimizer.client = new PromptAssistantClient({
+        identityKey:promptAssistantIdentityKey(node),
+        onFrame:handleOptimizerFrame,
+        onStatus:(status, detail) => {
+            if (detail?.providers) state.optimizer.providers = detail.providers;
+            if (status === "disconnected" && state.optimizer.requestId) {
+                state.optimizer.error = "Prompt-agent bridge disconnected.";
+                state.optimizer.requestId = null;
+                state.optimizer.meta = null;
+            }
+            refreshOptimizerUi();
+        },
+    });
+
+    const widget = node.addDOMWidget("h3_rich_scene_prompt_editor", "h3-rich-scene-prompt-editor", root,
+        {serialize:false, hideOnZoom:false, getMinHeight:() => 560});
+    widget.serialize = false;
+    node.setSize?.([Math.max(Number(node.size?.[0]) || 780, 780), Math.max(Number(node.size?.[1]) || 760, 760)]);
+
+    const connectionsChanged = node.onConnectionsChange;
+    node.onConnectionsChange = function () {
+        const result = connectionsChanged?.apply(this, arguments);
+        setTimeout(() => loadPlan(true), 0);
+        return result;
+    };
+    const onPromptExecuted = (event) => {
+        const values = event.detail?.output?.h3_chain_active_scene;
+        const scene = Array.isArray(values) ? values.at(-1) : null;
+        if (!scene || String(scene.run_name ?? "") !== planRunName()) return;
+        const shot = state.plan?.shots?.[state.active];
+        const shotId = String(shot?.id ?? "");
+        if (!shotId || String(scene.shot_id ?? "") !== shotId) return;
+        window.setTimeout(() => {
+            if (state.history.sceneKey === historySceneKey(planRunName(), shotId)) {
+                void loadHistory(shotId, promptValueToText(shot.prompt), false);
+            }
+        }, 50);
+    };
+    api.addEventListener("executed", onPromptExecuted);
+
+    const removed = node.onRemoved;
+    node.onRemoved = function () {
+        if (state.pollTimer != null) window.clearInterval(state.pollTimer);
+        if (state.popoverTimer != null) window.clearTimeout(state.popoverTimer);
+        hidePopover();
+        state.popover?.remove();
+        api.removeEventListener("executed", onPromptExecuted);
+        void flushHistoryDraft();
+        state.optimizer.client?.close();
+        return removed?.apply(this, arguments);
+    };
+    node._h3RichPromptRefresh = () => loadPlan(true);
+    state.pollTimer = window.setInterval(() => loadPlan(false), 500);
+    loadPlan(true);
+}
+
+app.registerExtension({
+    name:"minimax_h3_context_loop.rich_scene_prompt_editor",
+    async beforeRegisterNodeDef(nodeTypeDefinition, nodeData) {
+        if (nodeData.name !== NODE_NAME) return;
+        const created = nodeTypeDefinition.prototype.onNodeCreated;
+        nodeTypeDefinition.prototype.onNodeCreated = function () {
+            const result = created?.apply(this, arguments);
+            setTimeout(() => mount(this), 0);
+            return result;
+        };
+    },
+    async nodeCreated(node) {
+        if (nodeType(node) === NODE_NAME) mount(node);
+    },
+    async afterConfigureGraph() {
+        for (const node of allNodes(app.graph)) {
+            if (nodeType(node) === NODE_NAME) setTimeout(() => node._h3RichPromptRefresh?.(), 0);
+        }
+    },
+});
