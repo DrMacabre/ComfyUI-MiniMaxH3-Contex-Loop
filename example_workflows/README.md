@@ -118,14 +118,6 @@ Replace the supplied image/audio filenames and model selections with files
 available in your ComfyUI installation. Scene-count and duration labels are
 intentionally generic because both are controlled by the editable plan.
 
-## Legacy manual Motion Context workflows
-
-`MiniMax H3 with Motion Context.json` is NikoDemon80's original compact FL2VA
-motion-and-audio continuation workflow. It is retained for attribution and
-history; its original `MiniMaxH3MotionContext*` ids now belong exclusively to
-[ComfyUI-H3-Motion-Context](https://github.com/NikoDemon80/ComfyUI-H3-Motion-Context).
-Install that upstream pack to use or modernize the manual workflow.
-
 ## MiniMax H3 Seamless Chain Global Refs 6 Clips
 
 This is also a historical manual workflow rather than the recursive loop demo.
