@@ -1866,21 +1866,27 @@ def _align_audio_reference_to_h3_grid(
     # other input rates so the later resample cannot spill into one additional
     # reference latent.
     target_steps = int(round(int(frame_count) / float(FPS) * 40.0))
-    target_32k_samples = target_steps * 800
+    # A reference ending exactly on the target boundary (15.075s at 362
+    # frames) still showed the same visual duplication seen with an overlong
+    # reference, while a 5ms undercut (15.070s) did not. Keep the same number
+    # of reference latents but leave a short zero-padded tail in the last one.
+    safety_samples_32k = 160
+    target_32k_samples = max(1, target_steps * 800 - safety_samples_32k)
     target_samples = max(1, int(math.floor(
         target_32k_samples * sample_rate / 32000.0)))
     current_samples = int(waveform.shape[-1])
     if current_samples <= target_samples:
         return audio, (
-            "audio ref unchanged at %d samples (target %d steps, %.6fs)" %
-            (current_samples, target_steps, target_steps / 40.0))
+            "audio ref unchanged at %d samples (target %d steps, safe %.6fs)" %
+            (current_samples, target_steps,
+             target_32k_samples / 32000.0))
     return {
         "waveform": waveform[..., :target_samples],
         "sample_rate": sample_rate,
     }, (
-        "audio ref aligned %d->%d samples (target %d steps, %.6fs)" %
+        "audio ref aligned %d->%d samples (target %d steps, safe %.6fs)" %
         (current_samples, target_samples, target_steps,
-         target_steps / 40.0))
+         target_32k_samples / 32000.0))
 
 
 def _slice_audio_after_external_context(
@@ -3230,12 +3236,13 @@ class MiniMaxH3ChainCurrent:
                                "scene in source-track modes."}),
                 "align_audio_reference": ("BOOLEAN", {
                     "default": False,
-                    "tooltip": "Experimental. Cap only source_audio_slice to "
-                               "H3's rounded 40 Hz target-audio grid. For 362 "
-                               "frames this changes 15.083333s to 15.075s "
-                               "(604 reference steps to 603). Shorter slices are "
-                               "left unchanged. The full source track used by "
-                               "Assemble is never modified."}),
+                    "tooltip": "Experimental. Cap only source_audio_slice 5ms "
+                               "below H3's rounded 40 Hz target-audio boundary. "
+                               "For 362 frames this changes 15.083333s to "
+                               "15.070s while retaining 603 reference steps and "
+                               "a short padded tail. Shorter slices are unchanged. "
+                               "The full source track used by Assemble is never "
+                               "modified."}),
             },
         }
 

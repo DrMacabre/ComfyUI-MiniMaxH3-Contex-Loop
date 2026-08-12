@@ -1021,8 +1021,8 @@ def main():
             grid_aligned = chain.MiniMaxH3ChainCurrent().current(
                 aligned_state, aligned_source,
                 align_audio_reference=True)["result"]
-            assert int(grid_aligned[12]["waveform"].shape[-1]) == 482400
-            assert "target 603 steps, 15.075000s" in grid_aligned[13]
+            assert int(grid_aligned[12]["waveform"].shape[-1]) == 482240
+            assert "target 603 steps, safe 15.070000s" in grid_aligned[13]
 
             aligned_44k_source = audio_for_frames(362, 44100)
             aligned_44k_state = chain.MiniMaxH3ChainLoopStart().start(
@@ -1032,8 +1032,8 @@ def main():
                 align_audio_reference=True)["result"][12]
             aligned_44k_samples = int(
                 grid_aligned_44k["waveform"].shape[-1])
-            assert aligned_44k_samples == 664807
-            assert math.ceil(aligned_44k_samples * 32000 / 44100) == 482400
+            assert aligned_44k_samples == 664587
+            assert math.ceil(aligned_44k_samples * 32000 / 44100) == 482240
             try:
                 chain.MiniMaxH3ChainCurrent().current(
                     started[1], changed_source)

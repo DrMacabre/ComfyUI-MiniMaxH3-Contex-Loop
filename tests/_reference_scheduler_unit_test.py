@@ -45,8 +45,8 @@ exact_362_audio = {
 }
 aligned_362_audio, aligned_362_status = (
     chain._align_audio_reference_to_h3_grid(exact_362_audio, 362))
-assert int(aligned_362_audio["waveform"].shape[-1]) == 482400
-assert "target 603 steps, 15.075000s" in aligned_362_status
+assert int(aligned_362_audio["waveform"].shape[-1]) == 482240
+assert "target 603 steps, safe 15.070000s" in aligned_362_status
 
 exact_362_audio_44k = {
     "waveform": chain.torch.ones((1, 2, round(362 / 24 * 44100))),
@@ -55,8 +55,8 @@ exact_362_audio_44k = {
 aligned_362_audio_44k, _ = chain._align_audio_reference_to_h3_grid(
     exact_362_audio_44k, 362)
 aligned_44k_samples = int(aligned_362_audio_44k["waveform"].shape[-1])
-assert aligned_44k_samples == 664807
-assert math.ceil(aligned_44k_samples * 32000 / 44100) == 482400
+assert aligned_44k_samples == 664587
+assert math.ceil(aligned_44k_samples * 32000 / 44100) == 482240
 
 short_audio = {
     "waveform": chain.torch.ones((1, 2, 480000)),
