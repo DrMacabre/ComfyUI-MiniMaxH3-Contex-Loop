@@ -55,14 +55,11 @@ core layout API and emits compatible guide records from Loop Context.
 
 ## ComfyUI-MiniMaxH3-Easy
 
-The H3 Chain Plan editors' quick `@` reference-tag and `#` dialogue-tag
-interactions, rich reference chips, media miniatures, and compact optimizer
-presentation were inspired by
+The H3 Chain Plan scene editor's quick `@` reference-tag and `#` dialogue-tag
+interactions were inspired by
 [ComfyUI-MiniMaxH3-Easy](https://github.com/nkxx188/ComfyUI-MiniMaxH3-Easy)
-by **nkxx188**. The graph-aware scheduled-reference mapping, scene-card editor,
-plan serializer, prompt revision storage, Codex/Hermes bridge integration,
-timing calculations, and chain integration in this repository are an original
-implementation.
+by **nkxx188**. The scene-card editor, plan serializer, timing calculations,
+and chain integration in this repository are an original implementation.
 
 ComfyUI-MiniMaxH3-Easy is distributed under the MIT License:
 
