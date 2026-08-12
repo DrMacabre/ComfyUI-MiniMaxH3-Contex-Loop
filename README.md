@@ -20,6 +20,10 @@ huge cumulative image tensor.
 Newest first. Recent additions stay visible; older milestones are folded away
 so this page remains a useful starting point rather than a changelog wall.
 
+- **v0.3.26 — Three-level prompt compliance.** Scheduled Ref2VA now offers
+  strict, soft, and disabled authoring policy. Strict blocks unresolved aliases;
+  soft compiles valid aliases while warning about unresolved ones; disabled
+  passes prompt text through without interpreting `@tags`.
 - **v0.3.25 — Portable run assets and optional tag warnings.** Run Manager
   accepts dynamic loader-asset
   connections, records persistent binding identities plus original input paths,
@@ -284,12 +288,18 @@ current scene. For example, suppose two picture nodes use tags `picture_1` and
 `<Picture 1>`. The `active_references` output shows the exact mapping for the
 current scene.
 
-Scheduled Ref2VA's **strict_reference_tags** switch defaults on. In strict mode,
-an unknown `@tag` or a scheduled tag that is inactive for the current scene
-stops the workflow before sampling. Disable the switch to leave that tag text
-unchanged, emit a warning in the ComfyUI log and `active_references` status, and
-continue generation. This only relaxes prompt-tag compliance; invalid media,
-reference counts, dimensions, and checkpoint compatibility still block safely.
+Scheduled Ref2VA's **prompt_compliance** control has three levels:
+
+- **strict** (default) compiles active aliases and blocks an unknown `@tag` or
+  a scheduled tag that is inactive for the current scene.
+- **soft** compiles valid active aliases, but preserves unresolved tags, emits
+  warnings in the ComfyUI log and `active_references` status, and continues.
+- **disabled** performs no alias compilation or checking; the exact prompt and
+  every `@tag` are left to the user and passed through unchanged.
+
+This control governs prompt-tag compliance only. Invalid media tensors,
+reference capacity, dimensions, and checkpoint compatibility still fail safely
+because those are execution requirements rather than authoring policy.
 
 The **Scene Prompt Editor** discovers the Scheduled Ref2VA connected downstream
 without adding an execution socket or a graph cycle. Open its **@ Reference**

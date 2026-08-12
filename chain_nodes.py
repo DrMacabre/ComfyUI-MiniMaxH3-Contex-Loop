@@ -234,6 +234,20 @@ def _parse_scene_range(value: Any, total: int,
 _REFERENCE_TAG_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,63}")
 _REFERENCE_ALIAS_RE = re.compile(
     r"(?<![A-Za-z0-9_])@([A-Za-z][A-Za-z0-9_-]{0,63})")
+REFERENCE_COMPLIANCE_MODES = ("strict", "soft", "disabled")
+
+
+def _reference_compliance_mode(value: Any) -> str:
+    # Compatibility with the short-lived BOOLEAN form: True was strict and
+    # False was the warning-only behavior now named soft.
+    if isinstance(value, bool):
+        return "strict" if value else "soft"
+    mode = str(value or "strict").strip().lower()
+    if mode not in REFERENCE_COMPLIANCE_MODES:
+        raise ValueError(
+            "Reference prompt compliance must be strict, soft, or disabled; "
+            "got %r." % value)
+    return mode
 
 
 def _normalize_reference_tag(value: Any, label: str) -> str:
@@ -457,14 +471,18 @@ def _active_reference_bindings(
 
 def _replace_reference_aliases(
         text: str, bindings: dict[str, Any], scene: int,
-        strict_reference_tags: bool = True,
+        compliance_mode: str = "strict",
         warnings: list[str] | None = None) -> str:
     aliases = bindings["aliases"]
     all_tags = bindings["all_tags"]
     warnings = warnings if warnings is not None else []
+    mode = _reference_compliance_mode(compliance_mode)
+
+    if mode == "disabled":
+        return str(text)
 
     def compliance_error(message: str, original: str) -> str:
-        if strict_reference_tags:
+        if mode == "strict":
             raise ValueError(message)
         if message not in warnings:
             warnings.append(message)
@@ -492,14 +510,14 @@ def _replace_reference_aliases(
 def _compile_scheduled_reference_prompt(
         schedule: Any, scene: int, scene_count: int,
         prompt: Any,
-        strict_reference_tags: bool = True) -> tuple[str, str, dict[str, Any]]:
+        compliance_mode: str = "strict") -> tuple[str, str, dict[str, Any]]:
     bindings = _active_reference_bindings(schedule, scene, scene_count)
+    mode = _reference_compliance_mode(compliance_mode)
     normalized_prompt = str(prompt or "").replace(
         "\r\n", "\n").replace("\r", "\n").strip()
     warnings: list[str] = []
     compiled_body = _replace_reference_aliases(
-        normalized_prompt, bindings, scene,
-        bool(strict_reference_tags), warnings)
+        normalized_prompt, bindings, scene, mode, warnings)
     mapping_lines = []
     for item in bindings["presentation"]:
         mapping_lines.append("@%s -> %s" % (
@@ -510,6 +528,9 @@ def _compile_scheduled_reference_prompt(
         else "no scheduled references")
     if warnings:
         summary += "; warning-only: %s" % " ".join(warnings)
+    elif mode == "disabled":
+        summary += "; prompt compliance disabled; @tags passed unchanged"
+    bindings["compliance_mode"] = mode
     bindings["compliance_warnings"] = warnings
     return compiled_body, summary, bindings
 
@@ -2263,19 +2284,25 @@ class MiniMaxH3ScheduledReferenceToVideo:
                                "uses its high-fidelity 2048px-short-edge path."}),
             },
             "optional": {
-                "strict_reference_tags": ("BOOLEAN", {
-                    "default": True,
-                    "label_on": "strict: block",
-                    "label_off": "warn only: generate",
-                    "tooltip": "When enabled, an unknown @tag or a scheduled "
-                               "tag inactive in the current scene blocks the "
-                               "workflow before sampling. Disable it to log a "
-                               "compliance warning and pass unresolved @tag "
-                               "text to H3 unchanged. Reference count, media, "
-                               "shape, and checkpoint safety checks remain "
-                               "strict."}),
+                "prompt_compliance": (list(REFERENCE_COMPLIANCE_MODES), {
+                    "default": "strict",
+                    "tooltip": "strict: compile active @tags and block unknown "
+                               "or inactive tags. soft: compile active tags but "
+                               "warn and preserve unresolved tags. disabled: "
+                               "perform no @tag compilation or checking and "
+                               "pass the prompt unchanged. This setting does "
+                               "not bypass media tensor, reference capacity, "
+                               "shape, or checkpoint safety requirements."}),
             },
         }
+
+    @classmethod
+    def VALIDATE_INPUTS(cls, prompt_compliance="strict"):
+        try:
+            _reference_compliance_mode(prompt_compliance)
+        except ValueError as exc:
+            return str(exc)
+        return True
 
     RETURN_TYPES = ("CONDITIONING", "LATENT", "STRING", "STRING", "STRING")
     RETURN_NAMES = (
@@ -2303,13 +2330,13 @@ class MiniMaxH3ScheduledReferenceToVideo:
 
     def apply(self, clip, vae, audio_vae, reference_schedule, clip_index,
               clip_count, prompt, width, height, length,
-              ref_image_size="match", strict_reference_tags=True):
+              ref_image_size="match", prompt_compliance="strict"):
         if GraphBuilder is None:
             raise RuntimeError(
                 "Scheduled H3 Ref2VA requires ComfyUI GraphBuilder.")
         compiled, summary, bindings = _compile_scheduled_reference_prompt(
             reference_schedule, clip_index, clip_count, prompt,
-            strict_reference_tags)
+            prompt_compliance)
         graph = GraphBuilder()
         ref2va = graph.node("MiniMaxH3ReferenceToVideo", "ScheduledRef2VA")
         for key, value in (

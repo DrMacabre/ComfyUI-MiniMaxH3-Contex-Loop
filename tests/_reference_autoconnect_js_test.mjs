@@ -11,6 +11,7 @@ import {
     collectReferenceInputs,
     convertCoreRef2VA,
     migrateLegacyVideoScheduleWidgets,
+    migrateReferenceComplianceWidget,
 } from "../web/h3_reference_autoconnect_core.mjs";
 
 class FakeNode {
@@ -109,7 +110,7 @@ function schema(type) {
         ], ["positive", "latent", "compiled_prompt", "active_references",
             "schedule_fingerprint"], [
             ["prompt", ""], ["width", 960], ["height", 544], ["length", 124],
-            ["ref_image_size", "match"],
+            ["ref_image_size", "match"], ["prompt_compliance", "strict"],
         ]);
     }
     if (type === PICTURE_REF_TYPE) {
@@ -262,11 +263,20 @@ assert.equal(migrateLegacyVideoScheduleWidgets(migratedVideo, {
 assert.equal(migratedVideo.widgets.find(
     (item) => item.name === "audio_tag").value, "performance_audio");
 
+const migratedCompliance = schema(SCHEDULED_REF2VA_TYPE);
+migratedCompliance.widgets.find(
+    (item) => item.name === "prompt_compliance").value = false;
+assert.equal(migrateReferenceComplianceWidget(migratedCompliance), true);
+assert.equal(migratedCompliance.widgets.find(
+    (item) => item.name === "prompt_compliance").value, "soft");
+assert.equal(migrateReferenceComplianceWidget(migratedCompliance), false);
+
 const extensionSource = fs.readFileSync(
     new URL("../web/h3_reference_autoconnect.js", import.meta.url), "utf8");
 assert.match(extensionSource, /Convert to MiniMax H3 Scheduled Ref2VA/);
 assert.match(extensionSource, /beforeRegisterNodeDef/);
 assert.match(extensionSource, /migrateLegacyVideoScheduleWidgets/);
+assert.match(extensionSource, /migrateReferenceComplianceWidget/);
 assert.match(extensionSource, /LiteGraph\?\.createNode/);
 
 console.log("H3 Ref2VA autoconnector: references, loop sockets, outputs, and fingerprint safety pass");

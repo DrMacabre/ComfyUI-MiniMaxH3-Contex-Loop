@@ -109,16 +109,31 @@ warning_prompt, warning_summary, warning_bindings = (
     chain._compile_scheduled_reference_prompt(
         schedule(), 1, 14,
         "Resolve @hero_face; preserve @missing and @missing.",
-        strict_reference_tags=False))
+        compliance_mode="soft"))
 assert warning_prompt == (
     "Resolve <Picture 1>; preserve @missing and @missing.")
 assert len(warning_bindings["compliance_warnings"]) == 1
 assert "unknown scheduled reference tag @missing" in warning_summary
-strict_tag_options = (
+compliance_options = (
     chain.MiniMaxH3ScheduledReferenceToVideo.INPUT_TYPES()["optional"]
-    ["strict_reference_tags"][1])
-assert strict_tag_options["default"] is True
-assert strict_tag_options["label_off"] == "warn only: generate"
+    ["prompt_compliance"])
+assert compliance_options[0] == ["strict", "soft", "disabled"]
+assert compliance_options[1]["default"] == "strict"
+disabled_prompt, disabled_summary, disabled_bindings = (
+    chain._compile_scheduled_reference_prompt(
+        schedule(), 1, 14,
+        "Leave @hero_face and @missing entirely to the user.",
+        compliance_mode="disabled"))
+assert disabled_prompt == "Leave @hero_face and @missing entirely to the user."
+assert disabled_bindings["compliance_warnings"] == []
+assert disabled_bindings["compliance_mode"] == "disabled"
+assert "@tags passed unchanged" in disabled_summary
+assert chain._reference_compliance_mode(True) == "strict"
+assert chain._reference_compliance_mode(False) == "soft"
+assert chain.MiniMaxH3ScheduledReferenceToVideo.VALIDATE_INPUTS(True) is True
+assert chain.MiniMaxH3ScheduledReferenceToVideo.VALIDATE_INPUTS(False) is True
+assert "must be strict, soft, or disabled" in (
+    chain.MiniMaxH3ScheduledReferenceToVideo.VALIDATE_INPUTS("unknown"))
 
 picture_inputs = chain.MiniMaxH3ScheduledPictureReference.INPUT_TYPES()[
     "required"]

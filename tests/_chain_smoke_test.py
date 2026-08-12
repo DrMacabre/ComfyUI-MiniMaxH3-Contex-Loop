@@ -692,7 +692,7 @@ def main():
         chain._compile_scheduled_reference_prompt(
             picture_only, 1, 2,
             "Keep @unknown and @unknown; resolve @single.",
-            strict_reference_tags=False))
+            compliance_mode="soft"))
     assert warning_prompt == (
         "Keep @unknown and @unknown; resolve <Picture 1>.")
     assert len(warning_bindings["compliance_warnings"]) == 1
@@ -700,10 +700,17 @@ def main():
     inactive_prompt, _, inactive_bindings = (
         chain._compile_scheduled_reference_prompt(
             picture_only, 2, 2, "Keep @single here.",
-            strict_reference_tags=False))
+            compliance_mode="soft"))
     assert inactive_prompt == "Keep @single here."
     assert "not active in scene 2" in (
         inactive_bindings["compliance_warnings"][0])
+    disabled_prompt, disabled_summary, disabled_bindings = (
+        chain._compile_scheduled_reference_prompt(
+            picture_only, 1, 2, "Leave @single and @unknown unchanged.",
+            compliance_mode="disabled"))
+    assert disabled_prompt == "Leave @single and @unknown unchanged."
+    assert disabled_bindings["compliance_warnings"] == []
+    assert "prompt compliance disabled" in disabled_summary
     try:
         audio_node.add(
             voice_audio, "hero", "", previous=picture_schedule)

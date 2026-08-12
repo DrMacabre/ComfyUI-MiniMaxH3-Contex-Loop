@@ -73,6 +73,15 @@ export function migrateLegacyVideoScheduleWidgets(node, info) {
     return setWidget(node, "audio_tag", values[3] ?? "");
 }
 
+export function migrateReferenceComplianceWidget(node) {
+    if (nodeType(node) !== SCHEDULED_REF2VA_TYPE) return false;
+    const target = widget(node, "prompt_compliance");
+    if (!target || typeof target.value !== "boolean") return false;
+    target.value = target.value ? "strict" : "soft";
+    target.callback?.(target.value);
+    return true;
+}
+
 function copyWidget(oldNode, newNode, name) {
     const source = widget(oldNode, name);
     const target = widget(newNode, name);

@@ -1,9 +1,11 @@
 import {app} from "/scripts/app.js";
 import {
     CORE_REF2VA_TYPE,
+    SCHEDULED_REF2VA_TYPE,
     VIDEO_REF_TYPE,
     convertCoreRef2VA,
     migrateLegacyVideoScheduleWidgets,
+    migrateReferenceComplianceWidget,
 } from "./h3_reference_autoconnect_core.mjs";
 
 const EXTENSION = "minimax_h3_context_loop.reference_autoconnect";
@@ -49,6 +51,14 @@ app.registerExtension({
             nodeType.prototype.onConfigure = function (info) {
                 const result = originalConfigure?.apply(this, arguments);
                 migrateLegacyVideoScheduleWidgets(this, info);
+                return result;
+            };
+        }
+        if (nodeData.name === SCHEDULED_REF2VA_TYPE) {
+            const originalConfigure = nodeType.prototype.onConfigure;
+            nodeType.prototype.onConfigure = function () {
+                const result = originalConfigure?.apply(this, arguments);
+                migrateReferenceComplianceWidget(this);
                 return result;
             };
         }
