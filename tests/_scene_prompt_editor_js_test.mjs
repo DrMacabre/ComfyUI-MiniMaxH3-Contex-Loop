@@ -72,5 +72,15 @@ assert.match(source, /empty assistant draft cannot replace/i);
 assert.match(source, /Undo last apply/);
 assert.match(source, /assistant\.client\?\.close\(\)/);
 assert.match(source, /window\.setInterval\(\(\) => loadPlan\(false\), 500\)/);
+assert.match(source, /h3_prompt_history_core\.mjs/);
+assert.match(source, /promptRevisionNavigation/);
+assert.match(source, /promptRevisionLabel/);
+assert.match(source, /\/minimax_h3_context_loop\/prompt-history/);
+assert.match(source, /action: "save"/);
+assert.match(source, /action: "activate"/);
+assert.match(source, /scheduleHistoryDraft\(shotId, textarea\.value\)/);
+assert.match(source, /navigation\.position.*navigation\.total/);
+assert.match(source, /Loading prompt versions/);
+assert.match(source, /runName === state\.lastRunName/);
 
 console.log("H3 Scene Prompt companion: Plan synchronization and controls pass");

@@ -76,6 +76,7 @@ from .nodes import (
     _resize,
     _streams_from_latent,
 )
+from .prompt_history import PromptHistoryStore
 
 
 _LOG = logging.getLogger("minimax_h3_context_loop.chain")
@@ -2967,6 +2968,16 @@ class MiniMaxH3ChainCurrent:
             "shot_id": str(shot["id"]),
             "seed": str(shot["seed"]),
         }
+        # Prompt history is supplementary recovery data and must never block a
+        # generation. Mark the exact scene prompt immutable as soon as this
+        # execution reaches Current Shot; subsequent editor changes branch
+        # from it while the Plan JSON remains compact.
+        try:
+            PromptHistoryStore(_output_root()).mark_executed(
+                plan["run_name"], shot["id"], shot.get("scene_prompt", ""))
+        except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            _LOG.warning("H3 prompt history could not mark scene %s executed: %s",
+                         shot["id"], exc)
         return {
             "ui": {"h3_chain_active_scene": [active_scene]},
             "result": result,
@@ -5006,6 +5017,54 @@ async def _open_run_folder(request):
     return web.json_response(payload)
 
 
+async def _get_prompt_history(request):
+    run_name = request.query.get("run_name", "")
+    scene_id = request.query.get("scene_id", "")
+    revision = request.query.get("revision", "")
+    store = PromptHistoryStore(_output_root())
+    try:
+        if revision:
+            payload = await asyncio.to_thread(
+                store.get, run_name, scene_id, revision)
+        else:
+            payload = await asyncio.to_thread(store.list, run_name, scene_id)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        return web.json_response({"error": str(exc)}, status=400)
+    return web.json_response(payload)
+
+
+async def _update_prompt_history(request):
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response(
+            {"error": "The prompt-history request must contain JSON."},
+            status=400)
+    if not isinstance(body, dict):
+        return web.json_response(
+            {"error": "The prompt-history request must contain a JSON object."},
+            status=400)
+    action = str(body.get("action") or "")
+    store = PromptHistoryStore(_output_root())
+    try:
+        if action == "save":
+            payload = await asyncio.to_thread(
+                store.save_draft,
+                body.get("run_name"), body.get("scene_id"),
+                body.get("prompt", ""), body.get("parent_revision"))
+        elif action == "activate":
+            payload = await asyncio.to_thread(
+                store.activate,
+                body.get("run_name"), body.get("scene_id"),
+                body.get("revision"))
+        else:
+            return web.json_response(
+                {"error": "Unknown prompt-history action."}, status=400)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        return web.json_response({"error": str(exc)}, status=400)
+    return web.json_response(payload)
+
+
 if (PromptServer is not None and web is not None and
         getattr(PromptServer, "instance", None) is not None):
     PromptServer.instance.routes.post(
@@ -5016,6 +5075,10 @@ if (PromptServer is not None and web is not None and
         "/minimax_h3_context_loop/checkpoints")(_list_saved_checkpoints)
     PromptServer.instance.routes.post(
         "/minimax_h3_context_loop/open-run-folder")(_open_run_folder)
+    PromptServer.instance.routes.get(
+        "/minimax_h3_context_loop/prompt-history")(_get_prompt_history)
+    PromptServer.instance.routes.post(
+        "/minimax_h3_context_loop/prompt-history")(_update_prompt_history)
 
 
 CHAIN_NODE_CLASS_MAPPINGS = {

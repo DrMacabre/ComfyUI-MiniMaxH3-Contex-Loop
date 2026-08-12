@@ -17,6 +17,10 @@ import {
     promptSourceRevision,
 } from "./h3_prompt_assistant_core.mjs";
 import {PromptAssistantClient} from "./h3_prompt_assistant_client.mjs";
+import {
+    promptRevisionLabel,
+    promptRevisionNavigation,
+} from "./h3_prompt_history_core.mjs";
 import {availableReferenceRecords} from "./h3_reference_preview_core.mjs";
 
 // The compact @ reference and # dialogue authoring interactions are inspired
@@ -108,6 +112,18 @@ function injectStyles() {
             white-space:pre-wrap; overflow-wrap:anywhere; }
         .h3sp-ref-preview-title { color:var(--h3sp-text); font-weight:700; }
         .h3sp-footer { justify-content:space-between; color:var(--h3sp-muted); }
+        .h3sp-history { min-height:28px; display:flex; align-items:center;
+            justify-content:flex-end; gap:6px; color:var(--h3sp-muted); }
+        .h3sp-history-nav { display:flex; align-items:center; gap:2px;
+            border:1px solid color-mix(in srgb,var(--h3sp-border) 72%,transparent);
+            border-radius:999px; padding:1px 3px; background:var(--comfy-input-bg,#11141a); }
+        .h3sp-history-nav button { min-width:25px; padding:2px 5px; border:0;
+            border-radius:999px; background:transparent; }
+        .h3sp-history-count { min-width:42px; text-align:center; color:var(--h3sp-text);
+            font-variant-numeric:tabular-nums; }
+        .h3sp-history-meta { min-width:0; max-width:70%; overflow:hidden;
+            text-overflow:ellipsis; white-space:nowrap; font-size:11px; }
+        .h3sp-history-error { color:#ffb3b3; }
         .h3sp-error { padding:12px; border:1px solid #a76565; border-radius:6px;
             color:#ffb3b3; background:#351f24; white-space:pre-wrap; }
         .h3sp-assist { flex:0 0 auto; display:flex; flex-direction:column; gap:7px;
@@ -343,6 +359,7 @@ function mount(node) {
         planNode: null,
         planWidget: null,
         lastValue: "",
+        lastRunName: "",
         active: Math.max(0, Number(node.properties[ACTIVE_SCENE_PROPERTY]) || 0),
         fontSize: clamp(
             node.properties[FONT_SIZE_PROPERTY], MIN_FONT_SIZE, MAX_FONT_SIZE,
@@ -371,6 +388,20 @@ function mount(node) {
             reconnectTimer: null,
             lastApplied: null,
             providers: null,
+            error: "",
+        },
+        history: {
+            sceneKey: "",
+            data: null,
+            revisionId: null,
+            host: null,
+            textarea: null,
+            status: null,
+            loadToken: 0,
+            loadPromise: null,
+            saveTimer: null,
+            pendingDraft: null,
+            savePromise: null,
             error: "",
         },
         pollTimer: null,
@@ -423,6 +454,208 @@ function mount(node) {
         state.planNode.graph?.setDirtyCanvas?.(true, true);
         if (status) status.textContent = "Saved to connected Plan";
         dirty();
+    }
+
+    function planRunName() {
+        return String(state.planNode?.widgets?.find(
+            (item) => item.name === "run_name",
+        )?.value ?? "").trim();
+    }
+
+    function historySceneKey(runName, shotId) {
+        return `${runName}\u0000${shotId}`;
+    }
+
+    async function historyRequest(query = {}, body = null) {
+        const suffix = new URLSearchParams(query).toString();
+        const response = await api.fetchApi(
+            `/minimax_h3_context_loop/prompt-history${suffix ? `?${suffix}` : ""}`,
+            body == null ? undefined : {
+                method: "POST",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify(body),
+            },
+        );
+        let payload = {};
+        try {
+            payload = await response.json();
+        } catch (_error) {
+            // A proxy can replace a backend error with a non-JSON response.
+        }
+        if (!response.ok) {
+            throw new Error(payload.error || `Prompt history request failed (HTTP ${response.status}).`);
+        }
+        return payload;
+    }
+
+    function renderHistory() {
+        const history = state.history;
+        const host = history.host;
+        if (!host) return;
+        host.replaceChildren();
+        if (history.error) {
+            host.append(element("span", "h3sp-history-meta h3sp-history-error", history.error));
+            return;
+        }
+        if (!history.data) {
+            host.append(element("span", "h3sp-history-meta", "Loading prompt versions…"));
+            return;
+        }
+        const navigation = promptRevisionNavigation(history.data, history.revisionId);
+        const controls = element("span", "h3sp-history-nav");
+        const previous = button("‹", "Previous prompt version", () => {
+            if (navigation.previous) void selectHistoryRevision(navigation.previous.id);
+        });
+        const count = element(
+            "span", "h3sp-history-count",
+            `${navigation.position} / ${navigation.total}`,
+        );
+        const next = button("›", "Next prompt version", () => {
+            if (navigation.next) void selectHistoryRevision(navigation.next.id);
+        });
+        previous.disabled = !navigation.previous;
+        next.disabled = !navigation.next;
+        controls.append(previous, count, next);
+        const metadata = element(
+            "span", "h3sp-history-meta", promptRevisionLabel(navigation),
+        );
+        metadata.title = metadata.textContent;
+        host.append(controls, metadata);
+    }
+
+    async function loadHistory(shotId, prompt, synchronize = true) {
+        const runName = planRunName();
+        const history = state.history;
+        const key = historySceneKey(runName, shotId);
+        const token = ++history.loadToken;
+        history.sceneKey = key;
+        history.data = null;
+        history.revisionId = null;
+        history.error = "";
+        renderHistory();
+        if (!runName) {
+            history.error = "Set a Plan run_name to enable prompt history.";
+            renderHistory();
+            return;
+        }
+        const request = synchronize
+            ? historyRequest({}, {
+                action: "save",
+                run_name: runName,
+                scene_id: shotId,
+                prompt,
+                parent_revision: null,
+            })
+            : historyRequest({run_name: runName, scene_id: shotId});
+        history.loadPromise = request;
+        try {
+            const payload = await request;
+            if (token !== history.loadToken || history.sceneKey !== key) return;
+            history.data = payload.history ?? payload;
+            history.revisionId = payload.revision?.id
+                ?? history.data.active_revision ?? history.revisionId;
+            history.error = "";
+        } catch (error) {
+            if (token !== history.loadToken || history.sceneKey !== key) return;
+            history.error = error?.message || String(error);
+        } finally {
+            if (history.loadPromise === request) history.loadPromise = null;
+            if (token === history.loadToken && history.sceneKey === key) renderHistory();
+        }
+    }
+
+    function scheduleHistoryDraft(shotId, prompt) {
+        const history = state.history;
+        const runName = planRunName();
+        if (!runName) return;
+        history.pendingDraft = {
+            key: historySceneKey(runName, shotId),
+            runName,
+            shotId,
+            prompt,
+        };
+        history.error = "";
+        if (history.saveTimer != null) window.clearTimeout(history.saveTimer);
+        history.saveTimer = window.setTimeout(() => {
+            history.saveTimer = null;
+            void flushHistoryDraft();
+        }, 650);
+    }
+
+    async function flushHistoryDraft() {
+        const history = state.history;
+        if (history.saveTimer != null) {
+            window.clearTimeout(history.saveTimer);
+            history.saveTimer = null;
+        }
+        if (history.savePromise) {
+            await history.savePromise;
+            return history.pendingDraft ? flushHistoryDraft() : undefined;
+        }
+        const draft = history.pendingDraft;
+        if (!draft) return;
+        history.pendingDraft = null;
+        if (history.loadPromise && history.sceneKey === draft.key) {
+            await history.loadPromise;
+        }
+        const parent = history.sceneKey === draft.key ? history.revisionId : null;
+        const request = historyRequest({}, {
+            action: "save",
+            run_name: draft.runName,
+            scene_id: draft.shotId,
+            prompt: draft.prompt,
+            parent_revision: parent,
+        });
+        history.savePromise = request;
+        try {
+            const payload = await request;
+            if (history.sceneKey === draft.key) {
+                history.data = payload.history;
+                history.revisionId = payload.revision?.id ?? payload.history?.active_revision;
+                history.error = "";
+                renderHistory();
+            }
+        } catch (error) {
+            if (history.sceneKey === draft.key) {
+                history.error = error?.message || String(error);
+                renderHistory();
+            }
+        } finally {
+            if (history.savePromise === request) history.savePromise = null;
+        }
+        if (history.pendingDraft) await flushHistoryDraft();
+    }
+
+    async function selectHistoryRevision(revisionId) {
+        await flushHistoryDraft();
+        const history = state.history;
+        const shot = state.plan?.shots?.[state.active];
+        if (!shot || !history.textarea) return;
+        const shotId = String(shot.id || `clip_${String(state.active + 1).padStart(4, "0")}`);
+        const runName = planRunName();
+        const key = historySceneKey(runName, shotId);
+        try {
+            const payload = await historyRequest({}, {
+                action: "activate",
+                run_name: runName,
+                scene_id: shotId,
+                revision: revisionId,
+            });
+            if (history.sceneKey !== key) return;
+            history.data = payload.history;
+            history.revisionId = payload.revision.id;
+            history.error = "";
+            history.textarea.value = String(payload.revision.prompt ?? "");
+            shot.prompt = promptTextToLines(history.textarea.value);
+            writePlan(history.status);
+            if (history.status) history.status.textContent = "Loaded prompt version";
+            renderHistory();
+            history.textarea.focus();
+        } catch (error) {
+            if (history.sceneKey !== key) return;
+            history.error = error?.message || String(error);
+            renderHistory();
+        }
     }
 
     function messagesForProvider(provider = assistant.provider) {
@@ -949,6 +1182,9 @@ function mount(node) {
 
     function showFailure(message) {
         assistant.host = null;
+        state.history.host = null;
+        state.history.textarea = null;
+        state.history.status = null;
         root.replaceChildren();
         root.append(
             element("div", "h3sp-title", "MiniMax H3 Scene Prompt Editor"),
@@ -959,11 +1195,14 @@ function mount(node) {
 
     function navigate(offset, absolute = null) {
         if (!state.plan?.shots?.length) return;
-        const requested = absolute == null ? state.active + offset : Number(absolute);
-        state.active = Math.max(0, Math.min(state.plan.shots.length - 1, requested));
-        persistView();
-        render();
-        root.querySelector(".h3sp-textarea")?.focus();
+        void (async () => {
+            await flushHistoryDraft();
+            const requested = absolute == null ? state.active + offset : Number(absolute);
+            state.active = Math.max(0, Math.min(state.plan.shots.length - 1, requested));
+            persistView();
+            render();
+            root.querySelector(".h3sp-textarea")?.focus();
+        })();
     }
 
     function showReferencePreview(record, preview) {
@@ -1137,10 +1376,15 @@ function mount(node) {
         );
         const status = element("span", "", "Synchronized with Plan");
         footer.append(identity, status);
+        const historyHost = element("div", "h3sp-history");
+        state.history.host = historyHost;
+        state.history.textarea = textarea;
+        state.history.status = status;
 
         textarea.addEventListener("input", () => {
             shot.prompt = promptTextToLines(textarea.value);
             writePlan(status);
+            scheduleHistoryDraft(shotId, textarea.value);
             refreshAssistant();
         });
         textarea.addEventListener("keydown", (event) => {
@@ -1161,7 +1405,7 @@ function mount(node) {
             }
         });
 
-        root.append(head, nav, tools, refs, textarea);
+        root.append(head, nav, tools, refs, textarea, historyHost);
         if (PROMPT_ASSISTANT_ENABLED) {
             const assistantHost = element("div", "h3sp-assist");
             assistant.host = assistantHost;
@@ -1169,6 +1413,7 @@ function mount(node) {
             root.append(assistantHost);
         }
         root.append(footer);
+        void loadHistory(shotId, textarea.value);
     }
 
     function loadPlan(force = false) {
@@ -1180,17 +1425,23 @@ function mount(node) {
                 state.planNode = null;
                 state.planWidget = null;
                 state.lastValue = "";
+                state.lastRunName = "";
                 showFailure("No connected H3 Chain Plan was found.");
             }
             return;
         }
         const value = String(planWidget.value ?? "");
-        if (!force && planNode === state.planNode && value === state.lastValue) return;
+        const runName = String(planNode.widgets?.find(
+            (item) => item.name === "run_name",
+        )?.value ?? "").trim();
+        if (!force && planNode === state.planNode && value === state.lastValue
+            && runName === state.lastRunName) return;
         try {
             state.plan = parsePlanJson(value);
             state.planNode = planNode;
             state.planWidget = planWidget;
             state.lastValue = value;
+            state.lastRunName = runName;
             render();
         } catch (error) {
             showFailure(`Connected Plan JSON is invalid:\n${error.message}`);
@@ -1227,9 +1478,28 @@ function mount(node) {
         setTimeout(() => loadPlan(true), 0);
         return result;
     };
+    const onPromptExecuted = (event) => {
+        const values = event.detail?.output?.h3_chain_active_scene;
+        const scene = Array.isArray(values) ? values.at(-1) : null;
+        if (!scene || String(scene.run_name ?? "") !== planRunName()) return;
+        const shot = state.plan?.shots?.[state.active];
+        const shotId = String(shot?.id ?? "");
+        if (!shotId || String(scene.shot_id ?? "") !== shotId) return;
+        // Current Shot marks the revision on the backend before emitting this
+        // event. Reload only the lightweight index; prompt content stays lazy.
+        window.setTimeout(() => {
+            if (state.history.sceneKey === historySceneKey(planRunName(), shotId)) {
+                void loadHistory(shotId, promptValueToText(shot.prompt), false);
+            }
+        }, 50);
+    };
+    api.addEventListener("executed", onPromptExecuted);
+
     const removed = node.onRemoved;
     node.onRemoved = function () {
         if (state.pollTimer != null) window.clearInterval(state.pollTimer);
+        api.removeEventListener("executed", onPromptExecuted);
+        void flushHistoryDraft();
         if (PROMPT_ASSISTANT_ENABLED) {
             assistant.preparingRequest = null;
             clearAssistantReconnect();

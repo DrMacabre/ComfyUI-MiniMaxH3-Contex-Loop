@@ -20,6 +20,11 @@ huge cumulative image tensor.
 Newest first. Recent additions stay visible; older milestones are folded away
 so this page remains a useful starting point rather than a changelog wall.
 
+- **v0.3.23 — Branching scene-prompt history.** The Scene Prompt Editor keeps
+  lazy per-scene prompt revisions outside the workflow and Plan JSON. Its
+  compact ChatGPT-style `‹ 2 / 5 ›` control swaps versions, shows a light
+  timestamp/execution state, and creates a child branch when an executed
+  version is edited.
 - **v0.3.22 — Optional floating reroll control.** A ComfyUI setting under
   **MiniMax H3 Contex Loop → Interface → Cancel & reroll** can hide and disable
   the floating in-progress Cancel & reroll action. Review Gate retry and reroll
@@ -415,6 +420,16 @@ inside the connected Plan—there is no duplicate prompt storage. Use the arrow
 buttons or `Alt+Left/Right` to move between scenes, `@` for Picture/Video/Audio
 reference tags, `#` for dialogue tags, and `A−`/`A+` for a persistent font size.
 The node may sit inline before Loop Start or on an editor-only branch.
+
+Below the textarea, prompt history uses a compact `‹ current / total ›`
+variant selector. Typing updates one draft instead of producing a revision per
+keystroke. When Current Shot executes, that exact prompt becomes immutable;
+editing it creates a child branch. Selecting an older number restores that
+prompt into the active scene. Its light label reports Draft/Executed, timestamp,
+and branch parent. The readable Plan JSON still contains only the active
+prompt. History is loaded only for the selected scene and stored as a small
+index plus one human-readable file per revision under
+`output/h3_chains/<run_name>/prompt_history/<scene_id>/`.
 
 ### Prompt Assistant (Codex or Hermes)
 
