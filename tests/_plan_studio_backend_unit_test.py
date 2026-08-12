@@ -71,15 +71,12 @@ async def check():
                 "segment": str(segment.relative_to(temporary)),
                 "checkpoint": str(checkpoint.relative_to(temporary)),
                 "segment_sha256": video_hash,
-                "raw_frames": 362,
-                "delivered_frames": 340,
             },
         }), encoding="utf-8")
 
         first = await chain._list_saved_checkpoints(Request())
         first_payload = json.loads(first.text)
         assert first_payload["checkpoints"][0]["ready"] is True
-        assert first_payload["checkpoints"][0]["delivered_frames"] == 340
         assert "preview_video" not in first_payload["checkpoints"][0]
 
         preview = reviews / (

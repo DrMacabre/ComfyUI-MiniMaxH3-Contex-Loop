@@ -5359,12 +5359,6 @@ async def _list_saved_checkpoints(request):
             {"error": "A non-empty H3 chain run_name is required."}, status=400)
     checkpoint_dir = os.path.join(
         _output_root(), "h3_chains", run_name, "checkpoints")
-    review_dir = os.path.join(
-        _output_root(), "h3_chains", run_name, "reviews")
-    try:
-        review_filenames = os.listdir(review_dir) if os.path.isdir(review_dir) else []
-    except OSError:
-        review_filenames = []
     checkpoints = []
     if os.path.isdir(checkpoint_dir):
         for filename in sorted(os.listdir(checkpoint_dir)):
@@ -5388,29 +5382,23 @@ async def _list_saved_checkpoints(request):
                     "scene_id": str(segment.get("id") or "clip_%04d" % index),
                     "resume_scene": index + 1,
                     "ready": ready,
-                    "raw_frames": int(segment.get("raw_frames", 0)),
-                    "delivered_frames": int(segment.get("delivered_frames", 0)),
                 }
                 if os.path.isfile(segment_path):
                     item["video"] = _video_output_item(segment_path)
+                    review_dir = os.path.join(
+                        _output_root(), "h3_chains", run_name, "reviews")
                     video_hash = str(segment.get("segment_sha256") or "")[:12]
                     review_prefix = "clip_%04d.%s." % (index, video_hash)
-                    if video_hash and review_filenames:
-                        previews = []
-                        for candidate in review_filenames:
-                            if (not candidate.startswith(review_prefix) or
-                                    not candidate.endswith(".review.mp4")):
-                                continue
-                            preview_path = os.path.join(review_dir, candidate)
-                            try:
-                                previews.append(
-                                    (os.path.getmtime(preview_path), preview_path))
-                            except OSError:
-                                # Review replacement is atomic, but its old
-                                # revision can disappear during this read.
-                                continue
+                    if video_hash and os.path.isdir(review_dir):
+                        previews = [
+                            os.path.join(review_dir, candidate)
+                            for candidate in os.listdir(review_dir)
+                            if candidate.startswith(review_prefix)
+                            and candidate.endswith(".review.mp4")
+                            and os.path.isfile(os.path.join(review_dir, candidate))
+                        ]
                         if previews:
-                            newest = max(previews, key=lambda item: item[0])[1]
+                            newest = max(previews, key=os.path.getmtime)
                             item["preview_video"] = _video_output_item(newest)
                 partial_path = os.path.join(
                     _output_root(), "h3_chains", run_name, "final",
