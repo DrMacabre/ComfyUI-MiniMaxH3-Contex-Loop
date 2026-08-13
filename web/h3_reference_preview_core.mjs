@@ -3,6 +3,7 @@ export const TAGGED_REF2VA_TYPE = "MiniMaxH3TaggedReferenceToVideo";
 export const CORE_REF2VA_TYPE = "MiniMaxH3ReferenceToVideo";
 export const IMAGE_TO_VIDEO_TYPE = "MiniMaxH3ImageToVideo";
 export const FIRST_SCENE_IMAGE_TYPE = "MiniMaxH3ChainFirstSceneImage";
+export const FRAME_INDEX_SWITCH_TYPE = "MiniMaxH3ChainFrameIndexSwitch";
 export const PICTURE_REF_TYPE = "MiniMaxH3ScheduledPictureReference";
 export const VIDEO_REF_TYPE = "MiniMaxH3ScheduledVideoReference";
 export const AUDIO_REF_TYPE = "MiniMaxH3ScheduledAudioReference";
@@ -33,10 +34,15 @@ export function referenceTag(value) {
     return String(value ?? "").trim().replace(/^@+/, "");
 }
 
-function inputSource(node, name) {
+function inputConnection(node, name) {
     const input = node?.inputs?.find((item) => item.name === name);
     const link = input?.link == null ? null : node.graph?.links?.[input.link];
-    return link ? node.graph?.getNodeById?.(link.origin_id) ?? null : null;
+    const source = link ? node.graph?.getNodeById?.(link.origin_id) ?? null : null;
+    return source ? {source, originSlot: Number(link.origin_slot ?? 0)} : null;
+}
+
+function inputSource(node, name) {
+    return inputConnection(node, name)?.source ?? null;
 }
 
 function outputTargets(node) {
@@ -315,15 +321,47 @@ export function coreReferenceRecords(editorNode) {
     };
 }
 
+function selectedFrameSource(source, scene) {
+    if (nodeType(source) !== FRAME_INDEX_SWITCH_TYPE) return source;
+    const frames = [];
+    for (let index = 1; index <= 8; index += 1) {
+        const frame = inputSource(source, `frame_${index}`);
+        if (frame) frames.push(frame);
+    }
+    if (!frames.length) return source;
+    const requested = Math.max(1, Number.isFinite(Number(scene))
+        ? Math.trunc(Number(scene)) : 1);
+    return frames[(requested - 1) % frames.length];
+}
+
+function keyframePreviewSource(connection, role, scene) {
+    let source = connection?.source ?? null;
+    if (!source) return null;
+
+    // The frame gate exposes both first_frame and last_frame from the same
+    // node. Starting a generic upstream search at that node always encounters
+    // its opening `image` first, which made Picture 2 preview Picture 1. Follow
+    // the input that corresponds to the I2V socket instead.
+    if (nodeType(source) === FIRST_SCENE_IMAGE_TYPE) {
+        source = inputSource(source, role === "first" ? "image" : "last_frame")
+            ?? source;
+    }
+    return selectedFrameSource(source, scene);
+}
+
 export function imageToVideoReferenceRecords(editorNode, scene = 1) {
     const wrapper = findImageToVideo(editorNode);
     if (!wrapper) return {wrapper: null, mode: null, records: []};
-    const firstFrame = inputSource(wrapper, "first_frame");
-    const lastFrame = inputSource(wrapper, "last_frame");
+    const firstConnection = inputConnection(wrapper, "first_frame");
+    const lastConnection = inputConnection(wrapper, "last_frame");
+    const firstFrame = firstConnection?.source ?? null;
+    const lastFrame = lastConnection?.source ?? null;
     const records = [];
+    let firstActive = false;
     if (firstFrame) {
         const firstSceneOnly = nodeType(firstFrame) === FIRST_SCENE_IMAGE_TYPE;
         const active = !firstSceneOnly || Number(scene) === 1;
+        firstActive = active;
         records.push({
             node: wrapper,
             kind: "picture",
@@ -331,14 +369,14 @@ export function imageToVideoReferenceRecords(editorNode, scene = 1) {
             token: "<Picture 1>",
             selector: firstSceneOnly ? "1" : "all",
             active,
-            source: firstFrame,
+            source: keyframePreviewSource(firstConnection, "first", scene),
             label: "<Picture 1>",
             mode: "native",
             role: "first frame",
         });
     }
     if (lastFrame) {
-        const ordinal = firstFrame ? 2 : 1;
+        const ordinal = firstActive ? 2 : 1;
         records.push({
             node: wrapper,
             kind: "picture",
@@ -346,7 +384,7 @@ export function imageToVideoReferenceRecords(editorNode, scene = 1) {
             token: `<Picture ${ordinal}>`,
             selector: "all",
             active: true,
-            source: lastFrame,
+            source: keyframePreviewSource(lastConnection, "last", scene),
             label: `<Picture ${ordinal}>`,
             mode: "native",
             role: "last frame",

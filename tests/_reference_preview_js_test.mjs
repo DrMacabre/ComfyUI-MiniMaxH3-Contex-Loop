@@ -35,13 +35,16 @@ function add(node) {
     graph._nodes.push(node);
     return node;
 }
-function connect(source, target, targetName) {
+function connect(source, target, targetName, sourceSlot = 0) {
     const id = nextLink++;
-    source.outputs[0].links.push(id);
+    while (source.outputs.length <= sourceSlot) {
+        source.outputs.push({name: `output_${source.outputs.length}`, links: []});
+    }
+    source.outputs[sourceSlot].links.push(id);
     target.inputs.push({name: targetName, link: id});
     graph.links[id] = {
         origin_id: source.id,
-        origin_slot: 0,
+        origin_slot: sourceSlot,
         target_id: target.id,
         target_slot: target.inputs.length - 1,
     };
@@ -197,6 +200,45 @@ assert.deepEqual(
 );
 assert.equal(referencePreviewRecords(flEditor, 1).mode, "native_keyframes");
 
+const indexedEditor = add(makeNode(40, "MiniMaxH3ChainRichScenePromptEditor"));
+const indexedRelay = add(makeNode(41, "MiniMaxH3ChainCurrent"));
+const indexedFl2v = add(makeNode(42, "MiniMaxH3ImageToVideo"));
+const indexedGate = add(makeNode(43, "MiniMaxH3ChainFirstSceneImage"));
+const indexedSwitch = add(makeNode(44, "MiniMaxH3ChainFrameIndexSwitch"));
+const frameA = add(makeNode(45, "LoadImage", {image: "frame-a.png"}));
+const frameB = add(makeNode(46, "LoadImage", {image: "frame-b.png"}));
+connect(indexedEditor, indexedRelay, "state");
+connect(indexedRelay, indexedFl2v, "prompt");
+connect(frameA, indexedGate, "image");
+connect(frameB, indexedSwitch, "frame_1");
+connect(frameA, indexedSwitch, "frame_2");
+connect(indexedSwitch, indexedGate, "last_frame");
+connect(indexedGate, indexedFl2v, "first_frame", 0);
+connect(indexedGate, indexedFl2v, "last_frame", 3);
+
+const indexedSceneOne = imageToVideoReferenceRecords(indexedEditor, 1).records;
+assert.deepEqual(
+    indexedSceneOne.map(({token, role, source}) => ({token, role, source: source.id})),
+    [
+        {token: "<Picture 1>", role: "first frame", source: frameA.id},
+        {token: "<Picture 2>", role: "last frame", source: frameB.id},
+    ],
+);
+const indexedSceneTwo = imageToVideoReferenceRecords(indexedEditor, 2).records;
+assert.deepEqual(
+    indexedSceneTwo.map(({token, role, active, source}) => ({
+        token, role, active, source: source.id,
+    })),
+    [
+        {token: "<Picture 1>", role: "first frame", active: false, source: frameA.id},
+        {token: "<Picture 1>", role: "last frame", active: true, source: frameA.id},
+    ],
+);
+assert.deepEqual(
+    availableReferenceRecords(indexedEditor, 1).records.map(({source}) => source.id),
+    [frameA.id, frameB.id],
+);
+
 const i2vEditor = add(makeNode(24, "MiniMaxH3ChainScenePromptEditor"));
 const i2vRelay = add(makeNode(25, "MiniMaxH3ChainCurrent"));
 const i2v = add(makeNode(26, "MiniMaxH3ImageToVideo"));
@@ -212,7 +254,7 @@ assert.deepEqual(
             token, selector, active, source: source.type,
         })),
     [{token: "<Picture 1>", selector: "1", active: true,
-        source: "MiniMaxH3ChainFirstSceneImage"}],
+        source: "LoadImage"}],
 );
 assert.deepEqual(
     referencePreviewRecords(i2vEditor, 2).records
