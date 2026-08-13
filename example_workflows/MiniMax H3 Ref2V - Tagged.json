@@ -216,7 +216,7 @@
         1056
       ],
       "flags": {},
-      "order": 13,
+      "order": 23,
       "mode": 0,
       "inputs": [
         {
@@ -282,7 +282,7 @@
         26
       ],
       "flags": {},
-      "order": 11,
+      "order": 12,
       "mode": 0,
       "inputs": [
         {
@@ -318,7 +318,7 @@
         26
       ],
       "flags": {},
-      "order": 12,
+      "order": 13,
       "mode": 0,
       "inputs": [
         {
@@ -353,7 +353,7 @@
         192
       ],
       "flags": {},
-      "order": 17,
+      "order": 25,
       "mode": 0,
       "inputs": [
         {
@@ -421,7 +421,7 @@
         26
       ],
       "flags": {},
-      "order": 15,
+      "order": 16,
       "mode": 0,
       "inputs": [
         {
@@ -457,7 +457,7 @@
         26
       ],
       "flags": {},
-      "order": 16,
+      "order": 17,
       "mode": 0,
       "inputs": [
         {
@@ -492,7 +492,7 @@
         512
       ],
       "flags": {},
-      "order": 21,
+      "order": 27,
       "mode": 0,
       "inputs": [
         {
@@ -625,7 +625,7 @@
         256
       ],
       "flags": {},
-      "order": 22,
+      "order": 28,
       "mode": 2,
       "inputs": [
         {
@@ -709,7 +709,7 @@
         96
       ],
       "flags": {},
-      "order": 24,
+      "order": 29,
       "mode": 0,
       "inputs": [
         {
@@ -753,7 +753,7 @@
         544
       ],
       "flags": {},
-      "order": 25,
+      "order": 31,
       "mode": 0,
       "inputs": [
         {
@@ -775,6 +775,12 @@
           "name": "references",
           "type": "H3_TAGGED_REFERENCES",
           "link": 90
+        },
+        {
+          "name": "state",
+          "shape": 7,
+          "type": "H3_CHAIN_STATE",
+          "link": null
         },
         {
           "name": "clip_index",
@@ -870,6 +876,8 @@
         672,
         243,
         "match",
+        "strict",
+        "match",
         "strict"
       ],
       "color": "#346434",
@@ -887,7 +895,7 @@
         288
       ],
       "flags": {},
-      "order": 27,
+      "order": 32,
       "mode": 0,
       "inputs": [
         {
@@ -1001,7 +1009,7 @@
         26
       ],
       "flags": {},
-      "order": 23,
+      "order": 22,
       "mode": 0,
       "inputs": [
         {
@@ -1036,7 +1044,7 @@
         26
       ],
       "flags": {},
-      "order": 26,
+      "order": 24,
       "mode": 0,
       "inputs": [
         {
@@ -1072,7 +1080,7 @@
         96
       ],
       "flags": {},
-      "order": 29,
+      "order": 33,
       "mode": 0,
       "inputs": [
         {
@@ -1115,7 +1123,7 @@
         128
       ],
       "flags": {},
-      "order": 28,
+      "order": 30,
       "mode": 0,
       "inputs": [
         {
@@ -1165,7 +1173,7 @@
         672
       ],
       "flags": {},
-      "order": 30,
+      "order": 34,
       "mode": 0,
       "inputs": [
         {
@@ -1231,7 +1239,7 @@
         96
       ],
       "flags": {},
-      "order": 31,
+      "order": 35,
       "mode": 0,
       "inputs": [
         {
@@ -1274,7 +1282,7 @@
         96
       ],
       "flags": {},
-      "order": 32,
+      "order": 36,
       "mode": 0,
       "inputs": [
         {
@@ -1317,7 +1325,7 @@
         224
       ],
       "flags": {},
-      "order": 33,
+      "order": 37,
       "mode": 0,
       "inputs": [
         {
@@ -1407,7 +1415,7 @@
         288
       ],
       "flags": {},
-      "order": 34,
+      "order": 38,
       "mode": 0,
       "inputs": [
         {
@@ -1475,7 +1483,7 @@
         480
       ],
       "flags": {},
-      "order": 37,
+      "order": 41,
       "mode": 0,
       "inputs": [
         {
@@ -1524,7 +1532,7 @@
         64
       ],
       "flags": {},
-      "order": 10,
+      "order": 11,
       "mode": 0,
       "inputs": [
         {
@@ -1564,7 +1572,7 @@
         96
       ],
       "flags": {},
-      "order": 14,
+      "order": 15,
       "mode": 0,
       "inputs": [
         {
@@ -1605,7 +1613,7 @@
         320
       ],
       "flags": {},
-      "order": 36,
+      "order": 40,
       "mode": 0,
       "inputs": [
         {
@@ -1707,9 +1715,15 @@
         1600
       ],
       "flags": {},
-      "order": 8,
+      "order": 21,
       "mode": 0,
       "inputs": [
+        {
+          "name": "plan_json_input",
+          "shape": 7,
+          "type": "STRING",
+          "link": null
+        },
         {
           "name": "generation_fingerprint",
           "type": "STRING",
@@ -1764,7 +1778,9 @@
         "h3_chain_scene_colors": {},
         "h3_chain_plan_layout": {
           "promptHeights": {
-            "shared": 88
+            "shared": 88,
+            "scene:market_garden_descent": 112,
+            "scene:farmhouse_interior": 112
           }
         }
       },
@@ -1801,7 +1817,7 @@
         1376
       ],
       "flags": {},
-      "order": 35,
+      "order": 39,
       "mode": 0,
       "inputs": [
         {
@@ -1873,7 +1889,7 @@
         224
       ],
       "flags": {},
-      "order": 18,
+      "order": 26,
       "mode": 2,
       "inputs": [
         {
@@ -1936,7 +1952,7 @@
         320
       ],
       "flags": {},
-      "order": 9,
+      "order": 8,
       "mode": 0,
       "inputs": [],
       "outputs": [],
@@ -1954,7 +1970,7 @@
       "id": 1945,
       "type": "LoadImage",
       "pos": [
-        -3072,
+        -2048,
         -256
       ],
       "size": [
@@ -1962,7 +1978,7 @@
         448
       ],
       "flags": {},
-      "order": 38,
+      "order": 9,
       "mode": 0,
       "inputs": [],
       "outputs": [
@@ -1987,7 +2003,10 @@
       },
       "widgets_values": [
         "jigen_market_garden_doom_opening.png",
-        "image"
+        "image",
+        null,
+        null,
+        null
       ],
       "color": "#744c8c",
       "bgcolor": "rgba(24,24,27,.9)"
@@ -1996,7 +2015,7 @@
       "id": 1946,
       "type": "LoadImage",
       "pos": [
-        -2624,
+        -1600,
         -256
       ],
       "size": [
@@ -2004,7 +2023,7 @@
         448
       ],
       "flags": {},
-      "order": 39,
+      "order": 10,
       "mode": 0,
       "inputs": [],
       "outputs": [
@@ -2029,7 +2048,10 @@
       },
       "widgets_values": [
         "jigen_market_garden_doom_last.png",
-        "image"
+        "image",
+        null,
+        null,
+        null
       ],
       "color": "#744c8c",
       "bgcolor": "rgba(24,24,27,.9)"
@@ -2038,7 +2060,7 @@
       "id": 1947,
       "type": "MiniMaxH3TaggedPictureReference",
       "pos": [
-        -3072,
+        -2048,
         256
       ],
       "size": [
@@ -2046,7 +2068,7 @@
         192
       ],
       "flags": {},
-      "order": 40,
+      "order": 14,
       "mode": 0,
       "inputs": [
         {
@@ -2097,7 +2119,7 @@
       "id": 1948,
       "type": "MiniMaxH3TaggedPictureReference",
       "pos": [
-        -2624,
+        -1600,
         256
       ],
       "size": [
@@ -2105,7 +2127,7 @@
         192
       ],
       "flags": {},
-      "order": 41,
+      "order": 18,
       "mode": 0,
       "inputs": [
         {
@@ -2201,7 +2223,7 @@
       1702,
       4,
       110,
-      6,
+      7,
       "STRING"
     ],
     [
@@ -2209,7 +2231,7 @@
       1702,
       8,
       110,
-      7,
+      8,
       "INT"
     ],
     [
@@ -2217,7 +2239,7 @@
       1702,
       9,
       110,
-      8,
+      9,
       "INT"
     ],
     [
@@ -2225,7 +2247,7 @@
       1702,
       6,
       110,
-      9,
+      10,
       "INT"
     ],
     [
@@ -2657,7 +2679,7 @@
       1702,
       1,
       110,
-      4,
+      5,
       "INT"
     ],
     [
@@ -2665,7 +2687,7 @@
       1702,
       2,
       110,
-      5,
+      6,
       "INT"
     ],
     [
@@ -2673,7 +2695,7 @@
       1948,
       1,
       1700,
-      0,
+      1,
       "STRING"
     ]
   ],
@@ -2742,7 +2764,7 @@
       "id": 7,
       "title": "PROMPT-DRIVEN TAGGED PICTURE REFERENCES",
       "bounding": [
-        -3136,
+        -2112,
         -352,
         1000,
         864
@@ -2754,10 +2776,10 @@
   "config": {},
   "extra": {
     "ds": {
-      "scale": 0.3361571272434445,
+      "scale": 0.305688405797102,
       "offset": [
-        3359.2185131289407,
-        1561.8409198172365
+        4837.034147129561,
+        2758.036796787102
       ]
     },
     "frontendVersion": "1.48.7",
@@ -2768,7 +2790,7 @@
     "ue_links": [],
     "links_added_by_ue": [],
     "comfyui_mcp": {
-      "workflow_uuid": "312ea1b7-6057-4cb0-89fe-41c2b233bb4c"
+      "workflow_uuid": "5d40de8b-65c2-4285-9d5e-8af27be63c2d"
     }
   },
   "version": 0.4

@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/minimax-h3-contex-loop.svg" alt="MiniMax H3 Contex Loop — scene plans that survive the render" width="100%">
+  <img src="assets/minimax-h3-contex-loop.svg" alt="MiniMax H3 Contex Loop v0.4 — scene plans that survive the render" width="100%">
 </p>
 
 # ComfyUI MiniMax H3 Contex Loop

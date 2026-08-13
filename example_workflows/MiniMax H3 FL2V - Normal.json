@@ -178,48 +178,6 @@
       ]
     },
     {
-      "id": 1930,
-      "type": "MiniMaxH3ChainScenePromptEditor",
-      "pos": [
-        416,
-        544
-      ],
-      "size": [
-        1120,
-        1056
-      ],
-      "flags": {},
-      "order": 15,
-      "mode": 0,
-      "inputs": [
-        {
-          "name": "plan",
-          "type": "H3_CHAIN_PLAN",
-          "link": 74
-        }
-      ],
-      "outputs": [
-        {
-          "name": "plan",
-          "type": "H3_CHAIN_PLAN",
-          "links": [
-            75,
-            76
-          ]
-        }
-      ],
-      "title": "SCENE PROMPT EDITOR — STANDARD AUTHORING",
-      "properties": {
-        "cnr_id": "comfyui-minimaxh3-contex-loop",
-        "ver": "0.3.10",
-        "Node name for S&R": "MiniMaxH3ChainScenePromptEditor",
-        "aux_id": "ethanfel/ComfyUI-MiniMaxH3-Contex-Loop"
-      },
-      "widgets_values": [],
-      "color": "#1f1f48",
-      "bgcolor": "rgba(24,24,27,.9)"
-    },
-    {
       "id": 1906,
       "type": "Note",
       "pos": [
@@ -1034,7 +992,7 @@
       ],
       "size": [
         320,
-        672
+        384
       ],
       "flags": {},
       "order": 34,
@@ -1581,7 +1539,14 @@
       "flags": {},
       "order": 7,
       "mode": 0,
-      "inputs": [],
+      "inputs": [
+        {
+          "name": "plan_json_input",
+          "shape": 7,
+          "type": "STRING",
+          "link": null
+        }
+      ],
       "outputs": [
         {
           "name": "plan",
@@ -1636,7 +1601,7 @@
         }
       },
       "widgets_values": [
-        "{\"defaults\":{\"duration_seconds\":15,\"steps\":8},\"shots\":[{\"id\":\"parachute_to_building\",\"prompt\":[\"How the reference pictures align with the target video — Picture 1 (from Shot 1) aligns with the 0.00-second mark of the target video; Picture 2 (from Shot 1) aligns with the 15.08-second mark of the target video.\",\"\",\"integrated_multimodal_description: [Shot 1] Classic Doom 1993 first-person-shooter pixel art in a World War II Market Garden scenario. Begin from the exact first-person parachute view, hands, suspension lines, canopy, airborne soldiers, bridge, river, town, sky, HUD, palette, pixel scale, and composition established by <Picture 1>. Use one uninterrupted forward-moving gameplay shot with no camera cut.\",\"\",\"Timeline:\",\"[0s-8s] The viewpoint descends rapidly while advancing toward the outskirts of the city. The older paratroopers descend at different depths with coherent pixel-art parallax; one soldier lands near the viewer as the bridge and river rise through frame.\",\"[8s-10s] The player lands, the parachute collapses behind the viewpoint, and both hands pull an M1 Garand into the center of the screen. Preserve the HUD layout and first-person anatomy while the player turns toward the same dark building.\",\"[10s-13.5s] The viewpoint runs to cover beside a friendly soldier and fires into the building. Muzzle flashes, recoil, blocky wall debris, and enemy reactions remain synchronized with the forward movement.\",\"[13.5s-15.08s] The player pushes into the dark entrance and raises the rifle sight toward the enemy line inside. Progressively narrow every remaining difference in viewpoint, weapon position, doorway geometry, enemy spacing, HUD values, lighting, and pixel composition, landing exactly on <Picture 2> at the final frame.\",\"\",\"overall_soundscape: Flak bursts, distant gunfire, low World War II aircraft hum, rushing air, parachute fabric, landing impacts, running footsteps, M1 Garand handling, and sharp rifle reports follow the visible action continuously. Interior reverberation becomes audible only as the viewpoint enters the building.\",\"\",\"non_diegetic_music: A low-volume World War II-era brass-and-snare fanfare continues beneath the gameplay sounds without a new downbeat at the end.\"],\"length\":362,\"seed\":\"2101\"},{\"id\":\"respawn_to_parachute\",\"prompt\":[\"How the reference pictures align with the target video — <Picture 1> (from [Shot 1]) aligns with the 15.08-second mark of the target video.\",\"\",\"integrated_multimodal_description: [Shot 1] Continue the same uninterrupted Classic Doom 1993 first-person Market Garden gameplay directly from the incoming H3 Motion Context inside the dark building. Preserve the incoming rifle sight, enemy positions, doorway geometry, HUD, pixel scale, palette, lighting, movement direction, and active audio phase without resetting at the scene boundary. The complete shot forms a plausible retro-game death-and-respawn cycle that converges on the supplied final frame.\",\"\",\"Timeline:\",\"[0s-5s] The rifle fires into the enemy line while the viewpoint strafes behind the doorway. Enemies return fire, the weapon recoils, and the HUD health falls as impacts throw small blocky fragments from the timber walls.\",\"[5s-8s] A nearby explosion overwhelms the player. The first-person view jolts downward, the weapon drops partly out of frame, and the image darkens through a brief period-authentic game-over transition while the battlefield audio becomes muffled.\",\"[8s-11.5s] The game immediately respawns into the same mission: darkness lifts into a bright pixel sky, rushing wind returns, parachute lines extend into view, and the HUD resets cleanly without duplicating hands, weapons, or interface elements.\",\"[11.5s-15.08s] The airborne viewpoint steadies over the river, bridge, town, and descending soldiers. Progressively align the hands, suspension lines, canopy edge, soldier positions, horizon, bridge geometry, river, HUD, colors, and exact first-person composition with <Picture 1>, reaching it precisely at the final frame so the assembled video can loop back to its opening.\",\"\",\"overall_soundscape: Indoor rifle fire, enemy shots, ricochets, wall impacts, and a close explosion transition into a short muffled game-over tail. Wind, parachute fabric, distant flak, aircraft hum, and battlefield gunfire return gradually during the respawn and remain continuous into the loop point.\",\"\",\"non_diegetic_music: The same low-volume World War II-era fanfare briefly filters down during the death transition, then resumes its brass-and-snare texture without a hard restart at the final boundary.\"],\"length\":362,\"seed\":\"2102\"}]}",
+        "{\n  \"defaults\": {\n    \"duration_seconds\": 15,\n    \"steps\": 8\n  },\n  \"shots\": [\n    {\n      \"id\": \"parachute_to_building\",\n      \"prompt\": [\n        \"How the reference pictures align with the target video — Picture 1 (from Shot 1) aligns with the 0.00-second mark of the target video; Picture 2 (from Shot 1) aligns with the 15.08-second mark of the target video.\",\n        \"\",\n        \"integrated_multimodal_description: [Shot 1] Classic Doom 1993 first-person-shooter pixel art in a World War II Market Garden scenario. Begin from the exact first-person parachute view, hands, suspension lines, canopy, airborne soldiers, bridge, river, town, sky, HUD, palette, pixel scale, and composition established by <Picture 1>. Use one uninterrupted forward-moving gameplay shot with no camera cut.\",\n        \"\",\n        \"Timeline:\",\n        \"[0s-8s] The viewpoint descends rapidly while advancing toward the outskirts of the city. The older paratroopers descend at different depths with coherent pixel-art parallax; one soldier lands near the viewer as the bridge and river rise through frame.\",\n        \"[8s-10s] The player lands, the parachute collapses behind the viewpoint, and both hands pull an M1 Garand into the center of the screen. Preserve the HUD layout and first-person anatomy while the player turns toward the same dark building.\",\n        \"[10s-13.5s] The viewpoint runs to cover beside a friendly soldier and fires into the building. Muzzle flashes, recoil, blocky wall debris, and enemy reactions remain synchronized with the forward movement.\",\n        \"[13.5s-15.08s] The player pushes into the dark entrance and raises the rifle sight toward the enemy line inside. Progressively narrow every remaining difference in viewpoint, weapon position, doorway geometry, enemy spacing, HUD values, lighting, and pixel composition, landing exactly on <Picture 2> at the final frame.\",\n        \"\",\n        \"overall_soundscape: Flak bursts, distant gunfire, low World War II aircraft hum, rushing air, parachute fabric, landing impacts, running footsteps, M1 Garand handling, and sharp rifle reports follow the visible action continuously. Interior reverberation becomes audible only as the viewpoint enters the building.\",\n        \"\",\n        \"non_diegetic_music: A low-volume World War II-era brass-and-snare fanfare continues beneath the gameplay sounds without a new downbeat at the end.\"\n      ],\n      \"length\": 362,\n      \"seed\": \"2101\"\n    },\n    {\n      \"id\": \"respawn_to_parachute\",\n      \"prompt\": [\n        \"How the reference pictures align with the target video — <Picture 1> (from [Shot 1]) aligns with the 15.08-second mark of the target video.\",\n        \"\",\n        \"integrated_multimodal_description: [Shot 1] Continue the same uninterrupted Classic Doom 1993 first-person Market Garden gameplay directly from the incoming H3 Motion Context inside the dark building. Preserve the incoming rifle sight, enemy positions, doorway geometry, HUD, pixel scale, palette, lighting, movement direction, and active audio phase without resetting at the scene boundary. The complete shot forms a plausible retro-game death-and-respawn cycle that converges on the supplied final frame.\",\n        \"\",\n        \"Timeline:\",\n        \"[0s-5s] The rifle fires into the enemy line while the viewpoint strafes behind the doorway. Enemies return fire, the weapon recoils, and the HUD health falls as impacts throw small blocky fragments from the timber walls.\",\n        \"[5s-8s] A nearby explosion overwhelms the player. The first-person view jolts downward, the weapon drops partly out of frame, and the image darkens through a brief period-authentic game-over transition while the battlefield audio becomes muffled.\",\n        \"[8s-11.5s] The game immediately respawns into the same mission: darkness lifts into a bright pixel sky, rushing wind returns, parachute lines extend into view, and the HUD resets cleanly without duplicating hands, weapons, or interface elements.\",\n        \"[11.5s-15.08s] The airborne viewpoint steadies over the river, bridge, town, and descending soldiers. Progressively align the hands, suspension lines, canopy edge, soldier positions, horizon, bridge geometry, river, HUD, colors, and exact first-person composition with <Picture 1>, reaching it precisely at the final frame so the assembled video can loop back to its opening.\",\n        \"\",\n        \"overall_soundscape: Indoor rifle fire, enemy shots, ricochets, wall impacts, and a close explosion transition into a short muffled game-over tail. Wind, parachute fabric, distant flak, aircraft hum, and battlefield gunfire return gradually during the respawn and remain continuous into the loop point.\",\n        \"\",\n        \"non_diegetic_music: The same low-volume World War II-era fanfare briefly filters down during the death transition, then resumes its brass-and-snare texture without a hard restart at the final boundary.\"\n      ],\n      \"length\": 362,\n      \"seed\": \"2102\"\n    }\n  ]\n}",
         "fl2v_normal_market_garden_ab_loop",
         "fl2v-market-garden-a-b-a-v1",
         896,
@@ -1655,78 +1620,6 @@
       ],
       "color": "#1f1f48",
       "bgcolor": "rgba(24,24,27,.9)"
-    },
-    {
-      "id": 1944,
-      "type": "MiniMaxH3ChainReview",
-      "pos": [
-        3744,
-        -256
-      ],
-      "size": [
-        736,
-        1376
-      ],
-      "flags": {},
-      "order": 39,
-      "mode": 0,
-      "inputs": [
-        {
-          "name": "state",
-          "type": "H3_CHAIN_STATE",
-          "link": 82
-        },
-        {
-          "name": "segment",
-          "type": "H3_CHAIN_SEGMENT",
-          "link": 83
-        },
-        {
-          "name": "audio",
-          "shape": 7,
-          "type": "AUDIO",
-          "link": 84
-        },
-        {
-          "name": "source_audio",
-          "shape": 7,
-          "type": "AUDIO",
-          "link": null
-        }
-      ],
-      "outputs": [
-        {
-          "name": "segment",
-          "type": "H3_CHAIN_SEGMENT",
-          "links": [
-            85
-          ]
-        },
-        {
-          "name": "status",
-          "type": "STRING",
-          "links": null
-        }
-      ],
-      "title": "REVIEW GATE — APPROVE / EDIT+RETRY / REROLL / STOP",
-      "properties": {
-        "cnr_id": "comfyui-minimaxh3-contex-loop",
-        "ver": "0.3.10",
-        "Node name for S&R": "MiniMaxH3ChainReview",
-        "aux_id": "ethanfel/ComfyUI-MiniMaxH3-Contex-Loop",
-        "h3_chain_review_prompt_height": 442,
-        "h3_chain_review_video_height": 373
-      },
-      "widgets_values": [
-        true,
-        false,
-        0,
-        false,
-        true,
-        "checkpointed"
-      ],
-      "color": "#3f4e2f",
-      "bgcolor": "rgba(24,24,27,.96)"
     },
     {
       "id": 1707,
@@ -1818,143 +1711,6 @@
       "bgcolor": "rgba(24,24,27,.9)"
     },
     {
-      "id": 1945,
-      "type": "LoadImage",
-      "pos": [
-        -1536,
-        -256
-      ],
-      "size": [
-        384,
-        448
-      ],
-      "flags": {},
-      "order": 9,
-      "mode": 0,
-      "inputs": [],
-      "outputs": [
-        {
-          "name": "IMAGE",
-          "type": "IMAGE",
-          "links": [
-            87,
-            91
-          ]
-        },
-        {
-          "name": "MASK",
-          "type": "MASK",
-          "links": null
-        }
-      ],
-      "title": "FRAME A — LOOP OPENING / SCENE 2 TARGET",
-      "properties": {
-        "cnr_id": "comfy-core",
-        "ver": "0.31.0",
-        "Node name for S&R": "LoadImage"
-      },
-      "widgets_values": [
-        "jigen_market_garden_doom_opening.png",
-        "image",
-        null,
-        null,
-        null
-      ]
-    },
-    {
-      "id": 1946,
-      "type": "MiniMaxH3ChainFirstSceneImage",
-      "pos": [
-        640,
-        160
-      ],
-      "size": [
-        480,
-        192
-      ],
-      "flags": {},
-      "order": 29,
-      "mode": 0,
-      "inputs": [
-        {
-          "name": "state",
-          "type": "H3_CHAIN_STATE",
-          "link": 86
-        },
-        {
-          "name": "image",
-          "type": "IMAGE",
-          "link": 87
-        },
-        {
-          "name": "last_frame",
-          "shape": 7,
-          "type": "IMAGE",
-          "link": 92
-        }
-      ],
-      "outputs": [
-        {
-          "name": "first_frame",
-          "type": "IMAGE",
-          "links": [
-            88
-          ]
-        },
-        {
-          "name": "is_first_scene",
-          "type": "BOOLEAN",
-          "links": null
-        },
-        {
-          "name": "status",
-          "type": "STRING",
-          "links": null
-        },
-        {
-          "name": "last_frame",
-          "type": "IMAGE",
-          "links": [
-            93
-          ]
-        }
-      ],
-      "title": "FRAME GATE — FRAME A ONCE / SELECTED END TARGET",
-      "properties": {
-        "cnr_id": "comfyui-minimaxh3-contex-loop",
-        "ver": "0.3.12",
-        "Node name for S&R": "MiniMaxH3ChainFirstSceneImage",
-        "aux_id": "ethanfel/ComfyUI-MiniMaxH3-Contex-Loop"
-      },
-      "widgets_values": []
-    },
-    {
-      "id": 1902,
-      "type": "Note",
-      "pos": [
-        -2080,
-        -1504
-      ],
-      "size": [
-        1248,
-        416
-      ],
-      "flags": {},
-      "order": 10,
-      "mode": 0,
-      "inputs": [],
-      "outputs": [],
-      "title": "PROMPT + IMAGE SOURCE / ATTRIBUTION",
-      "properties": {
-        "Node name for S&R": "Note"
-      },
-      "widgets_values": [
-        "PROMPT + IMAGE SOURCE / ATTRIBUTION\n\nFrame A and the original I2VA concept were shared by ᴊɪɢᴇɴ in Banodoco's #minimax_h3_gens on August 12, 2026:\nhttps://discord.com/channels/1076117621407223829/1533677158067736777/1537180042210054226\n\nThe credited generated result is here:\nhttps://discord.com/channels/1076117621407223829/1533677158067736777/1537178443358142555\n\nFrame B is the final video frame extracted from that credited result. The two FL2VA/L2VA prompts and A→B→A loop design are repository-authored adaptations.\n\nBundled assets:\nexample_workflows/assets/jigen_market_garden_doom_opening.png\nexample_workflows/assets/jigen_market_garden_doom_last.png\n\nCopy both files into ComfyUI/input, or select them manually in the two Load Image nodes."
-      ],
-      "color": "#432f66",
-      "bgcolor": "rgba(24,24,27,.9)"
-    },
-    {
       "id": 1947,
       "type": "LoadImage",
       "pos": [
@@ -1966,7 +1722,7 @@
         448
       ],
       "flags": {},
-      "order": 11,
+      "order": 9,
       "mode": 0,
       "inputs": [],
       "outputs": [
@@ -1996,6 +1752,74 @@
         null,
         null
       ]
+    },
+    {
+      "id": 1701,
+      "type": "MiniMaxH3ChainLoopStart",
+      "pos": [
+        -576,
+        -224
+      ],
+      "size": [
+        352,
+        192
+      ],
+      "flags": {},
+      "order": 19,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "plan",
+          "type": "H3_CHAIN_PLAN",
+          "link": 75
+        },
+        {
+          "name": "source_audio",
+          "shape": 7,
+          "type": "AUDIO",
+          "link": null
+        },
+        {
+          "name": "external_context",
+          "shape": 7,
+          "type": "H3_CHAIN_EXTERNAL_CONTEXT",
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "name": "flow",
+          "type": "H3_CHAIN_FLOW",
+          "links": [
+            45
+          ]
+        },
+        {
+          "name": "state",
+          "type": "H3_CHAIN_STATE",
+          "links": [
+            15
+          ]
+        },
+        {
+          "name": "status",
+          "type": "STRING",
+          "links": null
+        }
+      ],
+      "title": "LOOP START / RESUME",
+      "properties": {
+        "cnr_id": "comfyui-minimaxh3-contex-loop",
+        "ver": "0.3.10",
+        "Node name for S&R": "MiniMaxH3ChainLoopStart",
+        "aux_id": "ethanfel/ComfyUI-MiniMaxH3-Contex-Loop"
+      },
+      "widgets_values": [
+        1,
+        ""
+      ],
+      "color": "#1f1f48",
+      "bgcolor": "rgba(24,24,27,.9)"
     },
     {
       "id": 1948,
@@ -2099,51 +1923,116 @@
       ]
     },
     {
-      "id": 1701,
-      "type": "MiniMaxH3ChainLoopStart",
+      "id": 1946,
+      "type": "MiniMaxH3ChainFirstSceneImage",
       "pos": [
-        -576,
-        -224
+        608,
+        224
       ],
       "size": [
-        352,
+        480,
         192
       ],
       "flags": {},
-      "order": 19,
+      "order": 29,
       "mode": 0,
       "inputs": [
         {
-          "name": "plan",
-          "type": "H3_CHAIN_PLAN",
-          "link": 75
+          "name": "state",
+          "type": "H3_CHAIN_STATE",
+          "link": 86
+        },
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "link": 87
+        },
+        {
+          "name": "last_frame",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": 92
+        }
+      ],
+      "outputs": [
+        {
+          "name": "first_frame",
+          "type": "IMAGE",
+          "links": [
+            88
+          ]
+        },
+        {
+          "name": "is_first_scene",
+          "type": "BOOLEAN",
+          "links": null
+        },
+        {
+          "name": "status",
+          "type": "STRING",
+          "links": null
+        },
+        {
+          "name": "last_frame",
+          "type": "IMAGE",
+          "links": [
+            93
+          ]
+        }
+      ],
+      "title": "FRAME GATE — FRAME A ONCE / SELECTED END TARGET",
+      "properties": {
+        "cnr_id": "comfyui-minimaxh3-contex-loop",
+        "ver": "0.3.12",
+        "Node name for S&R": "MiniMaxH3ChainFirstSceneImage",
+        "aux_id": "ethanfel/ComfyUI-MiniMaxH3-Contex-Loop"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 1944,
+      "type": "MiniMaxH3ChainReview",
+      "pos": [
+        3744,
+        -256
+      ],
+      "size": [
+        736,
+        1376
+      ],
+      "flags": {},
+      "order": 39,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "state",
+          "type": "H3_CHAIN_STATE",
+          "link": 82
+        },
+        {
+          "name": "segment",
+          "type": "H3_CHAIN_SEGMENT",
+          "link": 83
+        },
+        {
+          "name": "audio",
+          "shape": 7,
+          "type": "AUDIO",
+          "link": 84
         },
         {
           "name": "source_audio",
           "shape": 7,
           "type": "AUDIO",
           "link": null
-        },
-        {
-          "name": "external_context",
-          "shape": 7,
-          "type": "H3_CHAIN_EXTERNAL_CONTEXT",
-          "link": null
         }
       ],
       "outputs": [
         {
-          "name": "flow",
-          "type": "H3_CHAIN_FLOW",
+          "name": "segment",
+          "type": "H3_CHAIN_SEGMENT",
           "links": [
-            45
-          ]
-        },
-        {
-          "name": "state",
-          "type": "H3_CHAIN_STATE",
-          "links": [
-            15
+            85
           ]
         },
         {
@@ -2152,17 +2041,138 @@
           "links": null
         }
       ],
-      "title": "LOOP START / RESUME",
+      "title": "REVIEW GATE — APPROVE / EDIT+RETRY / REROLL / STOP",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
-        "Node name for S&R": "MiniMaxH3ChainLoopStart",
-        "aux_id": "ethanfel/ComfyUI-MiniMaxH3-Contex-Loop"
+        "Node name for S&R": "MiniMaxH3ChainReview",
+        "aux_id": "ethanfel/ComfyUI-MiniMaxH3-Contex-Loop",
+        "h3_chain_review_prompt_height": 442,
+        "h3_chain_review_video_height": 373
       },
       "widgets_values": [
-        1,
-        ""
+        true,
+        false,
+        0,
+        false,
+        true,
+        "checkpointed"
       ],
+      "color": "#3f4e2f",
+      "bgcolor": "rgba(24,24,27,.96)"
+    },
+    {
+      "id": 1945,
+      "type": "LoadImage",
+      "pos": [
+        -1568,
+        -256
+      ],
+      "size": [
+        384,
+        448
+      ],
+      "flags": {},
+      "order": 10,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            87,
+            91
+          ]
+        },
+        {
+          "name": "MASK",
+          "type": "MASK",
+          "links": null
+        }
+      ],
+      "title": "FRAME A — LOOP OPENING / SCENE 2 TARGET",
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.31.0",
+        "Node name for S&R": "LoadImage"
+      },
+      "widgets_values": [
+        "jigen_market_garden_doom_opening.png",
+        "image",
+        null,
+        null,
+        null
+      ]
+    },
+    {
+      "id": 1902,
+      "type": "Note",
+      "pos": [
+        -2112,
+        -1472
+      ],
+      "size": [
+        1248,
+        416
+      ],
+      "flags": {},
+      "order": 11,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "title": "PROMPT + IMAGE SOURCE / ATTRIBUTION",
+      "properties": {
+        "Node name for S&R": "Note"
+      },
+      "widgets_values": [
+        "PROMPT + IMAGE SOURCE / ATTRIBUTION\n\nFrame A and the original I2VA concept were shared by ᴊɪɢᴇɴ in Banodoco's #minimax_h3_gens on August 12, 2026:\nhttps://discord.com/channels/1076117621407223829/1533677158067736777/1537180042210054226\n\nThe credited generated result is here:\nhttps://discord.com/channels/1076117621407223829/1533677158067736777/1537178443358142555\n\nFrame B is the final video frame extracted from that credited result. The two FL2VA/L2VA prompts and A→B→A loop design are repository-authored adaptations.\n\nBundled assets:\nexample_workflows/assets/jigen_market_garden_doom_opening.png\nexample_workflows/assets/jigen_market_garden_doom_last.png\n\nCopy both files into ComfyUI/input, or select them manually in the two Load Image nodes."
+      ],
+      "color": "#432f66",
+      "bgcolor": "rgba(24,24,27,.9)"
+    },
+    {
+      "id": 1930,
+      "type": "MiniMaxH3ChainScenePromptEditor",
+      "pos": [
+        416,
+        544
+      ],
+      "size": [
+        1120,
+        1056
+      ],
+      "flags": {},
+      "order": 15,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "plan",
+          "type": "H3_CHAIN_PLAN",
+          "link": 74
+        }
+      ],
+      "outputs": [
+        {
+          "name": "plan",
+          "type": "H3_CHAIN_PLAN",
+          "links": [
+            75,
+            76
+          ]
+        }
+      ],
+      "title": "SCENE PROMPT EDITOR — STANDARD AUTHORING",
+      "properties": {
+        "cnr_id": "comfyui-minimaxh3-contex-loop",
+        "ver": "0.3.10",
+        "Node name for S&R": "MiniMaxH3ChainScenePromptEditor",
+        "aux_id": "ethanfel/ComfyUI-MiniMaxH3-Contex-Loop",
+        "h3_scene_prompt_editor_active_scene": 0,
+        "h3_scene_prompt_editor_font_size": 18,
+        "h3_scene_prompt_editor_rich_text": true
+      },
+      "widgets_values": [],
       "color": "#1f1f48",
       "bgcolor": "rgba(24,24,27,.9)"
     }
@@ -2754,10 +2764,10 @@
   "config": {},
   "extra": {
     "ds": {
-      "scale": 0.3386367757629368,
+      "scale": 0.5453779137339684,
       "offset": [
-        5580.403853072673,
-        2104.127563008662
+        2844.696551101137,
+        857.4532977923288
       ]
     },
     "frontendVersion": "1.48.7",
