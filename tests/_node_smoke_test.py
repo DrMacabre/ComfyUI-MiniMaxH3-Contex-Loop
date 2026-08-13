@@ -369,6 +369,17 @@ def main():
     assert [value[nodes.MC_KEY] for value in context_56][-1] == 52
     print("56-frame context: represented by 17 aligned video latent steps")
 
+    captured.clear()
+    _, trim_90 = node.apply(
+        conditioning=[["c", {}]], vae=VAE(), latent=target,
+        context_frames=context, context_length=90, encode_mode="video",
+        anchor_mode="head", crop="disabled", audio_context_length=22,
+        audio_mode="timeline", context_latent=prev)
+    context_90 = captured["minimax_keyframes"]
+    assert trim_90 == 90 and len(context_90) == 27
+    assert nodes._pixel_frames(len(context_90)) == 90
+    print("90-frame context: represented by 27 aligned video latent steps")
+
     # decoded-audio path must still work and carry integer end_frame
     captured.clear()
 

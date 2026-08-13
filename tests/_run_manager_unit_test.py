@@ -5,7 +5,7 @@ import json
 import pathlib
 import tempfile
 
-from run_manager import RunArchiveManager
+from run_manager import RunArchiveManager, _workflow_inputs
 
 
 def write(path, value):
@@ -14,6 +14,18 @@ def write(path, value):
 
 
 def main():
+    old_widgets = [
+        '{"shots":[{"prompt":"old"}]}', "old_run", "", 960, 544,
+        22, "video", "head", "disabled", "source_track", 22, 15.0,
+        20, 0, 18,
+    ]
+    old_restore = _workflow_inputs({
+        "nodes": [{"type": "MiniMaxH3ChainPlan",
+                   "widgets_values": old_widgets}],
+    }, "old_run")
+    assert old_restore["segment_crf"] == 18
+    assert old_restore["video_blend_frames"] == 0
+
     with tempfile.TemporaryDirectory() as temporary:
         root = pathlib.Path(temporary)
         exact = root / "h3_chains" / "variant_exact"
@@ -46,6 +58,7 @@ def main():
             "default_steps": 30,
             "base_seed": "18446744073709551615",
             "segment_crf": 17,
+            "video_blend_frames": 22,
         }
         write(exact / "api_prompt.json", {
             "12": {"class_type": "MiniMaxH3ChainPlan", "inputs": exact_inputs},
@@ -105,6 +118,7 @@ def main():
         assert restored["width"] == 768
         assert restored["anchor_mode"] == "before"
         assert restored["segment_crf"] == 19
+        assert restored["video_blend_frames"] == 0
         restored_plan = json.loads(restored["plan_json"])
         assert restored_plan["shots"][0]["prompt"] == "Fallback prompt."
         assert restored_plan["shots"][0]["seed"] == "9"

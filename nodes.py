@@ -144,7 +144,10 @@ def _prepare_native_guide_conditioning(conditioning):
 # clip instead of [-5..-1]. The pinned run would end five frames early and the
 # delivered clip would continue from the wrong instant. So off-grid requests
 # are snapped DOWN before slicing, keeping content and coverage in agreement.
-VIDEO_RUN_GRID = (56, 39, 22, 5, 1)
+VIDEO_RUN_GRID = (
+    243, 226, 209, 192, 175, 158, 141, 124,
+    107, 90, 73, 56, 39, 22, 5, 1,
+)
 
 
 def _pixel_frames(latent_t):
@@ -294,10 +297,10 @@ class MiniMaxH3MotionContext:
                                "clip. Supplying the whole clip is safe: only "
                                "the requested tail is used."}),
                 "context_length": ("INT", {
-                    "default": 5, "min": 1, "max": 56,
+                    "default": 5, "min": 1, "max": 243,
                     "tooltip": "Frames of the previous clip to carry over. In "
-                               "video mode only 1, 5, 22, 39 and 56 are "
-                               "distinct; "
+                               "video mode only native 17-frame grid values "
+                               "(1, 5, 22, ... 243) are distinct; "
                                "anything else is snapped DOWN to the nearest so "
                                "the pinned run always ends at the clip's last "
                                "frame."}),
@@ -405,8 +408,9 @@ class MiniMaxH3MotionContext:
             if run != n:
                 _LOG.warning(
                     "h3_motion_context: %d frames is off the VAE grid; pinning "
-                    "the last %d instead (usable runs: 1, 5, 22, 39, 56)",
-                    n, run)
+                    "the last %d instead (usable runs: %s)",
+                    n, run, ", ".join(str(value) for value in
+                                     reversed(VIDEO_RUN_GRID)))
             n = run
 
         if n >= frame_count:

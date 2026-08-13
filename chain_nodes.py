@@ -27,6 +27,7 @@ import sys
 import time
 import uuid
 import wave
+from collections import deque
 from datetime import datetime
 from fractions import Fraction
 from typing import Any
@@ -42,6 +43,11 @@ try:
     import torch
 except ImportError:  # ComfyUI always ships torch; keeps local imports clear.
     torch = None
+
+try:
+    import numpy as np
+except ImportError:  # NumPy ships with ComfyUI and PyAV.
+    np = None
 
 try:
     from PIL import Image, PngImagePlugin
@@ -89,7 +95,10 @@ PLAN_VERSION = 2
 MAX_SHOTS = 128
 MAX_SEED = 0xFFFFFFFFFFFFFFFF
 MAX_H3_FRAMES = 3592  # largest 17k+5 value accepted by H3's 3600-frame socket
-H3_CONTEXT_LENGTHS = (1, 5, 22, 39, 56)
+H3_CONTEXT_LENGTHS = (
+    1, 5, 22, 39, 56, 73, 90, 107, 124,
+    141, 158, 175, 192, 209, 226, 243,
+)
 AUDIO_MODES = ("source_track", "generated_audio", "source_plus_timeline")
 
 PLAN_TYPE = "H3_CHAIN_PLAN"
@@ -987,10 +996,11 @@ def _plan_with_external_context(
     cfg = prepared["compatibility"]
     prepared["summary"] = (
         "%d clips; %d delivered frames (%.3fs) at %dx%d; context=%d; "
-        "audio=%s; imported video; run=%s" %
+        "blend=%d; audio=%s; imported video; run=%s" %
         (len(prepared["shots"]), stitched_frames,
          stitched_frames / float(FPS), cfg["width"], cfg["height"],
-         configured, cfg["audio_mode"], prepared["run_name"]))
+         configured, int(cfg.get("video_blend_frames", 0)),
+         cfg["audio_mode"], prepared["run_name"]))
     return prepared
 
 
@@ -1096,10 +1106,11 @@ def _retime_review_plan(plan: dict[str, Any]) -> None:
     imported = "; imported video" if external_span else ""
     plan["summary"] = (
         "%d clips; %d delivered frames (%.3fs) at %dx%d; context=%d; "
-        "audio=%s%s; run=%s" %
+        "blend=%d; audio=%s%s; run=%s" %
         (len(plan["shots"]), stitched_frames,
          stitched_frames / float(FPS), cfg["width"], cfg["height"],
-         context_length, cfg["audio_mode"], imported, plan["run_name"]))
+         context_length, int(cfg.get("video_blend_frames", 0)),
+         cfg["audio_mode"], imported, plan["run_name"]))
 
 
 def _plan_with_review_revision(plan: dict[str, Any], index: int,
@@ -1172,6 +1183,7 @@ def _normalize_plan(
     base_seed: int,
     segment_crf: int,
     generation_fingerprint: str = "",
+    video_blend_frames: int = 0,
 ) -> dict[str, Any]:
     try:
         raw = json.loads(str(plan_json or ""))
@@ -1205,6 +1217,15 @@ def _normalize_plan(
     default_steps = max(1, min(10000, int(default_steps)))
     base_seed = max(0, min(MAX_SEED, int(base_seed)))
     segment_crf = max(0, min(51, int(segment_crf)))
+    video_blend_frames = int(video_blend_frames)
+    if video_blend_frames < 0 or video_blend_frames > context_length:
+        raise ValueError(
+            "H3 video blend length must be between 0 and context_length (%d)." %
+            context_length)
+    if anchor_mode != "head" and video_blend_frames:
+        raise ValueError(
+            "H3 video blending requires anchor_mode=head because before mode "
+            "does not reproduce a leading overlap to blend.")
 
     defaults = raw.get("defaults") if isinstance(raw.get("defaults"), dict) else {}
     default_duration = float(defaults.get(
@@ -1321,6 +1342,7 @@ def _normalize_plan(
         "audio_mode": audio_mode,
         "audio_context_length": max(0, int(audio_context_length)),
         "segment_crf": segment_crf,
+        "video_blend_frames": video_blend_frames,
         # Model, VAE, references, CFG, and scheduler live outside this node's
         # inputs. This caller-supplied tag lets a workflow make those external
         # generation dependencies part of the resume contract.
@@ -1343,9 +1365,10 @@ def _normalize_plan(
     })
     plan["summary"] = (
         "%d clips; %d delivered frames (%.3fs) at %dx%d; context=%d; "
-        "audio=%s; run=%s" %
+        "blend=%d; audio=%s; run=%s" %
         (len(shots), stitched_frames, stitched_frames / float(FPS), width,
-         height, context_length, audio_mode, plan["run_name"]))
+         height, context_length, video_blend_frames, audio_mode,
+         plan["run_name"]))
     return plan
 
 
@@ -1451,6 +1474,8 @@ def _artifact_paths(plan: dict[str, Any], index: int) -> dict[str, str]:
     return {
         "run_dir": run_dir,
         "segment": os.path.join(run_dir, "segments", "clip_%04d.mp4" % index),
+        "blend_segment": os.path.join(
+            run_dir, "blend_segments", "clip_%04d.mp4" % index),
         "generated_audio": os.path.join(
             run_dir, "generated_audio", "clip_%04d.wav" % index),
         "checkpoint": os.path.join(run_dir, "checkpoints",
@@ -1729,6 +1754,7 @@ def _compact_latent(latent: dict[str, Any]) -> dict[str, Any]:
 def _public_segment(value: dict[str, Any]) -> dict[str, Any]:
     return {key: value[key] for key in (
         "index", "id", "segment", "checkpoint", "metadata",
+        "blend_segment", "blend_segment_sha256", "blend_frames",
         "revision", "revision_metadata", "supersedes", "prompt_file",
         "generated_audio", "generated_audio_sha256",
         "raw_frames", "delivered_frames", "history_hash",
@@ -1760,6 +1786,23 @@ def _verify_segment_artifacts(segment: dict[str, Any], index: int) -> None:
             raise ValueError(
                 "H3 chain clip %d %s failed its SHA-256 integrity check." %
                 (index, key))
+    blend_frames = int(segment.get("blend_frames", 0))
+    if blend_frames:
+        value = segment.get("blend_segment")
+        expected_hash = str(segment.get("blend_segment_sha256") or "")
+        if not isinstance(value, str) or not expected_hash:
+            raise ValueError(
+                "H3 chain clip %d metadata has no verified blend segment." %
+                index)
+        artifact = _absolute_output_path(value)
+        if not os.path.isfile(artifact):
+            raise FileNotFoundError(
+                "H3 chain clip %d blend segment is missing: %s" %
+                (index, artifact))
+        if _file_sha256(artifact) != expected_hash:
+            raise ValueError(
+                "H3 chain clip %d blend segment failed its SHA-256 integrity "
+                "check." % index)
     generated_audio = segment.get("generated_audio")
     if generated_audio is not None:
         expected_hash = str(segment.get("generated_audio_sha256") or "")
@@ -3019,11 +3062,24 @@ class MiniMaxH3ChainPlan:
                                "quality; 0 is lossless and 51 is lowest quality. "
                                "This does not change model sampling or the saved "
                                "safetensors continuation checkpoint."}),
+                "video_blend_frames": ("INT", {
+                    "default": 0, "min": 0, "max": 243,
+                    "tooltip": "Optional visual blend at each scene boundary, "
+                               "in frames. 0 preserves the current hard-cut "
+                               "assembly. A positive value must not exceed "
+                               "context_length and requires head anchors. "
+                               "Connect this output to Loop Trim's "
+                               "retain_overlap_frames and its "
+                               "images_with_overlap output to Segment Save. "
+                               "Final and partial videos are re-encoded with a "
+                               "linear cumulative blend; audio timing and the "
+                               "delivered duration remain unchanged."}),
             }
         }
 
-    RETURN_TYPES = (PLAN_TYPE, "STRING", "INT", "INT", "INT")
-    RETURN_NAMES = ("plan", "summary", "clip_count", "width", "height")
+    RETURN_TYPES = (PLAN_TYPE, "STRING", "INT", "INT", "INT", "INT")
+    RETURN_NAMES = ("plan", "summary", "clip_count", "width", "height",
+                    "video_blend_frames")
     OUTPUT_TOOLTIPS = (
         "Validated chain plan. Connect it to Loop Start and, for recovery, "
         "Manifest Load.",
@@ -3032,6 +3088,8 @@ class MiniMaxH3ChainPlan:
         "Number of scenes in the plan.",
         "Validated generation width; connect to the stock H3 conditioning node.",
         "Validated generation height; connect to the stock H3 conditioning node.",
+        "Configured boundary blend length. Connect it to Loop Trim's "
+        "retain_overlap_frames input.",
     )
     FUNCTION = "build"
     CATEGORY = "conditioning/minimax/contex_loop"
@@ -3043,15 +3101,16 @@ class MiniMaxH3ChainPlan:
               context_length,
               encode_mode, anchor_mode, crop, audio_mode,
               audio_context_length, default_duration_seconds, default_steps,
-              base_seed, segment_crf):
+              base_seed, segment_crf, video_blend_frames=0):
         plan = _normalize_plan(
             plan_json, run_name, width, height, context_length, encode_mode,
             anchor_mode, crop, audio_mode, audio_context_length,
             default_duration_seconds, default_steps, base_seed, segment_crf,
-            generation_fingerprint)
+            generation_fingerprint, video_blend_frames)
         return (plan, plan["summary"], len(plan["shots"]),
                 plan["compatibility"]["width"],
-                plan["compatibility"]["height"])
+                plan["compatibility"]["height"],
+                plan["compatibility"]["video_blend_frames"])
 
 
 class MiniMaxH3ChainScenePromptEditor:
@@ -3626,6 +3685,12 @@ class MiniMaxH3ChainSegmentSave:
                                "Connect it in every audio mode to preserve "
                                "H3's generated sound as WAV sidecars. Required "
                                "for generated_audio and synchronized review."}),
+                "images_with_overlap": ("IMAGE", {
+                    "tooltip": "Blend-ready output from Loop Trim. Required "
+                               "only when Plan video_blend_frames is above 0. "
+                               "It contains the retained repeated head followed "
+                               "by the normal delivered frames and is saved as "
+                               "a separate disk-backed assembly artifact."}),
             },
             "hidden": {
                 "prompt": "PROMPT",
@@ -3650,8 +3715,8 @@ class MiniMaxH3ChainSegmentSave:
     def IS_CHANGED(cls, *args, **kwargs):
         return float("NaN")
 
-    def save(self, state, images, sampled_latent, audio=None, prompt=None,
-             extra_pnginfo=None):
+    def save(self, state, images, sampled_latent, audio=None,
+             images_with_overlap=None, prompt=None, extra_pnginfo=None):
         if _st_save is None:
             raise RuntimeError("safetensors is required for H3 chain checkpoints.")
         plan = state["plan"]
@@ -3664,6 +3729,28 @@ class MiniMaxH3ChainSegmentSave:
                 "H3 chain clip %d produced %d delivered frames; expected %d. "
                 "Wire decoded images through MiniMax H3 Contex Loop Trim before "
                 "Segment Save." % (index, actual_frames, expected_frames))
+
+        configured_blend = int(
+            plan["compatibility"].get("video_blend_frames", 0))
+        repeated_frames = max(
+            0, int(shot["raw_frames"]) - int(shot["delivered_frames"]))
+        blend_frames = min(configured_blend, repeated_frames)
+        if blend_frames:
+            if images_with_overlap is None:
+                raise ValueError(
+                    "H3 chain clip %d needs %d retained blend frames. Connect "
+                    "Plan video_blend_frames to Loop Trim "
+                    "retain_overlap_frames, then connect images_with_overlap "
+                    "to Segment Save." % (index, blend_frames))
+            blend_count = int(images_with_overlap.shape[0])
+            expected_blend_count = expected_frames + blend_frames
+            if blend_count != expected_blend_count:
+                raise ValueError(
+                    "H3 chain clip %d received %d blend-ready frames; expected "
+                    "%d (%d retained overlap + %d delivered). Check the Plan "
+                    "and Loop Trim blend connections." %
+                    (index, blend_count, expected_blend_count, blend_frames,
+                     expected_frames))
 
         mode = plan["compatibility"]["audio_mode"]
         if mode == "generated_audio" and audio is None:
@@ -3688,6 +3775,7 @@ class MiniMaxH3ChainSegmentSave:
 
         paths = _artifact_paths(plan, index)
         os.makedirs(os.path.dirname(paths["segment"]), exist_ok=True)
+        os.makedirs(os.path.dirname(paths["blend_segment"]), exist_ok=True)
         os.makedirs(os.path.dirname(paths["checkpoint"]), exist_ok=True)
         archives = _write_run_archives(plan, prompt, extra_pnginfo)
         previous_metadata = None
@@ -3702,6 +3790,9 @@ class MiniMaxH3ChainSegmentSave:
 
         transaction = uuid.uuid4().hex
         published_segment = _versioned_path(paths["segment"], transaction)
+        published_blend = (
+            _versioned_path(paths["blend_segment"], transaction)
+            if blend_frames else None)
         published_checkpoint = _versioned_path(paths["checkpoint"], transaction)
         published_audio = (_versioned_path(paths["generated_audio"], transaction)
                            if audio is not None else None)
@@ -3722,6 +3813,15 @@ class MiniMaxH3ChainSegmentSave:
             _write_segment_video(
                 images, published_segment, FPS, plan["segment_crf"],
                 metadata=video_metadata)
+            if published_blend is not None:
+                _write_segment_video(
+                    images_with_overlap, published_blend, FPS,
+                    plan["segment_crf"], metadata={
+                        **video_metadata,
+                        "title": "H3 blend-ready scene %d - %s" %
+                                 (index, shot["id"]),
+                        "h3_blend_frames": str(blend_frames),
+                    })
             if published_audio is not None:
                 _atomic_wav(
                     {"waveform": tensors["delivered_audio"],
@@ -3762,6 +3862,12 @@ class MiniMaxH3ChainSegmentSave:
                 "checkpoint_sha256": _file_sha256(published_checkpoint),
                 "prompt_file_sha256": _file_sha256(published_prompt),
             }
+            if published_blend is not None:
+                segment.update({
+                    "blend_segment": _relative_output_path(published_blend),
+                    "blend_segment_sha256": _file_sha256(published_blend),
+                    "blend_frames": blend_frames,
+                })
             if published_audio is not None:
                 segment.update({
                     "generated_audio": _relative_output_path(published_audio),
@@ -3787,6 +3893,8 @@ class MiniMaxH3ChainSegmentSave:
             _safe_unlink(checkpoint_tmp)
             if not committed:
                 _safe_unlink(published_segment)
+                if published_blend is not None:
+                    _safe_unlink(published_blend)
                 _safe_unlink(published_checkpoint)
                 if published_audio is not None:
                     _safe_unlink(published_audio)
@@ -3796,9 +3904,12 @@ class MiniMaxH3ChainSegmentSave:
         retained = "; previous revision retained" if previous_revision else ""
         audio_status = (" + generated WAV %s" % published_audio
                         if published_audio is not None else "")
-        status = ("saved clip %d/%d revision %s: %s + checkpoint %s%s%s" %
+        blend_status = (" + %d-frame blend artifact %s" %
+                        (blend_frames, published_blend)
+                        if published_blend is not None else "")
+        status = ("saved clip %d/%d revision %s: %s + checkpoint %s%s%s%s" %
                   (index, len(plan["shots"]), transaction, published_segment,
-                   published_checkpoint, audio_status, retained))
+                   published_checkpoint, audio_status, blend_status, retained))
         _LOG.info("H3 Chain %s", status)
         return {"ui": {"text": [status]}, "result": (segment, status)}
 
@@ -4748,6 +4859,224 @@ def _pyav_concat_video(segment_paths: list[str], delivered_frames: list[int],
         raise
 
 
+def _blend_video_records(
+    manifest: dict[str, Any],
+    segments: list[dict[str, Any]],
+    prelude: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    """Resolve the hard base and each disk-backed overlap continuation."""
+    configured = int(
+        (manifest.get("compatibility") or {}).get("video_blend_frames", 0))
+    if configured < 1:
+        return []
+    records: list[dict[str, Any]] = []
+    has_predecessor = prelude is not None
+    if prelude is not None:
+        records.append({
+            "path": _absolute_output_path(prelude["video"]),
+            "input_frames": int(prelude["frame_count"]),
+            "delivered_frames": int(prelude["frame_count"]),
+            "blend_frames": 0,
+        })
+
+    for item in segments:
+        delivered = int(item["delivered_frames"])
+        repeated = max(0, int(item.get("raw_frames", delivered)) - delivered)
+        expected_blend = min(configured, repeated) if has_predecessor else 0
+        if expected_blend:
+            recorded_blend = int(item.get("blend_frames", 0))
+            value = item.get("blend_segment")
+            if recorded_blend != expected_blend or not isinstance(value, str):
+                raise ValueError(
+                    "H3 chain clip %d requires a %d-frame blend artifact, but "
+                    "the manifest contains %d. Re-save the scene with Plan "
+                    "video_blend_frames connected to Loop Trim and its "
+                    "images_with_overlap connected to Segment Save." %
+                    (int(item.get("index", 0)), expected_blend,
+                     recorded_blend))
+            path = _absolute_output_path(value)
+        else:
+            path = _absolute_output_path(item["segment"])
+        if not os.path.isfile(path):
+            raise FileNotFoundError("H3 chain blend input is missing: %s" % path)
+        records.append({
+            "path": path,
+            "input_frames": delivered + expected_blend,
+            "delivered_frames": delivered,
+            "blend_frames": expected_blend,
+        })
+        has_predecessor = True
+    if not records:
+        raise ValueError("H3 chain blend assembly has no video inputs.")
+    return records if any(int(item["blend_frames"]) for item in records) else []
+
+
+def _ffmpeg_blend_video(
+    ffmpeg: str,
+    records: list[dict[str, Any]],
+    path: str,
+    metadata_path: str,
+    total_frames: int,
+    crf: int,
+) -> None:
+    """Cumulatively xfade overlap-bearing segments without changing duration."""
+    command = [ffmpeg, "-y"]
+    for record in records:
+        command.extend(["-i", record["path"]])
+    command.extend(["-f", "ffmetadata", "-i", metadata_path])
+
+    filters = []
+    for index in range(len(records)):
+        filters.append(
+            "[%d:v]fps=%d,settb=AVTB,setpts=N/(%d*TB)[v%d]" %
+            (index, FPS, FPS, index))
+    previous = "v0"
+    cumulative = int(records[0]["delivered_frames"])
+    for index, record in enumerate(records[1:], start=1):
+        blend = int(record["blend_frames"])
+        if blend < 1:
+            raise ValueError(
+                "H3 cumulative blend input %d has no retained overlap." % index)
+        output = "blend%d" % index
+        filters.append(
+            "[%s][v%d]xfade=transition=fade:duration=%.9f:offset=%.9f[%s]" %
+            (previous, index, blend / float(FPS),
+             (cumulative - blend) / float(FPS), output))
+        previous = output
+        cumulative += int(record["delivered_frames"])
+    filters.append(
+        "[%s]fps=%d,trim=end_frame=%d,setpts=N/(%d*TB),format=yuv420p[outv]" %
+        (previous, FPS, int(total_frames), FPS))
+    command.extend([
+        "-filter_complex", ";".join(filters),
+        "-map", "[outv]", "-map_metadata", str(len(records)), "-an",
+        "-c:v", "libx264", "-preset", "medium", "-crf", str(int(crf)),
+        "-pix_fmt", "yuv420p", "-r", str(FPS),
+        "-frames:v", str(int(total_frames)),
+        "-movflags", "use_metadata_tags+faststart", path,
+    ])
+    _run_ffmpeg(command)
+
+
+def _decode_rgb_frames(path: str):
+    with av.open(path, mode="r") as container:
+        streams = list(container.streams.video)
+        if len(streams) != 1:
+            raise ValueError(
+                "H3 blend input %s contains %d video streams; expected 1." %
+                (path, len(streams)))
+        for frame in container.decode(streams[0]):
+            yield frame.to_ndarray(format="rgb24")
+
+
+def _pyav_blend_video(
+    records: list[dict[str, Any]],
+    path: str,
+    metadata: dict[str, Any],
+    total_frames: int,
+    crf: int,
+) -> None:
+    """Streaming PyAV fallback; memory use is bounded by the blend window."""
+    if av is None or np is None:
+        raise RuntimeError("PyAV cumulative blending requires PyAV and NumPy.")
+    if not records:
+        raise ValueError("PyAV H3 blending requires at least one input.")
+
+    output = None
+    try:
+        with av.open(records[0]["path"], mode="r") as first:
+            streams = list(first.streams.video)
+            if len(streams) != 1:
+                raise ValueError("The first H3 blend input must have one video stream.")
+            width = int(streams[0].codec_context.width)
+            height = int(streams[0].codec_context.height)
+
+        output = av.open(
+            path, mode="w",
+            options={"movflags": "use_metadata_tags+faststart"})
+        for key, value in metadata.items():
+            if value is not None:
+                output.metadata[str(key)] = str(value)
+        stream = output.add_stream("libx264", rate=Fraction(FPS, 1))
+        stream.width = width
+        stream.height = height
+        stream.pix_fmt = "yuv420p"
+        stream.options = {"crf": str(int(crf)), "preset": "medium"}
+        pending: deque[Any] = deque()
+        written = 0
+
+        def encode(array: Any) -> None:
+            nonlocal written
+            frame = av.VideoFrame.from_ndarray(array, format="rgb24")
+            frame.pts = written
+            frame.time_base = Fraction(1, FPS)
+            for packet in stream.encode(frame):
+                output.mux(packet)
+            written += 1
+
+        for record_index, record in enumerate(records):
+            iterator = iter(_decode_rgb_frames(record["path"]))
+            expected_input = int(record["input_frames"])
+            blend = int(record["blend_frames"])
+            next_blend = (int(records[record_index + 1]["blend_frames"])
+                          if record_index + 1 < len(records) else 0)
+            seen = 0
+            if record_index == 0:
+                for array in iterator:
+                    pending.append(array)
+                    seen += 1
+                    while len(pending) > next_blend:
+                        encode(pending.popleft())
+            else:
+                if len(pending) != blend:
+                    raise RuntimeError(
+                        "H3 PyAV blend retained %d predecessor frames; expected %d."
+                        % (len(pending), blend))
+                for offset in range(blend):
+                    try:
+                        incoming = next(iterator)
+                    except StopIteration as exc:
+                        raise ValueError(
+                            "H3 blend input ended inside its overlap.") from exc
+                    previous = pending.popleft()
+                    alpha = (offset + 1) / float(blend + 1)
+                    mixed = np.clip(
+                        previous.astype(np.float32) * (1.0 - alpha) +
+                        incoming.astype(np.float32) * alpha,
+                        0.0, 255.0).round().astype(np.uint8)
+                    encode(mixed)
+                    seen += 1
+                for array in iterator:
+                    pending.append(array)
+                    seen += 1
+                    while len(pending) > next_blend:
+                        encode(pending.popleft())
+            if seen != expected_input:
+                raise ValueError(
+                    "H3 blend input %d decoded %d frames; expected %d." %
+                    (record_index + 1, seen, expected_input))
+            if len(pending) != next_blend:
+                raise RuntimeError(
+                    "H3 PyAV blend retained %d frames for the next boundary; "
+                    "expected %d." % (len(pending), next_blend))
+
+        while pending:
+            encode(pending.popleft())
+        if written != int(total_frames):
+            raise RuntimeError(
+                "H3 PyAV blend wrote %d frames; expected %d." %
+                (written, total_frames))
+        for packet in stream.encode():
+            output.mux(packet)
+        output.close()
+        output = None
+    except Exception:
+        if output is not None:
+            output.close()
+        _safe_unlink(path)
+        raise
+
+
 def _pyav_mux_audio(video_path: str, audio: dict[str, Any], path: str,
                      bitrate_kbps: int, total_frames: int) -> None:
     """Stream-copy joined video and encode frame-locked AAC through PyAV."""
@@ -5266,6 +5595,8 @@ class MiniMaxH3ChainAssemble:
                 raise FileNotFoundError("H3 chain segment is missing: %s" % path)
             segment_paths.append(path)
             delivered_frames.append(int(item["delivered_frames"]))
+        blend_records = _blend_video_records(manifest, segments, prelude)
+        blend_enabled = bool(blend_records)
         ffmpeg = shutil.which("ffmpeg")
         if not ffmpeg and av is None:
             raise RuntimeError(
@@ -5278,7 +5609,40 @@ class MiniMaxH3ChainAssemble:
         backend = "ffmpeg"
         try:
             media_metadata = _manifest_media_metadata(manifest)
-            if ffmpeg:
+            if blend_enabled:
+                _write_ffmetadata(metadata_tmp, media_metadata)
+                if ffmpeg:
+                    try:
+                        _ffmpeg_blend_video(
+                            ffmpeg, blend_records, video_tmp, metadata_tmp,
+                            total_output_frames,
+                            int(manifest["compatibility"].get(
+                                "segment_crf", 18)))
+                        backend = "ffmpeg cumulative linear blend"
+                    except Exception as exc:
+                        if av is None:
+                            raise
+                        backend = "PyAV cumulative linear blend fallback"
+                        _LOG.warning(
+                            "H3 Chain ffmpeg blending failed; retrying with "
+                            "the built-in PyAV fallback: %s", exc)
+                        _safe_unlink(video_tmp)
+                        _pyav_blend_video(
+                            blend_records, video_tmp, media_metadata,
+                            total_output_frames,
+                            int(manifest["compatibility"].get(
+                                "segment_crf", 18)))
+                else:
+                    backend = "PyAV cumulative linear blend fallback"
+                    _LOG.warning(
+                        "H3 Chain ffmpeg executable not found; blending with "
+                        "the built-in PyAV fallback")
+                    _pyav_blend_video(
+                        blend_records, video_tmp, media_metadata,
+                        total_output_frames,
+                        int(manifest["compatibility"].get(
+                            "segment_crf", 18)))
+            elif ffmpeg:
                 with open(concat_path, "w", encoding="utf-8") as handle:
                     for path in segment_paths:
                         escaped = path.replace("\\", "\\\\").replace(
@@ -5328,9 +5692,13 @@ class MiniMaxH3ChainAssemble:
             "; generated audio -> %s" % generated_sidecar_path
             if generated_sidecar_path is not None else
             ("; %s" % generated_warning if generated_warning else ""))
-        status = "assembled %d generated clips%s with %s -> %s%s" % (
+        blend_status = (
+            "; %d-frame cumulative visual blend" % int(
+                manifest["compatibility"].get("video_blend_frames", 0))
+            if blend_enabled else "; hard cuts")
+        status = "assembled %d generated clips%s with %s%s -> %s%s" % (
             len(segments), " + existing-video prelude" if prelude else "",
-            backend, final_path, sidecar_status)
+            backend, blend_status, final_path, sidecar_status)
         _LOG.info("H3 Chain %s", status)
         return {"ui": {"text": [status]}, "result": (final_path,)}
 
