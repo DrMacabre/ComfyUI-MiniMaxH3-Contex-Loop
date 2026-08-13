@@ -15,6 +15,9 @@ example_workflows/
 ├── MiniMax H3 FL2V - Normal.json
 ├── MiniMax H3 I2V - Normal.json
 ├── MiniMax H3 I2V - Studio.json
+├── MiniMax H3 Ref2V - Basic.json
+├── MiniMax H3 Ref2V - Scheduled.json
+├── MiniMax H3 Ref2V - Studio Scheduled.json
 ├── MiniMax H3 T2V - Normal.json
 ├── MiniMax H3 T2V - Studio.json
 └── Archive/
@@ -23,9 +26,10 @@ example_workflows/
 
 Active workflow JSON files remain directly in `example_workflows/` so ComfyUI
 can discover them. Only retired examples are nested under `Archive/`. T2V and
-I2V are the first reorganized pairs. FL2V currently has one Normal workflow
-that demonstrates indexed A→B→A endpoints; its Studio counterpart and the L2V
-and Ref2V sets can follow at this same top level.
+I2V are paired Normal/Studio examples. FL2V currently has one Normal workflow
+that demonstrates indexed A→B→A endpoints. Ref2V is represented at three
+levels: core global references, scheduled references with the standard editor,
+and scheduled references with Studio authoring plus run-asset restoration.
 
 ## T2V
 
@@ -127,6 +131,39 @@ scene 1 selects B, scene 2 selects A, and a third scene would select B again.
 Frame A is the credited source image used by the I2V pair. Frame B is the
 final frame extracted from the credited generated result. Copy both PNG files
 from [`assets/`](assets/) to `ComfyUI/input/` before loading the workflow.
+
+## Ref2V
+
+The Ref2V set uses the same two credited Market Garden pictures, the same
+two-scene plan, and the same model/sampler stack at every level:
+
+- [`MiniMax H3 Ref2V - Basic.json`](<MiniMax H3 Ref2V - Basic.json>) connects
+  both Load Image nodes directly to ComfyUI's core
+  `MiniMaxH3ReferenceToVideo`. Both images are global, so the prompts use the
+  native `<Picture 1>` and `<Picture 2>` labels in both scenes.
+- [`MiniMax H3 Ref2V - Scheduled.json`](<MiniMax H3 Ref2V - Scheduled.json>)
+  chains two Picture Schedule nodes into `MiniMaxH3ScheduledReferenceToVideo`.
+  `@style_base` is active in all scenes; `@interior` is active only in scene 2.
+  Current Shot supplies `clip_index` and `clip_count`, and the final schedule
+  fingerprint is connected to the Plan for checkpoint safety.
+- [`MiniMax H3 Ref2V - Studio Scheduled.json`](<MiniMax H3 Ref2V - Studio Scheduled.json>)
+  keeps that scheduled generation path and adds Plan Studio, Rich Scene Prompt
+  Editor, and an inline Run Manager. Both image loader outputs connect to raw
+  asset sockets as well as their schedule nodes. The manager archives image
+  fallbacks by default and restores each saved run's Plan plus the matching
+  loader selections.
+
+The scheduled wrapper only resolves active aliases to native H3 labels. It
+does not insert subject definitions or other prompt text. Every scene therefore
+contains the complete user-editable Ref2VA structure in this order:
+`subject_definitions`, `summary`, `retention_analysis`,
+`detailed_description`, `overall_soundscape`, and `non_diegetic_music`.
+
+Copy both PNG files from [`assets/`](assets/) to `ComfyUI/input/` before
+loading any Ref2V example. The prompt concept and first image came from
+[ᴊɪɢᴇɴ's Banodoco post](https://discord.com/channels/1076117621407223829/1533677158067736777/1537180042210054226);
+the second image is the last frame of the
+[credited result](https://discord.com/channels/1076117621407223829/1533677158067736777/1537178443358142555).
 
 ## Archive
 

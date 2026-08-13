@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Type-based example catalog and paired T2VA/I2VA workflow regression."""
+"""Type-based H3 example catalog and authoring-level workflow regression."""
 
 import collections
 import hashlib
@@ -284,6 +284,136 @@ def validate_fl2v(path):
     return workflow, plan
 
 
+def validate_ref2v(path, variant):
+    workflow = load(path)
+    validate_links(workflow)
+    node_types = {item.get("type") for item in workflow["nodes"]}
+    assert not node_types.intersection({
+        "PathchSageAttentionKJ",
+        "MiniMaxH3MemoryEfficientSageAttentionPatch",
+        "SolAttnPatch",
+    })
+    assert node(workflow, "ModelAttentionBackend")["widgets_values"] == [
+        "comfy kitchen attention"]
+    assert node(workflow, "LoraLoaderModelOnly")["widgets_values"] == [
+        "MiniMax H3/minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors",
+        1.0,
+    ]
+    assert node(workflow, "KSamplerSelect")["widgets_values"] == ["lcm"]
+    assert node(workflow, "BasicScheduler")["widgets_values"][0:2] == [
+        "beta", 8]
+
+    loaders = [item for item in workflow["nodes"]
+               if item.get("type") == "LoadImage"]
+    assert len(loaders) == 2
+    assert {item["widgets_values"][0] for item in loaders} == {
+        "jigen_market_garden_doom_opening.png",
+        "jigen_market_garden_doom_last.png",
+    }
+
+    plan_node = node(workflow, "MiniMaxH3ChainPlan")
+    plan = json.loads(plan_node["widgets_values"][0])
+    assert plan_node["widgets_values"][3:6] == [896, 672, 22]
+    assert plan_node["widgets_values"][9:13] == [
+        "generated_audio", 22, 10, 8]
+    assert plan["defaults"] == {"duration_seconds": 10, "steps": 8}
+    assert [shot["length"] for shot in plan["shots"]] == [243, 243]
+    assert [shot["seed"] for shot in plan["shots"]] == ["4201", "4202"]
+    for shot in plan["shots"]:
+        prompt = "\n".join(shot["prompt"])
+        positions = [prompt.index(section) for section in (
+            "subject_definitions:", "summary:", "retention_analysis:",
+            "detailed_description:", "overall_soundscape:",
+            "non_diegetic_music:")]
+        assert positions == sorted(positions)
+        assert positions[0] == 0
+
+    if variant == "basic":
+        conditioner = node(workflow, "MiniMaxH3ReferenceToVideo")
+        assert "MiniMaxH3ScheduledReferenceToVideo" not in node_types
+        assert not any(item.get("type") ==
+                       "MiniMaxH3ScheduledPictureReference"
+                       for item in workflow["nodes"])
+        assert socket(conditioner["inputs"],
+                      "ref_images.ref_image_0")["link"] is not None
+        assert socket(conditioner["inputs"],
+                      "ref_images.ref_image_1")["link"] is not None
+        prompts = ["\n".join(shot["prompt"]) for shot in plan["shots"]]
+        assert all("<Picture 1>" in prompt and "<Picture 2>" in prompt
+                   for prompt in prompts)
+        assert all("@style_base" not in prompt for prompt in prompts)
+        assert "MiniMaxH3ChainRunManager" not in node_types
+        editor = node(workflow, "MiniMaxH3ChainScenePromptEditor")
+        assert socket(editor["inputs"], "plan")["link"] is not None
+    else:
+        conditioner = node(workflow, "MiniMaxH3ScheduledReferenceToVideo")
+        assert conditioner["widgets_values"][-1] == "strict"
+        schedules = [item for item in workflow["nodes"]
+                     if item.get("type") ==
+                     "MiniMaxH3ScheduledPictureReference"]
+        assert len(schedules) == 2
+        assert {tuple(item["widgets_values"]) for item in schedules} == {
+            ("style_base", "all"), ("interior", "2")}
+        base = next(item for item in schedules
+                    if item["widgets_values"][0] == "style_base")
+        interior = next(item for item in schedules
+                        if item["widgets_values"][0] == "interior")
+        assert socket(base["inputs"], "image")["link"] is not None
+        assert socket(base["inputs"], "previous")["link"] is None
+        assert socket(interior["inputs"], "image")["link"] is not None
+        assert socket(interior["inputs"], "previous")["link"] is not None
+        assert socket(conditioner["inputs"],
+                      "reference_schedule")["link"] is not None
+        current = node(workflow, "MiniMaxH3ChainCurrent")
+        assert socket(current["outputs"], "clip_index")["links"] == [
+            socket(conditioner["inputs"], "clip_index")["link"]]
+        assert socket(current["outputs"], "clip_count")["links"] == [
+            socket(conditioner["inputs"], "clip_count")["link"]]
+        assert socket(plan_node["inputs"],
+                      "generation_fingerprint")["link"] is not None
+        prompts = ["\n".join(shot["prompt"]) for shot in plan["shots"]]
+        assert "@style_base" in prompts[0] and "@interior" not in prompts[0]
+        assert "@style_base" in prompts[1] and "@interior" in prompts[1]
+        assert all("<Picture" not in prompt for prompt in prompts)
+
+        if variant == "scheduled":
+            assert "MiniMaxH3ChainRunManager" not in node_types
+            editor = node(workflow, "MiniMaxH3ChainScenePromptEditor")
+            assert socket(editor["inputs"], "plan")["link"] is not None
+        else:
+            studio = node(workflow, "MiniMaxH3ChainPlanStudio")
+            rich = node(workflow, "MiniMaxH3ChainRichScenePromptEditor")
+            manager = node(workflow, "MiniMaxH3ChainRunManager")
+            loop_start = node(workflow, "MiniMaxH3ChainLoopStart")
+            assert socket(studio["inputs"], "plan")["link"] is not None
+            assert socket(rich["inputs"], "plan")["link"] is not None
+            assert socket(manager["inputs"], "plan")["link"] is not None
+            assert socket(loop_start["inputs"], "plan")["link"] == (
+                socket(manager["outputs"], "plan")["links"][0])
+            assert socket(manager["inputs"], "asset_0")["link"] is not None
+            assert socket(manager["inputs"], "asset_1")["link"] is not None
+            assert manager["widgets_values"][0:3] == [True, True, False]
+            bindings = json.loads(manager["widgets_values"][3])
+            assert len(bindings) == 2
+            assert {item["original_value"] for item in bindings} == {
+                "jigen_market_garden_doom_opening.png",
+                "jigen_market_garden_doom_last.png",
+            }
+            assert all(item["role"] == "picture" for item in bindings)
+            assert all(loader.get("properties", {}).get(
+                "h3_asset_binding_ids", {}).get("0")
+                for loader in loaders)
+
+    assert conditioner["widgets_values"][1:4] == [896, 672, 243]
+    assert socket(conditioner["inputs"], "audio_vae")["link"] is not None
+    notes = "\n".join(
+        str(item.get("widgets_values", [""])[0])
+        for item in workflow["nodes"] if item.get("type") == "Note")
+    assert "ᴊɪɢᴇɴ" in notes and I2V_SOURCE_URL in notes
+    assert "subject_definitions:" in notes and "non_diegetic_music:" in notes
+    return workflow, plan
+
+
 def main():
     assert EXAMPLES.joinpath("README.md").is_file()
     assert ARCHIVE.joinpath("README.md").is_file()
@@ -296,10 +426,14 @@ def main():
     i2v_normal_path = EXAMPLES / "MiniMax H3 I2V - Normal.json"
     i2v_studio_path = EXAMPLES / "MiniMax H3 I2V - Studio.json"
     fl2v_normal_path = EXAMPLES / "MiniMax H3 FL2V - Normal.json"
+    ref2v_basic_path = EXAMPLES / "MiniMax H3 Ref2V - Basic.json"
+    ref2v_scheduled_path = EXAMPLES / "MiniMax H3 Ref2V - Scheduled.json"
+    ref2v_studio_path = EXAMPLES / "MiniMax H3 Ref2V - Studio Scheduled.json"
     assert set(path.name for path in EXAMPLES.glob("*.json")) == {
         t2v_normal_path.name, t2v_studio_path.name,
         i2v_normal_path.name, i2v_studio_path.name,
-        fl2v_normal_path.name,
+        fl2v_normal_path.name, ref2v_basic_path.name,
+        ref2v_scheduled_path.name, ref2v_studio_path.name,
     }
     t2v_normal, t2v_normal_plan = validate_t2v(
         t2v_normal_path, "MiniMaxH3ChainScenePromptEditor", 0)
@@ -312,6 +446,13 @@ def main():
         i2v_studio_path, "MiniMaxH3ChainPlanStudio", 5)
     assert i2v_normal_plan == i2v_studio_plan
     fl2v_normal, _fl2v_normal_plan = validate_fl2v(fl2v_normal_path)
+    ref2v_basic, _ref2v_basic_plan = validate_ref2v(
+        ref2v_basic_path, "basic")
+    ref2v_scheduled, ref2v_scheduled_plan = validate_ref2v(
+        ref2v_scheduled_path, "scheduled")
+    ref2v_studio, ref2v_studio_plan = validate_ref2v(
+        ref2v_studio_path, "studio")
+    assert ref2v_scheduled_plan == ref2v_studio_plan
 
     def generation_types(workflow):
         return collections.Counter(
@@ -321,16 +462,19 @@ def main():
                 "MiniMaxH3ChainScenePromptEditor",
                 "MiniMaxH3ChainPlanStudio",
                 "MiniMaxH3ChainRichScenePromptEditor",
+                "MiniMaxH3ChainRunManager",
             })
 
     assert generation_types(t2v_normal) == generation_types(t2v_studio)
     assert generation_types(i2v_normal) == generation_types(i2v_studio)
+    assert generation_types(ref2v_scheduled) == generation_types(ref2v_studio)
     uuids = {
         workflow["extra"]["comfyui_mcp"]["workflow_uuid"]
         for workflow in (
-            t2v_normal, t2v_studio, i2v_normal, i2v_studio, fl2v_normal)
+            t2v_normal, t2v_studio, i2v_normal, i2v_studio, fl2v_normal,
+            ref2v_basic, ref2v_scheduled, ref2v_studio)
     }
-    assert len(uuids) == 5
+    assert len(uuids) == 8
 
     asset = EXAMPLES / "assets" / "jigen_market_garden_doom_opening.png"
     assert asset.is_file()
@@ -340,9 +484,10 @@ def main():
     assert hashlib.sha256(last_asset.read_bytes()).hexdigest() == (
         FL2V_LAST_ASSET_SHA256)
 
-    print("H3 workflow catalog: Archive, paired Normal/Studio T2VA and I2VA, "
-          "plus indexed A-B-A FL2VA; valid links, bundled asset integrity, "
-          "proper prompt sections, and visible source attribution pass")
+    print("H3 workflow catalog: T2VA, I2VA, indexed A-B-A FL2VA, and Basic / "
+          "Scheduled / Studio Scheduled Ref2VA; valid links, bundled asset "
+          "integrity, six-section reference prompts, asset restoration, and "
+          "visible source attribution pass")
 
 
 if __name__ == "__main__":

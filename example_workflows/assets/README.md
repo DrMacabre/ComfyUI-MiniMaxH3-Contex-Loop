@@ -12,9 +12,9 @@ I2V prompt used by scene 1:
 SHA-256:
 `7a9993055d71b1e174096f2a2533ae2a0b14a686fdacae0c7bab1faa738ef5f3`
 
-Copy the PNG to `ComfyUI/input/` before loading either I2V workflow. ComfyUI's
-Load Image node resolves assets from its configured input directories, not
-from this repository folder.
+Copy the PNG to `ComfyUI/input/` before loading either I2V workflow or any of
+the Ref2V examples. ComfyUI's Load Image node resolves assets from its
+configured input directories, not from this repository folder.
 
 ## `jigen_market_garden_doom_last.png`
 
@@ -26,4 +26,4 @@ SHA-256:
 `e07862c0d5160f06f015b8849dc4b7d2db0524de5ba490fd26c3dff33e196b34`
 
 Copy this PNG and `jigen_market_garden_doom_opening.png` to `ComfyUI/input/`
-before loading the FL2V workflow.
+before loading the FL2V workflow or any of the Ref2V examples.

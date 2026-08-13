@@ -234,6 +234,15 @@ Start with the Normal/Studio pair for the mode you need:
   Editor.
 - [FL2V — Normal A→B→A loop](<example_workflows/MiniMax H3 FL2V - Normal.json>)
   uses the loop scene index to alternate two bundled last-frame targets.
+- [Ref2V — Basic](<example_workflows/MiniMax H3 Ref2V - Basic.json>)
+  connects two global pictures directly to ComfyUI's core Ref2VA node.
+- [Ref2V — Scheduled](<example_workflows/MiniMax H3 Ref2V - Scheduled.json>)
+  activates stable `@style_base` and `@interior` aliases by scene with the
+  standard prompt editor.
+- [Ref2V — Studio Scheduled](<example_workflows/MiniMax H3 Ref2V - Studio Scheduled.json>)
+  uses the same scheduled generation graph with Plan Studio, the Rich Scene
+  Prompt Editor, and an inline Run Manager that archives/restores both image
+  loader assets.
 
 The T2V pair leaves both image sockets disconnected. The I2V pair applies one
 opening image only to scene 1. The FL2V example additionally connects Current
@@ -242,6 +251,13 @@ then scene 2 continues from motion context at B and lands back on A. All use
 core **Model Attention Backend** with **comfy kitchen attention**, the official
 LightX2V eight-step v1.0 LoRA at strength 1.0, the `lcm` sampler, and the
 `beta` scheduler.
+
+The Ref2V trio reuses the two credited bundled pictures to make the difference
+between global and scene-scheduled references explicit. In the scheduled
+workflows, `@style_base` is active in both scenes and `@interior` joins only in
+scene 2. The wrapper compiles those aliases to the native picture labels for
+the current scene; the six required Ref2VA prompt sections remain fully owned
+and editable by the user.
 
 The earlier mixed examples remain available in [`Archive/`](example_workflows/Archive/):
 
