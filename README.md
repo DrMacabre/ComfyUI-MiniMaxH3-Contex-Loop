@@ -220,19 +220,33 @@ and selected audio is encoded to AAC.
 
 ## Start here
 
-Start with one of the three v2 workflows:
+Start with one of the two equivalent T2V workflows:
 
-- [Single-image I2VA 20s v2](<example_workflows/Looping MiniMax H3 V2 - Single Image I2VA 20s.json>)
+- [T2V — Normal](<example_workflows/T2V/MiniMax H3 T2V - Normal.json>)
+  uses the standard Plan and Scene Prompt Editor.
+- [T2V — Studio](<example_workflows/T2V/MiniMax H3 T2V - Studio.json>)
+  uses the timeline-oriented Plan Studio while keeping the same prompts,
+  settings, seeds, and generation graph as Normal.
+
+Both are true text-to-video chains: the stock `MiniMaxH3ImageToVideo` node has
+no first- or last-frame input. They request two ten-second portrait scenes with
+generated audio, 22 context frames, and an independent five-frame visual
+blend. Scene 1 reproduces a Banodoco community prompt with visible attribution
+inside the workflow; scene 2 is a repository-authored continuation.
+
+The earlier mixed examples remain available in [`Archive/`](example_workflows/Archive/):
+
+- [Single-image I2VA 20s v2](<example_workflows/Archive/Looping MiniMax H3 V2 - Single Image I2VA 20s.json>)
   is the simplest long-form image-to-video example: one opening image, no last
   frame, and two requested 10-second scenes. Its First-Scene Image Gate applies
   `<Picture 1>` only to scene 1; scene 2 continues from motion context. With a
   five-frame overlap, the assembled result is 481 frames, or 20.04 seconds.
-- [Core FL2VA v2](<example_workflows/Looping MiniMax H3 V2 - Core FL2VA.json>)
+- [Core FL2VA v2](<example_workflows/Archive/Looping MiniMax H3 V2 - Core FL2VA.json>)
   uses ComfyUI's stock `MiniMaxH3ImageToVideo` with no reference scheduler. It
   is a one-scene first/last-frame model that also demonstrates the large prompt
   editor, native keyframe hover previews, review/retry, recovery, and safe
   date-versioned assembly.
-- [Scheduled Ref2VA v2](<example_workflows/Looping MiniMax H3 Seamless Chain V2 - Scheduled Refs.json>)
+- [Scheduled Ref2VA v2](<example_workflows/Archive/Looping MiniMax H3 Seamless Chain V2 - Scheduled Refs.json>)
   is the complete long-form loop with scene-selective picture, video, paired
   audio, and frame-exact song references. Its in-canvas notes show every alias
   mapping used by the fourteen-scene plan.
@@ -352,7 +366,7 @@ error rather than being overwritten. Leaving the node absent or disconnected
 does not change runtime behavior.
 
 For a non-looping experiment, open the
-[three-angle guitar Ref2VA workflow](<example_workflows/EXPERIMENTAL MiniMax H3 Three-Angle Guitar Ref2VA.json>).
+[three-angle guitar Ref2VA workflow](<example_workflows/Archive/EXPERIMENTAL MiniMax H3 Three-Angle Guitar Ref2VA.json>).
 It loads `3ClbaJYWVO4_000030.mp4`, turns the source performance into a
 209-frame synchronized Ref2VA reference, generates three alternate viewpoints
 in one pass, and exports with the original waveform cut exactly to 8.708 s.
@@ -361,7 +375,7 @@ The source product card and watermark are deliberately excluded by the prompt.
 To extend an existing video, add **MiniMax H3 Existing Video Context**:
 
 The ready-to-run wiring is included separately in the
-[experimental existing-video model workflow](<example_workflows/MiniMax H3 Extend Existing Video Model Workflow.json>).
+[experimental existing-video model workflow](<example_workflows/Archive/MiniMax H3 Extend Existing Video Model Workflow.json>).
 It uses core Load Video directly, generated-audio continuity, optional
 original-video prepend, and a Review Gate between every saved scene and Loop
 End. This path is new and should be treated as experimental while it receives

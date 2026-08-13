@@ -180,7 +180,7 @@ def main():
     assert (ROOT / "web" / "h3_chain_plan_studio_core.mjs").is_file()
     assert (ROOT / "web" / "h3_reference_autoconnect.js").is_file()
     assert (ROOT / "web" / "h3_reference_autoconnect_core.mjs").is_file()
-    workflow_path = (ROOT / "example_workflows" /
+    workflow_path = (ROOT / "example_workflows" / "Archive" /
                      "Looping MiniMax H3 Seamless Chain Global Refs Example.json")
     workflow = json.loads(workflow_path.read_text(encoding="utf-8"))
     workflow_types = {node.get("type") for node in workflow["nodes"]}
@@ -221,7 +221,7 @@ def main():
                 for link_id in output_socket.get("links") or []:
                     assert int(link_id) in links
 
-    fl2va_path = (ROOT / "example_workflows" /
+    fl2va_path = (ROOT / "example_workflows" / "Archive" /
                   "Looping MiniMax H3 V2 - Core FL2VA.json")
     fl2va = json.loads(fl2va_path.read_text(encoding="utf-8"))
     assert_workflow_links(fl2va)
@@ -262,7 +262,7 @@ def main():
     assert "%date:yyyy-MM-dd%" in fl_assemble["widgets_values"][1]
     print("workflow v2: scheduler-free core FL2VA editing/review graph passes")
 
-    i2va_path = (ROOT / "example_workflows" /
+    i2va_path = (ROOT / "example_workflows" / "Archive" /
                   "Looping MiniMax H3 V2 - Single Image I2VA 20s.json")
     i2va = json.loads(i2va_path.read_text(encoding="utf-8"))
     assert_workflow_links(i2va)
@@ -289,7 +289,7 @@ def main():
     assert i2va_inputs["last_frame"] is None
     print("workflow v2: gated two-scene I2VA 20-second graph passes")
 
-    scheduled_path = (ROOT / "example_workflows" /
+    scheduled_path = (ROOT / "example_workflows" / "Archive" /
                       "Looping MiniMax H3 Seamless Chain V2 - Scheduled Refs.json")
     scheduled = json.loads(scheduled_path.read_text(encoding="utf-8"))
     assert_workflow_links(scheduled)
@@ -402,7 +402,7 @@ def main():
     assert "%date:yyyy-MM-dd%" in scheduled_assemble["widgets_values"][1]
     print("workflow v2: scheduled picture/video/audio aliases and review graph pass")
 
-    angle_workflow_path = (ROOT / "example_workflows" /
+    angle_workflow_path = (ROOT / "example_workflows" / "Archive" /
                            "EXPERIMENTAL MiniMax H3 Three-Angle Guitar Ref2VA.json")
     angle_workflow = json.loads(
         angle_workflow_path.read_text(encoding="utf-8"))

@@ -116,7 +116,7 @@ def schedule():
 
 
 workflow = json.loads((
-    ROOT / "example_workflows" /
+    ROOT / "example_workflows" / "Archive" /
     "Looping MiniMax H3 Seamless Chain V2 - Scheduled Refs.json"
 ).read_text(encoding="utf-8"))
 plan_node = next(node for node in workflow["nodes"]
@@ -341,7 +341,7 @@ finally:
     chain._launch_directory = original_launch_directory
 
 i2va_workflow = json.loads((
-    ROOT / "example_workflows" /
+    ROOT / "example_workflows" / "Archive" /
     "Looping MiniMax H3 V2 - Single Image I2VA 20s.json"
 ).read_text(encoding="utf-8"))
 i2va_plan_node = next(node for node in i2va_workflow["nodes"]
