@@ -62,7 +62,7 @@ assert.deepEqual(checkpointResumeOptions([
 ]);
 
 const reviewSource = fs.readFileSync(
-    new URL("../web/h3_chain_review_main.js", import.meta.url),
+    new URL("../web/h3_chain_review_final.js", import.meta.url),
     "utf8",
 );
 assert.match(reviewSource, /minimax_h3_context_loop\/review/);
@@ -77,6 +77,8 @@ assert.match(reviewSource, /gates\.length === 1/);
 assert.match(reviewSource, /"pointerdown", "pointerup", "mousedown", "mouseup", "click"/);
 assert.match(reviewSource, /preview_revision/);
 assert.match(reviewSource, /sameToken/);
+assert.match(reviewSource, /data\.final_video \?\? data\.partial_video/);
+assert.match(reviewSource, /final assembled video/);
 assert.match(reviewSource, /Duration \(s\)/);
 assert.match(reviewSource, /body\.length/);
 assert.match(reviewSource, /reviewDurationText\(data\.raw_frames\)/);

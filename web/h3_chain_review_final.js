@@ -748,10 +748,13 @@ function mount(node) {
         setActionsEnabled(false);
         status.className = "h3r-status";
         status.textContent = data.status || "Review resolved; continuing…";
-        if (data.partial_video) {
-            video.src = videoUrl(data.partial_video);
+        const completedVideo = data.final_video ?? data.partial_video;
+        if (completedVideo) {
+            video.src = videoUrl(completedVideo);
             video.load();
-            badge.textContent = "partial joined video";
+            badge.textContent = data.final_video
+                ? "final assembled video"
+                : "partial joined video";
         }
         if (data.action === "stop") setTimeout(refreshResumeOptions, 0);
     };

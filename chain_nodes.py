@@ -111,6 +111,9 @@ REFERENCE_SCHEDULE_TYPE = "H3_REFERENCE_SCHEDULE"
 REFERENCE_SCHEDULE_VERSION = 1
 
 _PENDING_REVIEWS: dict[str, dict[str, Any]] = {}
+_PENDING_FINAL_REVIEW_PREVIEWS: dict[
+    tuple[str, str], dict[str, Any]
+] = {}
 
 
 def _canonical_json(value: Any) -> str:
@@ -1467,6 +1470,42 @@ def _video_output_item(path: str) -> dict[str, str]:
         "subfolder": os.path.dirname(relative),
         "type": "output",
     }
+
+
+def _final_review_preview_key(document: dict[str, Any]) -> tuple[str, str]:
+    return (
+        _safe_name(document.get("run_name"), "h3_chain"),
+        str(document.get("plan_hash") or ""),
+    )
+
+
+def _publish_final_review_preview(
+    manifest: dict[str, Any], final_path: str, status: str
+) -> None:
+    """Return the completed final assembly to the gate that approved it."""
+    if manifest.get("format") != "h3_chain_manifest_v3":
+        return
+    pending = _PENDING_FINAL_REVIEW_PREVIEWS.pop(
+        _final_review_preview_key(manifest), None)
+    if pending is None or PromptServer is None or PromptServer.instance is None:
+        return
+    payload = {
+        "token": pending["token"],
+        "node_id": pending["node_id"],
+        "action": "final",
+        "status": status,
+        "final_video": _video_output_item(final_path),
+    }
+    try:
+        PromptServer.instance.send_sync(
+            "minimax_h3_context_loop_review_resolved", payload,
+            pending.get("client_id"))
+    except Exception as exc:
+        # Assembly is already complete. A disconnected browser must not turn a
+        # successful render into a failed ComfyUI execution.
+        _LOG.warning(
+            "H3 Chain could not publish the final preview to Review Gate: %s",
+            exc)
 
 
 def _artifact_paths(plan: dict[str, Any], index: int) -> dict[str, str]:
@@ -4210,6 +4249,14 @@ class MiniMaxH3ChainReview:
             status = (("review timed out; auto-approved clip %d/%d; continuing")
                       if timed_out else ("approved clip %d/%d; continuing")) % (
                           index, len(plan["shots"]))
+            if index == len(plan["shots"]):
+                _PENDING_FINAL_REVIEW_PREVIEWS[
+                    _final_review_preview_key(plan)
+                ] = {
+                    "token": token,
+                    "node_id": payload["node_id"],
+                    "client_id": PromptServer.instance.client_id,
+                }
             if timed_out:
                 PromptServer.instance.send_sync(
                     "minimax_h3_context_loop_review_resolved",
@@ -5700,6 +5747,7 @@ class MiniMaxH3ChainAssemble:
             len(segments), " + existing-video prelude" if prelude else "",
             backend, blend_status, final_path, sidecar_status)
         _LOG.info("H3 Chain %s", status)
+        _publish_final_review_preview(manifest, final_path, status)
         return {"ui": {"text": [status]}, "result": (final_path,)}
 
 
