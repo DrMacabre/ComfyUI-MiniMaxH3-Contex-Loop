@@ -41,6 +41,24 @@ def socket(items, name):
     return next(item for item in items if item.get("name") == name)
 
 
+def prompt_text(value):
+    return "\n".join(value) if isinstance(value, list) else str(value)
+
+
+def comparable_plan(plan):
+    defaults = plan.get("defaults") or {}
+    return {
+        "prompt_prefix": str(plan.get("prompt_prefix", "")),
+        "shots": [{
+            "id": shot["id"],
+            "prompt": prompt_text(shot["prompt"]),
+            "length": shot["length"],
+            "steps": shot.get("steps", defaults.get("steps")),
+            "seed": shot["seed"],
+        } for shot in plan["shots"]],
+    }
+
+
 def validate_links(workflow):
     nodes = {item["id"]: item for item in workflow["nodes"]}
     links = {item[0]: item for item in workflow["links"]}
@@ -316,11 +334,17 @@ def validate_ref2v(path, variant):
     assert plan_node["widgets_values"][3:6] == [896, 672, 22]
     assert plan_node["widgets_values"][9:13] == [
         "generated_audio", 22, 10, 8]
-    assert plan["defaults"] == {"duration_seconds": 10, "steps": 8}
+    defaults = plan.get("defaults")
+    if defaults is not None:
+        assert defaults == {"duration_seconds": 10, "steps": 8}
+    else:
+        # Saving through Plan Studio expands defaults into each scene and
+        # stores prompts as strings. This is equivalent runtime Plan JSON.
+        assert all(shot.get("steps") == 8 for shot in plan["shots"])
     assert [shot["length"] for shot in plan["shots"]] == [243, 243]
     assert [shot["seed"] for shot in plan["shots"]] == ["4201", "4202"]
     for shot in plan["shots"]:
-        prompt = "\n".join(shot["prompt"])
+        prompt = prompt_text(shot["prompt"])
         positions = [prompt.index(section) for section in (
             "subject_definitions:", "summary:", "retention_analysis:",
             "detailed_description:", "overall_soundscape:",
@@ -339,7 +363,7 @@ def validate_ref2v(path, variant):
                       "ref_images.ref_image_0")["link"] is not None
         assert socket(conditioner["inputs"],
                       "ref_images.ref_image_1")["link"] is not None
-        prompts = ["\n".join(shot["prompt"]) for shot in plan["shots"]]
+        prompts = [prompt_text(shot["prompt"]) for shot in plan["shots"]]
         assert all("<Picture 1>" in prompt and "<Picture 2>" in prompt
                    for prompt in prompts)
         assert all("@style_base" not in prompt for prompt in prompts)
@@ -374,7 +398,7 @@ def validate_ref2v(path, variant):
             socket(conditioner["inputs"], "clip_count")["link"]]
         assert socket(plan_node["inputs"],
                       "generation_fingerprint")["link"] is not None
-        prompts = ["\n".join(shot["prompt"]) for shot in plan["shots"]]
+        prompts = [prompt_text(shot["prompt"]) for shot in plan["shots"]]
         assert "@style_base" in prompts[0] and "@interior" not in prompts[0]
         assert "@style_base" in prompts[1] and "@interior" in prompts[1]
         assert all("<Picture" not in prompt for prompt in prompts)
@@ -391,6 +415,8 @@ def validate_ref2v(path, variant):
             assert socket(studio["inputs"], "plan")["link"] is not None
             assert socket(rich["inputs"], "plan")["link"] is not None
             assert socket(manager["inputs"], "plan")["link"] is not None
+            assert socket(rich["outputs"], "plan")["links"] == [
+                socket(manager["inputs"], "plan")["link"]]
             assert socket(loop_start["inputs"], "plan")["link"] == (
                 socket(manager["outputs"], "plan")["links"][0])
             assert socket(manager["inputs"], "asset_0")["link"] is not None
@@ -521,7 +547,8 @@ def main():
         ref2v_tagged_path, "tagged")
     ref2v_studio, ref2v_studio_plan = validate_ref2v(
         ref2v_studio_path, "studio")
-    assert ref2v_tagged_plan == ref2v_studio_plan
+    assert comparable_plan(ref2v_tagged_plan) == comparable_plan(
+        ref2v_studio_plan)
     sequential, _sequential_plan = validate_sequential_motion_ref(
         sequential_path)
 
