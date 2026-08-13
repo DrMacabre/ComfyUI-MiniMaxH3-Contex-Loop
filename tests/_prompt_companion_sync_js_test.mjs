@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import {
     adjacentPlanCompanions,
     connectedPlanStudios,
@@ -70,5 +71,16 @@ assert.equal(localPlan.shots[0], editedShot, "active shot identity survives reba
 assert.deepEqual(localPlan.shots[0], {id:"two", prompt:["edited two"], seed:"22", steps:20});
 assert.deepEqual(localPlan.shots[1], {id:"one", prompt:["live one"], seed:"11"});
 assert.equal(rebaseScenePrompt({shots:[{id:"gone",prompt:[]}]}, livePlan, 0), -1);
+
+for (const relative of [
+    "../web/h3_chain_review.js",
+    "../web/h3_chain_scene_prompt_editor.js",
+    "../web/h3_chain_rich_scene_prompt_editor.js",
+    "../web/h3_chain_plan_studio.js",
+]) {
+    const source = fs.readFileSync(new URL(relative, import.meta.url), "utf8");
+    assert.match(source, /import \* as promptCompanionSync/);
+    assert.match(source, /promptCompanionSync\.publishCompanionPrompt\?\./);
+}
 
 console.log("H3 prompt companions: adjacency and active-scene synchronization pass");

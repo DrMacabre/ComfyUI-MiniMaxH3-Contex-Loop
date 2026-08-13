@@ -30,11 +30,12 @@ import {
     studioCheckpointSignature,
     studioSceneStartSeconds,
 } from "./h3_chain_plan_studio_core.mjs";
-import {
-    connectedPromptEditors,
-    publishCompanionPrompt,
-    publishCompanionScene,
-} from "./h3_prompt_companion_sync.mjs";
+import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs";
+
+const {connectedPromptEditors, publishCompanionScene} = promptCompanionSync;
+function publishCompanionPrompt(...args) {
+    return promptCompanionSync.publishCompanionPrompt?.(...args) ?? 0;
+}
 
 const NODE_NAME = "MiniMaxH3ChainPlanStudio";
 const PLAN_NAME = "MiniMaxH3ChainPlan";

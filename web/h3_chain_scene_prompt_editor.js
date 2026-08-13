@@ -22,11 +22,12 @@ import {
     promptRevisionNavigation,
 } from "./h3_prompt_history_core.mjs";
 import {availableReferenceRecords} from "./h3_reference_preview_core.mjs";
-import {
-    publishCompanionPrompt,
-    publishCompanionScene,
-    rebaseScenePrompt,
-} from "./h3_prompt_companion_sync.mjs";
+import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs";
+
+const {publishCompanionScene, rebaseScenePrompt} = promptCompanionSync;
+function publishCompanionPrompt(...args) {
+    return promptCompanionSync.publishCompanionPrompt?.(...args) ?? 0;
+}
 
 // The compact @ reference and # dialogue authoring interactions are inspired
 // by nkxx188/ComfyUI-MiniMaxH3-Easy (MIT); see THIRD_PARTY_NOTICES.md.

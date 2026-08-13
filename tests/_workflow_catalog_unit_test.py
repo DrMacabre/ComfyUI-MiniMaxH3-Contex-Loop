@@ -117,6 +117,10 @@ def validate_t2v(path, editor_type):
     assert socket(trim["outputs"], "images_with_overlap")["links"]
     assert socket(saver["inputs"], "images_with_overlap")["link"] is not None
 
+    review = node(workflow, "MiniMaxH3ChainReview")
+    assert socket(review["inputs"], "source_audio")["link"] is None
+    assert review["size"][1] >= 650
+
     notes = "\n".join(
         str(item.get("widgets_values", [""])[0])
         for item in workflow["nodes"] if item.get("type") == "Note")

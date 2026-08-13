@@ -15,10 +15,7 @@ import {
     reviewLocalDeadline,
     reviewSeed,
 } from "./h3_chain_review_core.mjs";
-import {
-    publishCompanionPrompt,
-    publishPlanCompanionScene,
-} from "./h3_prompt_companion_sync.mjs";
+import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs";
 
 const NODE_NAME = "MiniMaxH3ChainReview";
 const PLAN_NAME = "MiniMaxH3ChainPlan";
@@ -32,6 +29,18 @@ const mountedReviewNodes = new Set();
 let notificationAudioContext = null;
 let pendingFetchPromise = null;
 let pendingPollTimer = null;
+
+// Browser module caches can briefly pair this file with the preceding version
+// of h3_prompt_companion_sync.mjs after a custom-node update. Namespace access
+// keeps Review Gate mountable in that state; synchronization simply becomes a
+// no-op until the companion module refreshes instead of hiding every control.
+function publishCompanionPrompt(...args) {
+    return promptCompanionSync.publishCompanionPrompt?.(...args) ?? 0;
+}
+
+function publishPlanCompanionScene(...args) {
+    return promptCompanionSync.publishPlanCompanionScene?.(...args) ?? 0;
+}
 
 function ensureNotificationAudioContext() {
     const AudioContext = window.AudioContext ?? window.webkitAudioContext;
@@ -362,6 +371,18 @@ function updatePendingPolling() {
 function mount(node) {
     if (node._h3ReviewMounted || typeof node.addDOMWidget !== "function") return;
     node._h3ReviewMounted = true;
+    try {
+        mountReviewControls(node);
+    } catch (error) {
+        // A failed first lifecycle hook must not poison the node permanently.
+        // ComfyUI invokes a second creation/configuration hook, which can retry
+        // after transient frontend state settles.
+        node._h3ReviewMounted = false;
+        console.error("[H3 Chain Review] Could not mount controls:", error);
+    }
+}
+
+function mountReviewControls(node) {
     injectStyles();
 
     const root = document.createElement("div");

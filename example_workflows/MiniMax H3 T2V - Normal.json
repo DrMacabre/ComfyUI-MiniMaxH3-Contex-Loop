@@ -1692,7 +1692,7 @@
       ],
       "size": [
         608,
-        512
+        768
       ],
       "flags": {},
       "order": 40,
@@ -1713,6 +1713,12 @@
           "shape": 7,
           "type": "AUDIO",
           "link": 78
+        },
+        {
+          "name": "source_audio",
+          "shape": 7,
+          "type": "AUDIO",
+          "link": null
         }
       ],
       "outputs": [
@@ -1732,8 +1738,9 @@
       "title": "REVIEW GATE — APPROVE / EDIT+RETRY / REROLL / STOP",
       "properties": {
         "aux_id": "ethanfel/ComfyUI-MiniMaxH3-Contex-Loop",
-        "ver": "0.3.10",
-        "Node name for S&R": "MiniMaxH3ChainReview"
+        "ver": "0.4.0",
+        "Node name for S&R": "MiniMaxH3ChainReview",
+        "cnr_id": "comfyui-minimaxh3-contex-loop"
       },
       "widgets_values": [
         true,

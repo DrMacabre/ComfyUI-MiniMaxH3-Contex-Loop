@@ -35,11 +35,12 @@ import {
     richGuideInstruction,
     tokenizeRichPrompt,
 } from "./h3_rich_prompt_editor_core.mjs";
-import {
-    publishCompanionPrompt,
-    publishCompanionScene,
-    rebaseScenePrompt,
-} from "./h3_prompt_companion_sync.mjs";
+import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs";
+
+const {publishCompanionScene, rebaseScenePrompt} = promptCompanionSync;
+function publishCompanionPrompt(...args) {
+    return promptCompanionSync.publishCompanionPrompt?.(...args) ?? 0;
+}
 
 // The rich mention presentation and compact optimizer interaction are inspired
 // by nkxx188/ComfyUI-MiniMaxH3-Easy (MIT). Graph discovery, scene scheduling,
