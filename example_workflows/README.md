@@ -12,6 +12,7 @@ example_workflows/
 ├── assets/
 │   ├── jigen_market_garden_doom_opening.png
 │   └── jigen_market_garden_doom_last.png
+├── EXPERIMENTAL MiniMax H3 Ref2V - Sequential Motion.json
 ├── MiniMax H3 FL2V - Normal.json
 ├── MiniMax H3 I2V - Normal.json
 ├── MiniMax H3 I2V - Studio.json
@@ -30,6 +31,9 @@ I2V are paired Normal/Studio examples. FL2V currently has one Normal workflow
 that demonstrates indexed A→B→A endpoints. Ref2V is represented at three
 levels: core global references, scheduled references with the standard editor,
 and scheduled references with Studio authoring plus run-asset restoration.
+The additional sequential-motion workflow is deliberately prefixed
+`EXPERIMENTAL` because it combines a long advancing Ref2VA video timeline with
+recursive Motion Context.
 
 ## T2V
 
@@ -152,6 +156,13 @@ two-scene plan, and the same model/sampler stack at every level:
   asset sockets as well as their schedule nodes. The manager archives image
   fallbacks by default and restores each saved run's Plan plus the matching
   loader selections.
+- [`EXPERIMENTAL MiniMax H3 Ref2V - Sequential Motion.json`](<EXPERIMENTAL MiniMax H3 Ref2V - Sequential Motion.json>)
+  adds one long video with embedded audio as `@motion` + `@motion_audio` and
+  sets its Video Schedule to `sequential`. Current Shot `state` is mandatory:
+  scene 1 receives source frames `0:243` and scene 2 receives `221:464`, so the
+  source repeats the same 22-frame interval as Motion Context instead of
+  replaying frame zero. The included Patch Priority node is intentionally wired
+  before Motion Context for this experimental compatibility path.
 
 The scheduled wrapper only resolves active aliases to native H3 labels. It
 does not insert subject definitions or other prompt text. Every scene therefore
@@ -164,6 +175,12 @@ loading any Ref2V example. The prompt concept and first image came from
 [ᴊɪɢᴇɴ's Banodoco post](https://discord.com/channels/1076117621407223829/1533677158067736777/1537180042210054226);
 the second image is the last frame of the
 [credited result](https://discord.com/channels/1076117621407223829/1533677158067736777/1537178443358142555).
+
+The sequential example does not bundle its motion video. Select a source with
+embedded audio that remains at least 464 frames / 19.333 seconds after 24 fps
+conversion. Reference Video Prep validates the complete timeline before the
+per-scene scheduler slices it. The Plan uses `generated_audio`; paired
+`@motion_audio` is weak rhythmic guidance, not the assembled output track.
 
 ## Archive
 

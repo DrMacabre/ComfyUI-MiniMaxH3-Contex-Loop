@@ -243,6 +243,9 @@ Start with the Normal/Studio pair for the mode you need:
   uses the same scheduled generation graph with Plan Studio, the Rich Scene
   Prompt Editor, and an inline Run Manager that archives/restores both image
   loader assets.
+- [Ref2V — Experimental Sequential Motion](<example_workflows/EXPERIMENTAL MiniMax H3 Ref2V - Sequential Motion.json>)
+  advances one long video/audio reference across two loop scenes instead of
+  restarting it at source frame zero.
 
 The T2V pair leaves both image sockets disconnected. The I2V pair applies one
 opening image only to scene 1. The FL2V example additionally connects Current
@@ -258,6 +261,12 @@ workflows, `@style_base` is active in both scenes and `@interior` joins only in
 scene 2. The wrapper compiles those aliases to the native picture labels for
 the current scene; the six required Ref2VA prompt sections remain fully owned
 and editable by the user.
+
+Sequential motion-reference timing remains explicitly experimental in 0.4.
+The base workflow wires Current Shot `state`, `clip_index`, and `clip_count` to
+Scheduled Ref2VA and uses source windows `0:243` then `221:464`, matching the
+22-frame Motion Context overlap. It requires a user-selected motion video with
+embedded audio lasting at least 19.333 seconds after conversion to 24 fps.
 
 The earlier mixed examples remain available in [`Archive/`](example_workflows/Archive/):
 

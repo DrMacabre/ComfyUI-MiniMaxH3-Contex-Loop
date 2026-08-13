@@ -555,6 +555,9 @@ are safe because they do not skip the chain's motion dependency.
 
 ### Video-reference timeline modes
 
+`sequential` is experimental in 0.4. `restart_each_scene` remains the safe,
+backward-compatible default and preserves existing schedule fingerprints.
+
 Each Scheduled Video Ref chooses one of two source-timeline behaviors:
 
 | Mode | Behavior |
@@ -583,6 +586,12 @@ prompt-visible label; scheduled references remain `<Video 1>` through
 `<Video 3>`. Internally all visual conditioning blocks are presented to the
 model, so additional references may still cost VRAM and introduce competing
 motion instructions.
+
+See
+[`EXPERIMENTAL MiniMax H3 Ref2V - Sequential Motion.json`](<example_workflows/EXPERIMENTAL MiniMax H3 Ref2V - Sequential Motion.json>)
+for the minimal two-scene wiring. Its Reference Video Prep selects 464 frames,
+so the user-supplied native video and embedded audio must cover at least
+19.333 seconds after conversion to 24 fps.
 
 ### Prompt definitions and native labels
 

@@ -414,6 +414,69 @@ def validate_ref2v(path, variant):
     return workflow, plan
 
 
+def validate_sequential_motion_ref(path):
+    workflow = load(path)
+    validate_links(workflow)
+    assert path.name.startswith("EXPERIMENTAL ")
+
+    loader = node(workflow, "LoadVideo")
+    prep = node(workflow, "MiniMaxH3ReferenceVideoPrepare")
+    motion = node(workflow, "MiniMaxH3ScheduledVideoReference")
+    wrapper = node(workflow, "MiniMaxH3ScheduledReferenceToVideo")
+    current = node(workflow, "MiniMaxH3ChainCurrent")
+    priority = node(workflow, "MiniMaxH3PatchPriority")
+    context = node(workflow, "MiniMaxH3ChainContext")
+    plan_node = node(workflow, "MiniMaxH3ChainPlan")
+    plan = json.loads(plan_node["widgets_values"][0])
+
+    assert loader["widgets_values"][0] == (
+        "SELECT_LONG_MOTION_REFERENCE_WITH_AUDIO.mp4")
+    assert prep["widgets_values"] == [464, 24]
+    assert socket(prep["inputs"], "source_video")["link"] == (
+        socket(loader["outputs"], "VIDEO")["links"][0])
+    assert socket(motion["inputs"], "video")["link"] == (
+        socket(prep["outputs"], "ref_video")["links"][0])
+    assert socket(motion["inputs"], "audio")["link"] == (
+        socket(prep["outputs"], "source_audio")["links"][0])
+    assert motion["widgets_values"] == [
+        "motion", "all", "motion_audio", "sequential"]
+    assert socket(motion["inputs"], "previous")["link"] is not None
+    assert socket(wrapper["inputs"], "reference_schedule")["link"] == (
+        socket(motion["outputs"], "schedule")["links"][0])
+    assert socket(wrapper["inputs"], "state")["link"] == (
+        socket(current["outputs"], "state")["links"][-1])
+    assert socket(wrapper["inputs"], "clip_index")["link"] is not None
+    assert socket(wrapper["inputs"], "clip_count")["link"] is not None
+    assert socket(plan_node["inputs"], "generation_fingerprint")["link"] == (
+        socket(motion["outputs"], "schedule_fingerprint")["links"][0])
+
+    assert socket(priority["inputs"], "conditioning")["link"] == (
+        socket(wrapper["outputs"], "positive")["links"][0])
+    assert socket(context["inputs"], "conditioning")["link"] == (
+        socket(priority["outputs"], "conditioning")["links"][0])
+
+    assert [shot["length"] for shot in plan["shots"]] == [243, 243]
+    assert plan_node["widgets_values"][5] == 22
+    assert plan_node["widgets_values"][9] == "generated_audio"
+    prompts = ["\n".join(shot["prompt"]) for shot in plan["shots"]]
+    for prompt in prompts:
+        assert "@motion" in prompt and "@motion_audio" in prompt
+        positions = [prompt.index(section) for section in (
+            "subject_definitions:", "summary:", "retention_analysis:",
+            "detailed_description:", "overall_soundscape:",
+            "non_diegetic_music:")]
+        assert positions == sorted(positions) and positions[0] == 0
+    assert "source frame 0" in prompts[0]
+    assert "source frame 221" in prompts[1]
+    notes = "\n".join(
+        str(item.get("widgets_values", [""])[0])
+        for item in workflow["nodes"] if item.get("type") == "Note")
+    assert "EXPERIMENTAL" in notes
+    assert "0:243" in notes and "221:464" in notes
+    assert "19.333" in notes and "embedded audio" in notes
+    return workflow, plan
+
+
 def main():
     assert EXAMPLES.joinpath("README.md").is_file()
     assert ARCHIVE.joinpath("README.md").is_file()
@@ -429,11 +492,14 @@ def main():
     ref2v_basic_path = EXAMPLES / "MiniMax H3 Ref2V - Basic.json"
     ref2v_scheduled_path = EXAMPLES / "MiniMax H3 Ref2V - Scheduled.json"
     ref2v_studio_path = EXAMPLES / "MiniMax H3 Ref2V - Studio Scheduled.json"
+    sequential_path = (
+        EXAMPLES / "EXPERIMENTAL MiniMax H3 Ref2V - Sequential Motion.json")
     assert set(path.name for path in EXAMPLES.glob("*.json")) == {
         t2v_normal_path.name, t2v_studio_path.name,
         i2v_normal_path.name, i2v_studio_path.name,
         fl2v_normal_path.name, ref2v_basic_path.name,
         ref2v_scheduled_path.name, ref2v_studio_path.name,
+        sequential_path.name,
     }
     t2v_normal, t2v_normal_plan = validate_t2v(
         t2v_normal_path, "MiniMaxH3ChainScenePromptEditor", 0)
@@ -453,6 +519,8 @@ def main():
     ref2v_studio, ref2v_studio_plan = validate_ref2v(
         ref2v_studio_path, "studio")
     assert ref2v_scheduled_plan == ref2v_studio_plan
+    sequential, _sequential_plan = validate_sequential_motion_ref(
+        sequential_path)
 
     def generation_types(workflow):
         return collections.Counter(
@@ -472,9 +540,9 @@ def main():
         workflow["extra"]["comfyui_mcp"]["workflow_uuid"]
         for workflow in (
             t2v_normal, t2v_studio, i2v_normal, i2v_studio, fl2v_normal,
-            ref2v_basic, ref2v_scheduled, ref2v_studio)
+            ref2v_basic, ref2v_scheduled, ref2v_studio, sequential)
     }
-    assert len(uuids) == 8
+    assert len(uuids) == 9
 
     asset = EXAMPLES / "assets" / "jigen_market_garden_doom_opening.png"
     assert asset.is_file()
@@ -484,10 +552,10 @@ def main():
     assert hashlib.sha256(last_asset.read_bytes()).hexdigest() == (
         FL2V_LAST_ASSET_SHA256)
 
-    print("H3 workflow catalog: T2VA, I2VA, indexed A-B-A FL2VA, and Basic / "
-          "Scheduled / Studio Scheduled Ref2VA; valid links, bundled asset "
-          "integrity, six-section reference prompts, asset restoration, and "
-          "visible source attribution pass")
+    print("H3 workflow catalog: T2VA, I2VA, indexed A-B-A FL2VA, Basic / "
+          "Scheduled / Studio Scheduled Ref2VA, and experimental sequential "
+          "motion Ref2VA; valid links, bundled assets, timeline wiring, "
+          "six-section prompts, restoration, and attribution pass")
 
 
 if __name__ == "__main__":
