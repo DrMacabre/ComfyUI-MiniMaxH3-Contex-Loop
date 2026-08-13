@@ -4684,6 +4684,24 @@ def _pyav_concat_video(segment_paths: list[str], delivered_frames: list[int],
         raise
 
 
+def _fit_pyav_audio_samples(waveform: Any, required_samples: int) -> Any:
+    """Fit final mux audio, tolerating only a one-sample rounding deficit."""
+    required_samples = int(required_samples)
+    available_samples = int(waveform.shape[-1])
+    missing = required_samples - available_samples
+    if missing > 1:
+        raise ValueError(
+            "PyAV H3 assembly audio contains %d samples; %d are required." %
+            (available_samples, required_samples))
+    if missing == 1:
+        waveform = torch.nn.functional.pad(waveform, (0, 1))
+        _LOG.warning(
+            "H3 Chain PyAV assembly zero-padded a one-sample audio rounding "
+            "deficit (%d -> %d samples).",
+            available_samples, required_samples)
+    return waveform[..., :required_samples]
+
+
 def _pyav_mux_audio(video_path: str, audio: dict[str, Any], path: str,
                      bitrate_kbps: int, total_frames: int) -> None:
     """Stream-copy joined video and encode frame-locked AAC through PyAV."""
@@ -4704,11 +4722,8 @@ def _pyav_mux_audio(video_path: str, audio: dict[str, Any], path: str,
             % channels)
     required_samples = int(round(
         int(total_frames) / float(FPS) * sample_rate))
-    if int(waveform.shape[-1]) < required_samples:
-        raise ValueError(
-            "PyAV H3 assembly audio contains %d samples; %d are required."
-            % (int(waveform.shape[-1]), required_samples))
-    waveform = (torch.clamp(waveform[..., :required_samples], -1.0, 1.0)
+    waveform = _fit_pyav_audio_samples(waveform, required_samples)
+    waveform = (torch.clamp(waveform, -1.0, 1.0)
                 .to(device="cpu", dtype=torch.float32).contiguous().numpy())
     layout = "mono" if channels == 1 else "stereo"
 

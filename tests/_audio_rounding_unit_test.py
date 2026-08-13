@@ -72,6 +72,17 @@ def main():
             {"waveform": torch.ones((1, 2, 1667)), "sample_rate": 8000},
             5, {"frame_count": 5})
         assert joined["waveform"].shape[-1] == round(10 / 24 * 8000)
+
+        one_short = chain._fit_pyav_audio_samples(
+            torch.ones((2, 226666)), 226667)
+        assert one_short.shape[-1] == 226667
+        assert torch.count_nonzero(one_short[..., -1:]) == 0
+        try:
+            chain._fit_pyav_audio_samples(torch.ones((2, 226665)), 226667)
+        except ValueError as exc:
+            assert "226665 samples; 226667 are required" in str(exc)
+        else:
+            raise AssertionError("PyAV accepted an audio deficit above one sample")
     finally:
         chain._st_load = original_st_load
         chain._prelude_audio = original_prelude_audio
