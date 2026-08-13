@@ -57,7 +57,7 @@ def validate_links(workflow):
                 assert link_id in links
 
 
-def validate_t2v(path, editor_type):
+def validate_t2v(path, editor_type, expected_blend):
     workflow = load(path)
     validate_links(workflow)
     node_types = {item.get("type") for item in workflow["nodes"]}
@@ -88,7 +88,7 @@ def validate_t2v(path, editor_type):
     assert plan_node["widgets_values"][3:6] == [544, 960, 22]
     assert plan_node["widgets_values"][9] == "generated_audio"
     assert plan_node["widgets_values"][12] == 8
-    assert plan_node["widgets_values"][15] == 5
+    assert plan_node["widgets_values"][15] == expected_blend
     assert plan["defaults"]["steps"] == 8
     assert node(workflow, "KSamplerSelect")["widgets_values"] == ["lcm"]
     scheduler = node(workflow, "BasicScheduler")
@@ -110,6 +110,14 @@ def validate_t2v(path, editor_type):
     assert ("MiniMaxH3ChainPlanStudio" in {
         item.get("type") for item in workflow["nodes"]}) == (
             editor_type == "MiniMaxH3ChainPlanStudio")
+    rich_editors = [item for item in workflow["nodes"]
+                    if item.get("type") ==
+                    "MiniMaxH3ChainRichScenePromptEditor"]
+    if editor_type == "MiniMaxH3ChainPlanStudio":
+        assert len(rich_editors) == 1
+        assert socket(rich_editors[0]["inputs"], "plan")["link"] is not None
+    else:
+        assert not rich_editors
 
     trim = node(workflow, "MiniMaxH3LoopTrim")
     saver = node(workflow, "MiniMaxH3ChainSegmentSave")
@@ -126,6 +134,10 @@ def validate_t2v(path, editor_type):
         for item in workflow["nodes"] if item.get("type") == "Note")
     assert "🦙rishappi" in notes and SOURCE_URL in notes
     assert "Scene 2 is a new continuation" in notes
+    if expected_blend:
+        assert "blends only 5 frames" in notes
+    else:
+        assert "video_blend_frames = 0" in notes
     return workflow, plan
 
 
@@ -142,18 +154,20 @@ def main():
         normal_path.name, studio_path.name,
     }
     normal, normal_plan = validate_t2v(
-        normal_path, "MiniMaxH3ChainScenePromptEditor")
+        normal_path, "MiniMaxH3ChainScenePromptEditor", 0)
     studio, studio_plan = validate_t2v(
-        studio_path, "MiniMaxH3ChainPlanStudio")
+        studio_path, "MiniMaxH3ChainPlanStudio", 5)
     assert normal_plan == studio_plan
 
     def generation_types(workflow):
         return collections.Counter(
-            "PROMPT_INTERFACE" if item.get("type") in {
+            item.get("type")
+            for item in workflow["nodes"]
+            if item.get("type") not in {
                 "MiniMaxH3ChainScenePromptEditor",
                 "MiniMaxH3ChainPlanStudio",
-            } else item.get("type")
-            for item in workflow["nodes"])
+                "MiniMaxH3ChainRichScenePromptEditor",
+            })
 
     assert generation_types(normal) == generation_types(studio)
     assert normal["extra"]["comfyui_mcp"]["workflow_uuid"] != (

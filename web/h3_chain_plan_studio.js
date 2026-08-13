@@ -941,11 +941,12 @@ function mount(node) {
         head.append(element("span", "h3studio-title", "MiniMax H3 Plan Studio"),
             element("span", "h3studio-run", runName() ? `run · ${runName()}` : "connect a named Plan"));
         const toolbar = element("div", "h3studio-toolbar");
-        const add = button("+ Scene", "Insert a new scene after the selected scene", async () => {
+        const add = button("+ Scene", "Append a new scene and select it", async () => {
             if (state.plan.shots.length >= MAX_SHOTS) return;
             await flushHistoryDraft();
-            state.plan.shots.splice(state.active + 1, 0, makeShot(state.plan.shots));
-            state.active += 1; state.timelinePosition = null; persistView(); writePlan(); renderShell(); publishActiveScene();
+            state.plan.shots.push(makeShot(state.plan.shots));
+            state.active = state.plan.shots.length - 1;
+            state.timelinePosition = null; persistView(); writePlan(); renderShell(); publishActiveScene();
         });
         add.disabled = state.plan.shots.length >= MAX_SHOTS;
         const duplicate = button("Duplicate", "Duplicate the selected scene", async () => {
