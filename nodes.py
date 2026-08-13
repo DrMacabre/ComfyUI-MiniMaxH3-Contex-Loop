@@ -48,7 +48,7 @@ from .patch_layout import (
     apply_patch as apply_layout_patch,
     claim_patch_ownership as claim_layout_patch_ownership,
     is_applied,
-    native_guides_active,
+    native_guides_available,
 )
 from .patch_payload import (
     apply_patch as apply_payload_patch,
@@ -62,6 +62,7 @@ except ImportError:
     torchaudio = None
 
 _LOG = logging.getLogger("minimax_h3_context_loop")
+_legacy_core_warning_emitted = False
 
 FRAME_PER_TOKEN = (1, 4, 4, 4, 4)
 FPS = 24  # H3's native rate; audio latents run at 40 Hz, hence FRAME_RESCALE 5/3
@@ -70,25 +71,30 @@ AUDIO_HZ = 40.0
 
 
 def _activate_inline_patches():
-    """Select native guides or opt into the legacy marker-gated patches.
+    """Use core-native guides or opt into the legacy guarded fallback.
 
     Importing the node pack only registers nodes. Activation happens here,
-    immediately before Motion Context produces marked conditioning. Wrappers
-    call the original implementation unchanged for unmarked graphs, including
-    H3 jobs queued after an opted-in one in the same process.
+    immediately before Motion Context produces conditioning. Updated ComfyUI
+    remains completely unmodified. Older builds receive a one-time upgrade
+    warning before the marker-gated compatibility wrappers are activated.
     """
+    global _legacy_core_warning_emitted
+    if native_guides_available():
+        return "native"
+    if not _legacy_core_warning_emitted:
+        _LOG.warning(
+            "MiniMax H3 Contex Loop 0.4: this ComfyUI build does not include "
+            "the native H3 Add Guide API merged in Comfy-Org/ComfyUI PR "
+            "#15439. Update ComfyUI for the supported 0.4 path. Falling back "
+            "to legacy compatibility patches for this session; they are more "
+            "likely to conflict with other H3 extensions.")
+        _legacy_core_warning_emitted = True
     layout_ok = apply_layout_patch()
     if not layout_ok or not is_applied():
         raise RuntimeError(
             "h3_motion_context: the inline layout patch could not be enabled, "
             "so continuation guides cannot be placed safely. Check the log "
             "for the self-test failure reason.")
-    if native_guides_active():
-        # PR #15439 natively accepts arbitrary video/audio guides and merges
-        # their payload with Ref2VA. The layout wrapper active in this mode is
-        # only a marker-gated target-origin alignment for this pack's guide
-        # set; the legacy payload wrapper must not be stacked on core.
-        return "native"
     payload_ok = apply_payload_patch()
     if not payload_ok or not payload_patch_applied():
         raise RuntimeError(
@@ -100,14 +106,18 @@ def _activate_inline_patches():
 
 def _claim_inline_patch_ownership():
     """Explicitly make this pack the active compatible patch-family owner."""
+    if native_guides_available():
+        return "native guides; core-owned; no compatibility patch required"
+
+    # Patch Priority also acts as an early compatibility check, so surface the
+    # same one-time update warning as Motion Context before claiming fallback
+    # ownership.
+    _activate_inline_patches()
     layout_ok, layout_detail = claim_layout_patch_ownership()
     if not layout_ok or not is_applied():
         raise RuntimeError(
             "h3_motion_context: could not claim the H3 layout patch: %s" %
             layout_detail)
-    if native_guides_active():
-        return "native guides; %s" % layout_detail
-
     payload_ok, payload_detail = claim_payload_patch_ownership()
     if not payload_ok or not payload_patch_applied():
         raise RuntimeError(
@@ -117,24 +127,14 @@ def _claim_inline_patch_ownership():
 
 
 def _prepare_native_guide_conditioning(conditioning):
-    """Mark a pass-through scene for native guides chained downstream.
+    """Select the guide implementation and pass scene conditioning through.
 
-    Scene 1 has no motion-context payload, but a core Add Guide placed after
-    Loop Context still needs target-relative Ref2VA alignment. PR #15439 ignores
-    keyframe entries with neither a video nor audio latent, so one marker-only
-    record opts that later guide set into the layout correction without adding
-    conditioning rows. Legacy core must never receive this sentinel.
+    The merged native API aligns downstream Add Guide nodes relative to the
+    Ref2VA target timeline itself, so scene 1 no longer needs the old empty
+    marker keyframe. Legacy builds still activate their guarded fallback here.
     """
-    if _activate_inline_patches() != "native":
-        return conditioning
-    for _value, metadata in conditioning:
-        for item in metadata.get("minimax_keyframes", []) or []:
-            if (MC_KEY in item and item.get("latent") is None
-                    and item.get("audio_latent") is None):
-                return conditioning
-    sentinel = {"resolved_frame_index": 0, MC_KEY: 0}
-    return node_helpers.conditioning_set_values(
-        conditioning, {"minimax_keyframes": [sentinel]}, append=True)
+    _activate_inline_patches()
+    return conditioning
 
 # Run lengths the video VAE's downscale formula max(1, (n - 5) // 17 * 5 + 2)
 # actually distinguishes. Anything between two grid points encodes to the same
@@ -144,7 +144,10 @@ def _prepare_native_guide_conditioning(conditioning):
 # clip instead of [-5..-1]. The pinned run would end five frames early and the
 # delivered clip would continue from the wrong instant. So off-grid requests
 # are snapped DOWN before slicing, keeping content and coverage in agreement.
-VIDEO_RUN_GRID = (56, 39, 22, 5, 1)
+VIDEO_RUN_GRID = (
+    243, 226, 209, 192, 175, 158, 141, 124,
+    107, 90, 73, 56, 39, 22, 5, 1,
+)
 
 
 def _pixel_frames(latent_t):
@@ -294,10 +297,10 @@ class MiniMaxH3MotionContext:
                                "clip. Supplying the whole clip is safe: only "
                                "the requested tail is used."}),
                 "context_length": ("INT", {
-                    "default": 5, "min": 1, "max": 56,
+                    "default": 5, "min": 1, "max": 243,
                     "tooltip": "Frames of the previous clip to carry over. In "
-                               "video mode only 1, 5, 22, 39 and 56 are "
-                               "distinct; "
+                               "video mode only native 17-frame grid values "
+                               "(1, 5, 22, ... 243) are distinct; "
                                "anything else is snapped DOWN to the nearest so "
                                "the pinned run always ends at the clip's last "
                                "frame."}),
@@ -405,8 +408,9 @@ class MiniMaxH3MotionContext:
             if run != n:
                 _LOG.warning(
                     "h3_motion_context: %d frames is off the VAE grid; pinning "
-                    "the last %d instead (usable runs: 1, 5, 22, 39, 56)",
-                    n, run)
+                    "the last %d instead (usable runs: %s)",
+                    n, run, ", ".join(str(value) for value in
+                                     reversed(VIDEO_RUN_GRID)))
             n = run
 
         if n >= frame_count:
@@ -465,9 +469,6 @@ class MiniMaxH3MotionContext:
             if native_guides:
                 keyframes.append({
                     "resolved_frame_index": p,
-                    # The marker opts this complete guide set into the small
-                    # Ref2VA target-origin correction in patch_layout.
-                    MC_KEY: p,
                     "latent": blk,
                 })
             else:
@@ -526,7 +527,6 @@ class MiniMaxH3MotionContext:
                                    - ref_audio_t / FRAME_RESCALE)
                     keyframes.append({
                         "resolved_frame_index": audio_start,
-                        MC_KEY: audio_start,
                         "audio_latent": audio_latent,
                     })
                 else:
@@ -545,10 +545,10 @@ class MiniMaxH3MotionContext:
 
         # Preserve a stock last_frame guide. The carried head already owns any
         # first-frame guide at the same coordinates, so guides inside that
-        # repeated span are removed. Tag retained guides with MC_KEY so legacy
-        # reference compensation and native-guide alignment treat the complete
-        # target-relative set consistently. Ported from NikoDemon80 upstream
-        # 0.3.0 while retaining this fork's native-guide path.
+        # repeated span are removed. On legacy ComfyUI, tag retained guides with
+        # MC_KEY so reference compensation treats the complete target-relative
+        # set consistently. Native ComfyUI already anchors the full guide list
+        # to the target origin. Ported from NikoDemon80 upstream 0.3.0.
         head_end = span if anchor_mode == "head" else 0
         out = []
         dropped = []
@@ -572,7 +572,8 @@ class MiniMaxH3MotionContext:
                     dropped.append(position)
                     continue
                 retained = dict(prior_keyframe)
-                retained[MC_KEY] = position
+                if not native_guides:
+                    retained[MC_KEY] = position
                 kept.append(retained)
             metadata["minimax_keyframes"] = kept + keyframes
             if not native_guides:

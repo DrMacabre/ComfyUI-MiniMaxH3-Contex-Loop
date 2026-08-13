@@ -1,146 +1,194 @@
 # Example workflows
 
-## V2 demos: choose single-image I2VA, core FL2VA, or Scheduled Ref2VA
+Examples are organized first by H3 generation mode, then by authoring level.
+Each completed mode should contain the same two-workflow pair:
 
-[`Looping MiniMax H3 V2 - Single Image I2VA 20s.json`](<Looping MiniMax H3 V2 - Single Image I2VA 20s.json>)
-is the simple long-form image-to-video starting point. It uses one opening
-image, no last-frame input, and two requested 10-second scenes. The included
-**First-Scene Image Gate** passes `<Picture 1>` to ComfyUI's stock
-`MiniMaxH3ImageToVideo` only for scene 1; later recursive scenes receive no
-first-frame keyframe and continue from saved H3 Motion Context. The prompt
-editor marks Picture 1 active for scene 1 and inactive for scene 2.
-
-H3 rounds each 10-second request up to 243 raw frames. With the example's
-five-frame head overlap, the final delivery is `243 + (243 - 5) = 481` frames,
-or 20.04 seconds at 24 fps. Duplicate the second Plan scene to extend the
-chain; each additional requested 10-second continuation contributes 238 frames
-(about 9.92 seconds). Replace the opening image and both generic motion prompts
-before queueing.
-
-[`Looping MiniMax H3 V2 - Core FL2VA.json`](<Looping MiniMax H3 V2 - Core FL2VA.json>)
-is the scheduler-free starting point. It uses ComfyUI's stock
-`MiniMaxH3ImageToVideo` with a deliberately one-scene, 124-frame plan so one
-first/last keyframe pair is applied exactly once. The prompt follows H3's
-FL2VA format and the Scene Prompt Editor previews both connected native Picture
-labels. Disconnect the last image for a one-scene I2VA render, the first for
-L2VA, or both for T2VA. For a multi-scene I2VA chain use the dedicated example
-above; a globally connected keyframe would otherwise constrain every recursive
-scene.
-
-[`Looping MiniMax H3 Seamless Chain V2 - Scheduled Refs.json`](<Looping MiniMax H3 Seamless Chain V2 - Scheduled Refs.json>)
-is the full fourteen-scene Ref2VA demonstration. It includes the large Scene
-Prompt Editor, reference hover previews, Review Gate, muted recovery assembly,
-and date/version-safe final filenames. Its schedule exercises every media
-route:
-
-- `@hero_face` is active only in scenes 1–7;
-- `@hero_look` is always active and therefore renumbers from `<Picture 2>` to
-  `<Picture 1>` beginning in scene 8;
-- `@performance` and paired `@performance_audio` are active in scenes 4–6;
-- the frame-exact `@song` slice is always active, moving from `<Audio 1>` to
-  `<Audio 2>` while the paired soundtrack is present and back afterward.
-
-Both workflows contain in-canvas operating notes. Replace their placeholder
-media filenames and model selections before queueing. The older global-reference
-workflow remains available unchanged for compatibility and comparison.
-
-## Scheduled Ref2VA wiring
-
-Version 0.3.10 adds a typed reference chain which can replace the stock
-**MiniMax H3 Reference to Video** node inside the primary loop workflow:
+1. **Normal** — the standard Plan and scene-editor workflow.
+2. **Studio** — the same generation graph and prompt plan with Plan Studio as
+   the authoring interface.
 
 ```text
-Picture Ref (scenes 1,3,5:8) ─→ Video Ref (scenes 1:4)
-  ─→ Audio Ref (scene 3) ─→ Scheduled Ref2VA
-
-Current Shot ─ prompt, clip_index, clip_count, width, height, length ─────↗
+example_workflows/
+├── assets/
+│   ├── jigen_market_garden_doom_opening.png
+│   └── jigen_market_garden_doom_last.png
+├── EXPERIMENTAL MiniMax H3 Ref2V - Sequential Motion.json
+├── MiniMax H3 FL2V - Normal.json
+├── MiniMax H3 I2V - Normal.json
+├── MiniMax H3 I2V - Studio.json
+├── MiniMax H3 Ref2V - Basic.json
+├── MiniMax H3 Ref2V - Tagged.json
+├── MiniMax H3 Ref2V - Studio Tagged.json
+├── MiniMax H3 T2V - Normal.json
+├── MiniMax H3 T2V - Studio.json
+└── Archive/
+    └── previous mixed and experimental examples
 ```
 
-You may write stable aliases such as `@hero_face` in Plan scene prompts. They
-are optional authoring conveniences rather than required H3 syntax. Scheduled
-Ref2VA compiles them to the active scene's exact `<Picture N>`, `<Video N>`,
-and `<Audio N>` numbering before expanding to ComfyUI's stock Ref2VA node.
-Write all subject, video, and audio definitions directly in the Plan/Prompt
-Editor; schedule nodes never inject hidden prompt text.
-Video-paired soundtracks remain paired on the same dynamic index and receive a
-separate tag (blank `audio_tag` derives `@<video_tag>_audio`). A scene may have
-no active references; it still expands through the stock node with no dynamic
-reference sockets.
+Active workflow JSON files remain directly in `example_workflows/` so ComfyUI
+can discover them. Only retired examples are nested under `Archive/`. T2V and
+I2V are paired Normal/Studio examples. FL2V currently has one Normal workflow
+that demonstrates indexed A→B→A endpoints. Ref2V is represented at three
+levels: core global references, prompt-driven tagged references with the
+standard editor, and tagged references with Studio authoring plus run-asset
+restoration. The former numeric-range examples are retained in `Archive/`.
+The additional sequential-motion workflow is deliberately prefixed
+`EXPERIMENTAL` because it combines a long advancing Ref2VA video timeline with
+recursive Motion Context.
 
-To adapt the bundled global-reference loop without rebuilding its links by
-hand, right-click its core **MiniMax H3 Reference to Video** node and choose
-**Convert to MiniMax H3 Scheduled Ref2VA**. Existing connected reference
-sockets become all-scene schedule entries; narrow their `scenes` fields and
-replace fixed native labels in Plan prompts with the generated `@tags`.
+## T2V
 
-## Experimental: MiniMax H3 Three-Angle Guitar Ref2VA
+Both files use ComfyUI's core `MiniMaxH3ImageToVideo` node with `first_frame`
+and `last_frame` deliberately disconnected, which selects its T2VA path. They
+share the same two-scene portrait plan, model graph, seeds, generated-audio
+route, 22-frame motion context, checkpointing, Review Gate, recovery path, and
+final assembly. The shared model stack uses ComfyUI's
+core `ModelAttentionBackend` set to `comfy kitchen attention`, followed by
+`minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors` at strength 1.0.
+Both the Plan default and scheduler fallback use eight sampling steps with the
+`lcm` sampler and `beta` scheduler.
 
-A one-pass performance re-filming experiment, rather than a recursive loop.
-Core **Load Video** opens `3ClbaJYWVO4_000030.mp4`; **Reference Video Prep**
-samples it at H3's 24 fps, selects 209 valid frames (8.708 seconds), and copies
-the matching source-audio samples without padding or time-stretching. Stock
-Ref2VA receives the synchronized picture/audio pair and a source-specific
-three-angle prompt. At export, the original waveform replaces generated audio.
+- [`MiniMax H3 T2V - Normal.json`](<MiniMax H3 T2V - Normal.json>)
+  uses the standard Scene Prompt Editor.
+- [`MiniMax H3 T2V - Studio.json`](<MiniMax H3 T2V - Studio.json>)
+  uses the optional timeline-oriented Plan Studio plus the separate Rich Scene
+  Prompt Editor. Neither changes sampling or ComfyUI execution.
 
-The prompt preserves the visible performer, plaid shirt, cream Telecaster-style
-guitar, hand choreography, and musical timing while deliberately removing the
-source product card, website watermark, text, and split-screen layout. Treat
-this as experimental and select model paths available in your installation.
+Each requested ten-second scene normalizes to 243 raw H3 frames. The second
+scene reproduces and removes 22 context frames, so the assembled delivery is
+464 frames, or 19.333 seconds at 24 fps. Normal demonstrates a hard trimmed
+boundary (`video_blend_frames = 0`); Studio demonstrates a five-frame visual
+blend. Audio remains frame-locked and is not crossfaded.
 
-## Experimental: MiniMax H3 Extend Existing Video Model Workflow
+### Prompt source
 
-A compact two-scene model for extending an existing MP4. Core **Load Video**
-connects its native `VIDEO` directly to **MiniMax H3 Existing Video Context**.
-VHS and other loaders can instead use the adapter's separate `IMAGE`, `AUDIO`,
-and `source_fps` inputs. Scene 1 continues from the imported tail, generated
-audio can inherit its ending, and `prepend_original` places the normalized
-source before the generated extension.
+Scene 1 is reproduced verbatim from a prompt shared by **🦙rishappi** in
+Banodoco's `#minimax_h3_chatter` on August 11, 2026:
+[original Discord message](https://discord.com/channels/1076117621407223829/1532625331960152124/1536689209761599608).
+Scene 2 is a new repository-authored continuation using the same H3 T2VA
+three-section structure. Each workflow also contains this attribution in a
+visible note beside the graph.
 
-The Review Gate is fully wired between **Segment Save** and **Loop End**, with
-frame-locked preview audio from Loop Trim. Its recovery branch is muted by
-default. Select your own source video and model files before queueing. This is a
-new standalone example; none of the earlier workflow JSON files were changed.
-Treat it as experimental until the imported video/audio continuation path has
-received broader testing across source codecs, frame rates, and H3 setups.
+## I2V
 
-## Looping MiniMax H3 Seamless Chain Global Refs Example
+Both files use one opening image with ComfyUI's core
+`MiniMaxH3ImageToVideo`. The Frame Gate
+(`MiniMaxH3ChainFirstSceneImage`) sends the opening image only to scene 1;
+scene 2 receives no opening image and continues exclusively from the 22-frame
+H3 Motion Context. Do not bypass this gate or the opening frame will be
+reapplied on every scene.
 
-Disk-backed recursive Ref2VA chain using the visual H3 Chain Plan editor,
-global character references, a frame-exact source-song timeline, per-segment
-checkpointing, interruption resume, and final assembly. The recovery branch is
-muted by default and can assemble an already completed chain without sampling
-the last scene again. This is the primary workflow for
-`ComfyUI-MiniMaxH3-Contex-Loop` and uses the uniquely named
-`MiniMaxH3LoopTrim`, so it can run while NikoDemon80's upstream Motion Context
-pack is installed.
+The same gate also exposes an optional `last_frame` input and output. That
+target passes through on every loop where it is supplied. For distinct or
+alternating end frames, drive an upstream image-index switch with Current
+Shot's `clip_index`, connect the switch output to the gate's `last_frame`, and
+connect the gate output to core `MiniMaxH3ImageToVideo.last_frame`. The bundled
+I2V pair leaves this optional route disconnected.
 
-Replace the supplied image/audio filenames and model selections with files
-available in your ComfyUI installation. Scene-count and duration labels are
-intentionally generic because both are controlled by the editable plan.
+- [`MiniMax H3 I2V - Normal.json`](<MiniMax H3 I2V - Normal.json>) uses the
+  stable Scene Prompt Editor with rich token presentation but no active prompt
+  optimizer UI.
+- [`MiniMax H3 I2V - Studio.json`](<MiniMax H3 I2V - Studio.json>) uses Plan
+  Studio plus the separate Rich Scene Prompt Editor and its optional optimizer.
 
-## MiniMax H3 Seamless Chain Global Refs 6 Clips
+The pair uses the same Comfy Kitchen attention, LightX2V eight-step LoRA,
+`lcm` sampler, `beta` scheduler, generated-audio route, checkpoint/review path,
+and final assembly as T2V. It renders at 896 × 672 to preserve the bundled
+image's 4:3 composition. Each scene requests 362 raw frames; after removing 22
+repeated frames from scene 2, delivery is 702 frames, or 29.25 seconds at 24
+fps. Normal uses a hard boundary and Studio demonstrates a five-frame blend.
 
-This is also a historical manual workflow rather than the recursive loop demo.
-It is a six-clip Ref2VA chain with global character-reference images, 39-frame video
-and timeline-audio context, optional full previous-clip audio references, and
-sequential clip bypass controls.
+Copy [`assets/jigen_market_garden_doom_opening.png`](assets/jigen_market_garden_doom_opening.png)
+to `ComfyUI/input/`, then select it in the workflow's Load Image node. The JSON
+keeps the basename preselected, but ComfyUI does not load arbitrary files from
+a custom-node repository.
 
-Workflow and the underlying Ref2VA multi-reference/audio compatibility patch
-were contributed by **seitanism** in the Banodoco MiniMax H3
-seamless-extension thread: [original patch](https://discord.com/channels/1076117621407223829/1535700117452226560/1535771676158206032)
-and [original workflow](https://discord.com/channels/1076117621407223829/1535700117452226560/1535771814452793474),
-shared on 2026-08-08. Its original Motion Context node ids resolve through
-NikoDemon80's upstream pack. Do not run the separately posted global patch
-script alongside either marker-gated custom-node implementation.
+### Prompt and image source
 
-Extra custom nodes used by the demo:
+Scene 1 and the opening image were shared by **ᴊɪɢᴇɴ** in Banodoco's
+`#minimax_h3_gens` on August 12, 2026:
+[prompt and source image](https://discord.com/channels/1076117621407223829/1533677158067736777/1537180042210054226),
+[generated result](https://discord.com/channels/1076117621407223829/1533677158067736777/1537178443358142555).
+The workflow normalizes escaped line breaks and removes the surrounding
+code-string quote while preserving the source wording. Scene 2 is a new
+repository-authored continuation and intentionally contains no Picture label.
 
-- [rgthree-comfy](https://github.com/rgthree/rgthree-comfy) for group controls
-  and `Any Switch`.
-- [ComfyUI-VideoHelperSuite](https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite)
-  for preview/final video combining.
+## FL2V
 
-The workflow's optional full-audio-reference section is off by default. Keep
-it off for the baseline test because a full Ref2VA audio reference can make
-music restart or replay; Motion Context's 39-frame timeline-audio path remains
-enabled independently.
+[`MiniMax H3 FL2V - Normal.json`](<MiniMax H3 FL2V - Normal.json>) is a
+two-scene A→B→A loop built from the same working I2V graph. It adds this pack's
+Frame Index Switch between two Load Image nodes and the Frame Gate:
+
+```text
+Current Shot.clip_index ───────────────┐
+Frame B ─ frame_1 ┐                    ▼
+                  ├─ Frame Index Switch → Frame Gate.last_frame → core last_frame
+Frame A ─ frame_2 ┘
+Frame A ───────────────────────────────→ Frame Gate.image → core first_frame
+```
+
+Scene 1 receives Frame A as its opening and Frame B as its ending, so its
+prompt uses the two-picture FL2VA alignment sentence. Scene 2 starts from H3
+Motion Context at B, receives only Frame A as its final target, and therefore
+uses the one-picture L2VA alignment sentence. The switch wraps by scene index:
+scene 1 selects B, scene 2 selects A, and a third scene would select B again.
+
+Frame A is the credited source image used by the I2V pair. Frame B is the
+final frame extracted from the credited generated result. Copy both PNG files
+from [`assets/`](assets/) to `ComfyUI/input/` before loading the workflow.
+
+## Ref2V
+
+The Ref2V set uses the same two credited Market Garden pictures, the same
+two-scene plan, and the same model/sampler stack at every level:
+
+- [`MiniMax H3 Ref2V - Basic.json`](<MiniMax H3 Ref2V - Basic.json>) connects
+  both Load Image nodes directly to ComfyUI's core
+  `MiniMaxH3ReferenceToVideo`. Both images are global, so the prompts use the
+  native `<Picture 1>` and `<Picture 2>` labels in both scenes.
+- [`MiniMax H3 Ref2V - Tagged.json`](<MiniMax H3 Ref2V - Tagged.json>) chains
+  two Tagged Picture nodes into `MiniMaxH3TaggedReferenceToVideo`. There are no
+  numeric scene selectors: `@style_base` is present in both scene prompts,
+  while `@interior` appears only in scene 2. Current Shot supplies
+  `clip_index` and `clip_count`, and the final reference fingerprint is
+  connected to the Plan for checkpoint safety.
+- [`MiniMax H3 Ref2V - Studio Tagged.json`](<MiniMax H3 Ref2V - Studio Tagged.json>)
+  keeps that prompt-driven generation path and adds Plan Studio, Rich Scene Prompt
+  Editor, and an inline Run Manager. Both image loader outputs connect to raw
+  asset sockets as well as their Tagged Picture nodes. The manager archives image
+  fallbacks by default and restores each saved run's Plan plus the matching
+  loader selections.
+- [`EXPERIMENTAL MiniMax H3 Ref2V - Sequential Motion.json`](<EXPERIMENTAL MiniMax H3 Ref2V - Sequential Motion.json>)
+  adds one long video with embedded audio as `@motion` + `@motion_audio` and
+  sets its Tagged Video timeline to `sequential`. Current Shot `state` is mandatory:
+  scene 1 receives source frames `0:243` and scene 2 receives `221:464`, so the
+  source repeats the same 22-frame interval as Motion Context instead of
+  replaying frame zero. The included Patch Priority pass-through is inert on
+  updated ComfyUI and remains wired only to protect the legacy compatibility
+  path when this experimental workflow is opened on an older build.
+
+The tagged wrapper activates only registered aliases found in the resolved
+prompt and compiles them to native H3 labels. It does not insert subject
+definitions or other prompt text. Every scene therefore
+contains the complete user-editable Ref2VA structure in this order:
+`subject_definitions`, `summary`, `retention_analysis`,
+`detailed_description`, `overall_soundscape`, and `non_diegetic_music`.
+
+Copy both PNG files from [`assets/`](assets/) to `ComfyUI/input/` before
+loading any Ref2V example. The prompt concept and first image came from
+[ᴊɪɢᴇɴ's Banodoco post](https://discord.com/channels/1076117621407223829/1533677158067736777/1537180042210054226);
+the second image is the last frame of the
+[credited result](https://discord.com/channels/1076117621407223829/1533677158067736777/1537178443358142555).
+
+The sequential example does not bundle its motion video. Select a source with
+embedded audio that remains at least 464 frames / 19.333 seconds after 24 fps
+conversion. Reference Video Prep validates the complete timeline before the
+prompt-driven wrapper slices it. The Plan uses `generated_audio`; paired
+`@motion_audio` is weak rhythmic guidance, not the assembled output track.
+
+## Archive
+
+[`Archive/`](Archive/) contains the previous mixed catalog unchanged for
+compatibility, research, and migration. These workflows are not deleted, but
+they are not the recommended type-based starting points for the 0.4 examples.
+The archived catalog explains their historical purpose and extra dependencies.

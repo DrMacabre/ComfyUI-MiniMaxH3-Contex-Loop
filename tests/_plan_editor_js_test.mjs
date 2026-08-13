@@ -204,6 +204,10 @@ assert.match(editorSource, /createElementNS\(namespace, "svg"\)/);
 assert.match(editorSource, /h3c-folder-icon/);
 assert.match(editorSource, /minimax_h3_context_loop\/open-run-folder/);
 assert.match(editorSource, /navigator\.clipboard\.writeText\(payload\.path\)/);
+assert.match(editorSource, /plan_json_input/);
+assert.match(editorSource, /External plan input connected/);
+assert.match(editorSource, /non-empty upstream string controls execution/);
+assert.match(editorSource, /onConnectionsChange/);
 assert.doesNotMatch(editorSource, /h3_motion_context\.chain_plan_editor/);
 
 console.log("H3 Chain Plan editor core: parsing, uint64 seeds, timing and edits pass");

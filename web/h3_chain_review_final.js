@@ -255,6 +255,12 @@ function fetchPending() {
 
 function deliverReview(node, data) {
     if (!node || nodeType(node) !== NODE_NAME) return false;
+    const expectedRun = String(data?.run_name ?? "").trim();
+    if (expectedRun) {
+        const planNode = findUpstreamNode(node, PLAN_NAME);
+        const actualRun = String(widgetByName(planNode, "run_name")?.value ?? "").trim();
+        if (actualRun && actualRun !== expectedRun) return false;
+    }
     if (typeof node._h3ReviewHandler === "function") {
         node._h3ReviewHandler(data);
     } else {
@@ -267,8 +273,22 @@ function deliverReview(node, data) {
 }
 
 function reviewFallbackNode(data) {
-    const gates = allNodes(app.graph).filter((item) => nodeType(item) === NODE_NAME);
-    const leaf = String(data?.node_id ?? "").split(":").at(-1);
+    const gates = [...new Set([
+        ...allNodes(app.graph).filter((item) => nodeType(item) === NODE_NAME),
+        ...[...mountedReviewNodes].filter((item) => nodeType(item) === NODE_NAME),
+    ])];
+    const expectedRun = String(data?.run_name ?? "").trim();
+    if (expectedRun) {
+        const matchingRun = gates.filter((item) => {
+            const planNode = findUpstreamNode(item, PLAN_NAME);
+            return String(widgetByName(planNode, "run_name")?.value ?? "").trim() ===
+                expectedRun;
+        });
+        if (matchingRun.length === 1) return matchingRun[0];
+    }
+    // GraphBuilder execution ids use dots while subgraph-qualified display
+    // ids use colons. The visible LiteGraph node is always the final leaf.
+    const leaf = String(data?.node_id ?? "").split(/[.:]/).at(-1);
     const matchingLeaf = gates.filter((item) => String(item.id) === leaf);
     if (matchingLeaf.length === 1) return matchingLeaf[0];
     return gates.length === 1 ? gates[0] : null;
@@ -501,7 +521,10 @@ function mount(node) {
             reroll: "Reject this attempt, assign a new random seed, and regenerate the same scene using the edited prompt and duration.",
             stop: "Accept this scene but stop before the next one. Optionally assemble a partial joined MP4 and arm the next scene for resume.",
         }[action] ?? "Submit this review decision.";
-        button.disabled = true;
+        // Keep actions clickable while waiting. If a websocket event or node-id
+        // route was missed, submit() can recover the live token through the
+        // pending-review endpoint and perform the requested action immediately.
+        button.disabled = false;
         button.addEventListener("click", (event) => {
             event.preventDefault();
             event.stopPropagation();
@@ -644,7 +667,10 @@ function mount(node) {
             status.className = "h3r-status h3r-warning";
             status.textContent = "No live review token is attached. Checking the server…";
             await fetchPending();
-            return;
+            if (!current?.token) {
+                status.textContent = "No pending review is available for this project yet.";
+                return;
+            }
         }
         try {
             const normalizedSeed = action === "retry" ? reviewSeed(seed.value) : seed.value;
@@ -748,10 +774,13 @@ function mount(node) {
         setActionsEnabled(false);
         status.className = "h3r-status";
         status.textContent = data.status || "Review resolved; continuing…";
-        if (data.partial_video) {
-            video.src = videoUrl(data.partial_video);
+        const completedVideo = data.final_video ?? data.partial_video;
+        if (completedVideo) {
+            video.src = videoUrl(completedVideo);
             video.load();
-            badge.textContent = "partial joined video";
+            badge.textContent = data.final_video
+                ? "final assembled video"
+                : "partial joined video";
         }
         if (data.action === "stop") setTimeout(refreshResumeOptions, 0);
     };

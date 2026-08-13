@@ -174,7 +174,7 @@ def main():
     assert (ROOT / "web" / "h3_chain_scene_prompt_editor.js").is_file()
     assert (ROOT / "web" / "h3_reference_autoconnect.js").is_file()
     assert (ROOT / "web" / "h3_reference_autoconnect_core.mjs").is_file()
-    workflow_path = (ROOT / "example_workflows" /
+    workflow_path = (ROOT / "example_workflows" / "Archive" /
                      "Looping MiniMax H3 Seamless Chain Global Refs Example.json")
     workflow = json.loads(workflow_path.read_text(encoding="utf-8"))
     workflow_types = {node.get("type") for node in workflow["nodes"]}
@@ -215,7 +215,7 @@ def main():
                 for link_id in output_socket.get("links") or []:
                     assert int(link_id) in links
 
-    fl2va_path = (ROOT / "example_workflows" /
+    fl2va_path = (ROOT / "example_workflows" / "Archive" /
                   "Looping MiniMax H3 V2 - Core FL2VA.json")
     fl2va = json.loads(fl2va_path.read_text(encoding="utf-8"))
     assert_workflow_links(fl2va)
@@ -256,7 +256,7 @@ def main():
     assert "%date:yyyy-MM-dd%" in fl_assemble["widgets_values"][1]
     print("workflow v2: scheduler-free core FL2VA editing/review graph passes")
 
-    i2va_path = (ROOT / "example_workflows" /
+    i2va_path = (ROOT / "example_workflows" / "Archive" /
                   "Looping MiniMax H3 V2 - Single Image I2VA 20s.json")
     i2va = json.loads(i2va_path.read_text(encoding="utf-8"))
     assert_workflow_links(i2va)
@@ -283,7 +283,7 @@ def main():
     assert i2va_inputs["last_frame"] is None
     print("workflow v2: gated two-scene I2VA 20-second graph passes")
 
-    scheduled_path = (ROOT / "example_workflows" /
+    scheduled_path = (ROOT / "example_workflows" / "Archive" /
                       "Looping MiniMax H3 Seamless Chain V2 - Scheduled Refs.json")
     scheduled = json.loads(scheduled_path.read_text(encoding="utf-8"))
     assert_workflow_links(scheduled)
@@ -396,7 +396,7 @@ def main():
     assert "%date:yyyy-MM-dd%" in scheduled_assemble["widgets_values"][1]
     print("workflow v2: scheduled picture/video/audio aliases and review graph pass")
 
-    angle_workflow_path = (ROOT / "example_workflows" /
+    angle_workflow_path = (ROOT / "example_workflows" / "Archive" /
                            "EXPERIMENTAL MiniMax H3 Three-Angle Guitar Ref2VA.json")
     angle_workflow = json.loads(
         angle_workflow_path.read_text(encoding="utf-8"))
@@ -485,6 +485,13 @@ def main():
         opening_image, True)
     assert first_scene_gate.select({"index": 2}, opening_image)[:2] == (
         None, False)
+    last_target = object()
+    assert first_scene_gate.select(
+        {"index": 1}, opening_image, last_target)[3] is last_target
+    assert first_scene_gate.select(
+        {"index": 2}, opening_image, last_target)[3] is last_target
+    assert "last-frame target supplied" in first_scene_gate.select(
+        {"index": 2}, opening_image, last_target)[2]
     shared_only = chain._normalize_plan(
         json.dumps({
             "prompt_prefix": ["Shared identity.", "", "Shared direction."],
@@ -635,6 +642,38 @@ def main():
     assert expanded["result"][2:] == (
         compiled, active_summary, schedule_fingerprint)
 
+    sequential_video = torch.arange(
+        500, dtype=torch.float32).reshape(500, 1, 1, 1).expand(-1, 8, 8, 3)
+    sequential_audio = {
+        "waveform": torch.arange(
+            5000, dtype=torch.float32).reshape(1, 1, 5000),
+        "sample_rate": 240,
+    }
+    sequential_schedule = video_node.add(
+        sequential_video, "motion", "", "motion_audio", "sequential",
+        audio=sequential_audio)[0]
+    sequential_state = {
+        "index": 2,
+        "plan": {"shots": [
+            {"raw_frames": 243, "generation_start_frame": 0},
+            {"raw_frames": 243, "generation_start_frame": 221},
+        ]},
+    }
+    sequential_expanded = chain.MiniMaxH3ScheduledReferenceToVideo().apply(
+        "clip", "video-vae", "audio-vae", sequential_schedule, 2, 2,
+        "Use @motion and @motion_audio.", 960, 544, 243, "match",
+        state=sequential_state)
+    sequential_inputs = next(iter(
+        sequential_expanded["expand"].values()))["inputs"]
+    sequential_video_slice = sequential_inputs["ref_videos.ref_video_0"]
+    sequential_audio_slice = sequential_inputs[
+        "ref_video_audios.ref_video_audio_0"]
+    assert float(sequential_video_slice[0, 0, 0, 0]) == 221
+    assert float(sequential_video_slice[-1, 0, 0, 0]) == 463
+    assert float(sequential_audio_slice["waveform"][0, 0, 0]) == 2210
+    assert "@motion sequential frames 221:464" in (
+        sequential_expanded["result"][3])
+
     first_picture_schedule = picture_node.add(
         picture, "picture_1", "1")[0]
     renumbering_schedule = picture_node.add(
@@ -732,9 +771,84 @@ def main():
         assert "exceeds this plan's 4 scenes" in str(exc)
     else:
         raise AssertionError("scheduler accepted an out-of-plan selector")
+
+    tagged_picture_node = chain.MiniMaxH3TaggedPictureReference()
+    tagged_video_node = chain.MiniMaxH3TaggedVideoReference()
+    tagged_audio_node = chain.MiniMaxH3TaggedAudioReference()
+    assert "scenes" not in tagged_picture_node.INPUT_TYPES()["required"]
+    assert "scenes" not in tagged_video_node.INPUT_TYPES()["required"]
+    assert "scenes" not in tagged_audio_node.INPUT_TYPES()["required"]
+    tagged = tagged_picture_node.add(picture, "hero_face")[0]
+    tagged = tagged_picture_node.add(
+        picture, "hero_look", previous=tagged)[0]
+    tagged = tagged_audio_node.add(
+        voice_audio, "voice", previous=tagged)[0]
+    assert tagged["activation"] == "prompt"
+    assert all(entry["activation"] == "prompt"
+               for entry in tagged["entries"])
+    tagged_prompt = (
+        "<Subject 1> @S1 follows @hero_look. "
+        "@voice defines vocal identity. @unregistered stays user-managed.")
+    tagged_compiled, tagged_summary, tagged_bindings = (
+        chain._compile_tagged_reference_prompt(
+            tagged, 2, 4, tagged_prompt))
+    assert tagged_compiled == (
+        "<Subject 1> @S1 follows <Picture 1>. "
+        "<Audio 1> defines vocal identity. @unregistered stays user-managed.")
+    assert tagged_summary == (
+        "scene 2/4: @hero_look -> <Picture 1>; @voice -> <Audio 1>")
+    assert [entry["tag"] for entry in tagged_bindings["pictures"]] == [
+        "hero_look"]
+    assert [entry["tag"] for entry in tagged_bindings["audios"]] == [
+        "voice"]
+    assert "hero_face" not in tagged_bindings["aliases"]
+
+    tagged_expanded = chain.MiniMaxH3TaggedReferenceToVideo().apply(
+        "clip", "video-vae", "audio-vae", tagged, 2, 4,
+        tagged_prompt, 960, 544, 124, "match")
+    tagged_inputs = next(iter(tagged_expanded["expand"].values()))["inputs"]
+    assert tagged_inputs["prompt"] == tagged_compiled
+    assert tagged_inputs["ref_images.ref_image_0"] is tagged[
+        "entries"][1]["value"]
+    assert tagged_inputs["ref_audios.ref_audio_0"] is voice_audio
+    assert "ref_images.ref_image_1" not in tagged_inputs
+    assert tagged_expanded["result"][4] == tagged["fingerprint"]
+
+    tagged_motion = tagged_video_node.add(
+        sequential_video, "motion", "motion_audio", "sequential",
+        audio=sequential_audio)[0]
+    prompt_driven_state = {
+        "index": 3,
+        "plan": {"shots": [
+            {"raw_frames": 243, "generation_start_frame": 0,
+             "prompt": "No motion reference in this opening."},
+            {"raw_frames": 243, "generation_start_frame": 221,
+             "prompt": "Begin @motion."},
+            {"raw_frames": 243, "generation_start_frame": 442,
+             "prompt": "Continue using @motion_audio."},
+        ]},
+    }
+    tagged_motion_expanded = chain.MiniMaxH3TaggedReferenceToVideo().apply(
+        "clip", "video-vae", "audio-vae", tagged_motion, 3, 3,
+        "Continue using @motion_audio.", 960, 544, 243, "match",
+        state=prompt_driven_state)
+    tagged_motion_inputs = next(iter(
+        tagged_motion_expanded["expand"].values()))["inputs"]
+    assert float(tagged_motion_inputs[
+        "ref_videos.ref_video_0"][0, 0, 0, 0]) == 221
+    assert float(tagged_motion_inputs[
+        "ref_video_audios.ref_video_audio_0"]["waveform"][0, 0, 0]) == 2210
+    assert "origin scene 2" in tagged_motion_expanded["result"][3]
+    no_tag_compiled, no_tag_summary, no_tag_bindings = (
+        chain._compile_tagged_reference_prompt(
+            tagged, 1, 4, "A scene without registered aliases; keep @S1."))
+    assert no_tag_compiled.endswith("keep @S1.")
+    assert no_tag_bindings["pictures"] == []
+    assert no_tag_bindings["audios"] == []
+    assert no_tag_summary.endswith("no tagged references used by prompt")
     print("reference schedule: disjoint selectors, stable tags, native label "
           "compilation, strict/warning-only compliance, dynamic Ref2VA "
-          "sockets, and validation pass")
+          "sockets, prompt-driven tagged references, and validation pass")
 
     # ComfyUI rounds H3's 40 Hz audio grid to the nearest step. Depending on
     # frame length, the decoded stream can land 1/3 step above or below the
@@ -1524,6 +1638,7 @@ def main():
                     review_events = [
                         payload for event, payload, _client in sent
                         if event == "minimax_h3_context_loop_review"]
+                    assert review_events[0]["run_name"] == prepared_plan["run_name"]
                     assert review_events[0]["preview_pending"]
                     assert review_events[0]["preview_revision"] == 0
                     assert not review_events[-1]["preview_pending"]

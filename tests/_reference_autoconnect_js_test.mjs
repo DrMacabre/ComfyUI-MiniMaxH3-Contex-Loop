@@ -106,7 +106,7 @@ function schema(type) {
         return new FakeNode(type, [
             "clip", "vae", "audio_vae", "reference_schedule", "clip_index",
             "clip_count", "prompt", "width", "height", "length",
-            "ref_image_size",
+            "ref_image_size", "state",
         ], ["positive", "latent", "compiled_prompt", "active_references",
             "schedule_fingerprint"], [
             ["prompt", ""], ["width", 960], ["height", 544], ["length", 124],
@@ -123,6 +123,7 @@ function schema(type) {
         return new FakeNode(type, ["video", "audio", "previous"], [
             "schedule", "schedule_fingerprint", "status"], [
             ["tag", "performance"], ["scenes", ""], ["audio_tag", ""],
+            ["timeline_mode", "restart_each_scene"],
         ]);
     }
     if (type === AUDIO_REF_TYPE) {
@@ -219,6 +220,8 @@ assert.equal(converted.wrapper.inputs.find(
     (item) => item.name === "clip_index").link != null, true);
 assert.equal(converted.wrapper.inputs.find(
     (item) => item.name === "clip_count").link != null, true);
+assert.equal(converted.wrapper.inputs.find(
+    (item) => item.name === "state").link != null, true);
 assert.equal(graph.links[positiveTarget.inputs[0].link].origin_id,
     converted.wrapper.id);
 assert.equal(graph.links[latentTarget.inputs[0].link].origin_id,
@@ -262,6 +265,17 @@ assert.equal(migrateLegacyVideoScheduleWidgets(migratedVideo, {
 }), true);
 assert.equal(migratedVideo.widgets.find(
     (item) => item.name === "audio_tag").value, "performance_audio");
+assert.equal(migratedVideo.widgets.find(
+    (item) => item.name === "timeline_mode").value, "restart_each_scene");
+
+const modernVideo = schema(VIDEO_REF_TYPE);
+assert.equal(migrateLegacyVideoScheduleWidgets(modernVideo, {
+    widgets_values: [
+        "performance", "4:6", "performance_audio", "sequential",
+    ],
+}), false);
+assert.equal(modernVideo.widgets.find(
+    (item) => item.name === "audio_tag").value, "");
 
 const migratedCompliance = schema(SCHEDULED_REF2VA_TYPE);
 migratedCompliance.widgets.find(

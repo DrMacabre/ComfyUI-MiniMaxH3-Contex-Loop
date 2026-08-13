@@ -1,15 +1,25 @@
 export const SCHEDULED_REF2VA_TYPE = "MiniMaxH3ScheduledReferenceToVideo";
+export const TAGGED_REF2VA_TYPE = "MiniMaxH3TaggedReferenceToVideo";
 export const CORE_REF2VA_TYPE = "MiniMaxH3ReferenceToVideo";
 export const IMAGE_TO_VIDEO_TYPE = "MiniMaxH3ImageToVideo";
 export const FIRST_SCENE_IMAGE_TYPE = "MiniMaxH3ChainFirstSceneImage";
+export const FRAME_INDEX_SWITCH_TYPE = "MiniMaxH3ChainFrameIndexSwitch";
 export const PICTURE_REF_TYPE = "MiniMaxH3ScheduledPictureReference";
 export const VIDEO_REF_TYPE = "MiniMaxH3ScheduledVideoReference";
 export const AUDIO_REF_TYPE = "MiniMaxH3ScheduledAudioReference";
+export const TAGGED_PICTURE_REF_TYPE = "MiniMaxH3TaggedPictureReference";
+export const TAGGED_VIDEO_REF_TYPE = "MiniMaxH3TaggedVideoReference";
+export const TAGGED_AUDIO_REF_TYPE = "MiniMaxH3TaggedAudioReference";
 
 const SCHEDULE_TYPES = new Set([
     PICTURE_REF_TYPE,
     VIDEO_REF_TYPE,
     AUDIO_REF_TYPE,
+]);
+const TAGGED_TYPES = new Set([
+    TAGGED_PICTURE_REF_TYPE,
+    TAGGED_VIDEO_REF_TYPE,
+    TAGGED_AUDIO_REF_TYPE,
 ]);
 
 export function nodeType(node) {
@@ -24,10 +34,15 @@ export function referenceTag(value) {
     return String(value ?? "").trim().replace(/^@+/, "");
 }
 
-function inputSource(node, name) {
+function inputConnection(node, name) {
     const input = node?.inputs?.find((item) => item.name === name);
     const link = input?.link == null ? null : node.graph?.links?.[input.link];
-    return link ? node.graph?.getNodeById?.(link.origin_id) ?? null : null;
+    const source = link ? node.graph?.getNodeById?.(link.origin_id) ?? null : null;
+    return source ? {source, originSlot: Number(link.origin_slot ?? 0)} : null;
+}
+
+function inputSource(node, name) {
+    return inputConnection(node, name)?.source ?? null;
 }
 
 function outputTargets(node) {
@@ -59,6 +74,10 @@ export function findScheduledRef2VA(start) {
     return findDownstreamType(start, SCHEDULED_REF2VA_TYPE);
 }
 
+export function findTaggedRef2VA(start) {
+    return findDownstreamType(start, TAGGED_REF2VA_TYPE);
+}
+
 export function findCoreRef2VA(start) {
     return findDownstreamType(start, CORE_REF2VA_TYPE);
 }
@@ -72,6 +91,18 @@ export function collectScheduleNodes(wrapper) {
     const seen = new Set();
     let current = inputSource(wrapper, "reference_schedule");
     while (current && SCHEDULE_TYPES.has(nodeType(current)) && !seen.has(current)) {
+        seen.add(current);
+        result.unshift(current);
+        current = inputSource(current, "previous");
+    }
+    return result;
+}
+
+export function collectTaggedNodes(wrapper) {
+    const result = [];
+    const seen = new Set();
+    let current = inputSource(wrapper, "references");
+    while (current && TAGGED_TYPES.has(nodeType(current)) && !seen.has(current)) {
         seen.add(current);
         result.unshift(current);
         current = inputSource(current, "previous");
@@ -167,6 +198,82 @@ export function scheduledReferenceRecords(editorNode, scene) {
     };
 }
 
+function promptTagSet(prompt) {
+    return new Set([...String(prompt ?? "").matchAll(
+        /(?<![A-Za-z0-9_])@([A-Za-z][A-Za-z0-9_-]{0,63})/g,
+    )].map((match) => match[1]));
+}
+
+export function taggedReferenceRecords(editorNode, prompt = "") {
+    const wrapper = findTaggedRef2VA(editorNode);
+    if (!wrapper) return {wrapper: null, mode: null, records: []};
+    const nodes = collectTaggedNodes(wrapper);
+    const used = promptTagSet(prompt);
+    const pictures = [];
+    const videos = [];
+    const pairedAudios = [];
+    const audios = [];
+
+    for (const node of nodes) {
+        const type = nodeType(node);
+        if (type === TAGGED_PICTURE_REF_TYPE) {
+            const record = baseRecord(node, "picture", 1, "image");
+            record.selector = "prompt tag";
+            record.active = used.has(record.tag);
+            pictures.push(record);
+        } else if (type === TAGGED_VIDEO_REF_TYPE) {
+            const video = baseRecord(node, "video", 1, "video");
+            video.selector = "prompt tag";
+            const audioSource = inputSource(node, "audio");
+            const explicit = referenceTag(widgetValue(node, "audio_tag", ""));
+            const audioTag = explicit || `${video.tag}_audio`;
+            video.active = used.has(video.tag) || Boolean(
+                audioSource && used.has(audioTag));
+            videos.push(video);
+            if (audioSource) {
+                pairedAudios.push({
+                    node,
+                    kind: "audio",
+                    tag: audioTag,
+                    selector: "prompt tag",
+                    active: video.active,
+                    source: audioSource,
+                    label: null,
+                    pairedWith: video,
+                });
+            }
+        } else if (type === TAGGED_AUDIO_REF_TYPE) {
+            const record = baseRecord(node, "audio", 1, "audio");
+            record.selector = "prompt tag";
+            record.active = used.has(record.tag);
+            audios.push(record);
+        }
+    }
+
+    let ordinal = 0;
+    for (const item of pictures) {
+        if (item.active) item.label = `<Picture ${++ordinal}>`;
+    }
+    ordinal = 0;
+    for (const item of videos) {
+        if (item.active) item.label = `<Video ${++ordinal}>`;
+    }
+    ordinal = 0;
+    for (const item of pairedAudios) {
+        if (item.active) item.label = `<Audio ${++ordinal}>`;
+    }
+    for (const item of audios) {
+        if (item.active) item.label = `<Audio ${++ordinal}>`;
+    }
+    return {
+        wrapper,
+        mode: "tagged",
+        records: [...pictures, ...videos, ...pairedAudios, ...audios]
+            .filter((item) => item.tag)
+            .map((item) => ({...item, token: `@${item.tag}`})),
+    };
+}
+
 function numberedInputRecords(wrapper, pattern, kind, labelKind) {
     const records = [];
     for (const input of wrapper?.inputs ?? []) {
@@ -214,15 +321,47 @@ export function coreReferenceRecords(editorNode) {
     };
 }
 
+function selectedFrameSource(source, scene) {
+    if (nodeType(source) !== FRAME_INDEX_SWITCH_TYPE) return source;
+    const frames = [];
+    for (let index = 1; index <= 8; index += 1) {
+        const frame = inputSource(source, `frame_${index}`);
+        if (frame) frames.push(frame);
+    }
+    if (!frames.length) return source;
+    const requested = Math.max(1, Number.isFinite(Number(scene))
+        ? Math.trunc(Number(scene)) : 1);
+    return frames[(requested - 1) % frames.length];
+}
+
+function keyframePreviewSource(connection, role, scene) {
+    let source = connection?.source ?? null;
+    if (!source) return null;
+
+    // The frame gate exposes both first_frame and last_frame from the same
+    // node. Starting a generic upstream search at that node always encounters
+    // its opening `image` first, which made Picture 2 preview Picture 1. Follow
+    // the input that corresponds to the I2V socket instead.
+    if (nodeType(source) === FIRST_SCENE_IMAGE_TYPE) {
+        source = inputSource(source, role === "first" ? "image" : "last_frame")
+            ?? source;
+    }
+    return selectedFrameSource(source, scene);
+}
+
 export function imageToVideoReferenceRecords(editorNode, scene = 1) {
     const wrapper = findImageToVideo(editorNode);
     if (!wrapper) return {wrapper: null, mode: null, records: []};
-    const firstFrame = inputSource(wrapper, "first_frame");
-    const lastFrame = inputSource(wrapper, "last_frame");
+    const firstConnection = inputConnection(wrapper, "first_frame");
+    const lastConnection = inputConnection(wrapper, "last_frame");
+    const firstFrame = firstConnection?.source ?? null;
+    const lastFrame = lastConnection?.source ?? null;
     const records = [];
+    let firstActive = false;
     if (firstFrame) {
         const firstSceneOnly = nodeType(firstFrame) === FIRST_SCENE_IMAGE_TYPE;
         const active = !firstSceneOnly || Number(scene) === 1;
+        firstActive = active;
         records.push({
             node: wrapper,
             kind: "picture",
@@ -230,14 +369,14 @@ export function imageToVideoReferenceRecords(editorNode, scene = 1) {
             token: "<Picture 1>",
             selector: firstSceneOnly ? "1" : "all",
             active,
-            source: firstFrame,
+            source: keyframePreviewSource(firstConnection, "first", scene),
             label: "<Picture 1>",
             mode: "native",
             role: "first frame",
         });
     }
     if (lastFrame) {
-        const ordinal = firstFrame ? 2 : 1;
+        const ordinal = firstActive ? 2 : 1;
         records.push({
             node: wrapper,
             kind: "picture",
@@ -245,7 +384,7 @@ export function imageToVideoReferenceRecords(editorNode, scene = 1) {
             token: `<Picture ${ordinal}>`,
             selector: "all",
             active: true,
-            source: lastFrame,
+            source: keyframePreviewSource(lastConnection, "last", scene),
             label: `<Picture ${ordinal}>`,
             mode: "native",
             role: "last frame",
@@ -254,7 +393,9 @@ export function imageToVideoReferenceRecords(editorNode, scene = 1) {
     return {wrapper, mode: "native_keyframes", records};
 }
 
-export function referencePreviewRecords(editorNode, scene) {
+export function referencePreviewRecords(editorNode, scene, {prompt = ""} = {}) {
+    const tagged = taggedReferenceRecords(editorNode, prompt);
+    if (tagged.wrapper) return tagged;
     const scheduled = scheduledReferenceRecords(editorNode, scene);
     if (scheduled.wrapper) return scheduled;
     const core = coreReferenceRecords(editorNode);
@@ -263,9 +404,9 @@ export function referencePreviewRecords(editorNode, scene) {
 }
 
 export function availableReferenceRecords(
-    editorNode, scene, {includeInactive = false} = {},
+    editorNode, scene, {includeInactive = false, prompt = ""} = {},
 ) {
-    const result = referencePreviewRecords(editorNode, scene);
+    const result = referencePreviewRecords(editorNode, scene, {prompt});
     return {
         ...result,
         records: result.records.filter(

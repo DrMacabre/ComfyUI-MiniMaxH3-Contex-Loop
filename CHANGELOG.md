@@ -2,6 +2,40 @@
 
 Newest first. This file keeps release history out of the onboarding README.
 
+## v0.4.0 — Prompt-driven Ref2VA and Studio authoring
+
+- Added Tagged Picture, Video, and Audio references. Register stable aliases
+  such as `@hero`, `@motion`, and `@voice`; only tags present in the resolved
+  scene prompt are sent to H3 and compacted to native media labels.
+- Retained numeric-range Scheduled Ref2VA under the legacy-schedule category
+  for workflows that need explicit scene selectors.
+- Added optional Plan Studio and Rich Scene Prompt Editor authoring, including
+  synchronized scene selection, rich reference chips and previews, prompt
+  revisions, and configurable Direct API or MCP prompt optimization.
+- Added maintained T2V and I2V Normal/Studio pairs, indexed A→B→A FL2V, Basic /
+  Tagged / Studio Tagged Ref2V, and an experimental advancing motion-reference
+  workflow. Previous examples remain archived rather than deleted.
+- Added cumulative disk-backed visual blending, final-assembly playback in
+  Review Gate, editable retry duration, and exact scene retiming.
+- Added native first/last-frame reference previews that follow the active frame
+  index, plus prompt-driven image, video, and audio miniatures.
+- Added portable Run Manager asset restoration to the Studio Tagged example.
+- Updated compatibility for merged ComfyUI PR #15439: current ComfyUI owns H3
+  guide placement and payload merging; older builds receive one warning before
+  the guarded fallback is used.
+- Added an optional external Plan JSON STRING input for provider-independent
+  story-director and LLM workflows.
+
+Credit: native H3 guide support is by **drozbay**; cumulative audio budgeting
+was inspired by **seitanism**; the editor interaction pattern was inspired by
+**nkxx188's ComfyUI-MiniMaxH3-Easy**. See
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for the complete attribution.
+
+## v0.3.28 — PyAV audio rounding tolerance
+
+Final PyAV muxing tolerates and zero-pads a single missing sample caused by
+frame-to-sample rounding while continuing to reject larger audio deficits.
+
 ## v0.3.27 — True disabled scheduler compliance
 
 Disabled policy reaches upstream Schedule nodes, converts scheduler-owned

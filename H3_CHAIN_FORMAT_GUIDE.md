@@ -51,9 +51,40 @@ frame correctly exposes that frame as `<Picture 1>`. When a core I2V first
 frame passes through **MiniMax H3 First-Scene Image Gate**, Picture 1 is active
 only in scene 1 and is omitted from the menu on continuation scenes.
 
+The experimental **Rich Scene Prompt Editor** adds color-coded tokens, larger
+media previews, prompt guides, revision history, and one-click **Optimize**.
+Its optimizer connection is global rather than stored on the node or in the
+workflow. Open **ComfyUI Settings → MiniMax H3 Contex Loop → Prompt
+optimizer** and choose:
+
+- **Direct API** (default) for an OpenAI-compatible Chat Completions endpoint,
+  the OpenAI Responses format, or Gemini Native. Enter the server URL and model;
+  an API key is optional for local OpenAI-compatible servers and required for
+  Gemini Native.
+- **MCP agent** to use a provider advertised by the compatible separately
+  installed `comfyui-mcp` prompt bridge.
+- **Disabled** to turn off optimizer execution while keeping manual Studio
+  editing available.
+
+Reference-media reading is a separate opt-in setting and is off by default.
+When enabled, only reference files resolvable inside ComfyUI's input, output,
+or temp roots are considered. OpenAI-compatible and Responses requests attach
+images; Gemini Native can also receive video and audio. Provider credentials
+are saved in ComfyUI user settings and are never serialized into workflow JSON.
+
 Use the editor's **JSON** button when you need to inspect, paste, import, or
 export the underlying plan. The JSON format below remains the runtime contract
 and existing plans are backward compatible.
+
+The Plan also exposes an optional forced STRING socket named
+`plan_json_input`. Connect an LLM node, local story director, reusable STRING,
+or any other provider-independent JSON source. A non-empty upstream string is
+the execution source and receives the same normalization and validation as the
+internal JSON; an empty string or disconnected socket uses the visual editor's
+stored `plan_json`. While connected, the visual editor clearly labels its cards
+as the editable fallback. This socket replaces only the scene-plan JSON—Plan
+settings such as `run_name`, dimensions, context, and audio mode remain their
+own inputs.
 
 ## Copy/paste workflow note
 
@@ -482,7 +513,7 @@ should apply to selected scenes instead of every recursive iteration.
 ```text
 Scheduled Picture Ref ─→ Scheduled Video Ref ─→ Scheduled Audio Ref
                                                     ↓
-Current Shot ─ prompt, clip_index, clip_count ─→ Scheduled Ref2VA
+Current Shot ─ state, prompt, clip_index, clip_count ─→ Scheduled Ref2VA
 Current Shot ─ width, height, length ───────────→ Scheduled Ref2VA
 CLIP + video VAE + audio VAE ──────────────────→ Scheduled Ref2VA
 ```
@@ -499,7 +530,7 @@ edit, not a runtime monkeypatch. It:
 - creates one schedule entry for every connected picture, video, paired video
   soundtrack, and standalone audio socket;
 - keeps same-index video/audio inputs together in one Video Schedule node;
-- connects Current Shot `clip_index` and `clip_count` when the loop node is
+- connects Current Shot `state`, `clip_index`, and `clip_count` when the loop node is
   already connected to the core prompt/dimensions, or is the only Current Shot;
 - connects a static schedule fingerprint to the only Plan when safe and leaves
   it disconnected when a reference depends on Current Shot, avoiding a cycle;
@@ -531,6 +562,46 @@ Overlapping or adjacent ranges are normalized. Zero, reversed ranges, malformed
 tokens, and selections beyond `clip_count` stop before model execution with a
 specific error. Unlike Loop Start's render range, disjoint reference selections
 are safe because they do not skip the chain's motion dependency.
+
+### Video-reference timeline modes
+
+`sequential` is experimental in 0.4. `restart_each_scene` remains the safe,
+backward-compatible default and preserves existing schedule fingerprints.
+
+Each Scheduled Video Ref chooses one of two source-timeline behaviors:
+
+| Mode | Behavior |
+|---|---|
+| `restart_each_scene` | Every active scene receives the reference beginning at source frame 0. This is the compatibility default for existing workflows and short reusable motion examples. |
+| `sequential` | The source advances on the Plan timeline. Each scene receives an exact source slice beginning at that scene's `generation_start_frame`, relative to the first scene where this reference is active. |
+
+Sequential mode requires Current Shot `state` connected to Scheduled Ref2VA.
+It uses the same overlap already represented in the Plan. With 243 raw frames
+and 22 head-context frames, scene 1 uses reference frames `0:243`; scene 2
+starts at generation frame 221 and therefore uses `221:464`. This overlap is
+intentional: the reference motion shown beneath the pinned continuation frames
+is the same motion, rather than frame 0 replaying against a later scene.
+
+If the selector begins at scene 4, reference source frame 0 aligns with scene
+4. Later active scenes follow the Plan's elapsed generation time, including
+inactive gaps. The video must already be 24 fps and contain every requested
+frame. Paired video audio is sliced to the same time interval with sample-exact
+rounding. A short source, missing state, changed Plan timing, or mismatched
+scene state stops with an explicit error; the scheduler never wraps or pads a
+motion reference silently.
+
+Motion Context is not `<Video 0>` and does not consume one of stock Ref2VA's
+three external video slots. It travels as an H3 guide/keyframe and has no
+prompt-visible label; scheduled references remain `<Video 1>` through
+`<Video 3>`. Internally all visual conditioning blocks are presented to the
+model, so additional references may still cost VRAM and introduce competing
+motion instructions.
+
+See
+[`EXPERIMENTAL MiniMax H3 Ref2V - Sequential Motion.json`](<example_workflows/EXPERIMENTAL MiniMax H3 Ref2V - Sequential Motion.json>)
+for the minimal two-scene wiring. Its Reference Video Prep selects 464 frames,
+so the user-supplied native video and embedded audio must cover at least
+19.333 seconds after conversion to 24 fps.
 
 ### Prompt definitions and native labels
 
@@ -572,12 +643,15 @@ receives its own audio tag; if `audio_tag` is blank, `@performance` derives
 3 videos, and 3 standalone audios. Scenes with no active references remain
 valid and expand to stock Ref2VA without dynamic reference sockets.
 
-### Optional patch ownership control
+### Optional legacy patch ownership control
 
-Normally the first compatible H3 Motion Context copy loaded by ComfyUI owns the
-small process-level compatibility wrappers. If an older installed copy wins
-load order, wire **MiniMax H3 Patch Priority** between the conditioning node and
-**MiniMax H3 Contex Loop Context**:
+Updated ComfyUI builds containing merged PR #15439 keep H3 guide placement and
+Ref2VA merging entirely core-owned; Patch Priority is then an unchanged
+pass-through reporting that no compatibility patch is required. On an older
+ComfyUI build, the first compatible H3 Motion Context copy loaded owns the
+legacy process-level wrappers. If an older installed copy wins load order, wire
+**MiniMax H3 Patch Priority** between the conditioning node and **MiniMax H3
+Contex Loop Context**:
 
 ```text
 Ref2VA / I2V conditioning → Patch Priority → Contex Loop Context
@@ -729,13 +803,14 @@ When ComfyUI exposes **MiniMax H3 Add Guide** (introduced by
 [ComfyUI PR #15439](https://github.com/Comfy-Org/ComfyUI/pull/15439)), Loop
 Context automatically emits core video/audio guide records instead of the
 legacy keyframe/ref representation. Existing ComfyUI releases continue through
-the guarded compatibility path, so workflows do not need a version switch.
+the guarded compatibility path with a one-time update warning, so workflows do
+not need a version switch.
 
 To add a scene-local still, clip, or audio anchor, place the official Add Guide
 node **after Loop Context**. It appends its guide to the continuation anchors.
-When Ref2VA references are present, the loop's marker-gated alignment keeps the
-complete guide set on the target scene timeline rather than the preceding
-reference cursor. Core remains responsible for guide layout and payload merging.
+When Ref2VA references are present, merged core places the complete guide set
+on the target scene timeline rather than the preceding reference cursor. This
+pack does not wrap the native layout or payload path.
 
 ## Starting, resuming, and changing a plan
 

@@ -1,11 +1,11 @@
-"""PR #15439 compatibility: native AV guides with Ref2VA and legacy fallback.
+"""Merged PR #15439 compatibility: core-owned AV guides with Ref2VA.
 
 The fake layout mirrors the new frame_count-free API closely enough to prove:
+  * this pack does not wrap PackedLayout on updated ComfyUI;
   * payload monkey-patching is skipped;
   * one video guide and one start-anchored audio guide carry the continuation;
   * Ref2VA refs remain in place and core merges both payload families;
-  * every guide chained after Motion Context shares the target-origin fix;
-  * an unrelated, unmarked native-guide graph remains core-owned.
+  * core aligns every guide to the target origin after reference blocks.
 """
 
 import importlib.util
@@ -93,10 +93,20 @@ def _native_model_module():
                 np.arange(text_len, dtype=np.float64),
                 np.zeros((text_len, 2), dtype=np.float64),
             ))]
-            cursor = float(text_len)
+            target_origin = float(text_len)
+            for ref in refs or []:
+                kind = ref["kind"]
+                if kind == "image":
+                    target_origin += 1.0
+                elif kind == "audio":
+                    target_origin += float(ref.get("ref_audio_t", 0))
+                elif kind in ("video", "video_audio"):
+                    target_origin += max(
+                        float(ref.get("ref_audio_t", 0)),
+                        _video_span(int(ref["latent_t"])))
 
             for keyframe in keyframes or []:
-                start = (float(text_len) + FRAME_RESCALE
+                start = (target_origin + FRAME_RESCALE
                          * float(keyframe["resolved_frame_index"]))
                 video = keyframe.get("latent")
                 if video is not None:
@@ -114,6 +124,7 @@ def _native_model_module():
                     blocks.append(np.column_stack((
                         times, np.zeros((steps * 2, 2), dtype=np.float64))))
 
+            cursor = float(text_len)
             for ref in refs or []:
                 kind = ref["kind"]
                 if kind == "image":
@@ -170,6 +181,7 @@ def _native_model_module():
 
 def main():
     mm = _native_model_module()
+    stock_layout_init = mm.PackedLayout.__init__
     for name in ("comfy", "comfy.ldm", "comfy.ldm.minimax"):
         sys.modules[name] = types.ModuleType(name)
     sys.modules["comfy.ldm.minimax.model"] = mm
@@ -273,15 +285,14 @@ def main():
         {"kind": "audio", "ref_audio_t": 3,
          "audio_latent": T(np.zeros((1, 32, 2, 3)))},
     ]
-    scene_one = nodes._prepare_native_guide_conditioning(
-        [["conditioning", {"minimax_refs": refs}]])
-    scene_one_keyframes = scene_one[0][1]["minimax_keyframes"]
-    assert len(scene_one_keyframes) == 1
-    assert scene_one_keyframes[0].get("latent") is None
-    scene_one_keyframes.append({
+    scene_one_input = [["conditioning", {"minimax_refs": refs}]]
+    scene_one = nodes._prepare_native_guide_conditioning(scene_one_input)
+    assert scene_one is scene_one_input
+    assert "minimax_keyframes" not in scene_one[0][1]
+    scene_one_keyframes = [{
         "resolved_frame_index": 60,
         "latent": T(np.zeros((1, 16, 1, height, width))),
-    })
+    }]
     scene_one_layout = mm.PackedLayout(
         7, latent_t, height, width, audio_t,
         keyframes=scene_one_keyframes, refs=refs)
@@ -301,15 +312,20 @@ def main():
     )
 
     assert trim == 22
-    assert layout_patch.is_applied() and layout_patch.native_guides_active()
+    assert layout_patch.native_guides_available()
+    assert not layout_patch.is_applied()
+    assert mm.PackedLayout.__init__ is stock_layout_init
     assert not payload_patch.is_applied()
     priority_status = nodes._claim_inline_patch_ownership()
-    assert priority_status == "native guides; layout owned by this pack"
+    assert priority_status == (
+        "native guides; core-owned; no compatibility patch required")
+    assert mm.PackedLayout.__init__ is stock_layout_init
     output_metadata = output[0][1]
     assert "minimax_frame_count" not in output_metadata
     assert output_metadata["minimax_refs"] == refs
     keyframes = output_metadata["minimax_keyframes"]
     assert len(keyframes) == 2
+    assert all(nodes.MC_KEY not in value for value in keyframes)
     assert keyframes[0]["resolved_frame_index"] == 0
     assert tuple(keyframes[0]["latent"].shape)[2] == 7
     assert keyframes[1].get("latent") is None
@@ -338,7 +354,8 @@ def main():
     assert anchored_trim == 22
     assert len(anchored_keyframes) == 3
     assert anchored_keyframes[0]["latent"] is last_anchor
-    assert anchored_keyframes[0][nodes.MC_KEY] == frame_count - 1
+    assert anchored_keyframes[0]["resolved_frame_index"] == frame_count - 1
+    assert all(nodes.MC_KEY not in value for value in anchored_keyframes)
     assert first_anchor not in [value.get("latent")
                                 for value in anchored_keyframes]
     anchored_layout = mm.PackedLayout(
@@ -402,10 +419,9 @@ def main():
     assert len(ref_payload["cond_video_latents"]) == 2
     assert len(ref_payload["cond_audio_latents"]) == 2
 
-    print("native guides: AV continuation, retained last_frame and chained "
-          "Add Guide align after Ref2VA on scene 1 and continuations; timeline "
-          "and reference audio modes retain core payload merging; legacy "
-          "payload patch skipped")
+    print("native guides: core-owned PackedLayout, sentinel-free scene 1, AV "
+          "continuation, retained last_frame and chained Add Guide alignment "
+          "after Ref2VA; legacy layout/payload patches skipped")
 
 
 if __name__ == "__main__":

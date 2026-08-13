@@ -67,10 +67,15 @@ function setWidget(node, name, value) {
 export function migrateLegacyVideoScheduleWidgets(node, info) {
     const values = info?.widgets_values;
     if (nodeType(node) !== VIDEO_REF_TYPE || !Array.isArray(values)
-            || values.length < 4) return false;
+            || values.length < 5) return false;
     // v0.3.10 stored [tag, scenes, declaration, audio_tag,
-    // audio_declaration]. The lean scheduler stores [tag, scenes, audio_tag].
-    return setWidget(node, "audio_tag", values[3] ?? "");
+    // audio_declaration]. The current scheduler stores
+    // [tag, scenes, audio_tag, timeline_mode], so only the five-value legacy
+    // shape may be migrated here.
+    const audioMigrated = setWidget(node, "audio_tag", values[3] ?? "");
+    const timelineReset = setWidget(
+        node, "timeline_mode", "restart_each_scene");
+    return audioMigrated || timelineReset;
 }
 
 export function migrateReferenceComplianceWidget(node) {
@@ -223,7 +228,7 @@ function transferOutputs(oldNode, wrapper, graph) {
 
 function connectCurrentShot(current, wrapper) {
     if (!current) return false;
-    for (const name of ["clip_index", "clip_count"]) {
+    for (const name of ["state", "clip_index", "clip_count"]) {
         const slot = outputSlot(current, name);
         if (slot >= 0 && inputSlot(wrapper, name) >= 0) {
             connect(current, slot, wrapper, name);

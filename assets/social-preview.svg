@@ -1,0 +1,85 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" role="img" aria-labelledby="title desc">
+  <title id="title">MiniMax H3 Contex Loop v0.4</title>
+  <desc id="desc">Social preview for version 0.4, featuring a luminous motion and audio loop behind the project title.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#030716"/>
+      <stop offset=".56" stop-color="#0b0d29"/>
+      <stop offset="1" stop-color="#041d2c"/>
+    </linearGradient>
+    <radialGradient id="halo" cx="81%" cy="48%" r="54%">
+      <stop offset="0" stop-color="#375dff" stop-opacity=".34"/>
+      <stop offset=".48" stop-color="#754cff" stop-opacity=".13"/>
+      <stop offset="1" stop-color="#030716" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="ribbon" x1="430" y1="165" x2="1250" y2="478" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#a269ff"/>
+      <stop offset=".48" stop-color="#4b47ff"/>
+      <stop offset="1" stop-color="#37def0"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="88" y1="0" x2="338" y2="0" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#9b6cff"/>
+      <stop offset="1" stop-color="#38d6e8"/>
+    </linearGradient>
+    <pattern id="grid" width="30" height="30" patternUnits="userSpaceOnUse">
+      <circle cx="1" cy="1" r="1" fill="#b8c3ff" opacity=".1"/>
+    </pattern>
+    <filter id="glow" x="-35%" y="-45%" width="170%" height="190%">
+      <feGaussianBlur stdDeviation="12" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="soft" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="4" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <rect width="1280" height="640" fill="url(#bg)"/>
+  <rect width="1280" height="640" fill="url(#halo)"/>
+  <rect width="1280" height="640" fill="url(#grid)"/>
+  <path d="M0 548C222 497 412 615 630 550S1040 495 1280 550V640H0Z" fill="#020510" opacity=".74"/>
+
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M438 320C548 126 710 126 828 320S1104 514 1230 320C1104 126 946 126 828 320S548 514 438 320Z" stroke="#111c4a" stroke-width="58" opacity=".85"/>
+    <path d="M438 320C548 126 710 126 828 320S1104 514 1230 320C1104 126 946 126 828 320S548 514 438 320Z" stroke="url(#ribbon)" stroke-width="27" opacity=".96" filter="url(#glow)"/>
+    <path d="M438 320C548 126 710 126 828 320S1104 514 1230 320C1104 126 946 126 828 320S548 514 438 320Z" stroke="#d8fbff" stroke-width="3" opacity=".72"/>
+    <path d="M463 319C556 205 660 202 751 299S928 439 1023 357S1182 225 1208 308" stroke="#fff" stroke-width="2" stroke-dasharray="3 15" opacity=".48"/>
+    <path d="M500 381l12-20 12 34 12-58 12 46 12-25 12 11 12-34 12 51 12-22 12 11 12-29 12 42 12-17" stroke="#ff74cf" stroke-width="3" opacity=".7" filter="url(#soft)"/>
+  </g>
+
+  <g filter="url(#soft)">
+    <circle cx="504" cy="223" r="9" fill="#9b6cff"/><circle cx="504" cy="223" r="3" fill="#fff" opacity=".85"/>
+    <circle cx="828" cy="320" r="11" fill="#4b47ff"/><circle cx="828" cy="320" r="4" fill="#fff" opacity=".88"/>
+    <circle cx="1157" cy="210" r="9" fill="#38d6e8"/><circle cx="1157" cy="210" r="3" fill="#fff" opacity=".85"/>
+    <circle cx="1174" cy="438" r="8" fill="#ff6b7d"/><circle cx="1174" cy="438" r="3" fill="#fff" opacity=".82"/>
+  </g>
+
+  <rect x="48" y="52" width="654" height="536" rx="30" fill="#030615" fill-opacity=".92" stroke="#20264b" stroke-opacity=".5"/>
+  <g font-family="Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif">
+    <rect x="88" y="101" width="250" height="6" rx="3" fill="url(#accent)"/>
+    <text x="88" y="143" fill="#7ce9f3" font-size="21" font-weight="750" letter-spacing="2.1">COMFYUI / MINIMAX H3</text>
+    <g transform="translate(401 115)">
+      <rect width="82" height="38" rx="19" fill="#18183b" stroke="#8d72ff" stroke-width="1.5"/>
+      <text x="41" y="26" fill="#e5ddff" font-size="17" font-weight="800" letter-spacing=".8" text-anchor="middle">v0.4</text>
+    </g>
+    <text x="82" y="242" fill="#f7f8ff" font-size="76" font-weight="780" letter-spacing="-2.2">Contex Loop</text>
+    <text x="88" y="327" fill="#c6cbe3" font-size="27" font-weight="470">Recursive scenes. Seamless continuity.</text>
+    <text x="88" y="372" fill="#929bbb" font-size="25">Review. Checkpoint. Resume.</text>
+
+    <g font-size="15" font-weight="800" letter-spacing="1.1">
+      <g transform="translate(88 438)">
+        <circle cx="8" cy="8" r="6" fill="#9b6cff"/><text x="26" y="14" fill="#e0e3f4">VIDEO</text>
+      </g>
+      <g transform="translate(220 438)">
+        <circle cx="8" cy="8" r="6" fill="#528dff"/><text x="26" y="14" fill="#e0e3f4">AUDIO</text>
+      </g>
+      <g transform="translate(352 438)">
+        <circle cx="8" cy="8" r="6" fill="#38d6e8"/><text x="26" y="14" fill="#e0e3f4">LOOP</text>
+      </g>
+    </g>
+    <g transform="translate(88 500)">
+      <rect width="262" height="38" rx="19" fill="#111b34" stroke="#38d6e8" stroke-opacity=".58"/>
+      <text x="131" y="25" fill="#bff7fb" font-size="13" font-weight="750" letter-spacing="1" text-anchor="middle">PROMPT-DRIVEN REF2VA</text>
+    </g>
+  </g>
+</svg>

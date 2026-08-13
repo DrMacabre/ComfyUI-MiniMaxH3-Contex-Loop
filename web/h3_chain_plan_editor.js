@@ -92,6 +92,15 @@ function injectStyles() {
             stroke-linejoin:round; }
         .h3c-title { font-size: 15px; font-weight: 700; }
         .h3c-summary { color: var(--h3c-muted); text-align: right; }
+        .h3c-external-plan {
+            margin-bottom: 8px;
+            padding: 7px 9px;
+            border: 1px solid color-mix(in srgb, var(--h3c-accent) 65%, var(--h3c-border));
+            border-radius: 6px;
+            background: color-mix(in srgb, var(--h3c-accent) 12%, var(--h3c-panel));
+            color: var(--h3c-text);
+        }
+        .h3c-external-plan strong { color: var(--h3c-accent); }
         .h3c-section {
             margin-bottom: 9px;
             padding: 9px;
@@ -234,6 +243,11 @@ function numberInput(value, options = {}) {
 function widgetValue(node, name, fallback) {
     const widget = node.widgets?.find((item) => item.name === name);
     return widget?.value ?? fallback;
+}
+
+function inputConnected(node, name) {
+    const input = node.inputs?.find((item) => item.name === name);
+    return input?.link !== null && input?.link !== undefined;
 }
 
 function collapseWidget(widget) {
@@ -491,9 +505,19 @@ function mountEditor(node) {
         function renderReferenceMenu() {
             menu.replaceChildren();
             const requestedScene = scene ?? 1;
-            const {records, mode} = availableReferenceRecords(
-                node, requestedScene, {includeInactive: scene == null},
+            const referenceData = availableReferenceRecords(
+                node, requestedScene, {
+                    includeInactive: true,
+                    prompt: [
+                        scene == null ? "" : sharedPrompt(state.plan).text.trim(),
+                        textarea.value.trim(),
+                    ].filter(Boolean).join("\n\n"),
+                },
             );
+            const {mode} = referenceData;
+            const records = mode === "tagged" || scene == null
+                ? referenceData.records
+                : referenceData.records.filter((record) => record.active);
             if (!records.length) {
                 menu.append(element(
                     "span", "h3c-help",
@@ -505,17 +529,20 @@ function mountEditor(node) {
             }
             menu.append(element(
                 "span", "h3c-help",
-                mode === "scheduled"
+                mode === "tagged"
+                    ? "Connected prompt-driven references. Insert an @tag to activate that asset in this scene; it compiles to a native H3 label."
+                    : mode === "scheduled"
                     ? "Connected scheduled references only. @aliases are optional authoring shortcuts that compile to native labels; the scheduler inserts no prompt text."
                     : "Connected core references only. These use native <Picture/Video/Audio N> labels; @aliases are not required.",
             ));
             for (const record of records) {
-                const mapping = mode === "scheduled" && record.label
+                const aliasMode = mode === "scheduled" || mode === "tagged";
+                const mapping = aliasMode && record.label
                     ? ` → ${record.label}` : "";
                 menu.append(button(
                     `${record.token}${mapping}`,
-                    mode === "scheduled"
-                        ? `Insert optional alias ${record.token}. It compiles to ${record.label ?? "the active native label"} for this scene.`
+                    aliasMode
+                        ? `Insert ${record.token}. It ${mode === "tagged" ? "activates this reference and " : ""}compiles to ${record.label ?? "a scene-local native label"}.`
                         : `Insert ${record.token} for the connected core reference.`,
                     () => {
                         insertText(textarea, record.token);
@@ -799,6 +826,7 @@ function mountEditor(node) {
         root.replaceChildren();
         root.classList.toggle("h3c-show-advanced", state.advanced);
 
+        const externalPlanConnected = inputConnected(node, "plan_json_input");
         const header = element("div", "h3c-header");
         const openOutput = button(
             "Output",
@@ -848,6 +876,16 @@ function mountEditor(node) {
         const headerActions = element("div", "h3c-header-actions");
         headerActions.append(openOutput, element("div", "h3c-summary"));
         header.append(element("div", "h3c-title", "MiniMax H3 Scene Plan"), headerActions);
+
+        const externalNotice = element("div", "h3c-external-plan");
+        externalNotice.append(
+            element("strong", "", "External plan input connected. "),
+            document.createTextNode(
+                "A non-empty upstream string controls execution. The editor below " +
+                "shows and edits the local fallback used only when that string is empty " +
+                "or disconnected.",
+            ),
+        );
 
         const prefix = element("textarea", "h3c-prefix");
         prefix.value = sharedPrompt(state.plan).text;
@@ -967,7 +1005,13 @@ function mountEditor(node) {
 
         const footer = element("div", "h3c-footer");
         footer.append(
-            element("span", "", "Edits are serialized into plan_json; the backend contract is unchanged."),
+            element(
+                "span",
+                "",
+                externalPlanConnected
+                    ? "Edits are serialized into fallback plan_json; non-empty external JSON takes precedence."
+                    : "Edits are serialized into plan_json; connect plan_json_input for an external override.",
+            ),
             Object.assign(element("a", "", "UI inspiration: nkxx188"), {
                 href: "https://github.com/nkxx188/ComfyUI-MiniMaxH3-Easy",
                 target: "_blank",
@@ -975,7 +1019,17 @@ function mountEditor(node) {
             }),
         );
 
-        root.append(header, prefixSection, defaults, toolbar, errors, cards, jsonPanel, footer);
+        root.append(
+            header,
+            ...(externalPlanConnected ? [externalNotice] : []),
+            prefixSection,
+            defaults,
+            toolbar,
+            errors,
+            cards,
+            jsonPanel,
+            footer,
+        );
         updateTiming();
         requestAnimationFrame(() => { root.scrollTop = scrollTop; });
         graphDirty();
@@ -1037,6 +1091,7 @@ function mountEditor(node) {
         loadFromWidget(true);
         scheduleResponsiveSize();
     };
+    node._h3ChainEditorConnectionRefresh = () => render();
     node._h3ChainEditorFit = applyResponsiveSize;
     loadFromWidget(true);
     scheduleResponsiveSize();
@@ -1070,6 +1125,13 @@ app.registerExtension({
         nodeType.prototype.onGraphConfigured = function () {
             const result = onGraphConfigured?.apply(this, arguments);
             setTimeout(() => this._h3ChainEditorRefresh?.(), 0);
+            return result;
+        };
+
+        const onConnectionsChange = nodeType.prototype.onConnectionsChange;
+        nodeType.prototype.onConnectionsChange = function () {
+            const result = onConnectionsChange?.apply(this, arguments);
+            setTimeout(() => this._h3ChainEditorConnectionRefresh?.(), 0);
             return result;
         };
     },

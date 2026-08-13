@@ -34,11 +34,12 @@ position_ids, so this lands before anything reads it.
 That keeps the patch surface to one attribute we can verify rather than a
 copy of a 90-line constructor that would rot on the next ComfyUI change.
 
-ComfyUI PR #15439 adds native arbitrary-position video/audio guides and drops
-the ``frame_count`` constructor argument. On that API we no longer lift an
-anchor restriction or move audio out of a reference block. A smaller wrapper
-only aligns this pack's guide set with the target origin after Ref2VA blocks;
-unmarked native-guide graphs remain entirely core-owned.
+ComfyUI PR #15439 adds native arbitrary-position video/audio guides, merges
+guide and Ref2VA payloads, aligns guides to the target origin after reference
+blocks, and drops the ``frame_count`` constructor argument. On that API this
+module detects the native implementation and leaves ``PackedLayout`` entirely
+core-owned. Everything below is retained only as a guarded fallback for older
+ComfyUI builds.
 """
 
 import inspect
@@ -62,7 +63,6 @@ _LOG = logging.getLogger("h3_motion_context")
 
 _orig_init = None
 _applied = False
-_native_active = False
 
 # SolAttn's H3 Morton hook wraps PackedLayout only to record the final video
 # span. It calls the constructor it captured, does not mutate the layout, and
@@ -98,56 +98,6 @@ def _target_origin(layout):
             "last layout segment, found %r spanning %d rows. Upstream "
             "layout change; refusing to rewrite positions." % (kind, b - a))
     return float(layout.position_ids[a, 0])
-
-
-def _native_keyframe_segments(layout, keyframes):
-    """Map PR #15439 guide entries to their emitted layout segments."""
-    actual = [(a, b, kind) for a, b, kind in layout.segments
-              if kind in ("cond", "cond_audio")]
-    expected = []
-    for index, keyframe in enumerate(keyframes or []):
-        if keyframe.get("latent") is not None:
-            expected.append((index, "cond"))
-        if keyframe.get("audio_latent") is not None:
-            expected.append((index, "cond_audio"))
-    if len(actual) != len(expected):
-        raise RuntimeError(
-            "h3_motion_context: %d native guides should emit %d conditioning "
-            "segments, the layout has %d. ComfyUI's H3 guide layout changed; "
-            "refusing to realign it." %
-            (len(keyframes or []), len(expected), len(actual)))
-    mapped = []
-    for (index, wanted), (a, b, found) in zip(expected, actual):
-        if found != wanted or b <= a:
-            raise RuntimeError(
-                "h3_motion_context: native guide %d should emit a non-empty "
-                "%s segment, found %s spanning %d rows." %
-                (index, wanted, found, b - a))
-        mapped.append((index, a, b, found))
-    return mapped
-
-
-def _fixup_native(layout, keyframes):
-    """Align one marked native guide set with the actual target origin.
-
-    PR #15439 computes guide coordinates from ``text_len`` while reference
-    blocks advance the target cursor. Once one guide came from Motion Context,
-    every guide in that conditioning belongs to the same target timeline,
-    including stock Add Guide nodes chained after us. Read the target origin
-    back from the layout and translate only guide segments to their requested
-    frame positions. If core later performs this compensation itself, the
-    calculated translation is zero.
-    """
-    if not keyframes or not any(MC_KEY in item for item in keyframes):
-        return
-    target_origin = _target_origin(layout)
-    for index, a, b, _kind in _native_keyframe_segments(layout, keyframes):
-        keyframe = keyframes[index]
-        requested = float(keyframe["resolved_frame_index"])
-        wanted = target_origin + mm.FRAME_RESCALE * requested
-        current = float(layout.position_ids[a, 0])
-        layout.position_ids[a:b, 0] = (layout.position_ids[a:b, 0]
-                                       + (wanted - current))
 
 
 def _expected_ref_segments(blk):
@@ -348,14 +298,6 @@ def _patched_init(self, text_len, latent_t, latent_h, latent_w, audio_t,
     # neither marked: stock graph, leave it exactly as built
 
 
-def _patched_init_native(self, text_len, latent_t, latent_h, latent_w, audio_t,
-                         keyframes=None, refs=None):
-    """PR #15439 path: core owns guides; we only align marked guide sets."""
-    _orig_init(self, text_len, latent_t, latent_h, latent_w, audio_t,
-               keyframes=keyframes, refs=refs)
-    _fixup_native(self, keyframes)
-
-
 def _self_test():
     """Prove the rewrite reproduces stock positions before committing.
 
@@ -488,53 +430,6 @@ def _self_test():
         prev_hi = hi
 
 
-class _ShapeOnly:
-    """Minimal latent accepted by the native layout's shape-only planning."""
-
-    def __init__(self, shape):
-        self.shape = shape
-
-
-def _self_test_native():
-    """Verify PR #15439 guide segments and target-relative realignment."""
-    text_len, latent_t, lh, lw, audio_t = 7, 7, 22, 38, 16
-    video = _ShapeOnly((1, 16, 1, lh, lw))
-    audio = _ShapeOnly((1, 32, 2, 3))
-    refs = [{"kind": "image", "latent_h": 8, "latent_w": 12}]
-    keyframes = [
-        {"resolved_frame_index": 2.0, MC_KEY: 2.0, "latent": video},
-        # An unmarked core Add Guide chained after Motion Context must share
-        # the same target-relative correction.
-        {"resolved_frame_index": 4.5, "audio_latent": audio},
-    ]
-
-    layout = mm.PackedLayout.__new__(mm.PackedLayout)
-    _orig_init(layout, text_len, latent_t, lh, lw, audio_t,
-               keyframes=keyframes, refs=refs)
-    _fixup_native(layout, keyframes)
-    mapped = _native_keyframe_segments(layout, keyframes)
-    origin = _target_origin(layout)
-    for index, a, _b, _kind in mapped:
-        wanted = origin + mm.FRAME_RESCALE * float(
-            keyframes[index]["resolved_frame_index"])
-        got = float(layout.position_ids[a, 0])
-        if abs(got - wanted) > 1e-9:
-            raise RuntimeError(
-                "native guide %d starts at %.6f, expected %.6f relative to "
-                "the target origin" % (index, got, wanted))
-
-    # No marker means an unrelated native guide graph stays byte-identical.
-    plain = [{key: value for key, value in item.items() if key != MC_KEY}
-             for item in keyframes]
-    untouched = mm.PackedLayout.__new__(mm.PackedLayout)
-    _orig_init(untouched, text_len, latent_t, lh, lw, audio_t,
-               keyframes=plain, refs=refs)
-    before = untouched.position_ids.clone()
-    _fixup_native(untouched, plain)
-    if not torch.equal(before, untouched.position_ids):
-        raise RuntimeError("unmarked native guide layout was modified")
-
-
 def _check_move(before, after, refs, idx, label):
     """Only the marked block's rows moved, uniformly, on the time axis."""
     if after.position_ids.shape != before.position_ids.shape:
@@ -574,8 +469,6 @@ def _check_move(before, after, refs, idx, label):
 
 
 setattr(_patched_init, PATCH_MARKER, True)
-setattr(_patched_init_native, PATCH_MARKER, True)
-setattr(_patched_init_native, NATIVE_GUIDES_MARKER, True)
 
 
 def _solattn_wrapped_init(init):
@@ -627,6 +520,34 @@ def _uses_native_guide_api(init):
     except (TypeError, ValueError):
         return False
     return "frame_count" not in parameters
+
+
+def native_guides_available():
+    """Whether ComfyUI provides the merged, core-owned H3 guide API.
+
+    SolAttn may wrap the core constructor as a read-only observer, and an older
+    installed copy of this pack may already have wrapped the native API. The
+    narrow unwrapping/marker checks in ``_uses_native_guide_api`` recognise
+    both cases without changing either implementation.
+    """
+    cls = getattr(mm, "PackedLayout", None)
+    init = getattr(cls, "__init__", None) if cls is not None else None
+    if init is None:
+        return False
+    original = _solattn_wrapped_init(init) or init
+    if (getattr(original, NATIVE_GUIDES_MARKER, False)
+            or getattr(original, "__name__", "") == "_patched_init_native"):
+        return True
+    # A frame_count-free signature is meaningful only on core's own
+    # constructor. Arbitrary third-party wrappers often accept *args/**kwargs;
+    # treating those as the native API would silently bypass collision checks.
+    if hasattr(original, "__wrapped__"):
+        return False
+    home = str(getattr(cls, "__module__", "") or "")
+    where = str(getattr(original, "__module__", "") or "")
+    if home and where != home:
+        return False
+    return _uses_native_guide_api(original)
 
 
 def _already_patched():
@@ -698,11 +619,15 @@ def _already_patched():
 
 
 def apply_patch():
-    global _orig_init, _applied, _native_active
+    global _orig_init, _applied
     if _applied:
         return True
     current_init = getattr(getattr(mm, "PackedLayout", None), "__init__", None)
-    native_api = bool(current_init and _uses_native_guide_api(current_init))
+    if native_guides_available():
+        _LOG.info(
+            "h3_motion_context: native H3 guides detected; PackedLayout "
+            "remains core-owned")
+        return True
     who = _already_patched()
     if who == "foreign":
         _LOG.warning(
@@ -719,16 +644,10 @@ def apply_patch():
         # report success: the patch IS active, just not ours, and the
         # calling pack's nodes check is_applied() before they will run
         _applied = True
-        _native_active = native_api
         if who == "same":
-            if native_api:
-                _LOG.info(
-                    "h3_motion_context: native guide alignment already "
-                    "enabled by another pack, standing down")
-            else:
-                _LOG.info(
-                    "h3_motion_context: interior keyframe anchors already "
-                    "enabled by another pack, standing down")
+            _LOG.info(
+                "h3_motion_context: interior keyframe anchors already "
+                "enabled by another pack, standing down")
         else:
             _LOG.warning(
                 "h3_motion_context: the H3 layout patch is already installed "
@@ -740,24 +659,16 @@ def apply_patch():
                 "folder does not stop ComfyUI loading it.")
         return True
     if who == "solattn":
-        if native_api:
-            _LOG.info(
-                "h3_motion_context: composing native guide alignment with "
-                "SolAttn's H3 Morton layout observer")
-        else:
-            _LOG.info(
-                "h3_motion_context: composing with SolAttn's H3 Morton layout "
-                "observer; interior anchors and Morton ordering remain enabled")
+        _LOG.info(
+            "h3_motion_context: composing with SolAttn's H3 Morton layout "
+            "observer; interior anchors and Morton ordering remain enabled")
     if not hasattr(mm, "PackedLayout") or not hasattr(mm, "FRAME_RESCALE"):
         _LOG.warning("h3_motion_context: MiniMax H3 model module missing expected "
                      "attributes, patch not applied")
         return False
     _orig_init = mm.PackedLayout.__init__
     try:
-        if native_api:
-            _self_test_native()
-        else:
-            _self_test()
+        _self_test()
     except Exception as exc:
         _orig_init = None
         _LOG.warning("h3_motion_context: self-test failed (%s), patch not "
@@ -771,16 +682,9 @@ def apply_patch():
             "loading it. Otherwise this is an upstream ComfyUI change and "
             "the message above says what moved.")
         return False
-    mm.PackedLayout.__init__ = (
-        _patched_init_native if native_api else _patched_init)
+    mm.PackedLayout.__init__ = _patched_init
     _applied = True
-    _native_active = native_api
-    if native_api:
-        _LOG.info(
-            "h3_motion_context: native H3 guides detected; Ref2VA timeline "
-            "alignment enabled")
-    else:
-        _LOG.info("h3_motion_context: interior keyframe anchors enabled")
+    _LOG.info("h3_motion_context: legacy interior keyframe anchors enabled")
     return True
 
 
@@ -794,14 +698,15 @@ def claim_patch_ownership():
 
     Returns ``(ok, detail)`` for the visible Patch Priority pass-through node.
     """
-    global _orig_init, _applied, _native_active
+    global _orig_init, _applied
     cls = getattr(mm, "PackedLayout", None)
     current = getattr(cls, "__init__", None) if cls is not None else None
     if current is None or not hasattr(mm, "FRAME_RESCALE"):
         return False, "MiniMax H3 PackedLayout is unavailable"
-    if current in (_patched_init, _patched_init_native):
+    if native_guides_available():
+        return True, "native guides are core-owned; no patch required"
+    if current is _patched_init:
         _applied = True
-        _native_active = current is _patched_init_native
         return True, "layout owned by this pack"
 
     who = _already_patched()
@@ -839,29 +744,21 @@ def claim_patch_ownership():
             "refusing to discard it")
 
     previous_original = _orig_init
-    previous_native = _native_active
-    native_api = _uses_native_guide_api(original)
     _orig_init = original
     try:
-        if native_api:
-            _self_test_native()
-        else:
-            _self_test()
+        _self_test()
     except Exception as exc:
         _orig_init = previous_original
-        _native_active = previous_native
         return False, "replacement layout self-test failed: %s" % exc
 
-    replacement = _patched_init_native if native_api else _patched_init
+    replacement = _patched_init
     if solattn_inner is not None:
         if not _replace_solattn_wrapped_init(current, replacement):
             _orig_init = previous_original
-            _native_active = previous_native
             return False, "could not preserve SolAttn's layout observer"
     else:
         cls.__init__ = replacement
     _applied = True
-    _native_active = native_api
     _LOG.info(
         "h3_motion_context: this pack claimed H3 layout ownership from "
         "compatible module %s", getattr(family_wrapper, "__module__", "?"))
@@ -873,5 +770,5 @@ def is_applied():
 
 
 def native_guides_active():
-    """True after activation against ComfyUI's native Add Guide API."""
-    return _applied and _native_active
+    """Backward-compatible alias for native guide capability detection."""
+    return native_guides_available()

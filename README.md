@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/minimax-h3-contex-loop.svg" alt="MiniMax H3 Contex Loop — scene plans that survive the render" width="100%">
+  <img src="assets/minimax-h3-contex-loop.svg" alt="MiniMax H3 Contex Loop v0.4 — scene plans that survive the render" width="100%">
 </p>
 
 # ComfyUI MiniMax H3 Contex Loop
@@ -21,17 +21,19 @@ giant cumulative image tensor.
 | 🎬 | Visual multiline scene planner with exact H3 timing |
 | 🔁 | One recursive sampling body for a complete scene plan |
 | 🧬 | Motion and optional generated-audio continuity |
-| 🗓️ | Scene-scheduled picture, video, and audio references |
+| 🏷️ | Prompt-driven picture, video, and audio references with stable `@tags` |
+| 🗓️ | Optional legacy scene-range scheduling for explicit reference control |
 | 👀 | Video-with-sound review, prompt retry, and seed reroll |
 | 💾 | Atomic checkpoints, partial assembly, and safe resume |
 | 🕘 | Branching prompt history and saved-run restoration |
+| 🧭 | Optional Plan Studio and Rich Scene Prompt Editor |
 | ⏩ | Existing-video continuation and optional source prepend |
 | 🖼️ | Lossless PNG re-decode from saved scene latents |
 | 🔬 | In-graph audio-seam diagnostics |
 
-The runtime changes are opt-in. Ordinary ComfyUI workflows are not altered by
-installing the pack; its guarded H3 patches activate only when a Contex Loop
-Context node executes.
+On an updated ComfyUI, core owns guide placement and reference-payload merging;
+this pack does not patch H3. Older builds receive a one-time update warning and
+use the guarded compatibility fallback only when a Contex Loop node executes.
 
 ## Install
 
@@ -44,26 +46,34 @@ Restart ComfyUI and hard-refresh the browser. An `ffmpeg` executable on `PATH`
 is preferred, but review and final assembly can fall back to ComfyUI's bundled
 PyAV.
 
+Version 0.4 expects a ComfyUI build containing the native **Add Guide for
+MiniMax H3** implementation from
+[PR #15439](https://github.com/Comfy-Org/ComfyUI/pull/15439). Update ComfyUI
+before starting a new v0.4 workflow.
+
 NikoDemon80's upstream H3 Motion Context pack is optional and may be installed
 alongside this one for its manual Motion Context, Save Latent, and Load Latent
 nodes. H3-Multishot is also supported through guarded payload reuse.
 
 ## Choose a workflow
 
-Start with one of the maintained v2 examples:
+Start with the maintained v0.4 example for your generation mode:
 
-- [Single-image I2VA 20s](<example_workflows/Looping MiniMax H3 V2 - Single Image I2VA 20s.json>)
-  is the simplest long-form image-to-video workflow. One image anchors scene 1;
-  later scenes continue through motion context.
-- [Core FL2VA](<example_workflows/Looping MiniMax H3 V2 - Core FL2VA.json>)
-  uses ComfyUI's stock MiniMax H3 Image to Video node with first and last frames,
-  review/retry, prompt editing, and safe assembly.
-- [Scheduled Ref2VA](<example_workflows/Looping MiniMax H3 Seamless Chain V2 - Scheduled Refs.json>)
-  is the complete long-form workflow with per-scene picture, video, paired-audio,
-  and source-song references.
+- [T2V — Normal](<example_workflows/MiniMax H3 T2V - Normal.json>) or
+  [Studio](<example_workflows/MiniMax H3 T2V - Studio.json>).
+- [I2V — Normal](<example_workflows/MiniMax H3 I2V - Normal.json>) or
+  [Studio](<example_workflows/MiniMax H3 I2V - Studio.json>).
+- [FL2V — indexed A→B→A](<example_workflows/MiniMax H3 FL2V - Normal.json>).
+- [Ref2V — Basic](<example_workflows/MiniMax H3 Ref2V - Basic.json>),
+  [Tagged](<example_workflows/MiniMax H3 Ref2V - Tagged.json>), or
+  [Studio Tagged](<example_workflows/MiniMax H3 Ref2V - Studio Tagged.json>).
+- [Sequential motion reference](<example_workflows/EXPERIMENTAL MiniMax H3 Ref2V - Sequential Motion.json>)
+  remains explicitly experimental.
 
-See [all example workflows](example_workflows/README.md), including the
-experimental existing-video and three-angle performance workflows.
+Normal workflows use the stable Plan and Scene Prompt Editor. Studio workflows
+add the optional timeline-oriented Plan Studio and Rich Scene Prompt Editor.
+See [all example workflows](example_workflows/README.md); retired v2 and
+numeric-schedule examples remain available under `example_workflows/Archive/`.
 
 ## The loop
 
@@ -127,7 +137,26 @@ track used for final assembly.
 See [Audio and continuity](docs/AUDIO_AND_CONTINUITY.md) for wiring, generated
 WAV preservation, timing behavior, and the Seam Probe.
 
-## Scheduled references at a glance
+## Prompt-driven references at a glance
+
+```text
+Load Image ─→ Tagged Picture Ref ─┐
+24 fps IMAGE (+ paired AUDIO) ─→ Tagged Video Ref ─┐
+Standalone AUDIO ─→ Tagged Audio Ref ──────────────┴→ Tagged Ref2VA
+
+Current Shot prompt / scene / dimensions / length ───────────────────↗
+```
+
+Register stable aliases such as `@hero`, `@performance`, and `@voice`, then
+mention only the media needed by each scene. Tagged Ref2VA activates those
+sources and compiles their aliases to compact native `<Picture N>`, `<Video N>`,
+and `<Audio N>` labels. It does not insert subject definitions or other prompt
+text; the user remains responsible for the complete H3 prompt.
+
+The original numeric-range nodes remain available in the **legacy schedule**
+category when explicit selectors are useful.
+
+## Legacy scheduled references
 
 ```text
 Load Image ─→ Scheduled Picture Ref ─┐

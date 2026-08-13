@@ -49,6 +49,10 @@ class FakeImages:
         return self
 
 
+class FakeBlendImages(FakeImages):
+    shape = (7, 1, 1, 3)
+
+
 def main():
     with tempfile.TemporaryDirectory() as tempdir:
         folder_paths.output_directory = tempdir
@@ -75,6 +79,7 @@ def main():
             "compatibility": {
                 "audio_mode": "source_track",
                 "context_length": 2,
+                "video_blend_frames": 2,
             },
             "shots": [{
                 "id": "scene_one",
@@ -83,7 +88,7 @@ def main():
                 "prompt_hash": "prompt-hash",
                 "seed": 1,
                 "steps": 5,
-                "raw_frames": 5,
+                "raw_frames": 7,
                 "delivered_frames": 5,
                 "generation_start_frame": 0,
             }],
@@ -95,12 +100,20 @@ def main():
             "sample_rate": 8000,
         }
         saver = chain.MiniMaxH3ChainSegmentSave()
+        try:
+            saver.save(state, FakeImages(), object(), generated_audio)
+        except ValueError as exc:
+            assert "images_with_overlap" in str(exc)
+        else:
+            raise AssertionError("enabled blending accepted no overlap input")
         first = saver.save(
-            state, FakeImages(), object(), generated_audio)["result"][0]
+            state, FakeImages(), object(), generated_audio,
+            FakeBlendImages())["result"][0]
         first_paths = {
             key: pathlib.Path(chain._absolute_output_path(first[key]))
             for key in ("segment", "checkpoint", "prompt_file",
-                        "revision_metadata", "generated_audio")
+                        "revision_metadata", "generated_audio",
+                        "blend_segment")
         }
         assert all(path.is_file() for path in first_paths.values())
         assert first["generated_audio_sha256"] == chain._file_sha256(
@@ -117,10 +130,13 @@ def main():
             "seed": 2,
         })
         second = saver.save(
-            state, FakeImages(), object(), generated_audio)["result"][0]
+            state, FakeImages(), object(), generated_audio,
+            FakeBlendImages())["result"][0]
         assert second["revision"] != first["revision"]
         assert second["supersedes"] == first["revision_metadata"]
         assert second["generated_audio"] != first["generated_audio"]
+        assert second["blend_segment"] != first["blend_segment"]
+        assert second["blend_frames"] == 2
         assert all(path.is_file() for path in first_paths.values())
 
         current = json.loads(pathlib.Path(

@@ -167,4 +167,46 @@ async def check_route_validation():
 
 asyncio.run(check_route_validation())
 
-print("H3 Review length: full Plan retiming and predecessor history pass")
+
+class FakePromptServerInstance:
+    def __init__(self):
+        self.client_id = "current-client"
+        self.sent = []
+
+    def send_sync(self, event, payload, client_id=None):
+        self.sent.append((event, payload, client_id))
+
+
+fake_prompt_server = FakePromptServerInstance()
+chain.PromptServer.instance = fake_prompt_server
+final_manifest = {
+    "format": "h3_chain_manifest_v3",
+    "run_name": "review_length",
+    "plan_hash": "prepared-hash",
+}
+final_key = chain._final_review_preview_key(final_manifest)
+chain._PENDING_FINAL_REVIEW_PREVIEWS[final_key] = {
+    "token": "final-token",
+    "node_id": "review-node",
+    "client_id": "originating-client",
+}
+chain._publish_final_review_preview(
+    final_manifest, str(ROOT / "final.mp4"), "assembled final")
+assert final_key not in chain._PENDING_FINAL_REVIEW_PREVIEWS
+assert fake_prompt_server.sent == [(
+    "minimax_h3_context_loop_review_resolved",
+    {
+        "token": "final-token",
+        "node_id": "review-node",
+        "action": "final",
+        "status": "assembled final",
+        "final_video": {
+            "filename": "final.mp4",
+            "subfolder": "",
+            "type": "output",
+        },
+    },
+    "originating-client",
+)]
+
+print("H3 Review length and final preview handoff: pass")

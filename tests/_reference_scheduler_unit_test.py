@@ -116,7 +116,7 @@ def schedule():
 
 
 workflow = json.loads((
-    ROOT / "example_workflows" /
+    ROOT / "example_workflows" / "Archive" /
     "Looping MiniMax H3 Seamless Chain V2 - Scheduled Refs.json"
 ).read_text(encoding="utf-8"))
 plan_node = next(node for node in workflow["nodes"]
@@ -296,6 +296,11 @@ else:
     raise AssertionError("legacy callable VHS_AUDIO was accepted")
 
 plan_inputs = chain.MiniMaxH3ChainPlan.INPUT_TYPES()["required"]
+plan_optional_inputs = chain.MiniMaxH3ChainPlan.INPUT_TYPES()["optional"]
+assert plan_optional_inputs["plan_json_input"][0] == "STRING"
+assert plan_optional_inputs["plan_json_input"][1]["forceInput"] is True
+assert "non-empty" in plan_optional_inputs[
+    "plan_json_input"][1]["tooltip"]
 audio_mode_help = plan_inputs["audio_mode"][1]["tooltip"]
 assert "does NOT enable or disable @voice/<Audio N> references" in audio_mode_help
 assert "finished prerecorded voice" in audio_mode_help
@@ -307,6 +312,120 @@ base_seed_help = plan_inputs["base_seed"][1]["tooltip"]
 assert "Reroll seed does NOT change base_seed" in base_seed_help
 assert "always-visible Scene seed" in base_seed_help
 assert "audio_tag" in video_inputs
+assert video_inputs["timeline_mode"][0] == [
+    "restart_each_scene", "sequential"]
+assert "state" in chain.MiniMaxH3ScheduledReferenceToVideo.INPUT_TYPES()[
+    "optional"]
+apply_arguments = (
+    chain.MiniMaxH3ScheduledReferenceToVideo.apply.__code__.co_varnames[
+        :chain.MiniMaxH3ScheduledReferenceToVideo.apply.__code__.co_argcount])
+assert "state" in apply_arguments and "prompt_compliance" in apply_arguments
+assert "timeline_mode" not in chain._reference_entry_contract({
+    "kind": "video", "tag": "motion", "scenes": "all",
+    "content_hash": "video", "timeline_mode": "restart_each_scene",
+})
+assert chain._reference_entry_contract({
+    "kind": "video", "tag": "motion", "scenes": "all",
+    "content_hash": "video", "timeline_mode": "sequential",
+})["timeline_mode"] == "sequential"
+
+sequential_video = chain.torch.arange(
+    500, dtype=chain.torch.float32).reshape(500, 1, 1, 1).expand(-1, 2, 2, 3)
+sequential_audio = {
+    "waveform": chain.torch.arange(
+        5000, dtype=chain.torch.float32).reshape(1, 1, 5000),
+    "sample_rate": 240,
+}
+sequential_schedule = chain.MiniMaxH3ScheduledVideoReference().add(
+    sequential_video, "motion", "", "motion_audio", "sequential",
+    audio=sequential_audio)[0]
+sequential_entry = sequential_schedule["entries"][0]
+assert sequential_entry["timeline_mode"] == "sequential"
+sequential_state = {
+    "index": 2,
+    "plan": {
+        "shots": [
+            {"raw_frames": 243, "generation_start_frame": 0},
+            {"raw_frames": 243, "generation_start_frame": 221},
+        ],
+    },
+}
+video_slice, audio_slice, slice_detail = (
+    chain._scheduled_video_reference_slice(
+        sequential_entry, sequential_state, 2, 2, 243))
+assert tuple(video_slice.shape) == (243, 2, 2, 3)
+assert float(video_slice[0, 0, 0, 0]) == 221
+assert float(video_slice[-1, 0, 0, 0]) == 463
+assert tuple(audio_slice["waveform"].shape) == (1, 1, 2430)
+assert float(audio_slice["waveform"][0, 0, 0]) == 2210
+assert slice_detail == "@motion sequential frames 221:464 (origin scene 1)"
+try:
+    chain._scheduled_video_reference_slice(
+        sequential_entry, None, 2, 2, 243)
+except ValueError as exc:
+    assert "Current Shot state" in str(exc)
+else:
+    raise AssertionError("sequential reference accepted missing state")
+
+tagged_picture_inputs = chain.MiniMaxH3TaggedPictureReference.INPUT_TYPES()[
+    "required"]
+tagged_video_inputs = chain.MiniMaxH3TaggedVideoReference.INPUT_TYPES()[
+    "required"]
+tagged_audio_inputs = chain.MiniMaxH3TaggedAudioReference.INPUT_TYPES()[
+    "required"]
+assert "scenes" not in tagged_picture_inputs
+assert "scenes" not in tagged_video_inputs
+assert "scenes" not in tagged_audio_inputs
+tagged_picture = chain.torch.zeros((1, 4, 4, 3))
+tagged_audio = {
+    "waveform": chain.torch.zeros((1, 1, 8000)),
+    "sample_rate": 8000,
+}
+tagged = chain.MiniMaxH3TaggedPictureReference().add(
+    tagged_picture, "face")[0]
+tagged = chain.MiniMaxH3TaggedPictureReference().add(
+    tagged_picture, "look", previous=tagged)[0]
+tagged = chain.MiniMaxH3TaggedAudioReference().add(
+    tagged_audio, "voice", previous=tagged)[0]
+assert tagged["activation"] == "prompt"
+assert all(entry["activation"] == "prompt" for entry in tagged["entries"])
+tagged_compiled, tagged_summary, tagged_bindings = (
+    chain._compile_tagged_reference_prompt(
+        tagged, 2, 3,
+        "<Subject 1> @S1 uses @look and speaks with @voice; keep @custom."))
+assert tagged_compiled == (
+    "<Subject 1> @S1 uses <Picture 1> and speaks with <Audio 1>; "
+    "keep @custom.")
+assert tagged_summary == (
+    "scene 2/3: @look -> <Picture 1>; @voice -> <Audio 1>")
+assert [entry["tag"] for entry in tagged_bindings["pictures"]] == ["look"]
+assert "face" not in tagged_bindings["aliases"]
+
+tagged_sequential = chain.MiniMaxH3TaggedVideoReference().add(
+    sequential_video, "motion", "motion_audio", "sequential",
+    audio=sequential_audio)[0]
+tagged_sequential_entry = tagged_sequential["entries"][0]
+tagged_state = {
+    "index": 3,
+    "plan": {"shots": [
+        {"raw_frames": 243, "generation_start_frame": 0,
+         "prompt": "Opening without a motion tag."},
+        {"raw_frames": 243, "generation_start_frame": 221,
+         "prompt": "Begin @motion."},
+        {"raw_frames": 243, "generation_start_frame": 442,
+         "prompt": "Continue @motion_audio."},
+    ]},
+}
+tagged_video_slice, tagged_audio_slice, tagged_detail = (
+    chain._scheduled_video_reference_slice(
+        tagged_sequential_entry, tagged_state, 3, 3, 243))
+assert float(tagged_video_slice[0, 0, 0, 0]) == 221
+assert float(tagged_audio_slice["waveform"][0, 0, 0]) == 2210
+assert tagged_detail.endswith("(origin scene 2)")
+assert "references" in chain.MiniMaxH3TaggedReferenceToVideo.INPUT_TYPES()[
+    "required"]
+assert "reference_schedule" not in (
+    chain.MiniMaxH3TaggedReferenceToVideo.INPUT_TYPES()["required"])
 conditioning = object()
 priority_result = chain.MiniMaxH3PatchPriority().claim(conditioning)
 assert priority_result == (conditioning, "test patch owner")
@@ -341,14 +460,17 @@ finally:
     chain._launch_directory = original_launch_directory
 
 i2va_workflow = json.loads((
-    ROOT / "example_workflows" /
+    ROOT / "example_workflows" / "Archive" /
     "Looping MiniMax H3 V2 - Single Image I2VA 20s.json"
 ).read_text(encoding="utf-8"))
 i2va_plan_node = next(node for node in i2va_workflow["nodes"]
                        if node.get("type") == "MiniMaxH3ChainPlan")
 context_choices = chain.MiniMaxH3ChainPlan.INPUT_TYPES()["required"][
     "context_length"][0]
-assert context_choices == [1, 5, 22, 39, 56]
+assert context_choices == [
+    1, 5, 22, 39, 56, 73, 90, 107, 124,
+    141, 158, 175, 192, 209, 226, 243,
+]
 normalized = chain.MiniMaxH3ChainPlan().build(
     *i2va_plan_node["widgets_values"])[0]
 assert [shot["raw_frames"] for shot in normalized["shots"]] == [243, 243]
@@ -358,6 +480,40 @@ assert normalized["total_delivered_frames"] / chain.FPS > 20
 assert normalized["compatibility"]["context_length"] == 5
 assert "<Picture 1>" in normalized["shots"][0]["scene_prompt"]
 assert "<Picture" not in normalized["shots"][1]["scene_prompt"]
+
+external_plan_json = json.dumps({
+    "prompt_prefix": "Externally directed continuity.",
+    "shots": [{
+        "id": "external_scene",
+        "prompt": "This scene came from the connected STRING input.",
+        "length": 124,
+        "seed": 987654321,
+    }],
+})
+external_normalized = chain.MiniMaxH3ChainPlan().build(
+    *i2va_plan_node["widgets_values"],
+    plan_json_input=external_plan_json,
+)[0]
+assert [shot["id"] for shot in external_normalized["shots"]] == [
+    "external_scene"]
+assert external_normalized["shots"][0]["seed"] == 987654321
+assert external_normalized["shots"][0]["prompt"].startswith(
+    "Externally directed continuity.")
+
+empty_external_fallback = chain.MiniMaxH3ChainPlan().build(
+    *i2va_plan_node["widgets_values"],
+    plan_json_input="  \n\t",
+)[0]
+assert empty_external_fallback["plan_hash"] == normalized["plan_hash"]
+try:
+    chain.MiniMaxH3ChainPlan().build(
+        *i2va_plan_node["widgets_values"],
+        plan_json_input="not valid JSON",
+    )
+except ValueError as exc:
+    assert "Plan JSON is invalid" in str(exc)
+else:
+    raise AssertionError("invalid external plan JSON bypassed Plan validation")
 
 gate_node = next(node for node in i2va_workflow["nodes"]
                  if node.get("type") == "MiniMaxH3ChainFirstSceneImage")
@@ -369,6 +525,19 @@ first_result = gate.select({"index": 1}, opening_image)
 later_result = gate.select({"index": 2}, opening_image)
 assert first_result[:2] == (opening_image, True)
 assert later_result[:2] == (None, False)
+last_target = object()
+assert gate.select({"index": 1}, opening_image, last_target)[3] is last_target
+assert gate.select({"index": 2}, opening_image, last_target)[3] is last_target
+assert gate.INPUT_TYPES()["optional"]["last_frame"][0] == "IMAGE"
+assert gate.RETURN_NAMES[-1] == "last_frame"
+
+frame_a = object()
+frame_b = object()
+switch = chain.MiniMaxH3ChainFrameIndexSwitch()
+assert switch.select(1, frame_b, frame_2=frame_a)[:2] == (frame_b, 1)
+assert switch.select(2, frame_b, frame_2=frame_a)[:2] == (frame_a, 2)
+assert switch.select(3, frame_b, frame_2=frame_a)[:2] == (frame_b, 1)
+assert switch.INPUT_TYPES()["optional"]["frame_8"][0] == "IMAGE"
 
 links = {link[0]: link for link in i2va_workflow["links"]}
 nodes = {node["id"]: node for node in i2va_workflow["nodes"]}

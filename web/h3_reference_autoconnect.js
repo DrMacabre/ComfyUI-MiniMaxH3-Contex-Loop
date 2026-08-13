@@ -28,7 +28,8 @@ function convert(node) {
         app.canvas?.selectNode?.(result.wrapper);
         app.canvas?.setDirty?.(true, true);
         const notes = [];
-        if (!result.connectedCurrent) notes.push("connect Current Shot clip index/count");
+        if (!result.connectedCurrent) notes.push(
+            "connect Current Shot state/index/count");
         if (!result.connectedFingerprint) notes.push(
             "connect the static schedule fingerprint to Plan when appropriate");
         if (result.ignoredOrphanVideoAudio) notes.push(
