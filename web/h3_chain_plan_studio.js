@@ -32,6 +32,7 @@ import {
 } from "./h3_chain_plan_studio_core.mjs";
 import {
     connectedPromptEditors,
+    publishCompanionPrompt,
     publishCompanionScene,
 } from "./h3_prompt_companion_sync.mjs";
 
@@ -388,6 +389,9 @@ function mount(node) {
             targetWidget.callback?.(targetWidget.value);
         }, 75);
         state.planNode?.graph?.setDirtyCanvas?.(true, true);
+        publishCompanionPrompt(
+            node, state.planNode, state.active,
+            promptValueToText(state.plan.shots[state.active]?.prompt));
         if (message) message.textContent = "Saved to connected Plan";
         renderStatus();
         dirty();
@@ -1062,12 +1066,32 @@ function mount(node) {
         if (state.planNotifyTimer != null) clearTimeout(state.planNotifyTimer);
         api.removeEventListener("executed", onPromptExecuted);
         delete node._h3PromptCompanionSetActiveScene;
+        delete node._h3PromptCompanionSetScenePrompt;
         disposePlayer();
         void flushHistoryDraft(); return removed?.apply(this, arguments);
     };
     node._h3PromptCompanionSetActiveScene = (planNode, index) => {
         if (planNode !== state.planNode || !state.plan?.shots?.length) return false;
         void selectScene(index, false);
+        return true;
+    };
+    node._h3PromptCompanionSetScenePrompt = (planNode, index, text) => {
+        if (planNode !== state.planNode || !state.plan?.shots?.[index]) return false;
+        state.plan.shots[index].prompt = promptTextToLines(text);
+        if (index === state.active && state.history.textarea
+                && state.history.textarea.value !== text) {
+            const textarea = state.history.textarea;
+            const focused = document.activeElement === textarea;
+            const start = textarea.selectionStart;
+            const end = textarea.selectionEnd;
+            textarea.value = text;
+            if (focused) textarea.setSelectionRange(
+                Math.min(start, text.length), Math.min(end, text.length));
+            scheduleHistoryDraft(
+                String(state.plan.shots[index].id || `clip_${String(index + 1).padStart(4, "0")}`),
+                text);
+        }
+        state.lastValue = String(state.planWidget?.value ?? state.lastValue);
         return true;
     };
     node._h3PlanStudioRefresh = () => {

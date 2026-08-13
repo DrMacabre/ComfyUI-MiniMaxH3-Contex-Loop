@@ -1,6 +1,11 @@
 import {app} from "/scripts/app.js";
 import {api} from "/scripts/api.js";
-import {parsePlanJson, planToJson} from "./h3_chain_plan_core.mjs";
+import {
+    parsePlanJson,
+    planToJson,
+    promptTextToLines,
+    promptValueToText,
+} from "./h3_chain_plan_core.mjs";
 import {
     applyReviewEdit,
     checkpointResumeOptions,
@@ -10,6 +15,10 @@ import {
     reviewLocalDeadline,
     reviewSeed,
 } from "./h3_chain_review_core.mjs";
+import {
+    publishCompanionPrompt,
+    publishPlanCompanionScene,
+} from "./h3_prompt_companion_sync.mjs";
 
 const NODE_NAME = "MiniMaxH3ChainReview";
 const PLAN_NAME = "MiniMaxH3ChainPlan";
@@ -212,6 +221,43 @@ function updatePlan(reviewNode, index, prompt, seed, length) {
     widget.callback?.(value);
     planNode._h3ChainEditorRefresh?.();
     planNode.graph?.setDirtyCanvas?.(true, true);
+    publishCompanionPrompt(
+        reviewNode, planNode, Number(index) - 1, prompt);
+    return true;
+}
+
+function livePlanPrompt(reviewNode, oneBasedIndex) {
+    const planNode = upstreamPlanNode(reviewNode);
+    const widget = planNode?.widgets?.find((item) => item.name === "plan_json");
+    if (!widget) return null;
+    try {
+        const plan = parsePlanJson(String(widget.value ?? ""));
+        const shot = plan.shots[Number(oneBasedIndex) - 1];
+        return shot ? {
+            planNode,
+            text:promptValueToText(shot.prompt),
+        } : null;
+    } catch (_error) {
+        return null;
+    }
+}
+
+function updateLivePlanPrompt(reviewNode, oneBasedIndex, text) {
+    const planNode = upstreamPlanNode(reviewNode);
+    const widget = planNode?.widgets?.find((item) => item.name === "plan_json");
+    if (!widget) return false;
+    let plan;
+    try { plan = parsePlanJson(String(widget.value ?? "")); }
+    catch (_error) { return false; }
+    const index = Number(oneBasedIndex) - 1;
+    if (!plan.shots[index]) return false;
+    plan.shots[index].prompt = promptTextToLines(text);
+    const value = planToJson(plan);
+    widget.value = value;
+    widget.callback?.(value);
+    planNode._h3ChainEditorRefresh?.();
+    planNode.graph?.setDirtyCanvas?.(true, true);
+    publishCompanionPrompt(reviewNode, planNode, index, text);
     return true;
 }
 
@@ -550,6 +596,7 @@ function mount(node) {
 
     let current = null;
     let countdownTimer = null;
+    let promptSyncTimer = null;
     let resumeChoices = [];
 
     function setActionsEnabled(enabled) {
@@ -615,6 +662,34 @@ function mount(node) {
         countdownTimer = null;
     }
 
+    function stopPromptSync() {
+        if (promptSyncTimer != null) clearInterval(promptSyncTimer);
+        promptSyncTimer = null;
+    }
+
+    function setPromptValue(text) {
+        const value = String(text ?? "");
+        if (prompt.value === value) return;
+        const focused = document.activeElement === prompt;
+        const start = prompt.selectionStart;
+        const end = prompt.selectionEnd;
+        prompt.value = value;
+        if (focused) prompt.setSelectionRange(
+            Math.min(start, value.length), Math.min(end, value.length));
+    }
+
+    function syncPromptFromPlan() {
+        if (!current?.clip_index) return;
+        const live = livePlanPrompt(node, current.clip_index);
+        if (live) setPromptValue(live.text);
+    }
+
+    function startPromptSync() {
+        stopPromptSync();
+        syncPromptFromPlan();
+        promptSyncTimer = setInterval(syncPromptFromPlan, 250);
+    }
+
     function renderWaitingStatus() {
         if (!current) return;
         const message = current.warning ||
@@ -669,6 +744,7 @@ function mount(node) {
             });
             const body = await response.json();
             if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
+            stopPromptSync();
             if (action === "approve") {
                 status.textContent = current.unload_models_while_waiting
                     ? "Approval received — workflow is resuming and reloading the model stack."
@@ -723,13 +799,18 @@ function mount(node) {
         video.src = videoUrl(data.video);
         video.load();
         if (!sameToken) {
-            prompt.value = data.scene_prompt ?? "";
+            const planNode = upstreamPlanNode(node);
+            if (planNode) publishPlanCompanionScene(
+                node, planNode, Number(data.clip_index) - 1);
+            const live = livePlanPrompt(node, data.clip_index);
+            setPromptValue(live?.text ?? data.scene_prompt ?? "");
             seed.value = data.seed ?? "";
             duration.value = reviewDurationText(data.raw_frames);
             prefix.textContent = data.prompt_prefix ?
                 `Shared prompt (unchanged)\n${data.prompt_prefix}` : "";
             prefix.hidden = !data.prompt_prefix;
             startCountdown();
+            startPromptSync();
             if (data.play_notification_sound && !notifiedTokens.has(data.token)) {
                 notifiedTokens.add(data.token);
                 playReviewChime().catch((error) => {
@@ -744,6 +825,7 @@ function mount(node) {
     node._h3ReviewResolvedHandler = (data) => {
         if (!current || data?.token !== current.token) return;
         stopCountdown();
+        stopPromptSync();
         root.classList.add("h3r-busy");
         setActionsEnabled(false);
         status.className = "h3r-status";
@@ -767,10 +849,22 @@ function mount(node) {
     const removed = node.onRemoved;
     node.onRemoved = function () {
         stopCountdown();
+        stopPromptSync();
         promptResizeObserver?.disconnect();
+        delete this._h3PromptCompanionSetScenePrompt;
         mountedReviewNodes.delete(this);
         updatePendingPolling();
         return removed?.apply(this, arguments);
+    };
+    prompt.addEventListener("input", () => {
+        if (!current?.clip_index) return;
+        updateLivePlanPrompt(node, current.clip_index, prompt.value);
+    });
+    node._h3PromptCompanionSetScenePrompt = (planNode, index, text) => {
+        if (planNode !== upstreamPlanNode(node) || !current
+                || Number(current.clip_index) - 1 !== index) return false;
+        setPromptValue(text);
+        return true;
     };
     node.setSize?.([Math.max(node.size?.[0] ?? 540, 540), Math.max(node.size?.[1] ?? 650, 650)]);
     const queuedReview = node._h3QueuedReview;

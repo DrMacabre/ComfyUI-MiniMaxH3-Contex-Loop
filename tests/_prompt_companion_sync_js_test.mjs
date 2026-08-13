@@ -5,7 +5,9 @@ import {
     adjacentPlanCompanions,
     connectedPlanStudios,
     connectedPromptEditors,
+    publishCompanionPrompt,
     publishCompanionScene,
+    publishPlanCompanionScene,
     rebaseScenePrompt,
 } from "../web/h3_prompt_companion_sync.mjs";
 
@@ -17,7 +19,7 @@ const links = {
     10:{origin_id:1,target_id:2},
     11:{origin_id:2,target_id:3},
 };
-const graph = {links, getNodeById:(id) => nodes.get(id)};
+const graph = {links, _nodes:[plan, studio, editor], getNodeById:(id) => nodes.get(id)};
 for (const node of nodes.values()) node.graph = graph;
 
 assert.deepEqual(adjacentPlanCompanions(studio), [plan, editor]);
@@ -33,6 +35,25 @@ assert.deepEqual(received, {receivedPlan:plan,index:2,source:studio});
 
 editor._h3PromptCompanionSetActiveScene = () => false;
 assert.equal(publishCompanionScene(studio, plan, 4), 0);
+
+const review = {id:4, type:"MiniMaxH3ChainReview", graph};
+graph._nodes.push(review);
+editor._h3PromptCompanionSetActiveScene = (receivedPlan, index, source) => {
+    received = {receivedPlan,index,source};
+    return receivedPlan === plan;
+};
+assert.equal(publishPlanCompanionScene(review, plan, 1), 1);
+assert.deepEqual(received, {receivedPlan:plan,index:1,source:review});
+
+let promptReceived = null;
+editor._h3PromptCompanionSetScenePrompt = (receivedPlan, index, prompt, source) => {
+    promptReceived = {receivedPlan,index,prompt,source};
+    return receivedPlan === plan;
+};
+assert.equal(publishCompanionPrompt(review, plan, 1, "Edited\r\nprompt."), 1);
+assert.deepEqual(promptReceived, {
+    receivedPlan:plan, index:1, prompt:"Edited\nprompt.", source:review,
+});
 
 const localPlan = {shared:"old", shots:[
     {id:"one", prompt:["old one"], seed:"1"},

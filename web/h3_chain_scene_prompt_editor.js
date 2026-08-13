@@ -23,6 +23,7 @@ import {
 } from "./h3_prompt_history_core.mjs";
 import {availableReferenceRecords} from "./h3_reference_preview_core.mjs";
 import {
+    publishCompanionPrompt,
     publishCompanionScene,
     rebaseScenePrompt,
 } from "./h3_prompt_companion_sync.mjs";
@@ -479,6 +480,9 @@ function mount(node) {
         state.planWidget.callback?.(value);
         state.planNode._h3ChainEditorRefresh?.();
         state.planNode.graph?.setDirtyCanvas?.(true, true);
+        publishCompanionPrompt(
+            node, state.planNode, state.active,
+            promptValueToText(state.plan.shots[state.active]?.prompt));
         if (status) status.textContent = "Saved to connected Plan";
         dirty();
     }
@@ -1528,6 +1532,7 @@ function mount(node) {
         if (state.pollTimer != null) window.clearInterval(state.pollTimer);
         api.removeEventListener("executed", onPromptExecuted);
         delete node._h3PromptCompanionSetActiveScene;
+        delete node._h3PromptCompanionSetScenePrompt;
         void flushHistoryDraft();
         if (PROMPT_ASSISTANT_ENABLED) {
             assistant.preparingRequest = null;
@@ -1540,6 +1545,27 @@ function mount(node) {
     node._h3PromptCompanionSetActiveScene = (planNode, index) => {
         if (planNode !== state.planNode || !state.plan?.shots?.length) return false;
         navigate(0, index, {synchronize:false, focus:false});
+        return true;
+    };
+    node._h3PromptCompanionSetScenePrompt = (planNode, index, text) => {
+        if (planNode !== state.planNode || !state.plan?.shots?.[index]) return false;
+        state.plan.shots[index].prompt = promptTextToLines(text);
+        if (index === state.active) {
+            const textarea = root.querySelector(".h3sp-textarea");
+            if (textarea && textarea.value !== text) {
+                const focused = document.activeElement === textarea;
+                const start = textarea.selectionStart;
+                const end = textarea.selectionEnd;
+                textarea.value = text;
+                if (focused) textarea.setSelectionRange(
+                    Math.min(start, text.length), Math.min(end, text.length));
+                scheduleHistoryDraft(
+                    String(state.plan.shots[index].id || `clip_${String(index + 1).padStart(4, "0")}`),
+                    text);
+                refreshAssistant();
+            }
+        }
+        state.lastValue = String(state.planWidget?.value ?? state.lastValue);
         return true;
     };
     node._h3ScenePromptEditorRefresh = () => loadPlan(true);

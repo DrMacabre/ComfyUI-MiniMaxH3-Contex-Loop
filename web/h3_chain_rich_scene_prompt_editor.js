@@ -36,6 +36,7 @@ import {
     tokenizeRichPrompt,
 } from "./h3_rich_prompt_editor_core.mjs";
 import {
+    publishCompanionPrompt,
     publishCompanionScene,
     rebaseScenePrompt,
 } from "./h3_prompt_companion_sync.mjs";
@@ -464,6 +465,9 @@ function mount(node) {
         state.planWidget.callback?.(value);
         state.planNode._h3ChainEditorRefresh?.();
         state.planNode.graph?.setDirtyCanvas?.(true, true);
+        publishCompanionPrompt(
+            node, state.planNode, state.active,
+            promptValueToText(state.plan.shots[state.active]?.prompt));
         if (state.status) state.status.textContent = message;
         dirty();
     }
@@ -1310,6 +1314,7 @@ function mount(node) {
         state.popover?.remove();
         api.removeEventListener("executed", onPromptExecuted);
         delete node._h3PromptCompanionSetActiveScene;
+        delete node._h3PromptCompanionSetScenePrompt;
         void flushHistoryDraft();
         state.optimizer.client?.close();
         state.optimizer.abortController?.abort();
@@ -1319,6 +1324,23 @@ function mount(node) {
     node._h3PromptCompanionSetActiveScene = (planNode, index) => {
         if (planNode !== state.planNode || !state.plan?.shots?.length || optimizerBusy()) return false;
         navigate(0, index, {synchronize:false, focus:false});
+        return true;
+    };
+    node._h3PromptCompanionSetScenePrompt = (planNode, index, text) => {
+        if (planNode !== state.planNode || !state.plan?.shots?.[index]) return false;
+        state.plan.shots[index].prompt = promptTextToLines(text);
+        if (index === state.active && state.editor) {
+            const current = editorPlainText(state.editor);
+            if (current !== text) {
+                const caret = document.activeElement === state.editor
+                    ? selectionTextOffset(state.editor) : null;
+                renderEditorText(text, caret == null ? null : Math.min(caret, text.length));
+                scheduleHistoryDraft(
+                    String(state.plan.shots[index].id || `clip_${String(index + 1).padStart(4, "0")}`),
+                    text);
+            }
+        }
+        state.lastValue = String(state.planWidget?.value ?? state.lastValue);
         return true;
     };
     node._h3RichPromptRefresh = () => loadPlan(true);

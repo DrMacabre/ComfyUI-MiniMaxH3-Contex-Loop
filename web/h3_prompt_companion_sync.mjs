@@ -12,6 +12,18 @@ function graphLink(graph, linkId) {
     return graph?.links?.[linkId] ?? graph?.links?.get?.(linkId) ?? null;
 }
 
+function allGraphNodes(graph, output = []) {
+    for (const node of graph?._nodes ?? []) {
+        output.push(node);
+        if (node.subgraph) allGraphNodes(node.subgraph, output);
+    }
+    return output;
+}
+
+function graphRoot(node) {
+    return node?.graph?.rootGraph ?? node?.graph;
+}
+
 /** Direct PLAN neighbours in either direction. Keeping this adjacency-scoped
  * means two independent editor branches may share a Plan without unexpectedly
  * taking over each other's scene selection. */
@@ -88,6 +100,45 @@ export function publishCompanionScene(source, planNode, sceneIndex) {
             if (apply.call(candidate, planNode, index, source) !== false) delivered += 1;
         } catch (_error) {
             // A companion UI must never break navigation in the source node.
+        }
+    }
+    return delivered;
+}
+
+/** A runtime component such as Review Gate is not directly adjacent to the
+ * Plan's authoring companions. Broadcast across the current graph instead;
+ * each receiver still verifies the exact Plan node before accepting. */
+export function publishPlanCompanionScene(source, planNode, sceneIndex) {
+    const index = Math.max(0, Math.trunc(Number(sceneIndex) || 0));
+    let delivered = 0;
+    for (const candidate of allGraphNodes(graphRoot(source))) {
+        if (!candidate || candidate === source) continue;
+        const apply = candidate._h3PromptCompanionSetActiveScene;
+        if (typeof apply !== "function") continue;
+        try {
+            if (apply.call(candidate, planNode, index, source) !== false) delivered += 1;
+        } catch (_error) {
+            // Synchronization must never interrupt review or execution.
+        }
+    }
+    return delivered;
+}
+
+/** Publish one already-written Plan prompt to every UI bound to that exact
+ * Plan. Receivers update their live field without writing back or rebroadcasting,
+ * which keeps this loop-free and preserves browser undo in the source editor. */
+export function publishCompanionPrompt(source, planNode, sceneIndex, prompt) {
+    const index = Math.max(0, Math.trunc(Number(sceneIndex) || 0));
+    const text = String(prompt ?? "").replace(/\r\n?/g, "\n");
+    let delivered = 0;
+    for (const candidate of allGraphNodes(graphRoot(source))) {
+        if (!candidate || candidate === source) continue;
+        const apply = candidate._h3PromptCompanionSetScenePrompt;
+        if (typeof apply !== "function") continue;
+        try {
+            if (apply.call(candidate, planNode, index, text, source) !== false) delivered += 1;
+        } catch (_error) {
+            // A companion UI must not make a Plan write fail.
         }
     }
     return delivered;
