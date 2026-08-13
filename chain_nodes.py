@@ -77,6 +77,7 @@ from .nodes import (
     _streams_from_latent,
 )
 from .prompt_history import PromptHistoryStore
+from .prompt_optimizer import optimize_prompt_payload
 from .run_manager import RunArchiveManager
 from .asset_store import MAX_ASSET_BINDINGS, RunAssetStore
 
@@ -3041,7 +3042,8 @@ class MiniMaxH3ChainRichScenePromptEditor:
     CATEGORY = "conditioning/minimax/contex_loop"
     DESCRIPTION = ("Experimental prompt-only scene editor with color-coded "
                    "references, media previews, prompt guides, revision "
-                   "history, and optional one-click Codex/Hermes rewriting. "
+                   "history, and optional one-click Direct API or MCP agent "
+                   "rewriting configured in ComfyUI Settings. "
                    "It does not edit Plan settings, schedules, or seeds.")
 
     def passthrough(self, plan):
@@ -5571,6 +5573,27 @@ async def _save_run_assets(request):
     return web.json_response(payload)
 
 
+async def _optimize_scene_prompt(request):
+    try:
+        body = await request.json()
+    except (json.JSONDecodeError, TypeError):
+        return web.json_response(
+            {"error": "The prompt optimizer request must contain JSON."},
+            status=400)
+    try:
+        payload = await optimize_prompt_payload(body)
+    except ValueError as exc:
+        return web.json_response({"error": str(exc)}, status=400)
+    except RuntimeError as exc:
+        return web.json_response({"error": str(exc)}, status=502)
+    except Exception:
+        _LOG.exception("Direct prompt optimization failed")
+        return web.json_response(
+            {"error": "Direct prompt optimization failed unexpectedly. "
+             "Check the ComfyUI server log."}, status=500)
+    return web.json_response(payload)
+
+
 if (PromptServer is not None and web is not None and
         getattr(PromptServer, "instance", None) is not None):
     PromptServer.instance.routes.post(
@@ -5591,6 +5614,8 @@ if (PromptServer is not None and web is not None and
         "/minimax_h3_context_loop/run")(_load_saved_run)
     PromptServer.instance.routes.post(
         "/minimax_h3_context_loop/run-assets")(_save_run_assets)
+    PromptServer.instance.routes.post(
+        "/minimax_h3_context_loop/prompt-optimize")(_optimize_scene_prompt)
 
 
 CHAIN_NODE_CLASS_MAPPINGS = {

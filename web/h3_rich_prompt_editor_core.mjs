@@ -44,7 +44,7 @@ export function richGuideInstruction(guide, generationMode) {
         schema,
         GUIDE_RULES[selected],
         "Preserve exact dialogue and lyrics inside <d> tags, their language, explicit timing, subject identity, wardrobe, camera continuity, and all valid media references unless the source explicitly asks to change them.",
-        "Connected references prove only that an asset and its media type are available; their previews are not uploaded to the optimizer. Do not invent image content, motion, lyrics, voice, timbre, or an audio copy/reference role. Use only facts stated in the prompt or shared/adjacent context and otherwise preserve the reference token without elaboration.",
+        "Connected references prove only that an asset and its media type are available. Do not invent image content, motion, lyrics, voice, timbre, or an audio copy/reference role. Use only facts stated in the prompt or shared/adjacent context, or media actually attached by the configured backend and directly observable to its model; otherwise preserve the reference token without elaboration.",
         "Keep all described events and cut times inside the supplied scene duration.",
         "Return a complete replacement rather than commentary, a patch, or an ellipsis.",
     ].join(" ");

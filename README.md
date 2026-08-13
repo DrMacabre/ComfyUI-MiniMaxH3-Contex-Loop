@@ -518,6 +518,11 @@ left unchanged.
 > Scene Prompt Editor retains its original compact manual-editing experience.
 > The implementation and tests remain in the repository for a future revisit;
 > use the comfyui-mcp sidebar Agent panel for prompt assistance in the meantime.
+> This note applies to the original compact editor. The experimental **Rich
+> Scene Prompt Editor** has a separate one-click optimizer configured globally
+> under **ComfyUI Settings → MiniMax H3 Contex Loop → Prompt optimizer**;
+> its portable **Direct API** mode is the default and does not require
+> `comfyui-mcp`.
 
 When enabled, the Scene Prompt Editor contains an optional **Prompt Assistant**.
 It uses the local `comfyui-mcp` panel orchestrator as a bridge, so agent

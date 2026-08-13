@@ -13,6 +13,16 @@ import {
 } from "./h3_prompt_assistant_core.mjs";
 import {PromptAssistantClient} from "./h3_prompt_assistant_client.mjs";
 import {
+    directOptimizerConfigurationError,
+    makeDirectPromptOptimizeRequest,
+} from "./h3_prompt_optimizer_core.mjs";
+import {
+    openPromptOptimizerSettings,
+    promptOptimizerBackend,
+    promptOptimizerDirectConfig,
+    promptOptimizerMcpProvider,
+} from "./h3_prompt_optimizer_settings.js";
+import {
     promptRevisionLabel,
     promptRevisionNavigation,
 } from "./h3_prompt_history_core.mjs";
@@ -39,7 +49,6 @@ const PLAN_NAME = "MiniMaxH3ChainPlan";
 const ACTIVE_PROPERTY = "h3_rich_prompt_active_scene";
 const FONT_PROPERTY = "h3_rich_prompt_font_size";
 const GUIDE_PROPERTY = "h3_rich_prompt_guide";
-const PROVIDER_PROPERTY = "h3_rich_prompt_provider";
 const DEFAULT_FONT = 17;
 const MIN_FONT = 12;
 const MAX_FONT = 32;
@@ -108,7 +117,6 @@ function injectStyles() {
       .h3rp-token-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
       .h3rp-toolbar { flex-wrap:wrap; }
       .h3rp-toolbar .h3rp-guide { min-width:150px; }
-      .h3rp-toolbar .h3rp-provider { width:150px; }
       .h3rp-toolbar-spacer { flex:1; }
       .h3rp-status { min-width:0; color:var(--h3rp-muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
       .h3rp-status-error { color:#ffaaaa; }
@@ -269,6 +277,31 @@ function findMediaPreview(start, kind) {
     return {url:null, source:start};
 }
 
+function findMediaAsset(start, kind) {
+    const queue = [start];
+    const seen = new Set();
+    while (queue.length) {
+        const candidate = queue.shift();
+        if (!candidate || seen.has(candidate)) continue;
+        seen.add(candidate);
+        for (const widget of candidate.widgets ?? []) {
+            const asset = widgetAsset(widget.value, kind);
+            if (asset && !asset.url) {
+                return {
+                    filename:asset.filename,
+                    subfolder:asset.subfolder ?? "",
+                    storage:asset.type ?? "input",
+                };
+            }
+        }
+        for (const input of candidate.inputs ?? []) {
+            const parent = inputSource(candidate, input.name);
+            if (parent) queue.push(parent);
+        }
+    }
+    return null;
+}
+
 function clamp(value, minimum, maximum, fallback) {
     const numeric = Number(value);
     return Number.isFinite(numeric) ? Math.max(minimum, Math.min(maximum, Math.round(numeric))) : fallback;
@@ -379,12 +412,11 @@ function mount(node) {
         active:Math.max(0, Number(node.properties[ACTIVE_PROPERTY]) || 0),
         fontSize:clamp(node.properties[FONT_PROPERTY], MIN_FONT, MAX_FONT, DEFAULT_FONT),
         guide:normalizeRichGuide(node.properties[GUIDE_PROPERTY]),
-        provider:/^[a-z][a-z0-9_-]*$/.test(String(node.properties[PROVIDER_PROPERTY] ?? ""))
-            ? String(node.properties[PROVIDER_PROPERTY]) : "codex",
         records:[], referenceMode:null, editor:null, refs:null, status:null, optimizerStatus:null,
         history:{sceneKey:"", data:null, revisionId:null, host:null, loadToken:0, loadPromise:null,
             saveTimer:null, pendingDraft:null, savePromise:null, error:""},
-        optimizer:{client:null, preparing:false, requestId:null, meta:null, origins:new Map(), providers:null, error:"", message:"", pendingResult:null},
+        optimizer:{client:null, preparing:false, requestId:null, meta:null, origins:new Map(), providers:null,
+            abortController:null, activeBackend:null, error:"", message:"", pendingResult:null},
         popover:null, popoverTimer:null, pollTimer:null,
     };
     node._h3RichPromptState = state;
@@ -398,7 +430,6 @@ function mount(node) {
         node.properties[ACTIVE_PROPERTY] = state.active;
         node.properties[FONT_PROPERTY] = state.fontSize;
         node.properties[GUIDE_PROPERTY] = state.guide;
-        node.properties[PROVIDER_PROPERTY] = state.provider;
         dirty();
     }
 
@@ -750,45 +781,11 @@ function mount(node) {
     function optimizerProviders() {
         const advertised = Array.isArray(state.optimizer.providers)
             ? state.optimizer.providers.filter((item) => item && typeof item.id === "string") : [];
-        const providers = advertised.length ? advertised : [
-            {id:"claude", label:"Claude", available:true},
-            {id:"codex", label:"Codex", available:true},
-            {id:"gemini", label:"Gemini", available:true},
-            {id:"hermes", label:"Hermes", available:true},
-        ];
-        if (!providers.some((item) => item.id === state.provider)) {
-            providers.push({id:state.provider, label:state.provider, available:false, reason:"not advertised by the bridge"});
-        }
-        return providers;
+        return advertised;
     }
 
-    function optimizerProviderLabel(id = state.provider) {
+    function optimizerProviderLabel(id = promptOptimizerMcpProvider()) {
         return optimizerProviders().find((item) => item.id === id)?.label || id;
-    }
-
-    function refreshProviderSelect(select = root.querySelector(".h3rp-provider")) {
-        if (!select) return;
-        select.replaceChildren();
-        for (const item of optimizerProviders()) {
-            const suffix = item.available === false
-                ? " — unavailable"
-                : item.transport === "direct_http"
-                    ? " — direct HTTP"
-                    : item.experimental ? " — experimental" : "";
-            const option = element("option", "", `${item.label || item.id}${suffix}`);
-            option.value = item.id;
-            option.disabled = item.available === false;
-            option.title = [item.reason, item.endpoint ? `Endpoint: ${item.endpoint}` : ""].filter(Boolean).join(" · ");
-            select.append(option);
-        }
-        select.value = state.provider;
-        const selected = optimizerProviders().find((item) => item.id === state.provider);
-        select.title = [
-            "Text-only agent used by Optimize. Available providers come from the connected comfyui-mcp orchestrator.",
-            selected?.transport === "direct_http" ? "Direct HTTP provider enabled globally in comfyui-mcp Settings." : "Isolated runtime.",
-            selected?.endpoint ? `Endpoint: ${selected.endpoint}` : "",
-            selected?.reason || "",
-        ].filter(Boolean).join(" ");
     }
 
     function refreshOptimizerUi() {
@@ -796,7 +793,13 @@ function mount(node) {
         if (state.editor) state.editor.contentEditable = busy ? "false" : "true";
         for (const control of root.querySelectorAll("[data-h3rp-lock]")) control.disabled = busy;
         const optimize = root.querySelector(".h3rp-optimize");
-        if (optimize) optimize.disabled = busy;
+        if (optimize) {
+            const backend = promptOptimizerBackend();
+            optimize.disabled = busy || backend === "disabled";
+            optimize.title = backend === "disabled"
+                ? "Prompt optimization is disabled in ComfyUI Settings → MiniMax H3 Contex Loop → Prompt optimizer."
+                : `Optimize through ${backend === "mcp" ? `MCP agent (${promptOptimizerMcpProvider()})` : "the configured Direct API"}. The result becomes a reversible prompt revision.`;
+        }
         const stop = root.querySelector(".h3rp-stop");
         if (stop) stop.hidden = !state.optimizer.requestId;
         const applyPending = root.querySelector(".h3rp-apply-pending");
@@ -811,8 +814,13 @@ function mount(node) {
         if (!frame || typeof frame !== "object") return;
         if (frame.type === "prompt_assist_ready") {
             state.optimizer.providers = Array.isArray(frame.providers) ? frame.providers : null;
-            refreshProviderSelect();
-        } else if (frame.type === "prompt_assist_started" && frame.request_id === state.optimizer.requestId) {
+            return;
+        }
+        // A previously connected bridge may still emit a late frame while a
+        // Direct API request is active. Never let that frame cancel or replace
+        // the direct result.
+        if (state.optimizer.activeBackend !== "mcp") return;
+        if (frame.type === "prompt_assist_started" && frame.request_id === state.optimizer.requestId) {
             state.optimizer.message = `Optimizing with ${optimizerProviderLabel()}…`;
         } else if (frame.type === "prompt_assist_progress" && frame.request_id === state.optimizer.requestId) {
             state.optimizer.message = "Agent is drafting…";
@@ -820,6 +828,7 @@ function mount(node) {
             const meta = state.optimizer.meta;
             state.optimizer.requestId = null;
             state.optimizer.meta = null;
+            state.optimizer.activeBackend = null;
             const result = typeof frame.rewritten_prompt === "string" ? frame.rewritten_prompt : null;
             if (!result?.trim()) {
                 state.optimizer.error = "The optimizer returned no replacement prompt.";
@@ -846,15 +855,18 @@ function mount(node) {
                 && (!frame.request_id || frame.request_id === state.optimizer.requestId)) {
             state.optimizer.requestId = null;
             state.optimizer.meta = null;
+            state.optimizer.activeBackend = null;
             state.optimizer.error = String(frame.error || "Prompt optimization failed.");
         } else if (frame.type === "prompt_assist_cancelled" && frame.request_id === state.optimizer.requestId) {
             state.optimizer.requestId = null;
             state.optimizer.meta = null;
+            state.optimizer.activeBackend = null;
             state.optimizer.message = "Optimization stopped; the prompt was not changed.";
         } else if (frame.type === "prompt_assist_cancel_ack" && frame.cancelled === false
                 && frame.request_id === state.optimizer.requestId) {
             state.optimizer.requestId = null;
             state.optimizer.meta = null;
+            state.optimizer.activeBackend = null;
             state.optimizer.error = "The optimizer request is no longer active.";
         }
         refreshOptimizerUi();
@@ -884,8 +896,131 @@ function mount(node) {
         refreshOptimizerUi();
     }
 
+    function optimizerInstruction(mode, refs) {
+        const referenceSummary = refs.records.length
+            ? refs.records.map((record) => {
+                const mapping = record.label && record.label !== record.token
+                    ? ` -> ${record.label}` : "";
+                return `${record.token}${mapping} (${record.kind}, ${record.active ? "active" : "inactive"})`;
+            }).join(", ")
+            : "none discovered";
+        return `${richGuideInstruction(state.guide, mode)} Connected scene references: ${referenceSummary}.`;
+    }
+
+    function optimizerMeta(sceneIndex, sceneId, sceneKey, source, current) {
+        return {sceneIndex, sceneId, sceneKey, source, currentAtRequest:current};
+    }
+
+    function optimizerResources(refs) {
+        return refs.records.filter((record) => record.active).map((record) => ({
+            type:record.kind === "picture" ? "image" : record.kind,
+            tag:record.token,
+            asset:findMediaAsset(
+                record.source, record.kind === "picture" ? "image" : record.kind),
+        })).filter((resource) => resource.asset);
+    }
+
+    function applyOptimizerResponse(result, message, meta) {
+        if (!result?.trim()) {
+            state.optimizer.error = "The optimizer returned no replacement prompt.";
+            return;
+        }
+        const shot = state.plan?.shots?.[meta.sceneIndex];
+        const current = shot ? promptValueToText(shot.prompt) : "";
+        if (!shot || String(shot.id || "") !== meta.sceneId || current !== meta.currentAtRequest) {
+            state.optimizer.pendingResult = {...meta, result};
+            state.optimizer.error = "The scene changed while optimizing; the result was not applied.";
+            return;
+        }
+        shot.prompt = promptTextToLines(result);
+        state.optimizer.origins.set(meta.sceneKey, {source:meta.source, result});
+        writePlan("Optimized prompt saved to Plan");
+        if (state.active === meta.sceneIndex) {
+            renderEditorText(result);
+            scheduleHistoryDraft(meta.sceneId, result);
+            void flushHistoryDraft();
+        }
+        state.optimizer.message = message || "Optimized prompt saved as a new revision.";
+        state.optimizer.error = "";
+    }
+
+    async function optimizeDirect(requestId, instruction, context, resources, meta, config) {
+        const abortController = new AbortController();
+        state.optimizer.abortController = abortController;
+        state.optimizer.requestId = requestId;
+        state.optimizer.preparing = false;
+        state.optimizer.activeBackend = "direct";
+        state.optimizer.meta = meta;
+        state.optimizer.message = "Optimizing with Direct API…";
+        refreshOptimizerUi();
+        try {
+            const body = makeDirectPromptOptimizeRequest({
+                config, instruction, context, resources,
+            });
+            const response = await api.fetchApi("/minimax_h3_context_loop/prompt-optimize", {
+                method:"POST", headers:{"Content-Type":"application/json"},
+                body:JSON.stringify(body), signal:abortController.signal,
+            });
+            const payload = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(payload.error || `Direct prompt optimizer failed (HTTP ${response.status}).`);
+            if (state.optimizer.requestId !== requestId) return;
+            state.optimizer.requestId = null;
+            state.optimizer.meta = null;
+            state.optimizer.abortController = null;
+            state.optimizer.activeBackend = null;
+            applyOptimizerResponse(String(payload.prompt || ""), payload.message, meta);
+        } catch (error) {
+            if (state.optimizer.requestId !== requestId) return;
+            state.optimizer.requestId = null;
+            state.optimizer.meta = null;
+            state.optimizer.abortController = null;
+            state.optimizer.activeBackend = null;
+            if (error?.name === "AbortError") state.optimizer.message = "Optimization stopped; the prompt was not changed.";
+            else state.optimizer.error = error?.message || String(error);
+        }
+        refreshOptimizerUi();
+    }
+
+    async function optimizeMcp(requestId, instruction, context, meta) {
+        const provider = promptOptimizerMcpProvider();
+        await state.optimizer.client.connect();
+        const selected = state.optimizer.providers?.find((item) => item.id === provider);
+        if (!selected) throw new Error(`${provider} is not supported by this comfyui-mcp prompt bridge.`);
+        if (selected.available === false) {
+            throw new Error(`${selected.label || provider} is unavailable${selected.reason ? `: ${selected.reason}` : "."}`);
+        }
+        state.optimizer.client.reset();
+        const request = makePromptAssistRequest({
+            requestId,
+            conversationId:state.optimizer.client.conversationId,
+            provider,
+            mode:"rewrite",
+            instruction,
+            context,
+        });
+        state.optimizer.requestId = requestId;
+        state.optimizer.preparing = false;
+        state.optimizer.activeBackend = "mcp";
+        state.optimizer.meta = meta;
+        state.optimizer.message = `Optimizing with ${optimizerProviderLabel(provider)}…`;
+        refreshOptimizerUi();
+        await state.optimizer.client.send(request);
+    }
+
     async function optimizePrompt() {
         if (optimizerBusy() || !state.plan?.shots?.length || !state.editor) return;
+        const backend = promptOptimizerBackend();
+        if (backend === "disabled") return;
+        const directConfig = backend === "direct" ? promptOptimizerDirectConfig() : null;
+        const configurationError = directConfig
+            ? directOptimizerConfigurationError(directConfig) : "";
+        if (configurationError) {
+            state.optimizer.error = `${configurationError} Configure it in ComfyUI Settings → MiniMax H3 Contex Loop → Prompt optimizer.`;
+            state.optimizer.message = "";
+            refreshOptimizerUi();
+            void openPromptOptimizerSettings();
+            return;
+        }
         const sceneIndex = state.active;
         const shot = state.plan.shots[sceneIndex];
         const sceneId = String(shot.id || `clip_${String(sceneIndex + 1).padStart(4, "0")}`);
@@ -899,45 +1034,28 @@ function mount(node) {
         });
         context.generation_mode = mode;
         const requestId = `rich-${globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`}`;
+        const instruction = optimizerInstruction(mode, refs);
+        const meta = optimizerMeta(sceneIndex, sceneId, sceneKey, source, current);
         state.optimizer.error = "";
         state.optimizer.pendingResult = null;
-        state.optimizer.message = "Connecting to the isolated prompt agent…";
+        state.optimizer.message = backend === "mcp"
+            ? "Connecting to the isolated prompt agent…" : "Preparing Direct API request…";
         state.optimizer.preparing = true;
+        state.optimizer.activeBackend = backend;
         refreshOptimizerUi();
         try {
-            await state.optimizer.client.connect();
-            const selected = state.optimizer.providers?.find((item) => item.id === state.provider);
-            if (!selected) throw new Error(`${optimizerProviderLabel()} is not supported by this comfyui-mcp prompt bridge.`);
-            if (selected.available === false) {
-                throw new Error(`${selected.label || state.provider} is unavailable${selected.reason ? `: ${selected.reason}` : "."}`);
+            if (backend === "direct") {
+                await optimizeDirect(
+                    requestId, instruction, context, optimizerResources(refs), meta, directConfig);
+            } else {
+                await optimizeMcp(requestId, instruction, context, meta);
             }
-            state.optimizer.client.reset();
-            const referenceSummary = refs.records.length
-                ? refs.records.map((record) => {
-                    const mapping = record.label && record.label !== record.token
-                        ? ` -> ${record.label}` : "";
-                    return `${record.token}${mapping} (${record.kind}, ${record.active ? "active" : "inactive"})`;
-                }).join(", ")
-                : "none discovered";
-            const request = makePromptAssistRequest({
-                requestId,
-                conversationId:state.optimizer.client.conversationId,
-                provider:state.provider,
-                mode:"rewrite",
-                instruction:`${richGuideInstruction(state.guide, mode)} Connected scene references: ${referenceSummary}.`,
-                context,
-            });
-            state.optimizer.requestId = requestId;
-            state.optimizer.preparing = false;
-            state.optimizer.meta = {sceneIndex, sceneId, sceneKey, source,
-                currentAtRequest:current};
-            state.optimizer.message = `Optimizing with ${optimizerProviderLabel()}…`;
-            refreshOptimizerUi();
-            await state.optimizer.client.send(request);
         } catch (error) {
             state.optimizer.preparing = false;
             state.optimizer.requestId = null;
             state.optimizer.meta = null;
+            state.optimizer.abortController = null;
+            state.optimizer.activeBackend = null;
             state.optimizer.error = error?.message || String(error);
             refreshOptimizerUi();
         }
@@ -945,7 +1063,14 @@ function mount(node) {
 
     function stopOptimizer() {
         if (!state.optimizer.requestId) return;
-        if (!state.optimizer.client.cancel(state.optimizer.requestId)) {
+        if (state.optimizer.activeBackend === "direct") {
+            state.optimizer.requestId = null;
+            state.optimizer.meta = null;
+            state.optimizer.activeBackend = null;
+            state.optimizer.abortController?.abort();
+            state.optimizer.abortController = null;
+            state.optimizer.message = "Optimization stopped; the prompt was not changed.";
+        } else if (!state.optimizer.client.cancel(state.optimizer.requestId)) {
             state.optimizer.error = "The bridge is disconnected; the request could not be cancelled.";
         } else state.optimizer.message = "Stopping optimizer…";
         refreshOptimizerUi();
@@ -1041,14 +1166,7 @@ function mount(node) {
         }
         guide.value = state.guide;
         guide.addEventListener("change", () => { state.guide = normalizeRichGuide(guide.value); persistView(); });
-        const provider = element("select", "h3rp-provider");
-        provider.dataset.h3rpLock = "";
-        provider.addEventListener("change", () => {
-            state.provider = provider.value;
-            persistView();
-            refreshProviderSelect(provider);
-        });
-        const optimize = button("Optimize", "Rewrite from prompt text, scene context, and reference mappings with the selected H3 guide; media previews are not uploaded. The result becomes a reversible prompt revision.", () => void optimizePrompt(), "sparkle");
+        const optimize = button("Optimize", "Optimize with the globally configured prompt backend.", () => void optimizePrompt(), "sparkle");
         optimize.classList.add("h3rp-optimize");
         const stop = button("Stop", "Cancel prompt optimization", stopOptimizer, "stop");
         stop.classList.add("h3rp-stop");
@@ -1058,8 +1176,7 @@ function mount(node) {
         applyPending.hidden = true;
         const optimizerStatus = element("span", "h3rp-status");
         state.optimizerStatus = optimizerStatus;
-        toolbar.replaceChildren(refsButton, dialogue, guide, provider, optimize, stop, applyPending, optimizerStatus);
-        refreshProviderSelect(provider);
+        toolbar.replaceChildren(refsButton, dialogue, guide, optimize, stop, applyPending, optimizerStatus);
 
         const refs = element("div", "h3rp-ref-tray");
         state.refs = refs;
@@ -1145,23 +1262,19 @@ function mount(node) {
         onStatus:(status, detail) => {
             if (detail?.providers) {
                 state.optimizer.providers = detail.providers;
-                refreshProviderSelect();
             }
-            if (status === "disconnected" && state.optimizer.requestId) {
+            if (status === "disconnected" && state.optimizer.requestId
+                    && state.optimizer.activeBackend === "mcp") {
                 state.optimizer.error = "Prompt-agent bridge disconnected.";
                 state.optimizer.requestId = null;
                 state.optimizer.meta = null;
+                state.optimizer.activeBackend = null;
             }
             refreshOptimizerUi();
         },
     });
-    // Provider discovery is cheap and text-only: connect the auxiliary bridge
-    // now so the selector reflects the orchestrator's real installed/authenticated
-    // providers before the user opens it. No agent turn starts until Optimize.
-    void state.optimizer.client.connect().catch((error) => {
-        state.optimizer.error = `Prompt-agent bridge: ${error?.message || String(error)}`;
-        refreshOptimizerUi();
-    });
+    const onOptimizerSettingsChanged = () => refreshOptimizerUi();
+    globalThis.addEventListener?.("h3-prompt-optimizer-settings-changed", onOptimizerSettingsChanged);
 
     const widget = node.addDOMWidget("h3_rich_scene_prompt_editor", "h3-rich-scene-prompt-editor", root,
         {serialize:false, hideOnZoom:false, getMinHeight:() => 560});
@@ -1199,6 +1312,8 @@ function mount(node) {
         delete node._h3PromptCompanionSetActiveScene;
         void flushHistoryDraft();
         state.optimizer.client?.close();
+        state.optimizer.abortController?.abort();
+        globalThis.removeEventListener?.("h3-prompt-optimizer-settings-changed", onOptimizerSettingsChanged);
         return removed?.apply(this, arguments);
     };
     node._h3PromptCompanionSetActiveScene = (planNode, index) => {
