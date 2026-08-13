@@ -73,7 +73,6 @@ assert.deepEqual(localPlan.shots[1], {id:"one", prompt:["live one"], seed:"11"})
 assert.equal(rebaseScenePrompt({shots:[{id:"gone",prompt:[]}]}, livePlan, 0), -1);
 
 for (const relative of [
-    "../web/h3_chain_review.js",
     "../web/h3_chain_scene_prompt_editor.js",
     "../web/h3_chain_rich_scene_prompt_editor.js",
     "../web/h3_chain_plan_studio.js",
@@ -82,5 +81,9 @@ for (const relative of [
     assert.match(source, /import \* as promptCompanionSync/);
     assert.match(source, /promptCompanionSync\.publishCompanionPrompt\?\./);
 }
+
+const reviewSource = fs.readFileSync(
+    new URL("../web/h3_chain_review.js", import.meta.url), "utf8");
+assert.doesNotMatch(reviewSource, /h3_prompt_companion_sync/);
 
 console.log("H3 prompt companions: adjacency and active-scene synchronization pass");
