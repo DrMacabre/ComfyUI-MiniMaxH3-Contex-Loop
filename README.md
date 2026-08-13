@@ -231,8 +231,11 @@ Start with one of the two equivalent T2V workflows:
 Both are true text-to-video chains: the stock `MiniMaxH3ImageToVideo` node has
 no first- or last-frame input. They request two ten-second portrait scenes with
 generated audio, 22 context frames, and an independent five-frame visual
-blend. Scene 1 reproduces a Banodoco community prompt with visible attribution
-inside the workflow; scene 2 is a repository-authored continuation.
+blend. The model stack uses core **Model Attention Backend** with **comfy
+kitchen attention** and the official LightX2V eight-step v1.0 LoRA at strength
+1.0, with the `lcm` sampler and `beta` scheduler. Scene 1 reproduces a Banodoco
+community prompt with visible attribution inside the workflow; scene 2 is a
+repository-authored continuation.
 
 The earlier mixed examples remain available in [`Archive/`](example_workflows/Archive/):
 

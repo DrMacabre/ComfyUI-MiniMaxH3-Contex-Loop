@@ -26,7 +26,11 @@ Both files use ComfyUI's core `MiniMaxH3ImageToVideo` node with `first_frame`
 and `last_frame` deliberately disconnected, which selects its T2VA path. They
 share the same two-scene portrait plan, model graph, seeds, generated-audio
 route, 22-frame motion context, five-frame visual blend, checkpointing, Review
-Gate, recovery path, and final assembly.
+Gate, recovery path, and final assembly. The shared model stack uses ComfyUI's
+core `ModelAttentionBackend` set to `comfy kitchen attention`, followed by
+`minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors` at strength 1.0.
+Both the Plan default and scheduler fallback use eight sampling steps with the
+`lcm` sampler and `beta` scheduler.
 
 - [`T2V/MiniMax H3 T2V - Normal.json`](<T2V/MiniMax H3 T2V - Normal.json>)
   uses the standard Scene Prompt Editor.

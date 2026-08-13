@@ -61,7 +61,23 @@ def validate_links(workflow):
 def validate_t2v(path, editor_type):
     workflow = load(path)
     validate_links(workflow)
-    assert not any(item.get("type") == "LoadImage" for item in workflow["nodes"])
+    node_types = {item.get("type") for item in workflow["nodes"]}
+    assert "LoadImage" not in node_types
+    assert not node_types.intersection({
+        "PathchSageAttentionKJ",
+        "MiniMaxH3MemoryEfficientSageAttentionPatch",
+        "SolAttnPatch",
+    })
+
+    attention = node(workflow, "ModelAttentionBackend")
+    assert attention["widgets_values"] == ["comfy kitchen attention"]
+    lora = node(workflow, "LoraLoaderModelOnly")
+    assert lora["widgets_values"] == [
+        "MiniMax H3/minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors",
+        1.0,
+    ]
+    assert socket(attention["inputs"], "model")["link"] is not None
+    assert socket(lora["inputs"], "model")["link"] is not None
 
     conditioner = node(workflow, "MiniMaxH3ImageToVideo")
     assert socket(conditioner["inputs"], "first_frame")["link"] is None
@@ -72,7 +88,12 @@ def validate_t2v(path, editor_type):
     plan = json.loads(plan_node["widgets_values"][0])
     assert plan_node["widgets_values"][3:6] == [544, 960, 22]
     assert plan_node["widgets_values"][9] == "generated_audio"
+    assert plan_node["widgets_values"][12] == 8
     assert plan_node["widgets_values"][15] == 5
+    assert plan["defaults"]["steps"] == 8
+    assert node(workflow, "KSamplerSelect")["widgets_values"] == ["lcm"]
+    scheduler = node(workflow, "BasicScheduler")
+    assert scheduler["widgets_values"][0:2] == ["beta", 8]
     assert len(plan["shots"]) == 2
     assert [shot["length"] for shot in plan["shots"]] == [243, 243]
     for shot in plan["shots"]:
