@@ -83,7 +83,7 @@ for (const relative of [
 }
 
 const reviewSource = fs.readFileSync(
-    new URL("../web/h3_chain_review.js", import.meta.url), "utf8");
+    new URL("../web/h3_chain_review_main.js", import.meta.url), "utf8");
 assert.doesNotMatch(reviewSource, /h3_prompt_companion_sync/);
 
 console.log("H3 prompt companions: adjacency and active-scene synchronization pass");

@@ -62,7 +62,7 @@ assert.deepEqual(checkpointResumeOptions([
 ]);
 
 const reviewSource = fs.readFileSync(
-    new URL("../web/h3_chain_review.js", import.meta.url),
+    new URL("../web/h3_chain_review_main.js", import.meta.url),
     "utf8",
 );
 assert.match(reviewSource, /minimax_h3_context_loop\/review/);
