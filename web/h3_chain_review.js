@@ -5,6 +5,8 @@ import {
     applyReviewEdit,
     checkpointResumeOptions,
     reviewCountdown,
+    reviewDuration,
+    reviewDurationText,
     reviewLocalDeadline,
     reviewSeed,
 } from "./h3_chain_review_core.mjs";
@@ -88,9 +90,16 @@ function injectStyles() {
         .h3r-label { display:flex; flex-direction:column; gap:4px; color:#aeb5c5; }
         .h3r-prompt { width:100%; min-height:120px; resize:vertical; padding:7px;
             border:1px solid #56637e; border-radius:5px; background:#101218; color:#eef1f7; }
-        .h3r-row { display:flex; align-items:center; gap:7px; }
-        .h3r-seed { flex:1; min-width:0; padding:6px 7px; border:1px solid #56637e;
+        .h3r-row { display:flex; align-items:flex-end; gap:7px; }
+        .h3r-field { display:flex; flex-direction:column; gap:4px; min-width:0;
+            color:#aeb5c5; }
+        .h3r-field-seed { flex:2 1 0; }
+        .h3r-field-duration { flex:1 1 0; }
+        .h3r-seed { width:100%; min-width:0; padding:6px 7px; border:1px solid #56637e;
             border-radius:5px; background:#101218; color:#eef1f7; }
+        .h3r-duration { width:100%; min-width:0; padding:6px 7px;
+            border:1px solid #56637e; border-radius:5px; background:#101218;
+            color:#eef1f7; }
         .h3r-actions { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:7px; }
         .h3r-button { padding:7px; border:1px solid #63708b; border-radius:5px;
             background:#292e3a; color:#eef1f7; cursor:pointer; }
@@ -191,12 +200,12 @@ function planResumeContext(reviewNode) {
     return {runName, clipCount: plan.shots.length};
 }
 
-function updatePlan(reviewNode, index, prompt, seed) {
+function updatePlan(reviewNode, index, prompt, seed, length) {
     const planNode = upstreamPlanNode(reviewNode);
     const widget = planNode?.widgets?.find((item) => item.name === "plan_json");
     if (!widget) return false;
     const plan = applyReviewEdit(
-        parsePlanJson(String(widget.value ?? "")), index, prompt, seed,
+        parsePlanJson(String(widget.value ?? "")), index, prompt, seed, length,
     );
     const value = planToJson(plan);
     widget.value = value;
@@ -454,14 +463,29 @@ function mount(node) {
     node._h3ReviewApplyLayout = applySavedLayout;
     applySavedLayout();
 
-    const seedRow = document.createElement("label");
+    const seedRow = document.createElement("div");
     seedRow.className = "h3r-row";
-    seedRow.append("Seed");
+    const seedField = document.createElement("label");
+    seedField.className = "h3r-field h3r-field-seed";
+    seedField.append("Seed");
     const seed = document.createElement("input");
     seed.className = "h3r-seed";
     seed.inputMode = "numeric";
     seed.title = "Unsigned 64-bit seed for the current scene. Edit it before Retry, or use Reroll seed to generate a new value automatically.";
-    seedRow.append(seed);
+    seedField.append(seed);
+    const durationField = document.createElement("label");
+    durationField.className = "h3r-field h3r-field-duration";
+    durationField.append("Duration (s)");
+    const duration = document.createElement("input");
+    duration.className = "h3r-duration";
+    duration.type = "number";
+    duration.inputMode = "decimal";
+    duration.min = String(5 / 24);
+    duration.max = String(3592 / 24);
+    duration.step = String(17 / 24);
+    duration.title = "Generated scene duration. Retry and Reroll round this upward to H3's exact 17k+5 frame grid, revise the full Plan, and retime downstream scenes. Prompt wording and written timestamps are not changed.";
+    durationField.append(duration);
+    seedRow.append(seedField, durationField);
 
     const actions = document.createElement("div");
     actions.className = "h3r-actions";
@@ -473,8 +497,8 @@ function mount(node) {
         button.type = "button";
         button.title = {
             approve: "Accept this saved scene and continue the loop with the next scene.",
-            retry: "Reject this attempt and regenerate the same scene using the edited scene prompt and seed.",
-            reroll: "Reject this attempt, assign a new random seed, and regenerate the same scene with the displayed prompt.",
+            retry: "Reject this attempt and regenerate the same scene using the edited prompt, seed, and duration.",
+            reroll: "Reject this attempt, assign a new random seed, and regenerate the same scene using the edited prompt and duration.",
             stop: "Accept this scene but stop before the next one. Optionally assemble a partial joined MP4 and arm the next scene for resume.",
         }[action] ?? "Submit this review decision.";
         button.disabled = true;
@@ -488,7 +512,7 @@ function mount(node) {
         return button;
     }
     actionButton("Approve & continue", "h3r-approve", "approve");
-    actionButton("Retry prompt / seed", "h3r-retry", "retry");
+    actionButton("Retry prompt / seed / length", "h3r-retry", "retry");
     actionButton("Reroll seed", "h3r-retry", "reroll");
     actionButton("Approve & stop", "h3r-stop", "stop");
 
@@ -624,6 +648,8 @@ function mount(node) {
         }
         try {
             const normalizedSeed = action === "retry" ? reviewSeed(seed.value) : seed.value;
+            const normalizedDuration = action === "retry" || action === "reroll"
+                ? reviewDuration(duration.value) : null;
             stopCountdown();
             root.classList.add("h3r-busy");
             setActionsEnabled(false);
@@ -638,6 +664,7 @@ function mount(node) {
                     action,
                     scene_prompt: prompt.value,
                     seed: normalizedSeed,
+                    length: normalizedDuration?.length,
                 }),
             });
             const body = await response.json();
@@ -648,8 +675,10 @@ function mount(node) {
                     : "Approval received — workflow resumed.";
             } else if (action === "retry" || action === "reroll") {
                 seed.value = body.seed;
-                const saved = updatePlan(node, current.clip_index, prompt.value, body.seed);
-                status.textContent = `Retrying scene with seed ${body.seed}.` +
+                duration.value = reviewDurationText(body.length);
+                const saved = updatePlan(
+                    node, current.clip_index, prompt.value, body.seed, body.length);
+                status.textContent = `Retrying scene with seed ${body.seed} at ${body.length} frames (${duration.value}s).` +
                     (saved ? " The Plan editor was updated." : "");
             } else if (action === "stop") {
                 const prepared = current.clip_index < current.clip_count &&
@@ -696,6 +725,7 @@ function mount(node) {
         if (!sameToken) {
             prompt.value = data.scene_prompt ?? "";
             seed.value = data.seed ?? "";
+            duration.value = reviewDurationText(data.raw_frames);
             prefix.textContent = data.prompt_prefix ?
                 `Shared prompt (unchanged)\n${data.prompt_prefix}` : "";
             prefix.hidden = !data.prompt_prefix;

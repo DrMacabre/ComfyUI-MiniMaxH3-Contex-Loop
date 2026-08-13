@@ -4,12 +4,20 @@ import {
     applyReviewEdit,
     checkpointResumeOptions,
     reviewCountdown,
+    reviewDuration,
+    reviewDurationText,
     reviewLocalDeadline,
     reviewSeed,
 } from "../web/h3_chain_review_core.mjs";
 
 assert.equal(reviewSeed("18446744073709551615"), "18446744073709551615");
 assert.throws(() => reviewSeed("18446744073709551616"), /uint64/);
+assert.deepEqual(reviewDuration("15"), {seconds: 15, length: 362});
+assert.equal(reviewDurationText(362), "15.083333");
+for (const length of [5, 22, 39, 56, 73, 362, 3592]) {
+    assert.equal(reviewDuration(reviewDurationText(length)).length, length);
+}
+assert.throws(() => reviewDuration("0"), /positive/);
 
 const plan = {
     prompt_prefix: ["Keep identity."],
@@ -18,10 +26,11 @@ const plan = {
         {id: "two", prompt: ["Old two."], seed: "2"},
     ],
 };
-applyReviewEdit(plan, 2, "New two.\n\nCAMERA: Close-up.", "9007199254740993");
+applyReviewEdit(plan, 2, "New two.\n\nCAMERA: Close-up.", "9007199254740993", 56);
 assert.deepEqual(plan.shots[0].prompt, ["Old one."]);
 assert.deepEqual(plan.shots[1].prompt, ["New two.", "", "CAMERA: Close-up."]);
 assert.equal(plan.shots[1].seed, "9007199254740993");
+assert.equal(plan.shots[1].length, 56);
 applyReviewEdit(plan, 1, "", "3");
 assert.deepEqual(plan.shots[0].prompt, [""]);
 assert.equal(plan.shots[0].seed, "3");
@@ -68,6 +77,9 @@ assert.match(reviewSource, /gates\.length === 1/);
 assert.match(reviewSource, /"pointerdown", "pointerup", "mousedown", "mouseup", "click"/);
 assert.match(reviewSource, /preview_revision/);
 assert.match(reviewSource, /sameToken/);
+assert.match(reviewSource, /Duration \(s\)/);
+assert.match(reviewSource, /body\.length/);
+assert.match(reviewSource, /reviewDurationText\(data\.raw_frames\)/);
 assert.match(reviewSource, /h3r-video-panel/);
 assert.match(reviewSource, /h3r-video-grip/);
 assert.match(reviewSource, /h3_chain_review_video_height/);
