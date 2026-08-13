@@ -2,12 +2,15 @@ import assert from "node:assert/strict";
 import {
     availableReferenceRecords,
     collectScheduleNodes,
+    collectTaggedNodes,
     coreReferenceRecords,
     findScheduledRef2VA,
+    findTaggedRef2VA,
     imageToVideoReferenceRecords,
     referencePreviewRecords,
     referenceIsActive,
     scheduledReferenceRecords,
+    taggedReferenceRecords,
 } from "../web/h3_reference_preview_core.mjs";
 
 function makeNode(id, type, widgets = {}) {
@@ -96,6 +99,63 @@ assert.deepEqual(
     ["picture_1", "picture_2", "score"],
 );
 
+const taggedEditor = add(makeNode(30, "MiniMaxH3ChainScenePromptEditor"));
+const taggedRelay = add(makeNode(31, "MiniMaxH3ChainCurrent"));
+const taggedWrapper = add(makeNode(32, "MiniMaxH3TaggedReferenceToVideo"));
+const taggedImageA = add(makeNode(33, "LoadImage", {image: "face.png"}));
+const taggedImageB = add(makeNode(34, "LoadImage", {image: "look.png"}));
+const taggedVideoFile = add(makeNode(35, "LoadVideo", {video: "motion.mp4"}));
+const taggedVideoAudio = add(makeNode(36, "LoadAudio", {audio: "motion.wav"}));
+const taggedPictureA = add(makeNode(37, "MiniMaxH3TaggedPictureReference", {
+    tag: "hero_face",
+}));
+const taggedPictureB = add(makeNode(38, "MiniMaxH3TaggedPictureReference", {
+    tag: "hero_look",
+}));
+const taggedVideo = add(makeNode(39, "MiniMaxH3TaggedVideoReference", {
+    tag: "motion", audio_tag: "motion_audio",
+}));
+connect(taggedEditor, taggedRelay, "state");
+connect(taggedRelay, taggedWrapper, "prompt");
+connect(taggedImageA, taggedPictureA, "image");
+connect(taggedPictureA, taggedPictureB, "previous");
+connect(taggedImageB, taggedPictureB, "image");
+connect(taggedPictureB, taggedVideo, "previous");
+connect(taggedVideoFile, taggedVideo, "video");
+connect(taggedVideoAudio, taggedVideo, "audio");
+connect(taggedVideo, taggedWrapper, "references");
+
+assert.equal(findTaggedRef2VA(taggedEditor), taggedWrapper);
+assert.deepEqual(
+    collectTaggedNodes(taggedWrapper),
+    [taggedPictureA, taggedPictureB, taggedVideo],
+);
+const promptRefs = taggedReferenceRecords(
+    taggedEditor, "Use @hero_look and @motion_audio; keep @S1.").records;
+assert.deepEqual(
+    promptRefs.map(({tag, label, active}) => ({tag, label, active})),
+    [
+        {tag: "hero_face", label: null, active: false},
+        {tag: "hero_look", label: "<Picture 1>", active: true},
+        {tag: "motion", label: "<Video 1>", active: true},
+        {tag: "motion_audio", label: "<Audio 1>", active: true},
+    ],
+);
+assert.equal(referencePreviewRecords(
+    taggedEditor, 2, {prompt: "Use @hero_look."}).mode, "tagged");
+assert.deepEqual(
+    availableReferenceRecords(taggedEditor, 2, {
+        prompt: "Use @hero_look.",
+    }).records.map(({tag}) => tag),
+    ["hero_look"],
+);
+assert.deepEqual(
+    availableReferenceRecords(taggedEditor, 2, {
+        prompt: "Use @hero_look.", includeInactive: true,
+    }).records.map(({tag}) => tag),
+    ["hero_face", "hero_look", "motion", "motion_audio"],
+);
+
 const coreEditor = add(makeNode(10, "MiniMaxH3ChainScenePromptEditor"));
 const coreRelay = add(makeNode(11, "MiniMaxH3ChainCurrent"));
 const core = add(makeNode(12, "MiniMaxH3ReferenceToVideo"));
@@ -173,4 +233,4 @@ assert.deepEqual(
     [{token: "<Picture 1>", role: "last frame"}],
 );
 
-console.log("H3 reference preview: scheduled Ref2VA, core Ref2VA, and core I2V/FL2V discovery pass");
+console.log("H3 reference preview: tagged/scheduled Ref2VA, core Ref2VA, and core I2V/FL2V discovery pass");

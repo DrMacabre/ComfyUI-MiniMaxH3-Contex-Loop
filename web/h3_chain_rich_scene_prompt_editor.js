@@ -635,7 +635,7 @@ function mount(node) {
         if (state.popoverTimer != null) window.clearTimeout(state.popoverTimer), state.popoverTimer = null;
         const popover = ensurePopover();
         popover.replaceChildren();
-        const title = record.mode === "scheduled" && record.label
+        const title = (state.referenceMode === "scheduled" || state.referenceMode === "tagged") && record.label
             ? `${record.token} → ${record.label}` : record.token;
         popover.append(element("div", "h3rp-popover-title", title));
         const mediaKind = record.kind === "picture" ? "image" : record.kind;
@@ -652,7 +652,7 @@ function mount(node) {
         }
         const sourceTitle = media.source?.title || nodeType(media.source) || "unresolved source";
         popover.append(element("div", "h3rp-popover-detail",
-            `${record.kind.toUpperCase()} · scenes ${record.selector}\n${record.active ? "Active" : "Inactive"} in scene ${state.active + 1}\nSource: ${sourceTitle}`));
+            `${record.kind.toUpperCase()} · ${record.selector === "prompt tag" ? "activated by prompt tag" : `scenes ${record.selector}`}\n${record.active ? "Active" : "Inactive"} in scene ${state.active + 1}\nSource: ${sourceTitle}`));
         popover.hidden = false;
         const rect = anchor.getBoundingClientRect();
         const width = Math.min(360, globalThis.innerWidth - 24);
@@ -732,6 +732,17 @@ function mount(node) {
 
     function insertDecoratedText(text) {
         insertPlainText(state.editor, text);
+        if (state.referenceMode === "tagged") {
+            state.records = availableReferenceRecords(
+                node, state.active + 1, {
+                    includeInactive: true,
+                    prompt: [
+                        sharedPrompt(state.plan).text.trim(),
+                        editorPlainText(state.editor).trim(),
+                    ].filter(Boolean).join("\n\n"),
+                },
+            ).records;
+        }
         decorateEditorAtCaret();
     }
 
@@ -740,14 +751,17 @@ function mount(node) {
         if (!tray) return;
         tray.replaceChildren();
         if (!state.records.length) {
-            tray.append(element("div", "h3rp-ref-help", "No connected Scheduled Ref2VA, core Ref2VA, or core I2V/FL2V references were found."));
+            tray.append(element("div", "h3rp-ref-help", "No connected Tagged/Scheduled Ref2VA, core Ref2VA, or core I2V/FL2V references were found."));
             return;
         }
         tray.append(element("div", "h3rp-ref-help",
-            `Scene ${state.active + 1}: click an active reference to insert it. Hover for image, video, or audio preview. Audio never autoplays.`));
+            state.referenceMode === "tagged"
+                ? "Click any registered @tag to insert and activate that reference for this scene. Hover for a media preview; audio never autoplays."
+                : `Scene ${state.active + 1}: click an active reference to insert it. Hover for image, video, or audio preview. Audio never autoplays.`));
         for (const record of state.records) {
-            const card = button("", record.active ? `Insert ${record.token}` : `${record.token} is inactive in this scene`, () => {
-                if (!record.active) return;
+            const insertable = record.active || state.referenceMode === "tagged";
+            const card = button("", insertable ? `Insert ${record.token}` : `${record.token} is inactive in this scene`, () => {
+                if (!insertable) return;
                 insertDecoratedText(record.token);
                 tray.classList.remove("h3rp-open");
             });
@@ -765,7 +779,8 @@ function mount(node) {
             copy.append(
                 element("div", "h3rp-ref-card-title", record.token),
                 element("div", "h3rp-ref-card-detail", record.label && record.label !== record.token
-                    ? `${record.label} · scenes ${record.selector}` : `${record.kind} · scenes ${record.selector}`),
+                    ? `${record.label} · ${record.selector === "prompt tag" ? "prompt activated" : `scenes ${record.selector}`}`
+                    : `${record.kind} · ${record.selector === "prompt tag" ? "insert to activate" : `scenes ${record.selector}`}`),
             );
             card.append(copy);
             card.addEventListener("mouseenter", () => showPopover(record, card));
@@ -1032,7 +1047,11 @@ function mount(node) {
         const sceneKey = optimizerSceneKey(sceneIndex);
         const current = editorPlainText(state.editor);
         const source = optimizerSource(current, state.optimizer.origins.get(sceneKey));
-        const refs = availableReferenceRecords(node, sceneIndex + 1, {includeInactive:true});
+        const refs = availableReferenceRecords(node, sceneIndex + 1, {
+            includeInactive: true,
+            prompt: [sharedPrompt(state.plan).text.trim(), source.trim()]
+                .filter(Boolean).join("\n\n"),
+        });
         const mode = richGenerationMode(refs.mode);
         const context = buildPromptAssistantContext(state.plan, sceneIndex, source, {
             includeShared:true, includeAdjacent:true,
@@ -1112,7 +1131,16 @@ function mount(node) {
         root.replaceChildren();
         const shot = state.plan.shots[state.active];
         const shotId = String(shot.id || `clip_${String(state.active + 1).padStart(4, "0")}`);
-        const referenceData = availableReferenceRecords(node, state.active + 1, {includeInactive:true});
+        const referenceData = availableReferenceRecords(
+            node, state.active + 1, {
+                includeInactive: true,
+                prompt: [
+                    sharedPrompt(state.plan).text.trim(),
+                    promptValueToText(
+                        shot.prompt, `Scene ${state.active + 1} prompt`).trim(),
+                ].filter(Boolean).join("\n\n"),
+            },
+        );
         state.records = referenceData.records;
         state.referenceMode = referenceData.mode;
 

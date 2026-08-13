@@ -655,13 +655,22 @@ function mount(node) {
 
     function renderReferenceTray(tray, textarea) {
         tray.replaceChildren();
-        const {records, wrapper} = availableReferenceRecords(
-            state.planNode ?? node, state.active + 1,
+        const referenceData = availableReferenceRecords(
+            state.planNode ?? node, state.active + 1, {
+                includeInactive: true,
+                prompt: [
+                    sharedPrompt(state.plan).text.trim(), textarea.value.trim(),
+                ].filter(Boolean).join("\n\n"),
+            },
         );
+        const {wrapper} = referenceData;
+        const records = referenceData.mode === "tagged"
+            ? referenceData.records
+            : referenceData.records.filter((record) => record.active);
         if (!records.length) {
             tray.append(element("span", "h3studio-message", wrapper
                 ? `No connected references are active in scene ${state.active + 1}.`
-                : "No downstream Scheduled Ref2VA, core Ref2VA, or I2V references were found."));
+                : "No downstream Tagged/Scheduled Ref2VA, core Ref2VA, or I2V references were found."));
             return;
         }
         const preview = element("div", "h3studio-ref-preview");
@@ -675,7 +684,7 @@ function mount(node) {
                 if (kind !== "image") { media.controls = true; media.preload = "metadata"; }
                 preview.append(media);
             }
-            preview.append(element("div", "", `${record.token}${record.label && record.label !== record.token ? ` → ${record.label}` : ""}\n${record.kind} · scenes ${record.selector}`));
+            preview.append(element("div", "", `${record.token}${record.label && record.label !== record.token ? ` → ${record.label}` : ""}\n${record.kind} · ${record.selector === "prompt tag" ? "insert to activate" : `scenes ${record.selector}`}`));
         }
         const icons = {picture:"▧",video:"▶",audio:"♫"};
         for (const record of records) {

@@ -1588,7 +1588,7 @@ function mount(node) {
         copy.append(
             element("div", "h3sp-ref-preview-title", previewTitle),
             document.createTextNode(
-                `\n${record.kind.toUpperCase()} · scenes ${record.selector}` +
+                `\n${record.kind.toUpperCase()} · ${record.selector === "prompt tag" ? "activated by prompt tag" : `scenes ${record.selector}`}` +
                 `\nSource: ${sourceTitle}`,
             ),
         );
@@ -1597,21 +1597,35 @@ function mount(node) {
 
     function renderReferenceTray(refs) {
         refs.replaceChildren();
-        const {records, mode, wrapper} = availableReferenceRecords(
-            node, state.active + 1,
+        const referenceData = availableReferenceRecords(
+            node, state.active + 1, {
+                includeInactive: true,
+                prompt: [
+                    sharedPrompt(state.plan).text.trim(),
+                    state.promptTextarea?.value?.trim() ?? "",
+                ].filter(Boolean).join("\n\n"),
+            },
         );
+        const {mode, wrapper} = referenceData;
+        const records = mode === "tagged"
+            ? referenceData.records
+            : referenceData.records.filter((record) => record.active);
         const preview = element("div", "h3sp-ref-preview");
         if (!records.length) {
             refs.append(element(
                 "div", "h3sp-ref-help",
                 wrapper
                     ? `No connected references are active in scene ${state.active + 1}.`
-                    : "No connected Scheduled Ref2VA, core Ref2VA, or core I2V/FL2V references were found. The menu does not invent unavailable labels.",
+                    : "No connected Tagged/Scheduled Ref2VA, core Ref2VA, or core I2V/FL2V references were found. The menu does not invent unavailable labels.",
             ));
             return;
         }
 
-        const help = mode === "scheduled"
+        const help = mode === "tagged"
+            ? "Prompt-driven references. Hover to preview; click a @tag to insert it. " +
+              "Writing the tag activates that asset for this scene and compiles it " +
+              "to a compact native H3 label. Audio never autoplays."
+            : mode === "scheduled"
             ? `Scheduled references for scene ${state.active + 1}. Hover to preview; ` +
               "click to insert the optional stable @alias. It compiles to a native label; " +
               "the scheduler inserts no prompt text. Audio never autoplays."
@@ -1624,19 +1638,21 @@ function mount(node) {
         refs.append(element("div", "h3sp-ref-help", help));
         const icons = {picture: "▧", video: "▶", audio: "♫"};
         for (const record of records) {
-            const mapping = (mode === "scheduled" || mode === "native_keyframes")
-                ? (mode === "scheduled" ? ` → ${record.label}` : "") : "";
+            const aliasMode = mode === "scheduled" || mode === "tagged";
+            const mapping = aliasMode && record.label
+                ? ` → ${record.label}` : "";
             const chip = button(
                 `${icons[record.kind] ?? "@"} ${record.token}${mapping}`,
-                mode === "scheduled"
-                    ? `Insert optional alias ${record.token}; it compiles to ${record.label} in this scene.`
+                aliasMode
+                    ? `Insert ${record.token}; it activates this reference and compiles to a native label in this scene.`
                     : `Insert ${record.token} for the connected core conditioning input.`,
                 () => {
                     insertPromptText(record.token);
                     refs.classList.remove("h3sp-open");
                 },
             );
-            chip.classList.add("h3sp-ref-chip", "h3sp-active");
+            chip.classList.add("h3sp-ref-chip");
+            chip.classList.toggle("h3sp-active", record.active);
             chip.addEventListener("mouseenter", () => showReferencePreview(record, preview));
             chip.addEventListener("focus", () => showReferencePreview(record, preview));
             refs.append(chip);
@@ -1707,7 +1723,10 @@ function mount(node) {
         textarea.classList.toggle("h3sp-hidden", state.decorated);
         state.promptTextarea = textarea;
 
-        const {records} = availableReferenceRecords(node, state.active + 1);
+        const {records} = availableReferenceRecords(
+            node, state.active + 1, {prompt: [
+                sharedPrompt(state.plan).text.trim(), textarea.value.trim(),
+            ].filter(Boolean).join("\n\n")});
         state.records = records;
         const editorShell = element("div", "h3sp-editor-shell");
         editorShell.classList.toggle("h3sp-hidden", !state.decorated);

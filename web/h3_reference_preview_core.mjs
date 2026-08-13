@@ -1,15 +1,24 @@
 export const SCHEDULED_REF2VA_TYPE = "MiniMaxH3ScheduledReferenceToVideo";
+export const TAGGED_REF2VA_TYPE = "MiniMaxH3TaggedReferenceToVideo";
 export const CORE_REF2VA_TYPE = "MiniMaxH3ReferenceToVideo";
 export const IMAGE_TO_VIDEO_TYPE = "MiniMaxH3ImageToVideo";
 export const FIRST_SCENE_IMAGE_TYPE = "MiniMaxH3ChainFirstSceneImage";
 export const PICTURE_REF_TYPE = "MiniMaxH3ScheduledPictureReference";
 export const VIDEO_REF_TYPE = "MiniMaxH3ScheduledVideoReference";
 export const AUDIO_REF_TYPE = "MiniMaxH3ScheduledAudioReference";
+export const TAGGED_PICTURE_REF_TYPE = "MiniMaxH3TaggedPictureReference";
+export const TAGGED_VIDEO_REF_TYPE = "MiniMaxH3TaggedVideoReference";
+export const TAGGED_AUDIO_REF_TYPE = "MiniMaxH3TaggedAudioReference";
 
 const SCHEDULE_TYPES = new Set([
     PICTURE_REF_TYPE,
     VIDEO_REF_TYPE,
     AUDIO_REF_TYPE,
+]);
+const TAGGED_TYPES = new Set([
+    TAGGED_PICTURE_REF_TYPE,
+    TAGGED_VIDEO_REF_TYPE,
+    TAGGED_AUDIO_REF_TYPE,
 ]);
 
 export function nodeType(node) {
@@ -59,6 +68,10 @@ export function findScheduledRef2VA(start) {
     return findDownstreamType(start, SCHEDULED_REF2VA_TYPE);
 }
 
+export function findTaggedRef2VA(start) {
+    return findDownstreamType(start, TAGGED_REF2VA_TYPE);
+}
+
 export function findCoreRef2VA(start) {
     return findDownstreamType(start, CORE_REF2VA_TYPE);
 }
@@ -72,6 +85,18 @@ export function collectScheduleNodes(wrapper) {
     const seen = new Set();
     let current = inputSource(wrapper, "reference_schedule");
     while (current && SCHEDULE_TYPES.has(nodeType(current)) && !seen.has(current)) {
+        seen.add(current);
+        result.unshift(current);
+        current = inputSource(current, "previous");
+    }
+    return result;
+}
+
+export function collectTaggedNodes(wrapper) {
+    const result = [];
+    const seen = new Set();
+    let current = inputSource(wrapper, "references");
+    while (current && TAGGED_TYPES.has(nodeType(current)) && !seen.has(current)) {
         seen.add(current);
         result.unshift(current);
         current = inputSource(current, "previous");
@@ -167,6 +192,82 @@ export function scheduledReferenceRecords(editorNode, scene) {
     };
 }
 
+function promptTagSet(prompt) {
+    return new Set([...String(prompt ?? "").matchAll(
+        /(?<![A-Za-z0-9_])@([A-Za-z][A-Za-z0-9_-]{0,63})/g,
+    )].map((match) => match[1]));
+}
+
+export function taggedReferenceRecords(editorNode, prompt = "") {
+    const wrapper = findTaggedRef2VA(editorNode);
+    if (!wrapper) return {wrapper: null, mode: null, records: []};
+    const nodes = collectTaggedNodes(wrapper);
+    const used = promptTagSet(prompt);
+    const pictures = [];
+    const videos = [];
+    const pairedAudios = [];
+    const audios = [];
+
+    for (const node of nodes) {
+        const type = nodeType(node);
+        if (type === TAGGED_PICTURE_REF_TYPE) {
+            const record = baseRecord(node, "picture", 1, "image");
+            record.selector = "prompt tag";
+            record.active = used.has(record.tag);
+            pictures.push(record);
+        } else if (type === TAGGED_VIDEO_REF_TYPE) {
+            const video = baseRecord(node, "video", 1, "video");
+            video.selector = "prompt tag";
+            const audioSource = inputSource(node, "audio");
+            const explicit = referenceTag(widgetValue(node, "audio_tag", ""));
+            const audioTag = explicit || `${video.tag}_audio`;
+            video.active = used.has(video.tag) || Boolean(
+                audioSource && used.has(audioTag));
+            videos.push(video);
+            if (audioSource) {
+                pairedAudios.push({
+                    node,
+                    kind: "audio",
+                    tag: audioTag,
+                    selector: "prompt tag",
+                    active: video.active,
+                    source: audioSource,
+                    label: null,
+                    pairedWith: video,
+                });
+            }
+        } else if (type === TAGGED_AUDIO_REF_TYPE) {
+            const record = baseRecord(node, "audio", 1, "audio");
+            record.selector = "prompt tag";
+            record.active = used.has(record.tag);
+            audios.push(record);
+        }
+    }
+
+    let ordinal = 0;
+    for (const item of pictures) {
+        if (item.active) item.label = `<Picture ${++ordinal}>`;
+    }
+    ordinal = 0;
+    for (const item of videos) {
+        if (item.active) item.label = `<Video ${++ordinal}>`;
+    }
+    ordinal = 0;
+    for (const item of pairedAudios) {
+        if (item.active) item.label = `<Audio ${++ordinal}>`;
+    }
+    for (const item of audios) {
+        if (item.active) item.label = `<Audio ${++ordinal}>`;
+    }
+    return {
+        wrapper,
+        mode: "tagged",
+        records: [...pictures, ...videos, ...pairedAudios, ...audios]
+            .filter((item) => item.tag)
+            .map((item) => ({...item, token: `@${item.tag}`})),
+    };
+}
+
 function numberedInputRecords(wrapper, pattern, kind, labelKind) {
     const records = [];
     for (const input of wrapper?.inputs ?? []) {
@@ -254,7 +355,9 @@ export function imageToVideoReferenceRecords(editorNode, scene = 1) {
     return {wrapper, mode: "native_keyframes", records};
 }
 
-export function referencePreviewRecords(editorNode, scene) {
+export function referencePreviewRecords(editorNode, scene, {prompt = ""} = {}) {
+    const tagged = taggedReferenceRecords(editorNode, prompt);
+    if (tagged.wrapper) return tagged;
     const scheduled = scheduledReferenceRecords(editorNode, scene);
     if (scheduled.wrapper) return scheduled;
     const core = coreReferenceRecords(editorNode);
@@ -263,9 +366,9 @@ export function referencePreviewRecords(editorNode, scene) {
 }
 
 export function availableReferenceRecords(
-    editorNode, scene, {includeInactive = false} = {},
+    editorNode, scene, {includeInactive = false, prompt = ""} = {},
 ) {
-    const result = referencePreviewRecords(editorNode, scene);
+    const result = referencePreviewRecords(editorNode, scene, {prompt});
     return {
         ...result,
         records: result.records.filter(

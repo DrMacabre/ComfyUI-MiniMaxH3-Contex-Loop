@@ -6,6 +6,11 @@ live one level above this folder, beginning with
 [`MiniMax H3 T2V - Normal.json`](<../MiniMax H3 T2V - Normal.json>) and
 [`MiniMax H3 T2V - Studio.json`](<../MiniMax H3 T2V - Studio.json>).
 
+`MiniMax H3 Ref2V - Legacy Scheduled.json` and
+`MiniMax H3 Ref2V - Studio Legacy Scheduled.json` preserve the former active
+Ref2V examples with explicit numeric scene selectors. The recommended Ref2V
+examples now use prompt-driven Tagged nodes one level above this folder.
+
 ## V2 demos: choose single-image I2VA, core FL2VA, or Scheduled Ref2VA
 
 [`Looping MiniMax H3 V2 - Single Image I2VA 20s.json`](<Looping MiniMax H3 V2 - Single Image I2VA 20s.json>)

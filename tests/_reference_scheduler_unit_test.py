@@ -296,6 +296,11 @@ else:
     raise AssertionError("legacy callable VHS_AUDIO was accepted")
 
 plan_inputs = chain.MiniMaxH3ChainPlan.INPUT_TYPES()["required"]
+plan_optional_inputs = chain.MiniMaxH3ChainPlan.INPUT_TYPES()["optional"]
+assert plan_optional_inputs["plan_json_input"][0] == "STRING"
+assert plan_optional_inputs["plan_json_input"][1]["forceInput"] is True
+assert "non-empty" in plan_optional_inputs[
+    "plan_json_input"][1]["tooltip"]
 audio_mode_help = plan_inputs["audio_mode"][1]["tooltip"]
 assert "does NOT enable or disable @voice/<Audio N> references" in audio_mode_help
 assert "finished prerecorded voice" in audio_mode_help
@@ -361,6 +366,66 @@ except ValueError as exc:
     assert "Current Shot state" in str(exc)
 else:
     raise AssertionError("sequential reference accepted missing state")
+
+tagged_picture_inputs = chain.MiniMaxH3TaggedPictureReference.INPUT_TYPES()[
+    "required"]
+tagged_video_inputs = chain.MiniMaxH3TaggedVideoReference.INPUT_TYPES()[
+    "required"]
+tagged_audio_inputs = chain.MiniMaxH3TaggedAudioReference.INPUT_TYPES()[
+    "required"]
+assert "scenes" not in tagged_picture_inputs
+assert "scenes" not in tagged_video_inputs
+assert "scenes" not in tagged_audio_inputs
+tagged_picture = chain.torch.zeros((1, 4, 4, 3))
+tagged_audio = {
+    "waveform": chain.torch.zeros((1, 1, 8000)),
+    "sample_rate": 8000,
+}
+tagged = chain.MiniMaxH3TaggedPictureReference().add(
+    tagged_picture, "face")[0]
+tagged = chain.MiniMaxH3TaggedPictureReference().add(
+    tagged_picture, "look", previous=tagged)[0]
+tagged = chain.MiniMaxH3TaggedAudioReference().add(
+    tagged_audio, "voice", previous=tagged)[0]
+assert tagged["activation"] == "prompt"
+assert all(entry["activation"] == "prompt" for entry in tagged["entries"])
+tagged_compiled, tagged_summary, tagged_bindings = (
+    chain._compile_tagged_reference_prompt(
+        tagged, 2, 3,
+        "<Subject 1> @S1 uses @look and speaks with @voice; keep @custom."))
+assert tagged_compiled == (
+    "<Subject 1> @S1 uses <Picture 1> and speaks with <Audio 1>; "
+    "keep @custom.")
+assert tagged_summary == (
+    "scene 2/3: @look -> <Picture 1>; @voice -> <Audio 1>")
+assert [entry["tag"] for entry in tagged_bindings["pictures"]] == ["look"]
+assert "face" not in tagged_bindings["aliases"]
+
+tagged_sequential = chain.MiniMaxH3TaggedVideoReference().add(
+    sequential_video, "motion", "motion_audio", "sequential",
+    audio=sequential_audio)[0]
+tagged_sequential_entry = tagged_sequential["entries"][0]
+tagged_state = {
+    "index": 3,
+    "plan": {"shots": [
+        {"raw_frames": 243, "generation_start_frame": 0,
+         "prompt": "Opening without a motion tag."},
+        {"raw_frames": 243, "generation_start_frame": 221,
+         "prompt": "Begin @motion."},
+        {"raw_frames": 243, "generation_start_frame": 442,
+         "prompt": "Continue @motion_audio."},
+    ]},
+}
+tagged_video_slice, tagged_audio_slice, tagged_detail = (
+    chain._scheduled_video_reference_slice(
+        tagged_sequential_entry, tagged_state, 3, 3, 243))
+assert float(tagged_video_slice[0, 0, 0, 0]) == 221
+assert float(tagged_audio_slice["waveform"][0, 0, 0]) == 2210
+assert tagged_detail.endswith("(origin scene 2)")
+assert "references" in chain.MiniMaxH3TaggedReferenceToVideo.INPUT_TYPES()[
+    "required"]
+assert "reference_schedule" not in (
+    chain.MiniMaxH3TaggedReferenceToVideo.INPUT_TYPES()["required"])
 conditioning = object()
 priority_result = chain.MiniMaxH3PatchPriority().claim(conditioning)
 assert priority_result == (conditioning, "test patch owner")
@@ -415,6 +480,40 @@ assert normalized["total_delivered_frames"] / chain.FPS > 20
 assert normalized["compatibility"]["context_length"] == 5
 assert "<Picture 1>" in normalized["shots"][0]["scene_prompt"]
 assert "<Picture" not in normalized["shots"][1]["scene_prompt"]
+
+external_plan_json = json.dumps({
+    "prompt_prefix": "Externally directed continuity.",
+    "shots": [{
+        "id": "external_scene",
+        "prompt": "This scene came from the connected STRING input.",
+        "length": 124,
+        "seed": 987654321,
+    }],
+})
+external_normalized = chain.MiniMaxH3ChainPlan().build(
+    *i2va_plan_node["widgets_values"],
+    plan_json_input=external_plan_json,
+)[0]
+assert [shot["id"] for shot in external_normalized["shots"]] == [
+    "external_scene"]
+assert external_normalized["shots"][0]["seed"] == 987654321
+assert external_normalized["shots"][0]["prompt"].startswith(
+    "Externally directed continuity.")
+
+empty_external_fallback = chain.MiniMaxH3ChainPlan().build(
+    *i2va_plan_node["widgets_values"],
+    plan_json_input="  \n\t",
+)[0]
+assert empty_external_fallback["plan_hash"] == normalized["plan_hash"]
+try:
+    chain.MiniMaxH3ChainPlan().build(
+        *i2va_plan_node["widgets_values"],
+        plan_json_input="not valid JSON",
+    )
+except ValueError as exc:
+    assert "Plan JSON is invalid" in str(exc)
+else:
+    raise AssertionError("invalid external plan JSON bypassed Plan validation")
 
 gate_node = next(node for node in i2va_workflow["nodes"]
                  if node.get("type") == "MiniMaxH3ChainFirstSceneImage")

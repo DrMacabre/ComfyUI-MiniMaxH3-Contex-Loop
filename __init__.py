@@ -11,9 +11,9 @@ original Motion Context, Save Latent, and Load Latent ids remain exclusively
 owned by Niko's upstream pack; this pack exports its stricter Loop Trim, a
 distinctly named Seam Probe adaptation, and the specialized H3 Chain nodes.
 
-Registers the loop nodes without changing ComfyUI's runtime behavior. Chain
-On current ComfyUI, Context activates both internal patches inline on first
-execution:
+Registers the loop nodes without changing ComfyUI's runtime behavior. On older
+ComfyUI builds, Chain Context activates two internal fallback patches inline on
+first execution:
 
   patch_layout   lifts the first/last-only keyframe anchor restriction,
                  moves pinned audio onto the clip's own timeline, and
@@ -28,10 +28,11 @@ down. H3 workflows that use neither pack remain stock. If either self-test
 fails the nodes still load but refuse the affected path, so an upstream
 ComfyUI change produces a clear message rather than a silently wrong render.
 
-When ComfyUI's native MiniMax H3 Add Guide API is available, core owns
-arbitrary-position video/audio guides and keyframe/ref payload merging. This
-pack switches automatically to native guide records and retains only a small,
-marker-gated Ref2VA target-origin alignment wrapper.
+When ComfyUI's native MiniMax H3 Add Guide API from merged PR #15439 is
+available, core owns arbitrary-position video/audio guides, Ref2VA target
+alignment, and keyframe/ref payload merging. This pack switches automatically
+to native guide records and installs no H3 layout or payload wrapper. Version
+0.4 emits a one-time update warning before using the legacy fallback.
 """
 
 from .nodes import (

@@ -76,6 +76,16 @@ Use the editor's **JSON** button when you need to inspect, paste, import, or
 export the underlying plan. The JSON format below remains the runtime contract
 and existing plans are backward compatible.
 
+The Plan also exposes an optional forced STRING socket named
+`plan_json_input`. Connect an LLM node, local story director, reusable STRING,
+or any other provider-independent JSON source. A non-empty upstream string is
+the execution source and receives the same normalization and validation as the
+internal JSON; an empty string or disconnected socket uses the visual editor's
+stored `plan_json`. While connected, the visual editor clearly labels its cards
+as the editable fallback. This socket replaces only the scene-plan JSON—Plan
+settings such as `run_name`, dimensions, context, and audio mode remain their
+own inputs.
+
 ## Copy/paste workflow note
 
 The following block is intentionally compact enough to paste into a ComfyUI
@@ -633,12 +643,15 @@ receives its own audio tag; if `audio_tag` is blank, `@performance` derives
 3 videos, and 3 standalone audios. Scenes with no active references remain
 valid and expand to stock Ref2VA without dynamic reference sockets.
 
-### Optional patch ownership control
+### Optional legacy patch ownership control
 
-Normally the first compatible H3 Motion Context copy loaded by ComfyUI owns the
-small process-level compatibility wrappers. If an older installed copy wins
-load order, wire **MiniMax H3 Patch Priority** between the conditioning node and
-**MiniMax H3 Contex Loop Context**:
+Updated ComfyUI builds containing merged PR #15439 keep H3 guide placement and
+Ref2VA merging entirely core-owned; Patch Priority is then an unchanged
+pass-through reporting that no compatibility patch is required. On an older
+ComfyUI build, the first compatible H3 Motion Context copy loaded owns the
+legacy process-level wrappers. If an older installed copy wins load order, wire
+**MiniMax H3 Patch Priority** between the conditioning node and **MiniMax H3
+Contex Loop Context**:
 
 ```text
 Ref2VA / I2V conditioning → Patch Priority → Contex Loop Context
@@ -790,13 +803,14 @@ When ComfyUI exposes **MiniMax H3 Add Guide** (introduced by
 [ComfyUI PR #15439](https://github.com/Comfy-Org/ComfyUI/pull/15439)), Loop
 Context automatically emits core video/audio guide records instead of the
 legacy keyframe/ref representation. Existing ComfyUI releases continue through
-the guarded compatibility path, so workflows do not need a version switch.
+the guarded compatibility path with a one-time update warning, so workflows do
+not need a version switch.
 
 To add a scene-local still, clip, or audio anchor, place the official Add Guide
 node **after Loop Context**. It appends its guide to the continuation anchors.
-When Ref2VA references are present, the loop's marker-gated alignment keeps the
-complete guide set on the target scene timeline rather than the preceding
-reference cursor. Core remains responsible for guide layout and payload merging.
+When Ref2VA references are present, merged core places the complete guide set
+on the target scene timeline rather than the preceding reference cursor. This
+pack does not wrap the native layout or payload path.
 
 ## Starting, resuming, and changing a plan
 

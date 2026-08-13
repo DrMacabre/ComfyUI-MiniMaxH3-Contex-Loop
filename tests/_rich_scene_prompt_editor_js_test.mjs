@@ -31,6 +31,7 @@ assert.deepEqual(
     ],
 );
 assert.equal(richGenerationMode("scheduled"), "Ref2VA");
+assert.equal(richGenerationMode("tagged"), "Ref2VA");
 assert.equal(richGenerationMode("native_keyframes"), "I2VA/FL2VA");
 assert.equal(normalizeRichGuide("bogus"), "auto");
 assert.ok(RICH_PROMPT_GUIDES.some((item) => item.id === "music_video"));

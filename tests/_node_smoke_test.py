@@ -239,11 +239,25 @@ def main():
          "audio_latent": T(np.zeros((1, 32, 2, 3), dtype=np.float32))},
     ]
     r2v_conditioning = [["c", {"minimax_refs": r2v_refs}]]
-    out, trim = node.apply(
-        conditioning=r2v_conditioning, vae=VAE(), latent=target,
-        context_frames=context, context_length=22, encode_mode="video",
-        anchor_mode="head", crop="disabled", audio_context_length=22,
-        audio_mode="timeline", context_latent=prev)
+    legacy_warnings = []
+    original_warning = nodes._LOG.warning
+    nodes._LOG.warning = lambda message, *args: legacy_warnings.append(
+        message % args if args else message)
+    try:
+        out, trim = node.apply(
+            conditioning=r2v_conditioning, vae=VAE(), latent=target,
+            context_frames=context, context_length=22, encode_mode="video",
+            anchor_mode="head", crop="disabled", audio_context_length=22,
+            audio_mode="timeline", context_latent=prev)
+        # Repeated scenes must not flood the server log with the upgrade notice.
+        nodes._activate_inline_patches()
+    finally:
+        nodes._LOG.warning = original_warning
+
+    update_warnings = [message for message in legacy_warnings
+                       if "Comfy-Org/ComfyUI PR #15439" in message]
+    assert len(update_warnings) == 1, update_warnings
+    assert "Update ComfyUI" in update_warnings[0]
 
     assert patch_layout.is_applied() and patch_payload.is_applied()
     assert nodes._claim_inline_patch_ownership() == (

@@ -783,9 +783,84 @@ def main():
         assert "exceeds this plan's 4 scenes" in str(exc)
     else:
         raise AssertionError("scheduler accepted an out-of-plan selector")
+
+    tagged_picture_node = chain.MiniMaxH3TaggedPictureReference()
+    tagged_video_node = chain.MiniMaxH3TaggedVideoReference()
+    tagged_audio_node = chain.MiniMaxH3TaggedAudioReference()
+    assert "scenes" not in tagged_picture_node.INPUT_TYPES()["required"]
+    assert "scenes" not in tagged_video_node.INPUT_TYPES()["required"]
+    assert "scenes" not in tagged_audio_node.INPUT_TYPES()["required"]
+    tagged = tagged_picture_node.add(picture, "hero_face")[0]
+    tagged = tagged_picture_node.add(
+        picture, "hero_look", previous=tagged)[0]
+    tagged = tagged_audio_node.add(
+        voice_audio, "voice", previous=tagged)[0]
+    assert tagged["activation"] == "prompt"
+    assert all(entry["activation"] == "prompt"
+               for entry in tagged["entries"])
+    tagged_prompt = (
+        "<Subject 1> @S1 follows @hero_look. "
+        "@voice defines vocal identity. @unregistered stays user-managed.")
+    tagged_compiled, tagged_summary, tagged_bindings = (
+        chain._compile_tagged_reference_prompt(
+            tagged, 2, 4, tagged_prompt))
+    assert tagged_compiled == (
+        "<Subject 1> @S1 follows <Picture 1>. "
+        "<Audio 1> defines vocal identity. @unregistered stays user-managed.")
+    assert tagged_summary == (
+        "scene 2/4: @hero_look -> <Picture 1>; @voice -> <Audio 1>")
+    assert [entry["tag"] for entry in tagged_bindings["pictures"]] == [
+        "hero_look"]
+    assert [entry["tag"] for entry in tagged_bindings["audios"]] == [
+        "voice"]
+    assert "hero_face" not in tagged_bindings["aliases"]
+
+    tagged_expanded = chain.MiniMaxH3TaggedReferenceToVideo().apply(
+        "clip", "video-vae", "audio-vae", tagged, 2, 4,
+        tagged_prompt, 960, 544, 124, "match")
+    tagged_inputs = next(iter(tagged_expanded["expand"].values()))["inputs"]
+    assert tagged_inputs["prompt"] == tagged_compiled
+    assert tagged_inputs["ref_images.ref_image_0"] is tagged[
+        "entries"][1]["value"]
+    assert tagged_inputs["ref_audios.ref_audio_0"] is voice_audio
+    assert "ref_images.ref_image_1" not in tagged_inputs
+    assert tagged_expanded["result"][4] == tagged["fingerprint"]
+
+    tagged_motion = tagged_video_node.add(
+        sequential_video, "motion", "motion_audio", "sequential",
+        audio=sequential_audio)[0]
+    prompt_driven_state = {
+        "index": 3,
+        "plan": {"shots": [
+            {"raw_frames": 243, "generation_start_frame": 0,
+             "prompt": "No motion reference in this opening."},
+            {"raw_frames": 243, "generation_start_frame": 221,
+             "prompt": "Begin @motion."},
+            {"raw_frames": 243, "generation_start_frame": 442,
+             "prompt": "Continue using @motion_audio."},
+        ]},
+    }
+    tagged_motion_expanded = chain.MiniMaxH3TaggedReferenceToVideo().apply(
+        "clip", "video-vae", "audio-vae", tagged_motion, 3, 3,
+        "Continue using @motion_audio.", 960, 544, 243, "match",
+        state=prompt_driven_state)
+    tagged_motion_inputs = next(iter(
+        tagged_motion_expanded["expand"].values()))["inputs"]
+    assert float(tagged_motion_inputs[
+        "ref_videos.ref_video_0"][0, 0, 0, 0]) == 221
+    assert float(tagged_motion_inputs[
+        "ref_video_audios.ref_video_audio_0"]["waveform"][0, 0, 0]) == 2210
+    assert "origin scene 2" in tagged_motion_expanded["result"][3]
+    no_tag_compiled, no_tag_summary, no_tag_bindings = (
+        chain._compile_tagged_reference_prompt(
+            tagged, 1, 4, "A scene without registered aliases; keep @S1."))
+    assert no_tag_compiled.endswith("keep @S1.")
+    assert no_tag_bindings["pictures"] == []
+    assert no_tag_bindings["audios"] == []
+    assert no_tag_summary.endswith("no tagged references used by prompt")
     print("reference schedule: disjoint selectors, stable tags, native label "
           "compilation, strict/warning-only compliance, dynamic Ref2VA "
-          "sockets, and validation pass")
+          "sockets, prompt-driven tagged references, and validation pass")
 
     # ComfyUI rounds H3's 40 Hz audio grid to the nearest step. Depending on
     # frame length, the decoded stream can land 1/3 step above or below the

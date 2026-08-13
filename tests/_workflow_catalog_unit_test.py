@@ -331,6 +331,7 @@ def validate_ref2v(path, variant):
     if variant == "basic":
         conditioner = node(workflow, "MiniMaxH3ReferenceToVideo")
         assert "MiniMaxH3ScheduledReferenceToVideo" not in node_types
+        assert "MiniMaxH3TaggedReferenceToVideo" not in node_types
         assert not any(item.get("type") ==
                        "MiniMaxH3ScheduledPictureReference"
                        for item in workflow["nodes"])
@@ -346,24 +347,26 @@ def validate_ref2v(path, variant):
         editor = node(workflow, "MiniMaxH3ChainScenePromptEditor")
         assert socket(editor["inputs"], "plan")["link"] is not None
     else:
-        conditioner = node(workflow, "MiniMaxH3ScheduledReferenceToVideo")
+        conditioner = node(workflow, "MiniMaxH3TaggedReferenceToVideo")
         assert conditioner["widgets_values"][-1] == "strict"
-        schedules = [item for item in workflow["nodes"]
-                     if item.get("type") ==
-                     "MiniMaxH3ScheduledPictureReference"]
-        assert len(schedules) == 2
-        assert {tuple(item["widgets_values"]) for item in schedules} == {
-            ("style_base", "all"), ("interior", "2")}
-        base = next(item for item in schedules
+        tagged_refs = [item for item in workflow["nodes"]
+                       if item.get("type") ==
+                       "MiniMaxH3TaggedPictureReference"]
+        assert len(tagged_refs) == 2
+        assert {tuple(item["widgets_values"]) for item in tagged_refs} == {
+            ("style_base",), ("interior",)}
+        assert not any(item.get("type", "").startswith(
+            "MiniMaxH3Scheduled") for item in workflow["nodes"])
+        base = next(item for item in tagged_refs
                     if item["widgets_values"][0] == "style_base")
-        interior = next(item for item in schedules
+        interior = next(item for item in tagged_refs
                         if item["widgets_values"][0] == "interior")
         assert socket(base["inputs"], "image")["link"] is not None
         assert socket(base["inputs"], "previous")["link"] is None
         assert socket(interior["inputs"], "image")["link"] is not None
         assert socket(interior["inputs"], "previous")["link"] is not None
         assert socket(conditioner["inputs"],
-                      "reference_schedule")["link"] is not None
+                      "references")["link"] is not None
         current = node(workflow, "MiniMaxH3ChainCurrent")
         assert socket(current["outputs"], "clip_index")["links"] == [
             socket(conditioner["inputs"], "clip_index")["link"]]
@@ -376,7 +379,7 @@ def validate_ref2v(path, variant):
         assert "@style_base" in prompts[1] and "@interior" in prompts[1]
         assert all("<Picture" not in prompt for prompt in prompts)
 
-        if variant == "scheduled":
+        if variant == "tagged":
             assert "MiniMaxH3ChainRunManager" not in node_types
             editor = node(workflow, "MiniMaxH3ChainScenePromptEditor")
             assert socket(editor["inputs"], "plan")["link"] is not None
@@ -421,8 +424,8 @@ def validate_sequential_motion_ref(path):
 
     loader = node(workflow, "LoadVideo")
     prep = node(workflow, "MiniMaxH3ReferenceVideoPrepare")
-    motion = node(workflow, "MiniMaxH3ScheduledVideoReference")
-    wrapper = node(workflow, "MiniMaxH3ScheduledReferenceToVideo")
+    motion = node(workflow, "MiniMaxH3TaggedVideoReference")
+    wrapper = node(workflow, "MiniMaxH3TaggedReferenceToVideo")
     current = node(workflow, "MiniMaxH3ChainCurrent")
     priority = node(workflow, "MiniMaxH3PatchPriority")
     context = node(workflow, "MiniMaxH3ChainContext")
@@ -439,16 +442,16 @@ def validate_sequential_motion_ref(path):
     assert socket(motion["inputs"], "audio")["link"] == (
         socket(prep["outputs"], "source_audio")["links"][0])
     assert motion["widgets_values"] == [
-        "motion", "all", "motion_audio", "sequential"]
+        "motion", "motion_audio", "sequential"]
     assert socket(motion["inputs"], "previous")["link"] is not None
-    assert socket(wrapper["inputs"], "reference_schedule")["link"] == (
-        socket(motion["outputs"], "schedule")["links"][0])
+    assert socket(wrapper["inputs"], "references")["link"] == (
+        socket(motion["outputs"], "references")["links"][0])
     assert socket(wrapper["inputs"], "state")["link"] == (
         socket(current["outputs"], "state")["links"][-1])
     assert socket(wrapper["inputs"], "clip_index")["link"] is not None
     assert socket(wrapper["inputs"], "clip_count")["link"] is not None
     assert socket(plan_node["inputs"], "generation_fingerprint")["link"] == (
-        socket(motion["outputs"], "schedule_fingerprint")["links"][0])
+        socket(motion["outputs"], "reference_fingerprint")["links"][0])
 
     assert socket(priority["inputs"], "conditioning")["link"] == (
         socket(wrapper["outputs"], "positive")["links"][0])
@@ -480,7 +483,7 @@ def validate_sequential_motion_ref(path):
 def main():
     assert EXAMPLES.joinpath("README.md").is_file()
     assert ARCHIVE.joinpath("README.md").is_file()
-    assert len(list(ARCHIVE.glob("*.json"))) == 7
+    assert len(list(ARCHIVE.glob("*.json"))) == 9
     for path in ARCHIVE.glob("*.json"):
         validate_links(load(path))
 
@@ -490,15 +493,15 @@ def main():
     i2v_studio_path = EXAMPLES / "MiniMax H3 I2V - Studio.json"
     fl2v_normal_path = EXAMPLES / "MiniMax H3 FL2V - Normal.json"
     ref2v_basic_path = EXAMPLES / "MiniMax H3 Ref2V - Basic.json"
-    ref2v_scheduled_path = EXAMPLES / "MiniMax H3 Ref2V - Scheduled.json"
-    ref2v_studio_path = EXAMPLES / "MiniMax H3 Ref2V - Studio Scheduled.json"
+    ref2v_tagged_path = EXAMPLES / "MiniMax H3 Ref2V - Tagged.json"
+    ref2v_studio_path = EXAMPLES / "MiniMax H3 Ref2V - Studio Tagged.json"
     sequential_path = (
         EXAMPLES / "EXPERIMENTAL MiniMax H3 Ref2V - Sequential Motion.json")
     assert set(path.name for path in EXAMPLES.glob("*.json")) == {
         t2v_normal_path.name, t2v_studio_path.name,
         i2v_normal_path.name, i2v_studio_path.name,
         fl2v_normal_path.name, ref2v_basic_path.name,
-        ref2v_scheduled_path.name, ref2v_studio_path.name,
+        ref2v_tagged_path.name, ref2v_studio_path.name,
         sequential_path.name,
     }
     t2v_normal, t2v_normal_plan = validate_t2v(
@@ -514,11 +517,11 @@ def main():
     fl2v_normal, _fl2v_normal_plan = validate_fl2v(fl2v_normal_path)
     ref2v_basic, _ref2v_basic_plan = validate_ref2v(
         ref2v_basic_path, "basic")
-    ref2v_scheduled, ref2v_scheduled_plan = validate_ref2v(
-        ref2v_scheduled_path, "scheduled")
+    ref2v_tagged, ref2v_tagged_plan = validate_ref2v(
+        ref2v_tagged_path, "tagged")
     ref2v_studio, ref2v_studio_plan = validate_ref2v(
         ref2v_studio_path, "studio")
-    assert ref2v_scheduled_plan == ref2v_studio_plan
+    assert ref2v_tagged_plan == ref2v_studio_plan
     sequential, _sequential_plan = validate_sequential_motion_ref(
         sequential_path)
 
@@ -535,12 +538,12 @@ def main():
 
     assert generation_types(t2v_normal) == generation_types(t2v_studio)
     assert generation_types(i2v_normal) == generation_types(i2v_studio)
-    assert generation_types(ref2v_scheduled) == generation_types(ref2v_studio)
+    assert generation_types(ref2v_tagged) == generation_types(ref2v_studio)
     uuids = {
         workflow["extra"]["comfyui_mcp"]["workflow_uuid"]
         for workflow in (
             t2v_normal, t2v_studio, i2v_normal, i2v_studio, fl2v_normal,
-            ref2v_basic, ref2v_scheduled, ref2v_studio, sequential)
+            ref2v_basic, ref2v_tagged, ref2v_studio, sequential)
     }
     assert len(uuids) == 9
 
@@ -553,7 +556,7 @@ def main():
         FL2V_LAST_ASSET_SHA256)
 
     print("H3 workflow catalog: T2VA, I2VA, indexed A-B-A FL2VA, Basic / "
-          "Scheduled / Studio Scheduled Ref2VA, and experimental sequential "
+          "Tagged / Studio Tagged Ref2VA, and experimental sequential "
           "motion Ref2VA; valid links, bundled assets, timeline wiring, "
           "six-section prompts, restoration, and attribution pass")
 

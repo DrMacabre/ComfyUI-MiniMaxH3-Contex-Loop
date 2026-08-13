@@ -20,6 +20,17 @@ huge cumulative image tensor.
 Newest first. Recent additions stay visible; older milestones are folded away
 so this page remains a useful starting point rather than a changelog wall.
 
+- **v0.4 — Prompt-driven tagged Ref2VA.** New Tagged Picture, Video, and Audio
+  nodes remove numeric reference scheduling: a registered asset is active only
+  when its `@tag` appears in the resolved scene prompt. Tagged Ref2VA compacts
+  the used media into native H3 labels and preserves unrelated syntax such as
+  subject/dialogue tags. The existing numeric Scheduled nodes remain available
+  under the legacy-schedule category for explicit range control. Updated
+  ComfyUI builds use merged PR #15439 entirely natively—no H3 layout or payload
+  wrapper. Older builds receive one clear runtime update warning before the
+  guarded legacy fallback is enabled. Plan also accepts an optional external
+  STRING JSON override for provider-independent LLM/story-director workflows,
+  as requested in [issue #10](https://github.com/ethanfel/ComfyUI-MiniMaxH3-Contex-Loop/issues/10).
 - **v0.3.27 — True disabled scheduler compliance.** Disabled policy now reaches
   upstream Schedule nodes, converts every scheduler-owned validation into a
   warning, and omits unusable media. An empty `source_audio_slice` left wired
@@ -109,8 +120,9 @@ so this page remains a useful starting point rather than a changelog wall.
   normalized original before partial or final assembled output.
 - **v0.3.5 — Native guides and portable assembly.** Automatically uses
   ComfyUI’s native arbitrary-position AV guides when PR #15439 (or its merged
-  equivalent) is present, retains the guarded legacy path, and falls back to
-  PyAV review and stream-copy assembly when no `ffmpeg` executable is available.
+  equivalent) is present without patching core H3, retains the guarded legacy
+  path, and falls back to PyAV review and stream-copy assembly when no `ffmpeg`
+  executable is available.
 - **v0.3.4 — Scene Prompt Editor.** A synchronized, large-format companion for
   editing each scene’s real Plan prompt, with scene navigation, reference and
   dialogue shortcuts, and adjustable type size.
@@ -195,11 +207,12 @@ inspired by **nkxx188’s**
 | 🗓️ | Schedule Ref2VA sources per scene with stable human-readable tags |
 | 🖼️ | Apply one I2VA opening image only to scene 1 and pass an indexed last-frame target into each loop |
 
-The runtime changes are opt-in. Loading this pack does not alter ordinary
-ComfyUI workflows; its guarded patches activate only when a Contex Loop Context
-node executes and self-test before touching H3 conditioning. The frontend
-widget-width compatibility layer likewise activates only while a node from this
-pack is present on the canvas.
+On an updated ComfyUI, loading and running this pack does not patch H3: core owns
+guide placement, Ref2VA alignment, and payload merging. On older ComfyUI builds,
+the guarded legacy wrappers activate only when a Contex Loop Context node
+executes and self-test before touching H3 conditioning. The frontend widget-width
+compatibility layer likewise activates only while a node from this pack is
+present on the canvas.
 
 ## Install
 
@@ -212,6 +225,12 @@ Restart ComfyUI and hard-refresh the browser. Niko’s upstream pack is optional
 install it alongside this one if you also want its manual Motion Context,
 Save Latent, and Load Latent nodes. H3-Multishot can also remain installed; its
 AV-bank payload merge is detected and reused without stacking another wrapper.
+
+Version 0.4 expects a ComfyUI build containing the native **Add Guide for
+MiniMax H3** implementation from
+[ComfyUI PR #15439](https://github.com/Comfy-Org/ComfyUI/pull/15439). If it is
+missing, the first loop execution logs a one-time update warning and uses the
+legacy compatibility fallback rather than silently changing behavior.
 
 An `ffmpeg` executable on `PATH` is preferred for review and final assembly.
 When it is unavailable, Review Gate and Assemble automatically use ComfyUI’s
@@ -236,11 +255,11 @@ Start with the Normal/Studio pair for the mode you need:
   uses the loop scene index to alternate two bundled last-frame targets.
 - [Ref2V — Basic](<example_workflows/MiniMax H3 Ref2V - Basic.json>)
   connects two global pictures directly to ComfyUI's core Ref2VA node.
-- [Ref2V — Scheduled](<example_workflows/MiniMax H3 Ref2V - Scheduled.json>)
-  activates stable `@style_base` and `@interior` aliases by scene with the
-  standard prompt editor.
-- [Ref2V — Studio Scheduled](<example_workflows/MiniMax H3 Ref2V - Studio Scheduled.json>)
-  uses the same scheduled generation graph with Plan Studio, the Rich Scene
+- [Ref2V — Tagged](<example_workflows/MiniMax H3 Ref2V - Tagged.json>)
+  activates stable `@style_base` and `@interior` aliases directly from each
+  resolved prompt with the standard editor—no numeric ranges.
+- [Ref2V — Studio Tagged](<example_workflows/MiniMax H3 Ref2V - Studio Tagged.json>)
+  uses the same prompt-driven generation graph with Plan Studio, the Rich Scene
   Prompt Editor, and an inline Run Manager that archives/restores both image
   loader assets.
 - [Ref2V — Experimental Sequential Motion](<example_workflows/EXPERIMENTAL MiniMax H3 Ref2V - Sequential Motion.json>)
@@ -256,15 +275,15 @@ LightX2V eight-step v1.0 LoRA at strength 1.0, the `lcm` sampler, and the
 `beta` scheduler.
 
 The Ref2V trio reuses the two credited bundled pictures to make the difference
-between global and scene-scheduled references explicit. In the scheduled
-workflows, `@style_base` is active in both scenes and `@interior` joins only in
-scene 2. The wrapper compiles those aliases to the native picture labels for
-the current scene; the six required Ref2VA prompt sections remain fully owned
-and editable by the user.
+between global and prompt-driven references explicit. In the tagged workflows,
+`@style_base` occurs in both scene prompts and `@interior` joins only in scene
+2. The wrapper activates and compiles those aliases to the native picture
+labels for the current scene; the six required Ref2VA prompt sections remain
+fully owned and editable by the user.
 
 Sequential motion-reference timing remains explicitly experimental in 0.4.
 The base workflow wires Current Shot `state`, `clip_index`, and `clip_count` to
-Scheduled Ref2VA and uses source windows `0:243` then `221:464`, matching the
+Tagged Ref2VA and uses source windows `0:243` then `221:464`, matching the
 22-frame Motion Context overlap. It requires a user-selected motion video with
 embedded audio lasting at least 19.333 seconds after conversion to 24 fps.
 
@@ -307,8 +326,30 @@ The Assemble `filename` field accepts ComfyUI-style date tokens such as
 requested MP4 already exists, the next file receives `_001`, `_002`, and so on
 instead of replacing it.
 
-To vary references by scene, replace the stock Ref2VA conditioning node with
-**MiniMax H3 Scheduled Ref2VA** and build its typed schedule:
+For the simplest per-scene references, use **MiniMax H3 Tagged Ref2VA**:
+
+```text
+Load Image ─→ Tagged Picture Ref ─┐
+24 fps IMAGE (+ paired AUDIO) ─→ Tagged Video Ref ─┐
+Standalone AUDIO ─→ Tagged Audio Ref ──────────────┴→ Tagged Ref2VA
+
+Current Shot prompt / clip_index / clip_count / width / height / length ─↗
+CLIP + video VAE + audio VAE ───────────────────────────────────────────↗
+```
+
+There is no scene-number field. Register stable aliases such as `@hero`,
+`@performance`, and `@voice`, then mention only the assets needed by each
+scene in that scene's prompt. Tagged Ref2VA activates those sources, assigns
+compact native labels, and compiles the registered aliases before H3 runs.
+An omitted tag means the asset is not sent for that scene. Unregistered
+`@syntax` is preserved because it may be a subject or dialogue tag such as
+`@S1`. With paired video audio, mentioning either registered tag activates the
+paired block. Connect `reference_fingerprint` to the Plan generation fingerprint
+when the sources are static.
+
+For explicit numeric ranges, the original nodes remain available in the
+**legacy schedule** category. Replace stock Ref2VA with **MiniMax H3 Scheduled
+Ref2VA** and build its typed schedule:
 
 ```text
 Load Image ─→ Scheduled Picture Ref ─┐
@@ -390,14 +431,13 @@ soundtracks, and conditioning/latent consumers. It also connects Current Shot's
 scene index/count when it can identify the loop. The original core node remains
 untouched in ComfyUI; the replacement invokes it internally per scene.
 
-If another installed pack vendors an older version of the same H3 compatibility
-patch, insert **MiniMax H3 Patch Priority** between Ref2VA/I2V conditioning and
-**Contex Loop Context**. Because it is wired, it executes before continuation
-guides are added and promotes this pack's implementation for the ComfyUI
-process. It only replaces a recognised H3 Motion Context sibling; compatible
-H3-Multishot/SolAttn hooks remain active and an unknown wrapper produces a clear
-error rather than being overwritten. Leaving the node absent or disconnected
-does not change runtime behavior.
+On updated ComfyUI, **MiniMax H3 Patch Priority** is an unchanged pass-through
+and reports that native guides are core-owned. It exists only for the legacy
+fallback: if another installed pack vendors an older version of the same H3
+compatibility patch, insert it between Ref2VA/I2V conditioning and **Contex Loop
+Context**. It may replace only a recognised H3 Motion Context sibling;
+compatible H3-Multishot/SolAttn hooks remain active and an unknown wrapper
+produces a clear error rather than being overwritten.
 
 For a non-looping experiment, open the
 [three-angle guitar Ref2VA workflow](<example_workflows/Archive/EXPERIMENTAL MiniMax H3 Three-Angle Guitar Ref2VA.json>).
@@ -500,6 +540,16 @@ changes.
 Prompts may be multiline strings or arrays of lines. Using seconds lets the Plan
 node handle H3’s `17k+5` frame grid; raw JSON remains available for
 copy/import/export.
+
+To generate plans programmatically, connect any STRING-producing node to the
+Plan's optional `plan_json_input`. A non-empty connected string replaces the
+internal scene JSON for that execution and passes through the exact same
+normalization and validation. Empty or disconnected input falls back to the
+visual editor unchanged. The editor displays a notice while the socket is
+connected because its cards then edit the fallback JSON, not a non-empty
+upstream value. Width, context, audio mode, `run_name`, and the other Plan
+controls remain normal sockets/widgets; the override supplies the scene-plan
+JSON only.
 
 For long-form writing, connect the Plan output to **MiniMax H3 Scene Prompt
 Editor**. Its large textarea edits the selected scene's real `shots[n].prompt`
@@ -714,17 +764,18 @@ deactivate scheduled audio-reference tags.
 - Upstream H3 Motion Context and this pack share patch-ownership markers; the
   second compatible copy stands down.
 - ComfyUI’s native **MiniMax H3 Add Guide** API is detected automatically. On
-  that API, core owns arbitrary video/audio guides and payload merging; this
-  pack keeps only a marker-gated Ref2VA target-alignment correction. Put an
-  official Add Guide node after Loop Context to add scene-local anchors.
+  that API, core owns arbitrary video/audio guides, Ref2VA target alignment,
+  and payload merging; this pack installs no H3 wrapper. Put an official Add
+  Guide node after Loop Context to add scene-local anchors.
 - Kijai’s SolAttn H3 Morton observer composes safely in either activation order.
 - Ref2VA refs remain intact; unknown wrappers and changed layout assumptions
   fail loudly instead of producing a subtly broken join.
 - KJ preview bridging is loop-local. Keep Spectrum/step-skipping disabled.
 
 MiniMax H3 support is moving quickly. The pack checks the live ComfyUI layout
-the first time Context runs; after updating ComfyUI or related H3 optimizers,
-restart fully so wrapper ownership is rebuilt cleanly.
+the first time Context runs. After updating ComfyUI or related H3 optimizers,
+restart fully so native capability detection and any legacy fallback ownership
+are rebuilt cleanly.
 
 ## More
 

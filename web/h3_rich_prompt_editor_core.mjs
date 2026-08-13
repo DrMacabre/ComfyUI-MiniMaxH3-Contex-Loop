@@ -28,7 +28,7 @@ export function normalizeRichGuide(value) {
 }
 
 export function richGenerationMode(referenceMode) {
-    if (referenceMode === "scheduled" || referenceMode === "native") return "Ref2VA";
+    if (["tagged", "scheduled", "native"].includes(referenceMode)) return "Ref2VA";
     if (referenceMode === "native_keyframes") return "I2VA/FL2VA";
     return "H3 chain scene";
 }
