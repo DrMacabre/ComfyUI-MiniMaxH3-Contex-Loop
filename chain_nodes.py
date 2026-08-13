@@ -1042,8 +1042,69 @@ def _plan_with_source_audio(plan: dict[str, Any],
     return prepared
 
 
+def _retime_review_plan(plan: dict[str, Any]) -> None:
+    """Rebuild every derived timeline field after a review length edit."""
+    context_length = int(plan["compatibility"]["context_length"])
+    anchor_mode = str(plan["compatibility"]["anchor_mode"])
+    external_span = int(
+        plan["compatibility"].get("external_context_frames", 0))
+    stitched_frames = 0
+    for offset, shot in enumerate(plan["shots"]):
+        raw_frames = _validate_h3_length(
+            shot["raw_frames"], "Shot %d length" % (offset + 1))
+        if offset == 0:
+            if external_span and anchor_mode == "head":
+                if raw_frames <= external_span:
+                    raise ValueError(
+                        "H3 scene 1 has %d raw frames, not enough for the "
+                        "%d-frame imported-video overlap." %
+                        (raw_frames, external_span))
+                generation_start = -external_span
+                delivered_frames = raw_frames - external_span
+            else:
+                generation_start = 0
+                delivered_frames = raw_frames
+            if external_span:
+                shot["external_context_frames"] = external_span
+        else:
+            if raw_frames <= context_length:
+                raise ValueError(
+                    "Shot %d has %d raw frames, not enough for a %d-frame "
+                    "continuation overlap." %
+                    (offset + 1, raw_frames, context_length))
+            if anchor_mode == "head":
+                generation_start = stitched_frames - context_length
+                delivered_frames = raw_frames - context_length
+            else:
+                generation_start = stitched_frames
+                delivered_frames = raw_frames
+        shot["generation_start_frame"] = generation_start
+        shot["delivered_frames"] = delivered_frames
+        shot["audio_start_seconds"] = max(0, generation_start) / float(FPS)
+        shot["audio_duration_seconds"] = raw_frames / float(FPS)
+        stitched_frames += delivered_frames
+
+    for shot in plan["shots"][:-1]:
+        if int(shot["delivered_frames"]) < context_length:
+            raise ValueError(
+                "Shot %d (%s) delivers only %d frames, but the next clip "
+                "requires %d context frames." %
+                (shot["index"], shot["id"], shot["delivered_frames"],
+                 context_length))
+    plan["total_delivered_frames"] = stitched_frames
+    cfg = plan["compatibility"]
+    imported = "; imported video" if external_span else ""
+    plan["summary"] = (
+        "%d clips; %d delivered frames (%.3fs) at %dx%d; context=%d; "
+        "audio=%s%s; run=%s" %
+        (len(plan["shots"]), stitched_frames,
+         stitched_frames / float(FPS), cfg["width"], cfg["height"],
+         context_length, cfg["audio_mode"], imported, plan["run_name"]))
+
+
 def _plan_with_review_revision(plan: dict[str, Any], index: int,
-                               scene_prompt: str, seed: int) -> dict[str, Any]:
+                               scene_prompt: str, seed: int,
+                               raw_frames: int | None = None) -> dict[str, Any]:
     """Revise the current scene while preserving the accepted history contract."""
     index = int(index)
     if index < 1 or index > len(plan["shots"]):
@@ -1066,12 +1127,17 @@ def _plan_with_review_revision(plan: dict[str, Any], index: int,
     shot["prompt_hash"] = hashlib.sha256(
         full_prompt.encode("utf-8")).hexdigest()
     shot["seed"] = seed
+    if raw_frames is not None:
+        shot["raw_frames"] = _validate_h3_length(
+            raw_frames, "H3 review retry length")
+    _retime_review_plan(revised)
 
     overrides = dict(revised.get("review_overrides") or {})
     overrides[str(index)] = {
         "scene_prompt": scene_prompt,
         "prompt_hash": shot["prompt_hash"],
         "seed": seed,
+        "raw_frames": int(shot["raw_frames"]),
     }
     revised["review_overrides"] = overrides
     base_plan_hash = str(revised.get("base_plan_hash") or revised["plan_hash"])
@@ -3910,7 +3976,8 @@ class MiniMaxH3ChainReview:
     CATEGORY = "conditioning/minimax/contex_loop"
     DESCRIPTION = ("Pause after a checkpointed H3 segment for synchronized "
                    "video/audio review. Approve, stop, retry an edited scene "
-                   "prompt, or reroll its seed from the node UI.")
+                   "prompt/seed/duration, or reroll its seed while applying "
+                   "the edited duration from the node UI.")
 
     @classmethod
     def IS_CHANGED(cls, *args, **kwargs):
@@ -3958,6 +4025,8 @@ class MiniMaxH3ChainReview:
             "scene_prompt": shot.get("scene_prompt", shot["prompt"]),
             "prompt_prefix": str(plan.get("prompt_prefix") or ""),
             "seed": str(shot["seed"]),
+            "raw_frames": int(shot["raw_frames"]),
+            "duration_seconds": int(shot["raw_frames"]) / float(FPS),
             "video": video,
             "has_audio": False,
             "warning": ("Preparing synchronized audio preview…"
@@ -3975,7 +4044,9 @@ class MiniMaxH3ChainReview:
             "future": future,
             "loop": loop,
             "public": payload,
+            "plan": plan,
             "current_seed": int(shot["seed"]),
+            "current_length": int(shot["raw_frames"]),
         }
         PromptServer.instance.send_sync(
             "minimax_h3_context_loop_review", dict(payload),
@@ -4074,9 +4145,10 @@ class MiniMaxH3ChainReview:
             "action": "retry",
             "scene_prompt": decision["scene_prompt"],
             "seed": int(decision["seed"]),
+            "raw_frames": int(decision["raw_frames"]),
         }
-        status = "retrying clip %d with seed %d" % (
-            index, int(decision["seed"]))
+        status = "retrying clip %d with seed %d at %d frames" % (
+            index, int(decision["seed"]), int(decision["raw_frames"]))
         return {"ui": {"text": [status]},
                 "result": (revised_segment, status)}
 
@@ -4313,7 +4385,9 @@ class MiniMaxH3ChainLoopEnd:
         if isinstance(review, dict) and review.get("action") == "retry":
             revised_plan = _plan_with_review_revision(
                 plan, index, review.get("scene_prompt", ""),
-                int(review.get("seed", plan["shots"][index - 1]["seed"])))
+                int(review.get("seed", plan["shots"][index - 1]["seed"])),
+                int(review.get(
+                    "raw_frames", plan["shots"][index - 1]["raw_frames"])))
             retry_state = dict(state)
             retry_state["plan"] = revised_plan
             # Keep the predecessor context and accepted segment list unchanged.
@@ -5334,6 +5408,12 @@ async def _submit_review_decision(request):
         if len(scene_prompt) > 200000:
             return web.json_response(
                 {"error": "The retry prompt is too large."}, status=400)
+        try:
+            raw_frames = _validate_h3_length(
+                body.get("length", pending.get("current_length")),
+                "H3 review retry length")
+        except (TypeError, ValueError) as exc:
+            return web.json_response({"error": str(exc)}, status=400)
         if action == "reroll":
             seed = secrets.randbits(64)
             while seed == int(pending["current_seed"]):
@@ -5352,7 +5432,15 @@ async def _submit_review_decision(request):
             "action": "retry",
             "scene_prompt": scene_prompt,
             "seed": seed,
+            "raw_frames": raw_frames,
         }
+        try:
+            _plan_with_review_revision(
+                pending["plan"],
+                int(pending["public"]["clip_index"]),
+                scene_prompt, seed, raw_frames)
+        except (TypeError, ValueError) as exc:
+            return web.json_response({"error": str(exc)}, status=400)
 
     def resolve_on_execution_loop():
         if not future.done():
@@ -5368,6 +5456,8 @@ async def _submit_review_decision(request):
         "ok": True,
         "action": decision["action"],
         "seed": str(decision.get("seed", pending["current_seed"])),
+        "length": int(decision.get(
+            "raw_frames", pending["current_length"])),
     })
 
 

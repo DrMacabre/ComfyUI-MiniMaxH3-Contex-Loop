@@ -1,5 +1,8 @@
 import {MAX_SEED, promptTextToLines, sharedPrompt} from "./h3_chain_plan_core.mjs";
 
+const FPS = 24;
+const MAX_H3_FRAMES = 3592;
+
 export function reviewSeed(value) {
     let seed;
     try {
@@ -13,7 +16,32 @@ export function reviewSeed(value) {
     return seed.toString();
 }
 
-export function applyReviewEdit(plan, oneBasedIndex, scenePrompt, seed) {
+export function reviewDuration(value) {
+    const seconds = Number(value);
+    if (!Number.isFinite(seconds) || seconds <= 0) {
+        throw new Error("Duration must be a finite positive number of seconds.");
+    }
+    // The field displays six decimals, while most frame/24 values repeat.
+    // Tolerate that display rounding so leaving an unchanged duration alone
+    // can never jump to the next 17-frame H3 step.
+    const requested = Math.max(5, Math.ceil(seconds * FPS - 1e-4));
+    const length = requested + ((5 - requested % 17) + 17) % 17;
+    if (length > MAX_H3_FRAMES) {
+        throw new Error(`Duration is too long; the largest H3 length is ${MAX_H3_FRAMES} frames (${(MAX_H3_FRAMES / FPS).toFixed(3)} seconds).`);
+    }
+    return {seconds, length};
+}
+
+export function reviewDurationText(rawFrames) {
+    const length = Number(rawFrames);
+    if (!Number.isInteger(length) || length < 5 || length > MAX_H3_FRAMES
+            || length % 17 !== 5) {
+        throw new Error("The reviewed scene has an invalid H3 frame length.");
+    }
+    return (length / FPS).toFixed(6).replace(/0+$/, "").replace(/\.$/, "");
+}
+
+export function applyReviewEdit(plan, oneBasedIndex, scenePrompt, seed, length = null) {
     const index = Number(oneBasedIndex) - 1;
     if (!Array.isArray(plan?.shots) || index < 0 || index >= plan.shots.length) {
         throw new Error("The reviewed scene does not exist in the plan.");
@@ -25,6 +53,17 @@ export function applyReviewEdit(plan, oneBasedIndex, scenePrompt, seed) {
     const normalizedSeed = reviewSeed(seed);
     plan.shots[index].prompt = promptTextToLines(prompt);
     plan.shots[index].seed = normalizedSeed;
+    if (length !== null && length !== undefined) {
+        const normalizedLength = Number(length);
+        if (!Number.isInteger(normalizedLength) || normalizedLength < 5
+                || normalizedLength > MAX_H3_FRAMES
+                || normalizedLength % 17 !== 5) {
+            throw new Error("Length must be an H3-valid frame count (17k+5).");
+        }
+        plan.shots[index].length = normalizedLength;
+        delete plan.shots[index].frames;
+        delete plan.shots[index].duration_seconds;
+    }
     return plan;
 }
 
