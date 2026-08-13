@@ -222,9 +222,9 @@ and selected audio is encoded to AAC.
 
 Start with one of the two equivalent T2V workflows:
 
-- [T2V — Normal](<example_workflows/T2V/MiniMax H3 T2V - Normal.json>)
+- [T2V — Normal](<example_workflows/MiniMax H3 T2V - Normal.json>)
   uses the standard Plan and Scene Prompt Editor.
-- [T2V — Studio](<example_workflows/T2V/MiniMax H3 T2V - Studio.json>)
+- [T2V — Studio](<example_workflows/MiniMax H3 T2V - Studio.json>)
   uses the timeline-oriented Plan Studio while keeping the same prompts,
   settings, seeds, and generation graph as Normal.
 

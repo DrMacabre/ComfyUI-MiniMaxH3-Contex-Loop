@@ -9,16 +9,16 @@ Each completed mode should contain the same two-workflow pair:
 
 ```text
 example_workflows/
-├── T2V/
-│   ├── MiniMax H3 T2V - Normal.json
-│   └── MiniMax H3 T2V - Studio.json
+├── MiniMax H3 T2V - Normal.json
+├── MiniMax H3 T2V - Studio.json
 └── Archive/
     └── previous mixed and experimental examples
 ```
 
-Only T2V has been reorganized into the new pair so far. I2V, FL2V, L2V, and
-Ref2V folders will be added when both their Normal and Studio workflows are
-ready, rather than exposing half-finished categories.
+Active workflow JSON files remain directly in `example_workflows/` so ComfyUI
+can discover them. Only retired examples are nested under `Archive/`. T2V is
+the first reorganized pair; I2V, FL2V, L2V, and Ref2V will be added at this
+same top level when both their Normal and Studio variants are ready.
 
 ## T2V
 
@@ -32,9 +32,9 @@ core `ModelAttentionBackend` set to `comfy kitchen attention`, followed by
 Both the Plan default and scheduler fallback use eight sampling steps with the
 `lcm` sampler and `beta` scheduler.
 
-- [`T2V/MiniMax H3 T2V - Normal.json`](<T2V/MiniMax H3 T2V - Normal.json>)
+- [`MiniMax H3 T2V - Normal.json`](<MiniMax H3 T2V - Normal.json>)
   uses the standard Scene Prompt Editor.
-- [`T2V/MiniMax H3 T2V - Studio.json`](<T2V/MiniMax H3 T2V - Studio.json>)
+- [`MiniMax H3 T2V - Studio.json`](<MiniMax H3 T2V - Studio.json>)
   replaces that editor with the optional timeline-oriented Plan Studio. It does
   not change sampling or ComfyUI execution.
 

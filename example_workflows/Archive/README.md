@@ -2,7 +2,9 @@
 
 These are the previous mixed and experimental examples retained unchanged for
 compatibility and reference. The recommended type-based workflow pairs now
-live one level above this folder, beginning with [`../T2V/`](../T2V/).
+live one level above this folder, beginning with
+[`MiniMax H3 T2V - Normal.json`](<../MiniMax H3 T2V - Normal.json>) and
+[`MiniMax H3 T2V - Studio.json`](<../MiniMax H3 T2V - Studio.json>).
 
 ## V2 demos: choose single-image I2VA, core FL2VA, or Scheduled Ref2VA
 

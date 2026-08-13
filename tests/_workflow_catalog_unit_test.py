@@ -9,7 +9,6 @@ import pathlib
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 EXAMPLES = ROOT / "example_workflows"
 ARCHIVE = EXAMPLES / "Archive"
-T2V = EXAMPLES / "T2V"
 SOURCE_URL = (
     "https://discord.com/channels/1076117621407223829/"
     "1532625331960152124/1536689209761599608"
@@ -129,14 +128,13 @@ def validate_t2v(path, editor_type):
 def main():
     assert EXAMPLES.joinpath("README.md").is_file()
     assert ARCHIVE.joinpath("README.md").is_file()
-    assert T2V.joinpath("README.md").is_file()
     assert len(list(ARCHIVE.glob("*.json"))) == 7
     for path in ARCHIVE.glob("*.json"):
         validate_links(load(path))
 
-    normal_path = T2V / "MiniMax H3 T2V - Normal.json"
-    studio_path = T2V / "MiniMax H3 T2V - Studio.json"
-    assert set(path.name for path in T2V.glob("*.json")) == {
+    normal_path = EXAMPLES / "MiniMax H3 T2V - Normal.json"
+    studio_path = EXAMPLES / "MiniMax H3 T2V - Studio.json"
+    assert set(path.name for path in EXAMPLES.glob("*.json")) == {
         normal_path.name, studio_path.name,
     }
     normal, normal_plan = validate_t2v(
