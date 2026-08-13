@@ -2014,6 +2014,12 @@
           "name": "image",
           "type": "IMAGE",
           "link": 84
+        },
+        {
+          "name": "last_frame",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
         }
       ],
       "outputs": [
@@ -2033,9 +2039,14 @@
           "name": "status",
           "type": "STRING",
           "links": null
+        },
+        {
+          "name": "last_frame",
+          "type": "IMAGE",
+          "links": null
         }
       ],
-      "title": "FIRST-SCENE IMAGE GATE — DO NOT BYPASS",
+      "title": "FRAME GATE — FIRST ONCE / INDEXED LAST TARGET",
       "properties": {
         "aux_id": "ethanfel/ComfyUI-MiniMaxH3-Contex-Loop",
         "ver": "0.3.12",
@@ -2549,7 +2560,7 @@
     },
     {
       "id": 3,
-      "title": "CORE I2VA + FIRST-SCENE IMAGE GATE + CHECKPOINTED REVIEW",
+      "title": "CORE I2VA + FRAME GATE + CHECKPOINTED REVIEW",
       "bounding": [
         -1248,
         -352,

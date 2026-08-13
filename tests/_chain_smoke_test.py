@@ -497,6 +497,13 @@ def main():
         opening_image, True)
     assert first_scene_gate.select({"index": 2}, opening_image)[:2] == (
         None, False)
+    last_target = object()
+    assert first_scene_gate.select(
+        {"index": 1}, opening_image, last_target)[3] is last_target
+    assert first_scene_gate.select(
+        {"index": 2}, opening_image, last_target)[3] is last_target
+    assert "last-frame target supplied" in first_scene_gate.select(
+        {"index": 2}, opening_image, last_target)[2]
     shared_only = chain._normalize_plan(
         json.dumps({
             "prompt_prefix": ["Shared identity.", "", "Shared direction."],

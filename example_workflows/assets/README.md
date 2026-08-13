@@ -15,3 +15,15 @@ SHA-256:
 Copy the PNG to `ComfyUI/input/` before loading either I2V workflow. ComfyUI's
 Load Image node resolves assets from its configured input directories, not
 from this repository folder.
+
+## `jigen_market_garden_doom_last.png`
+
+Final frame extracted from ᴊɪɢᴇɴ's credited generated result above. The FL2V
+Normal example uses it as Frame B, then alternates B and the original Frame A
+as per-scene last-frame targets.
+
+SHA-256:
+`e07862c0d5160f06f015b8849dc4b7d2db0524de5ba490fd26c3dff33e196b34`
+
+Copy this PNG and `jigen_market_garden_doom_opening.png` to `ComfyUI/input/`
+before loading the FL2V workflow.

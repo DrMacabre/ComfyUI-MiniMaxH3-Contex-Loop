@@ -372,6 +372,19 @@ first_result = gate.select({"index": 1}, opening_image)
 later_result = gate.select({"index": 2}, opening_image)
 assert first_result[:2] == (opening_image, True)
 assert later_result[:2] == (None, False)
+last_target = object()
+assert gate.select({"index": 1}, opening_image, last_target)[3] is last_target
+assert gate.select({"index": 2}, opening_image, last_target)[3] is last_target
+assert gate.INPUT_TYPES()["optional"]["last_frame"][0] == "IMAGE"
+assert gate.RETURN_NAMES[-1] == "last_frame"
+
+frame_a = object()
+frame_b = object()
+switch = chain.MiniMaxH3ChainFrameIndexSwitch()
+assert switch.select(1, frame_b, frame_2=frame_a)[:2] == (frame_b, 1)
+assert switch.select(2, frame_b, frame_2=frame_a)[:2] == (frame_a, 2)
+assert switch.select(3, frame_b, frame_2=frame_a)[:2] == (frame_b, 1)
+assert switch.INPUT_TYPES()["optional"]["frame_8"][0] == "IMAGE"
 
 links = {link[0]: link for link in i2va_workflow["links"]}
 nodes = {node["id"]: node for node in i2va_workflow["nodes"]}

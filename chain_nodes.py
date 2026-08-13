@@ -3334,29 +3334,104 @@ class MiniMaxH3ChainFirstSceneImage:
                     "tooltip": "Opening image for scene 1. It is returned only "
                                "for the first scene in the plan and omitted for "
                                "every continuation scene."}),
+            },
+            "optional": {
+                "last_frame": ("IMAGE", {
+                    "tooltip": "Optional end-frame target for the current "
+                               "loop scene. It is passed through unchanged on "
+                               "every scene where the upstream socket supplies "
+                               "an image. To alternate targets, drive an image "
+                               "index switch with Current Shot's clip_index and "
+                               "connect the selected image here."}),
             }
         }
 
-    RETURN_TYPES = ("IMAGE", "BOOLEAN", "STRING")
-    RETURN_NAMES = ("first_frame", "is_first_scene", "status")
+    # Append last_frame rather than inserting it beside first_frame: existing
+    # workflows may already use the boolean/status outputs by slot number.
+    RETURN_TYPES = ("IMAGE", "BOOLEAN", "STRING", "IMAGE")
+    RETURN_NAMES = ("first_frame", "is_first_scene", "status", "last_frame")
     OUTPUT_TOOLTIPS = (
         "Connect to the stock MiniMax H3 Image to Video first_frame input. "
         "Scene 1 receives the image; later scenes receive no first-frame "
         "keyframe and continue only from H3 Motion Context.",
         "True only while scene 1 is being generated.",
-        "Reports whether the opening image was supplied or omitted.",
+        "Reports whether the opening image and current last-frame target were "
+        "supplied or omitted.",
+        "Connect to the stock MiniMax H3 Image to Video last_frame input. The "
+        "currently selected optional target passes through on every loop; use "
+        "clip_index plus an upstream index switch for per-scene targets.",
     )
     FUNCTION = "select"
     CATEGORY = "conditioning/minimax/contex_loop"
-    DESCRIPTION = ("Use one opening image for scene 1 of a recursive I2VA "
-                   "chain without reapplying it to continuation scenes.")
+    DESCRIPTION = ("Use one opening image only for scene 1 of a recursive "
+                   "I2VA chain, and optionally pass a selected last-frame "
+                   "target into each loop scene for FL2VA/L2VA conditioning.")
 
-    def select(self, state, image):
+    def select(self, state, image, last_frame=None):
         index = int(state["index"])
+        last_status = ("last-frame target supplied" if last_frame is not None
+                       else "last-frame target omitted")
         if index == 1:
-            return (image, True, "scene 1: opening image supplied")
+            return (image, True,
+                    "scene 1: opening image supplied; %s" % last_status,
+                    last_frame)
         return (None, False,
-                "scene %d: opening image omitted for continuation" % index)
+                "scene %d: opening image omitted for continuation; %s" % (
+                    index, last_status),
+                last_frame)
+
+
+class MiniMaxH3ChainFrameIndexSwitch:
+    @classmethod
+    def INPUT_TYPES(cls):
+        optional = {}
+        for index in range(2, 9):
+            optional["frame_%d" % index] = ("IMAGE", {
+                "tooltip": "Optional last-frame target %d. Connected targets "
+                           "are selected in order and wrap when clip_index "
+                           "exceeds their count." % index})
+        return {
+            "required": {
+                "clip_index": ("INT", {
+                    "default": 1, "min": 1, "max": MAX_SHOTS,
+                    "tooltip": "One-based scene index from H3 Chain Current "
+                               "Shot. Scene 1 selects frame_1, scene 2 selects "
+                               "frame_2, then selection wraps."}),
+                "frame_1": ("IMAGE", {
+                    "tooltip": "Last-frame target selected for scene 1. For "
+                               "an A to B to A chain, connect frame B here "
+                               "and the opening frame A to frame_2."}),
+            },
+            "optional": optional,
+        }
+
+    RETURN_TYPES = ("IMAGE", "INT", "STRING")
+    RETURN_NAMES = ("image", "selected_index", "status")
+    OUTPUT_TOOLTIPS = (
+        "Selected image for the current scene. Connect this to Frame Gate's "
+        "last_frame input.",
+        "One-based target slot selected after wrapping.",
+        "Reports the scene index, selected target, and connected target count.",
+    )
+    FUNCTION = "select"
+    CATEGORY = "conditioning/minimax/contex_loop"
+    DESCRIPTION = ("Select and wrap one last-frame target per loop scene. "
+                   "Useful for alternating A/B endpoints in FL2VA chains.")
+
+    def select(self, clip_index, frame_1, **kwargs):
+        frames = [frame_1]
+        for index in range(2, 9):
+            frame = kwargs.get("frame_%d" % index)
+            if frame is not None:
+                frames.append(frame)
+        scene_index = max(1, int(clip_index))
+        selected = (scene_index - 1) % len(frames)
+        return (
+            frames[selected],
+            selected + 1,
+            "scene %d: selected frame_%d of %d" % (
+                scene_index, selected + 1, len(frames)),
+        )
 
 
 class MiniMaxH3ChainLoopStart:
@@ -6131,6 +6206,7 @@ CHAIN_NODE_CLASS_MAPPINGS = {
     "MiniMaxH3ChainPlanStudio": MiniMaxH3ChainPlanStudio,
     "MiniMaxH3ChainRunManager": MiniMaxH3ChainRunManager,
     "MiniMaxH3ChainFirstSceneImage": MiniMaxH3ChainFirstSceneImage,
+    "MiniMaxH3ChainFrameIndexSwitch": MiniMaxH3ChainFrameIndexSwitch,
     "MiniMaxH3ReferenceVideoPrepare": MiniMaxH3ReferenceVideoPrepare,
     "MiniMaxH3ScheduledPictureReference": MiniMaxH3ScheduledPictureReference,
     "MiniMaxH3ScheduledVideoReference": MiniMaxH3ScheduledVideoReference,
@@ -6156,7 +6232,8 @@ CHAIN_NODE_DISPLAY_NAME_MAPPINGS = {
         "MiniMax H3 Rich Scene Prompt Editor (Experimental)"),
     "MiniMaxH3ChainPlanStudio": "MiniMax H3 Plan Studio (Experimental)",
     "MiniMaxH3ChainRunManager": "MiniMax H3 Run Manager",
-    "MiniMaxH3ChainFirstSceneImage": "MiniMax H3 First-Scene Image Gate",
+    "MiniMaxH3ChainFirstSceneImage": "MiniMax H3 Frame Gate",
+    "MiniMaxH3ChainFrameIndexSwitch": "MiniMax H3 Frame Index Switch",
     "MiniMaxH3ReferenceVideoPrepare": "MiniMax H3 Reference Video Prep",
     "MiniMaxH3ScheduledPictureReference": "MiniMax H3 Scheduled Picture Ref",
     "MiniMaxH3ScheduledVideoReference": "MiniMax H3 Scheduled Video Ref",

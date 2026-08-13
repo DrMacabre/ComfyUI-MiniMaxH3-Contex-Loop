@@ -10,7 +10,9 @@ Each completed mode should contain the same two-workflow pair:
 ```text
 example_workflows/
 ├── assets/
-│   └── jigen_market_garden_doom_opening.png
+│   ├── jigen_market_garden_doom_opening.png
+│   └── jigen_market_garden_doom_last.png
+├── MiniMax H3 FL2V - Normal.json
 ├── MiniMax H3 I2V - Normal.json
 ├── MiniMax H3 I2V - Studio.json
 ├── MiniMax H3 T2V - Normal.json
@@ -21,8 +23,9 @@ example_workflows/
 
 Active workflow JSON files remain directly in `example_workflows/` so ComfyUI
 can discover them. Only retired examples are nested under `Archive/`. T2V and
-I2V are the first reorganized pairs; FL2V, L2V, and Ref2V will be added at this
-same top level when both their Normal and Studio variants are ready.
+I2V are the first reorganized pairs. FL2V currently has one Normal workflow
+that demonstrates indexed A→B→A endpoints; its Studio counterpart and the L2V
+and Ref2V sets can follow at this same top level.
 
 ## T2V
 
@@ -60,10 +63,18 @@ visible note beside the graph.
 ## I2V
 
 Both files use one opening image with ComfyUI's core
-`MiniMaxH3ImageToVideo`. `MiniMaxH3ChainFirstSceneImage` sends the image only
-to scene 1; scene 2 receives no image and continues exclusively from the
-22-frame H3 Motion Context. Do not bypass this gate or the opening frame will
-be reapplied on every scene.
+`MiniMaxH3ImageToVideo`. The Frame Gate
+(`MiniMaxH3ChainFirstSceneImage`) sends the opening image only to scene 1;
+scene 2 receives no opening image and continues exclusively from the 22-frame
+H3 Motion Context. Do not bypass this gate or the opening frame will be
+reapplied on every scene.
+
+The same gate also exposes an optional `last_frame` input and output. That
+target passes through on every loop where it is supplied. For distinct or
+alternating end frames, drive an upstream image-index switch with Current
+Shot's `clip_index`, connect the switch output to the gate's `last_frame`, and
+connect the gate output to core `MiniMaxH3ImageToVideo.last_frame`. The bundled
+I2V pair leaves this optional route disconnected.
 
 - [`MiniMax H3 I2V - Normal.json`](<MiniMax H3 I2V - Normal.json>) uses the
   stable Scene Prompt Editor with rich token presentation but no active prompt
@@ -92,6 +103,30 @@ Scene 1 and the opening image were shared by **ᴊɪɢᴇɴ** in Banodoco's
 The workflow normalizes escaped line breaks and removes the surrounding
 code-string quote while preserving the source wording. Scene 2 is a new
 repository-authored continuation and intentionally contains no Picture label.
+
+## FL2V
+
+[`MiniMax H3 FL2V - Normal.json`](<MiniMax H3 FL2V - Normal.json>) is a
+two-scene A→B→A loop built from the same working I2V graph. It adds this pack's
+Frame Index Switch between two Load Image nodes and the Frame Gate:
+
+```text
+Current Shot.clip_index ───────────────┐
+Frame B ─ frame_1 ┐                    ▼
+                  ├─ Frame Index Switch → Frame Gate.last_frame → core last_frame
+Frame A ─ frame_2 ┘
+Frame A ───────────────────────────────→ Frame Gate.image → core first_frame
+```
+
+Scene 1 receives Frame A as its opening and Frame B as its ending, so its
+prompt uses the two-picture FL2VA alignment sentence. Scene 2 starts from H3
+Motion Context at B, receives only Frame A as its final target, and therefore
+uses the one-picture L2VA alignment sentence. The switch wraps by scene index:
+scene 1 selects B, scene 2 selects A, and a third scene would select B again.
+
+Frame A is the credited source image used by the I2V pair. Frame B is the
+final frame extracted from the credited generated result. Copy both PNG files
+from [`assets/`](assets/) to `ComfyUI/input/` before loading the workflow.
 
 ## Archive
 

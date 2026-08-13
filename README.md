@@ -193,7 +193,7 @@ inspired by **nkxx188’s**
 | ⏩ | Continue an existing video, with optional original-video prepend |
 | 🎸 | Re-film one synchronized performance from new camera angles |
 | 🗓️ | Schedule Ref2VA sources per scene with stable human-readable tags |
-| 🖼️ | Apply one I2VA opening image only to scene 1 of a long chain |
+| 🖼️ | Apply one I2VA opening image only to scene 1 and pass an indexed last-frame target into each loop |
 
 The runtime changes are opt-in. Loading this pack does not alter ordinary
 ComfyUI workflows; its guarded patches activate only when a Contex Loop Context
@@ -220,22 +220,28 @@ and selected audio is encoded to AAC.
 
 ## Start here
 
-Start with one of the two equivalent T2V workflows:
+Start with the Normal/Studio pair for the mode you need:
 
 - [T2V — Normal](<example_workflows/MiniMax H3 T2V - Normal.json>)
   uses the standard Plan and Scene Prompt Editor.
 - [T2V — Studio](<example_workflows/MiniMax H3 T2V - Studio.json>)
-  uses the timeline-oriented Plan Studio while keeping the same prompts,
-  settings, seeds, and generation graph as Normal.
+  uses the timeline-oriented Plan Studio plus the separate Rich Scene Prompt
+  Editor.
+- [I2V — Normal](<example_workflows/MiniMax H3 I2V - Normal.json>)
+  uses one bundled opening image with the standard Scene Prompt Editor.
+- [I2V — Studio](<example_workflows/MiniMax H3 I2V - Studio.json>)
+  uses the same I2V generation graph with Plan Studio plus Rich Scene Prompt
+  Editor.
+- [FL2V — Normal A→B→A loop](<example_workflows/MiniMax H3 FL2V - Normal.json>)
+  uses the loop scene index to alternate two bundled last-frame targets.
 
-Both are true text-to-video chains: the stock `MiniMaxH3ImageToVideo` node has
-no first- or last-frame input. They request two ten-second portrait scenes with
-generated audio, 22 context frames, and an independent five-frame visual
-blend. The model stack uses core **Model Attention Backend** with **comfy
-kitchen attention** and the official LightX2V eight-step v1.0 LoRA at strength
-1.0, with the `lcm` sampler and `beta` scheduler. Scene 1 reproduces a Banodoco
-community prompt with visible attribution inside the workflow; scene 2 is a
-repository-authored continuation.
+The T2V pair leaves both image sockets disconnected. The I2V pair applies one
+opening image only to scene 1. The FL2V example additionally connects Current
+Shot's `clip_index` to the Frame Index Switch: scene 1 travels from A to B,
+then scene 2 continues from motion context at B and lands back on A. All use
+core **Model Attention Backend** with **comfy kitchen attention**, the official
+LightX2V eight-step v1.0 LoRA at strength 1.0, the `lcm` sampler, and the
+`beta` scheduler.
 
 The earlier mixed examples remain available in [`Archive/`](example_workflows/Archive/):
 

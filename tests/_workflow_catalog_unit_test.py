@@ -21,6 +21,9 @@ I2V_SOURCE_URL = (
 I2V_ASSET_SHA256 = (
     "7a9993055d71b1e174096f2a2533ae2a0b14a686fdacae0c7bab1faa738ef5f3"
 )
+FL2V_LAST_ASSET_SHA256 = (
+    "e07862c0d5160f06f015b8849dc4b7d2db0524de5ba490fd26c3dff33e196b34"
+)
 
 
 def load(path):
@@ -175,6 +178,8 @@ def validate_i2v(path, editor_type, expected_blend):
     gate = node(workflow, "MiniMaxH3ChainFirstSceneImage")
     assert socket(gate["inputs"], "state")["link"] is not None
     assert socket(gate["inputs"], "image")["link"] is not None
+    assert socket(gate["inputs"], "last_frame")["link"] is None
+    assert socket(gate["outputs"], "last_frame")["links"] is None
     conditioner = node(workflow, "MiniMaxH3ImageToVideo")
     assert socket(conditioner["inputs"], "first_frame")["link"] is not None
     assert socket(conditioner["inputs"], "last_frame")["link"] is None
@@ -230,6 +235,55 @@ def validate_i2v(path, editor_type, expected_blend):
     return workflow, plan
 
 
+def validate_fl2v(path):
+    workflow = load(path)
+    validate_links(workflow)
+    loaders = [item for item in workflow["nodes"]
+               if item.get("type") == "LoadImage"]
+    assert {item["widgets_values"][0] for item in loaders} == {
+        "jigen_market_garden_doom_opening.png",
+        "jigen_market_garden_doom_last.png",
+    }
+
+    current = node(workflow, "MiniMaxH3ChainCurrent")
+    switch = node(workflow, "MiniMaxH3ChainFrameIndexSwitch")
+    gate = node(workflow, "MiniMaxH3ChainFirstSceneImage")
+    conditioner = node(workflow, "MiniMaxH3ImageToVideo")
+    assert socket(current["outputs"], "clip_index")["links"] == [
+        socket(switch["inputs"], "clip_index")["link"]]
+    assert socket(switch["inputs"], "frame_1")["link"] is not None
+    assert socket(switch["inputs"], "frame_2")["link"] is not None
+    assert socket(switch["outputs"], "image")["links"] == [
+        socket(gate["inputs"], "last_frame")["link"]]
+    assert socket(gate["outputs"], "first_frame")["links"] == [
+        socket(conditioner["inputs"], "first_frame")["link"]]
+    assert socket(gate["outputs"], "last_frame")["links"] == [
+        socket(conditioner["inputs"], "last_frame")["link"]]
+
+    plan_node = node(workflow, "MiniMaxH3ChainPlan")
+    plan = json.loads(plan_node["widgets_values"][0])
+    assert [shot["length"] for shot in plan["shots"]] == [362, 362]
+    first = "\n".join(plan["shots"][0]["prompt"])
+    second = "\n".join(plan["shots"][1]["prompt"])
+    assert first.startswith(
+        "How the reference pictures align with the target video — "
+        "Picture 1 (from Shot 1) aligns with the 0.00-second mark")
+    assert "Picture 2 (from Shot 1) aligns with the 15.08-second mark" in first
+    assert second.startswith(
+        "How the reference pictures align with the target video — "
+        "<Picture 1> (from [Shot 1]) aligns with the 15.08-second mark")
+    for prompt in (first, second):
+        assert prompt.index("integrated_multimodal_description:") < (
+            prompt.index("overall_soundscape:")) < prompt.index(
+                "non_diegetic_music:")
+    notes = "\n".join(
+        str(item.get("widgets_values", [""])[0])
+        for item in workflow["nodes"] if item.get("type") == "Note")
+    assert "A→B→A" in notes and "ᴊɪɢᴇɴ" in notes
+    assert I2V_SOURCE_URL in notes
+    return workflow, plan
+
+
 def main():
     assert EXAMPLES.joinpath("README.md").is_file()
     assert ARCHIVE.joinpath("README.md").is_file()
@@ -241,9 +295,11 @@ def main():
     t2v_studio_path = EXAMPLES / "MiniMax H3 T2V - Studio.json"
     i2v_normal_path = EXAMPLES / "MiniMax H3 I2V - Normal.json"
     i2v_studio_path = EXAMPLES / "MiniMax H3 I2V - Studio.json"
+    fl2v_normal_path = EXAMPLES / "MiniMax H3 FL2V - Normal.json"
     assert set(path.name for path in EXAMPLES.glob("*.json")) == {
         t2v_normal_path.name, t2v_studio_path.name,
         i2v_normal_path.name, i2v_studio_path.name,
+        fl2v_normal_path.name,
     }
     t2v_normal, t2v_normal_plan = validate_t2v(
         t2v_normal_path, "MiniMaxH3ChainScenePromptEditor", 0)
@@ -255,6 +311,7 @@ def main():
     i2v_studio, i2v_studio_plan = validate_i2v(
         i2v_studio_path, "MiniMaxH3ChainPlanStudio", 5)
     assert i2v_normal_plan == i2v_studio_plan
+    fl2v_normal, _fl2v_normal_plan = validate_fl2v(fl2v_normal_path)
 
     def generation_types(workflow):
         return collections.Counter(
@@ -270,17 +327,22 @@ def main():
     assert generation_types(i2v_normal) == generation_types(i2v_studio)
     uuids = {
         workflow["extra"]["comfyui_mcp"]["workflow_uuid"]
-        for workflow in (t2v_normal, t2v_studio, i2v_normal, i2v_studio)
+        for workflow in (
+            t2v_normal, t2v_studio, i2v_normal, i2v_studio, fl2v_normal)
     }
-    assert len(uuids) == 4
+    assert len(uuids) == 5
 
     asset = EXAMPLES / "assets" / "jigen_market_garden_doom_opening.png"
     assert asset.is_file()
     assert hashlib.sha256(asset.read_bytes()).hexdigest() == I2V_ASSET_SHA256
+    last_asset = EXAMPLES / "assets" / "jigen_market_garden_doom_last.png"
+    assert last_asset.is_file()
+    assert hashlib.sha256(last_asset.read_bytes()).hexdigest() == (
+        FL2V_LAST_ASSET_SHA256)
 
-    print("H3 workflow catalog: Archive plus paired Normal/Studio T2VA and "
-          "I2VA workflows, valid links, bundled asset integrity, proper "
-          "prompt sections, and visible source attribution pass")
+    print("H3 workflow catalog: Archive, paired Normal/Studio T2VA and I2VA, "
+          "plus indexed A-B-A FL2VA; valid links, bundled asset integrity, "
+          "proper prompt sections, and visible source attribution pass")
 
 
 if __name__ == "__main__":
