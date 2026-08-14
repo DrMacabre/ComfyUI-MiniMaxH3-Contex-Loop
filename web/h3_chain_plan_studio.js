@@ -1,6 +1,7 @@
 import {app} from "/scripts/app.js";
 import {api} from "/scripts/api.js";
 import {
+    H3_CONTEXT_LENGTHS,
     MAX_SHOTS,
     automaticSceneColor,
     calculatePlanTiming,
@@ -14,6 +15,7 @@ import {
     promptValueToText,
     randomSceneSeed,
     safeShotId,
+    sceneContextLength,
     sceneContinuationMode,
     setSharedPrompt,
     setShotLengthMode,
@@ -107,7 +109,7 @@ function injectStyles() {
         .h3studio-scene-head { margin-bottom:7px; }
         .h3studio-scene-label { color:var(--hs-muted); }
         .h3studio-form { align-items:end; display:grid;
-            grid-template-columns:minmax(150px,1.5fr) minmax(190px,1.4fr) minmax(70px,.55fr) minmax(150px,1.2fr) minmax(145px,1fr); margin-bottom:8px; }
+            grid-template-columns:minmax(130px,1.3fr) minmax(175px,1.3fr) minmax(65px,.5fr) minmax(135px,1.1fr) minmax(120px,.85fr) minmax(140px,1fr); margin-bottom:8px; }
         .h3studio-field { display:flex; min-width:0; flex-direction:column; gap:3px; color:var(--hs-muted); }
         .h3studio-length { display:grid; grid-template-columns:112px minmax(80px,1fr); gap:5px; }
         .h3studio-prompt { min-height:250px; width:100%; font:15px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace !important; }
@@ -747,6 +749,28 @@ function mount(node) {
         const seedWrap = element("span", "h3studio-length");
         const reroll = button("↻", "Store a new random seed for this scene", () => { seed.value = randomSceneSeed(); shot.seed = seed.value; writePlan(); });
         seedWrap.append(seed, reroll);
+        const context = element("select");
+        for (const [value, label] of [
+            ["", `Plan default · ${settings().contextLength}`],
+            ["0", "0 · new scene"],
+            ...H3_CONTEXT_LENGTHS.map((value) => [String(value), `${value} frames`]),
+        ]) {
+            const option = element("option", "", label);
+            option.value = value;
+            context.append(option);
+        }
+        context.value = Object.hasOwn(shot, "context_length")
+            && shot.context_length !== null ? String(shot.context_length) : "";
+        context.title = state.active === 0
+            ? "Blank inherits the Plan context. Zero ignores Existing Video Context for generation."
+            : "Context entering this scene. Blank inherits the Plan default; zero starts with no preceding video or audio context.";
+        context.addEventListener("change", () => {
+            if (context.value === "") delete shot.context_length;
+            else shot.context_length = Number(context.value);
+            sceneContextLength(shot, settings().contextLength);
+            writePlan();
+            renderStatus();
+        });
         const continuation = element("select");
         for (const [value, label] of [
             ["", `Plan default · ${settings().continuationMode}`],
@@ -773,6 +797,7 @@ function mount(node) {
         form.append(
             field("Scene ID", id), field("Length", lengthControl),
             field("Steps", steps), field("Seed", seedWrap),
+            field("Context", context),
             field("Continuation", continuation),
         );
 

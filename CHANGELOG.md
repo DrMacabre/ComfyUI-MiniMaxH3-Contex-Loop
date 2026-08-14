@@ -2,7 +2,14 @@
 
 Newest first. This file keeps release history out of the onboarding README.
 
-## Unreleased — Checkpoint Plan recovery
+## Unreleased — Scene context and checkpoint Plan recovery
+
+- Added per-scene context-length overrides to the Plan's existing Advanced
+  controls and Plan Studio. Blank inherits the Plan default; `0` creates a
+  genuinely independent scene with no predecessor video or audio context.
+- Made timing, masked/guide behavior, imported-video scene 1 handling, resume
+  hashes, checkpoint tail storage, Run Manager recovery, and checkpoint
+  revision recovery preserve the effective per-scene context.
 
 - Made Review Gate's ordinary **Load checkpoint** action restore the saved
   run's complete Plan before arming Loop Start. Prompts and Plan settings no

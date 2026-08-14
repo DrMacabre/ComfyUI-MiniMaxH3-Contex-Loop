@@ -155,7 +155,8 @@ LENGTH AT 24 FPS, context=22, anchor=head
 - 10 seconds -> raw 243 frames; clip 1 delivers 243, later clips deliver 221.
 - 15 seconds -> raw 362 frames; clip 1 delivers 362, later clips deliver 340.
 Later clips lose the 22 repeated context frames after Trim. Use length for
-frame-exact control. Every non-final shot must deliver at least context_length.
+frame-exact control. Every non-final shot must deliver at least the effective
+incoming context requested by the following scene.
 
 PRECEDENCE
 shot value > JSON defaults > H3 Chain Plan node defaults.
@@ -215,6 +216,7 @@ Shot = string | {
   "frames"?: integer,             // alias of length
   "steps"?: integer,
   "seed"?: integer | digit string,
+  "context_length"?: 0 | 1 | 5 | 22 | 39 | ... | 243,
   "continuation_mode"?: "guide" | "masked_av"
 }
 ```
@@ -339,7 +341,7 @@ removes that overlap:
 
 ```text
 clip 1 delivered frames = raw_frames
-later delivered frames  = raw_frames - context_length
+later delivered frames  = raw_frames - that scene's effective context_length
 ```
 
 The Trim node's optional `images_with_overlap` output can retain the requested
@@ -368,8 +370,9 @@ With `anchor_mode: before`, no repeated head is delivered, so every scene
 delivers its complete raw length. This mode is retained for experimentation;
 `head` is the tested and recommended mode.
 
-Every non-final scene must deliver at least `context_length` frames so the next
-scene has enough context. The plan rejects shorter predecessors before render.
+Every non-final scene must deliver at least the next scene's effective
+`context_length` so that scene has enough context. The plan rejects shorter
+predecessors before render; a next-scene override of `0` needs none.
 
 ## Prompt formatting
 
@@ -480,8 +483,14 @@ camera, action, or environment. Use `masked_av` when it directly continues the
 same shot and should preserve the preceding AV prefix exactly. Scene 1 uses the
 field only when Existing Video Context supplies a predecessor.
 
-The compact Plan editor places this selector beside Steps under **Show
-advanced**; Plan Studio keeps it in the existing scene-properties row.
+`context_length` overrides the incoming context for one scene. Omit it (or
+leave the visual selector blank) to inherit the Plan node setting. Set it to
+`0` for a completely new scene with no predecessor video or audio context.
+Positive values use the same native H3 choices as the Plan setting. Scene 1's
+override applies when Existing Video Context is connected.
+
+The compact Plan editor places both selectors beside Steps under **Show
+advanced**; Plan Studio keeps them in the existing scene-properties row.
 
 ## H3 Chain Plan node settings
 
@@ -729,8 +738,8 @@ The adapter performs four explicit operations:
 1. decodes native `VIDEO`, or accepts already decoded `source_frames`, then
    resamples from the effective source FPS to H3's 24 fps;
 2. fits them to the Plan width/height using the Plan crop setting;
-3. keeps the last `context_length` frames and optional matching audio tail as
-   scene 1's predecessor;
+3. keeps the last effective scene-1 `context_length` frames and optional
+   matching audio tail as scene 1's predecessor (or none when it is `0`);
 4. when `prepend_original` is enabled, persists the complete normalized source
    for automatic partial/final assembly.
 
@@ -742,7 +751,7 @@ With recommended `anchor_mode: head`, imported context changes scene 1 timing
 to the same rule used by later continuations:
 
 ```text
-scene 1 delivered frames = raw_frames - context_length
+scene 1 delivered frames = raw_frames - scene 1's effective context_length
 ```
 
 Therefore a 362-frame first scene with 22 imported context frames contributes

@@ -96,18 +96,21 @@ assert.deepEqual(checkpointRevisionChain([
 const recoveredPlan = applyCheckpointRevisionSet({
     prompt_prefix: ["new prefix"],
     shots: [
-        {id: "one", prompt: ["new one"], length: 362, steps: 8, seed: "1"},
-        {id: "two", prompt: ["new two"], length: 362, steps: 8, seed: "2"},
+        {id: "one", prompt: ["new one"], length: 362, steps: 8, seed: "1",
+            context_length: 39},
+        {id: "two", prompt: ["new two"], length: 362, steps: 8, seed: "2",
+            context_length: 39},
     ],
 }, [
     {scene: 1, scene_id: "old_one", scene_prompt: "old one", seed: "101",
-        raw_frames: 345, steps: 6, prompt_prefix: "old prefix"},
+        raw_frames: 345, steps: 6, prompt_prefix: "old prefix", context_length: 0},
     {scene: 2, scene_id: "old_two", scene_prompt: "old two", seed: "102",
         raw_frames: 328, steps: 7, prompt_prefix: "old prefix"},
 ]);
 assert.deepEqual(recoveredPlan.prompt_prefix, ["old prefix"]);
 assert.deepEqual(recoveredPlan.shots, [
-    {id: "old_one", prompt: ["old one"], length: 345, steps: 6, seed: "101"},
+    {id: "old_one", prompt: ["old one"], length: 345, steps: 6, seed: "101",
+        context_length: 0},
     {id: "old_two", prompt: ["old two"], length: 328, steps: 7, seed: "102"},
 ]);
 

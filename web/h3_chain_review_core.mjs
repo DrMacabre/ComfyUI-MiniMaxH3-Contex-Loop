@@ -1,4 +1,9 @@
-import {MAX_SEED, promptTextToLines, sharedPrompt} from "./h3_chain_plan_core.mjs";
+import {
+    MAX_SEED,
+    promptTextToLines,
+    sceneContextLength,
+    sharedPrompt,
+} from "./h3_chain_plan_core.mjs";
 
 const FPS = 24;
 const MAX_H3_FRAMES = 3592;
@@ -186,6 +191,12 @@ export function applyCheckpointRevisionSet(plan, revisions) {
         shot.seed = reviewSeed(revision.seed);
         shot.length = length;
         shot.steps = steps;
+        if (Object.hasOwn(revision, "context_length")) {
+            shot.context_length = Number(revision.context_length);
+            sceneContextLength(shot);
+        } else {
+            delete shot.context_length;
+        }
         delete shot.frames;
         delete shot.duration_seconds;
     }

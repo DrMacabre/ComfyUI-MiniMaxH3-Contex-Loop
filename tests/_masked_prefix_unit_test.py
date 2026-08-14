@@ -262,6 +262,34 @@ def main():
         "continuation_mode"] == "masked_av"
     assert chain._effective_editor_plan(mixed_plan)["shots"][1][
         "continuation_mode"] == "masked_av"
+    per_scene_context_plan = chain._normalize_plan(
+        json.dumps({"shots": [
+            {"id": "one", "prompt": "first", "length": 192},
+            {"id": "clean", "prompt": "independent", "length": 192,
+             "context_length": 0, "continuation_mode": "masked_av"},
+            {"id": "long_context", "prompt": "continued", "length": 192,
+             "context_length": 39},
+        ]}),
+        "scene_context_test", 64, 32, 22, "frames", "before", "disabled",
+        "generated_audio", 22, 8.0, 8, 1, 18, "model-stack-v1", 0,
+        "guide",
+    )
+    assert [shot["delivered_frames"] for shot in
+            per_scene_context_plan["shots"]] == [192, 192, 192]
+    assert per_scene_context_plan["shots"][1]["context_length"] == 0
+    assert per_scene_context_plan["shots"][2]["context_length"] == 39
+    assert per_scene_context_plan["compatibility"][
+        "context_storage_length"] == 39
+    assert chain._history_contract(per_scene_context_plan, 2)["shots"][1][
+        "context_length"] == 0
+    assert chain._effective_editor_plan(per_scene_context_plan)["shots"][1][
+        "context_length"] == 0
+    clean_result = chain.MiniMaxH3ChainContext().apply(
+        {"plan": per_scene_context_plan, "index": 2,
+         "previous_frames": frames, "previous_latent": previous},
+        conditioning, VideoVAE(), target)
+    assert clean_result[:3] == (conditioning, 0, False)
+    assert clean_result[3] is target
     mixed_state = {
         "plan": mixed_plan,
         "index": 2,
@@ -301,6 +329,23 @@ def main():
             mixed_plan, frames, 24.0, False, imported_audio))
     assert int(mixed_external_context[
         "context_audio"]["waveform"].shape[-1]) == 2200
+    zero_external_plan = chain._normalize_plan(
+        json.dumps({"shots": [
+            {"id": "clean_first", "prompt": "first", "length": 192,
+             "context_length": 0},
+        ]}),
+        "zero_external_test", 64, 32, 22, "video", "head", "disabled",
+        "generated_audio", 22, 8.0, 8, 1, 18, "model-stack-v1", 0,
+        "guide",
+    )
+    zero_external_context, _status = (
+        chain.MiniMaxH3ChainExternalVideo().prepare(
+            zero_external_plan, frames, 24.0, False, imported_audio))
+    assert int(zero_external_context["context_frames"].shape[0]) == 0
+    assert zero_external_context["context_audio"] is None
+    zero_external_prepared = chain._plan_with_external_context(
+        zero_external_plan, zero_external_context)
+    assert zero_external_prepared["shots"][0]["delivered_frames"] == 192
     first_state = {
         "plan": plan,
         "index": 1,

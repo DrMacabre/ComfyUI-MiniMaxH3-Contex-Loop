@@ -1,6 +1,7 @@
 import {app} from "/scripts/app.js";
 import {api} from "/scripts/api.js";
 import {
+    H3_CONTEXT_LENGTHS,
     MAX_SHOTS,
     automaticSceneColor,
     calculatePlanTiming,
@@ -15,6 +16,7 @@ import {
     promptValueToText,
     randomSceneSeed,
     safeShotId,
+    sceneContextLength,
     sceneContinuationMode,
     setShotLengthMode,
     setSharedPrompt,
@@ -168,7 +170,7 @@ function injectStyles() {
             align-items:center; gap:6px; }
         .h3c-seed-status { grid-column:1 / -1; color:var(--h3c-muted);
             overflow-wrap:anywhere; }
-        .h3c-advanced-fields { display: none; grid-template-columns:repeat(2, minmax(220px, 1fr)); gap: 7px; margin-top: 8px; }
+        .h3c-advanced-fields { display: none; grid-template-columns:repeat(3, minmax(180px, 1fr)); gap: 7px; margin-top: 8px; }
         .h3c-editor.h3c-show-advanced .h3c-advanced-fields { display: grid; }
         .h3c-errors { display: none; margin: 7px 0; padding: 7px; border-radius: 5px; color: #ffb4b8; background: #5d202866; white-space: pre-wrap; }
         .h3c-errors.h3c-open { display: block; }
@@ -829,6 +831,28 @@ function mountEditor(node) {
             else delete shot.steps;
             syncPlan();
         });
+        const context = element("select", "h3c-context");
+        const planContextLength = Number(widgetValue(node, "context_length", 22));
+        for (const [value, label] of [
+            ["", `Plan default · ${planContextLength}`],
+            ["0", "0 · new scene"],
+            ...H3_CONTEXT_LENGTHS.map((value) => [String(value), `${value} frames`]),
+        ]) {
+            const option = element("option", "", label);
+            option.value = value;
+            context.append(option);
+        }
+        context.value = Object.hasOwn(shot, "context_length")
+            && shot.context_length !== null ? String(shot.context_length) : "";
+        context.title = index === 0
+            ? "Context entering this scene. Blank inherits the Plan default. Zero makes scene 1 independent even when Existing Video Context is connected; the original may still be prepended during assembly."
+            : "Frames carried from the preceding scene into this one. Blank inherits the Plan default; zero creates a completely new scene with no preceding video or audio context.";
+        context.addEventListener("change", () => {
+            if (context.value === "") delete shot.context_length;
+            else shot.context_length = Number(context.value);
+            sceneContextLength(shot, planContextLength);
+            syncPlan();
+        });
         const continuation = element("select", "h3c-continuation");
         const planContinuationMode = widgetValue(
             node, "continuation_mode", "guide",
@@ -860,6 +884,7 @@ function mountEditor(node) {
         });
         advanced.append(
             field("Steps (blank = default)", steps),
+            field("Context into scene", context),
             field("Continuation into scene", continuation),
         );
         card.append(

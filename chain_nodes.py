@@ -1009,6 +1009,37 @@ def _derived_seed(base_seed: int, index: int, shot_id: str) -> int:
                           "big")
 
 
+def _shot_context_length(shot: dict[str, Any],
+                         default_context_length: int) -> int:
+    """Resolve an optional scene override; zero deliberately means no context."""
+    default_context_length = int(default_context_length)
+    value = shot.get("context_length")
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return default_context_length
+    if isinstance(value, bool) or (
+            isinstance(value, float) and not value.is_integer()):
+        raise ValueError(
+            "H3 scene context length must be 0 or one of %s." %
+            (H3_CONTEXT_LENGTHS,))
+    try:
+        resolved = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "H3 scene context length must be 0 or one of %s." %
+            (H3_CONTEXT_LENGTHS,)) from exc
+    if resolved != 0 and resolved not in H3_CONTEXT_LENGTHS:
+        raise ValueError(
+            "H3 scene context length must be 0 or one of %s." %
+            (H3_CONTEXT_LENGTHS,))
+    return resolved
+
+
+def _plan_context_storage_length(plan: dict[str, Any]) -> int:
+    """Tail length checkpoints retain for all transitions in this plan."""
+    cfg = plan["compatibility"]
+    return int(cfg.get("context_storage_length", cfg["context_length"]))
+
+
 def _history_contract(plan: dict[str, Any], through_index: int) -> dict[str, Any]:
     shots = []
     for shot in plan["shots"][:int(through_index)]:
@@ -1026,6 +1057,8 @@ def _history_contract(plan: dict[str, Any], through_index: int) -> dict[str, Any
         # scene and the continuation history after it.
         if "continuation_mode" in shot:
             contract["continuation_mode"] = shot["continuation_mode"]
+        if "context_length" in shot:
+            contract["context_length"] = shot["context_length"]
         shots.append(contract)
     return {
         "version": PLAN_VERSION,
@@ -1060,7 +1093,8 @@ def _tensor_fingerprint(value: Any) -> str:
     chunks = value.detach().split(8, dim=0) if value.ndim else (value.detach(),)
     for chunk in chunks:
         cpu = chunk.to(device="cpu").contiguous()
-        digest.update(memoryview(cpu.numpy()).cast("B"))
+        if cpu.numel():
+            digest.update(memoryview(cpu.numpy()).cast("B"))
     return digest.hexdigest()
 
 
@@ -1263,7 +1297,8 @@ def _plan_with_external_context(
             "to use an unverifiable video tail.")
 
     span = int(contract["context_frames"])
-    configured = int(plan["compatibility"]["context_length"])
+    default_context = int(plan["compatibility"]["context_length"])
+    configured = _shot_context_length(plan["shots"][0], default_context)
     if span != configured:
         raise ValueError(
             "H3 existing-video context contains %d frames; this plan requires "
@@ -1298,8 +1333,9 @@ def _plan_with_external_context(
                 delivered_frames = raw_frames
             shot["external_context_frames"] = span
         elif anchor_mode == "head":
-            generation_start = stitched_frames - configured
-            delivered_frames = raw_frames - configured
+            scene_context = _shot_context_length(shot, default_context)
+            generation_start = stitched_frames - scene_context
+            delivered_frames = raw_frames - scene_context
         else:
             generation_start = stitched_frames
             delivered_frames = raw_frames
@@ -1312,13 +1348,15 @@ def _plan_with_external_context(
         shot["audio_duration_seconds"] = raw_frames / float(FPS)
         stitched_frames += delivered_frames
 
-    for shot in prepared["shots"][:-1]:
-        if int(shot["delivered_frames"]) < configured:
+    for offset, shot in enumerate(prepared["shots"][:-1]):
+        next_context = _shot_context_length(
+            prepared["shots"][offset + 1], default_context)
+        if int(shot["delivered_frames"]) < next_context:
             raise ValueError(
                 "Shot %d (%s) delivers only %d frames, but the next clip "
                 "requires %d context frames." %
                 (shot["index"], shot["id"], shot["delivered_frames"],
-                 configured))
+                 next_context))
 
     prepared["total_delivered_frames"] = stitched_frames
     prepared["plan_hash"] = _fingerprint({
@@ -1409,14 +1447,15 @@ def _retime_review_plan(plan: dict[str, Any]) -> None:
             if external_span:
                 shot["external_context_frames"] = external_span
         else:
-            if raw_frames <= context_length:
+            scene_context = _shot_context_length(shot, context_length)
+            if scene_context and raw_frames <= scene_context:
                 raise ValueError(
                     "Shot %d has %d raw frames, not enough for a %d-frame "
                     "continuation overlap." %
-                    (offset + 1, raw_frames, context_length))
+                    (offset + 1, raw_frames, scene_context))
             if anchor_mode == "head":
-                generation_start = stitched_frames - context_length
-                delivered_frames = raw_frames - context_length
+                generation_start = stitched_frames - scene_context
+                delivered_frames = raw_frames - scene_context
             else:
                 generation_start = stitched_frames
                 delivered_frames = raw_frames
@@ -1426,13 +1465,15 @@ def _retime_review_plan(plan: dict[str, Any]) -> None:
         shot["audio_duration_seconds"] = raw_frames / float(FPS)
         stitched_frames += delivered_frames
 
-    for shot in plan["shots"][:-1]:
-        if int(shot["delivered_frames"]) < context_length:
+    for offset, shot in enumerate(plan["shots"][:-1]):
+        next_context = _shot_context_length(
+            plan["shots"][offset + 1], context_length)
+        if int(shot["delivered_frames"]) < next_context:
             raise ValueError(
                 "Shot %d (%s) delivers only %d frames, but the next clip "
                 "requires %d context frames." %
                 (shot["index"], shot["id"], shot["delivered_frames"],
-                 context_length))
+                 next_context))
     plan["total_delivered_frames"] = stitched_frames
     cfg = plan["compatibility"]
     imported = "; imported video" if external_span else ""
@@ -1579,6 +1620,7 @@ def _normalize_plan(
     seen_ids: set[str] = set()
     shots: list[dict[str, Any]] = []
     resolved_continuation_modes: list[str] = []
+    resolved_context_lengths: list[int] = []
     stitched_frames = 0
     for offset, item in enumerate(raw_shots):
         index = offset + 1
@@ -1587,14 +1629,20 @@ def _normalize_plan(
         if not isinstance(item, dict):
             raise ValueError("Shot %d must be an object or prompt string." % index)
 
+        try:
+            shot_context_length = _shot_context_length(item, context_length)
+        except ValueError as exc:
+            raise ValueError("Shot %d: %s" % (index, exc)) from exc
+        resolved_context_lengths.append(shot_context_length)
+
         shot_continuation_mode = item.get(
             "continuation_mode", continuation_mode)
         if shot_continuation_mode not in CONTINUATION_MODES:
             raise ValueError(
                 "Shot %d has unknown H3 continuation mode %r." %
                 (index, shot_continuation_mode))
-        if shot_continuation_mode == "masked_av":
-            if context_length < 5:
+        if shot_context_length and shot_continuation_mode == "masked_av":
+            if shot_context_length < 5:
                 raise ValueError(
                     "H3 masked AV continuation requires context_length of at "
                     "least 5 frames (shot %d)." % index)
@@ -1640,13 +1688,14 @@ def _normalize_plan(
             generation_start_frame = 0
             delivered_frames = raw_frames
         else:
-            if raw_frames <= context_length:
+            if shot_context_length and raw_frames <= shot_context_length:
                 raise ValueError(
                     "Shot %d has %d raw frames, not enough for a %d-frame "
-                    "continuation overlap." % (index, raw_frames, context_length))
+                    "continuation overlap." %
+                    (index, raw_frames, shot_context_length))
             if anchor_mode == "head":
-                generation_start_frame = stitched_frames - context_length
-                delivered_frames = raw_frames - context_length
+                generation_start_frame = stitched_frames - shot_context_length
+                delivered_frames = raw_frames - shot_context_length
             else:
                 # `before` places context at negative coordinates, so no
                 # repeated head is delivered or trimmed from the new clip.
@@ -1682,17 +1731,25 @@ def _normalize_plan(
         # values preserves old guide plan and checkpoint hashes exactly.
         if "continuation_mode" in item:
             shot["continuation_mode"] = shot_continuation_mode
+        # Blank/null means inherit. Keep the explicit zero because it is the
+        # generation-significant spelling of a completely independent scene.
+        explicit_context = item.get("context_length")
+        if explicit_context is not None and not (
+                isinstance(explicit_context, str)
+                and not explicit_context.strip()):
+            shot["context_length"] = shot_context_length
         shots.append(shot)
         stitched_frames += delivered_frames
 
-    for shot in shots[:-1]:
-        if shot["delivered_frames"] < context_length:
+    for offset, shot in enumerate(shots[:-1]):
+        next_context_length = resolved_context_lengths[offset + 1]
+        if shot["delivered_frames"] < next_context_length:
             raise ValueError(
                 "Shot %d (%s) delivers only %d frames, but the next clip "
                 "requires %d context frames. Increase its length or reduce "
                 "context_length." %
                 (shot["index"], shot["id"], shot["delivered_frames"],
-                 context_length))
+                 next_context_length))
 
     compatibility = {
         "fps": FPS,
@@ -1716,6 +1773,11 @@ def _normalize_plan(
     # only the behavior-changing experimental mode extends the contract.
     if continuation_mode != "guide":
         compatibility["continuation_mode"] = continuation_mode
+    context_storage_length = max([context_length] + resolved_context_lengths)
+    if context_storage_length > context_length:
+        # Older plans retain the global-sized tail. Add this only when a
+        # larger scene override requires a longer checkpoint contract.
+        compatibility["context_storage_length"] = context_storage_length
     plan = {
         "version": PLAN_VERSION,
         "run_name": _safe_name(run_name, "h3_chain"),
@@ -2001,7 +2063,9 @@ def _effective_editor_plan(plan: dict[str, Any]) -> dict[str, Any]:
             # JavaScript, including uint64 values above Number.MAX_SAFE_INTEGER.
             "seed": str(int(shot["seed"])),
         }, **({"continuation_mode": shot["continuation_mode"]}
-               if "continuation_mode" in shot else {}))
+               if "continuation_mode" in shot else {}),
+             **({"context_length": shot["context_length"]}
+                if "context_length" in shot else {}))
             for shot in plan["shots"]],
     }
 
@@ -2169,7 +2233,7 @@ def _public_segment(value: dict[str, Any]) -> dict[str, Any]:
         "generated_audio", "generated_audio_sha256",
         "raw_frames", "delivered_frames", "history_hash",
         "prompt_prefix", "scene_prompt", "prompt", "prompt_hash", "archives",
-        "seed", "steps", "sample_rate", "segment_sha256",
+        "seed", "steps", "context_length", "sample_rate", "segment_sha256",
         "checkpoint_sha256", "prompt_file_sha256", "predecessor_revision",
         "predecessor_checkpoint_sha256") if key in value}
 
@@ -2297,7 +2361,7 @@ def _load_resume_state(plan: dict[str, Any], start_clip: int) -> dict[str, Any]:
     if missing:
         raise ValueError("H3 chain checkpoint is missing tensors: %s" % missing)
     expected_context = min(
-        int(plan["compatibility"]["context_length"]),
+        _plan_context_storage_length(plan),
         int(plan["shots"][previous_index - 1]["delivered_frames"]))
     if int(tensors["context_frames"].shape[0]) != expected_context:
         raise ValueError(
@@ -3556,7 +3620,8 @@ class MiniMaxH3ChainExternalVideo:
                 "[frames,height,width,channels]; got %r." %
                 (getattr(source_frames, "shape", None),))
         cfg = plan["compatibility"]
-        context_length = int(cfg["context_length"])
+        context_length = _shot_context_length(
+            plan["shots"][0], int(cfg["context_length"]))
         indices = _external_video_frame_indices(
             int(source_frames.shape[0]), float(source_fps))
         normalized_count = int(indices.numel())
@@ -3566,12 +3631,19 @@ class MiniMaxH3ChainExternalVideo:
                 "needs at least %d context frames. Supply a longer video or "
                 "reduce context_length." % (normalized_count, context_length))
 
-        selected_indices = indices if bool(prepend_original) else indices[-context_length:]
+        if bool(prepend_original):
+            selected_indices = indices
+        elif context_length:
+            selected_indices = indices[-context_length:]
+        else:
+            selected_indices = indices[:0]
         selected = source_frames.index_select(
             0, selected_indices.to(device=source_frames.device))
-        normalized = _resize(
+        normalized = (_resize(
             selected, int(cfg["width"]), int(cfg["height"]), cfg["crop"])
-        context_frames = _tensor_cpu_clone(normalized[-context_length:])
+            if int(selected.shape[0]) else _tensor_cpu_clone(selected))
+        context_frames = _tensor_cpu_clone(
+            normalized[-context_length:] if context_length else normalized[:0])
 
         normalized_audio = None
         context_audio = None
@@ -3587,7 +3659,9 @@ class MiniMaxH3ChainExternalVideo:
             configured_audio_frames = int(cfg["audio_context_length"])
             first_continuation_mode = plan["shots"][0].get(
                 "continuation_mode", cfg.get("continuation_mode", "guide"))
-            if first_continuation_mode == "masked_av":
+            if not context_length:
+                audio_context_frames = 0
+            elif first_continuation_mode == "masked_av":
                 # A clean target AV prefix is one physical interval. Unlike
                 # guide mode, masked continuation cannot use an independently
                 # sized audio-reference window.
@@ -3596,13 +3670,14 @@ class MiniMaxH3ChainExternalVideo:
                 audio_context_frames = min(
                     normalized_count,
                     configured_audio_frames or context_length)
-            context_samples = int(round(
-                audio_context_frames / float(FPS) * source_rate))
-            context_audio = {
-                "waveform": _tensor_cpu_clone(
-                    normalized_audio["waveform"][..., -context_samples:]),
-                "sample_rate": source_rate,
-            }
+            if audio_context_frames:
+                context_samples = int(round(
+                    audio_context_frames / float(FPS) * source_rate))
+                context_audio = {
+                    "waveform": _tensor_cpu_clone(
+                        normalized_audio["waveform"][..., -context_samples:]),
+                    "sample_rate": source_rate,
+                }
 
         external_context = {
             "version": 1,
@@ -3715,7 +3790,8 @@ class MiniMaxH3ChainPlan:
                     "tooltip": "The editable production plan behind the large "
                                "Scene Plan interface: shared prompt, ordered "
                                "scene prompts, optional lengths, sampler steps, "
-                               "and per-scene seed overrides. Use the visual "
+                               "per-scene context, continuation, and seed "
+                               "overrides. Use the visual "
                                "editor for normal work and Raw JSON only for "
                                "import, export, or advanced editing. Reference "
                                "media is connected elsewhere; this JSON only "
@@ -3750,10 +3826,11 @@ class MiniMaxH3ChainPlan:
                                "so its latent always matches the plan."}),
                 "context_length": (list(H3_CONTEXT_LENGTHS), {
                     "default": 22,
-                    "tooltip": "Number of previous-scene video frames used to "
+                    "tooltip": "Default previous-scene video frames used to "
                                "continue motion. Use 22 for guide mode and 39 "
                                "for masked_av so the AV clocks meet exactly. "
-                               "With head "
+                               "A scene's Advanced selector can override this; "
+                               "blank inherits it and 0 starts a new scene. With head "
                                "anchors, those frames are regenerated at the "
                                "start and Loop Trim removes them, so later scenes "
                                "deliver raw scene frames minus context_length. "
@@ -3819,7 +3896,7 @@ class MiniMaxH3ChainPlan:
                                "defaults both omit a duration/length. H3 cannot "
                                "generate every frame count, so seconds round UP "
                                "to the next valid 17k+5 raw length. In head mode, "
-                               "continuation scenes then lose context_length "
+                               "continuation scenes then lose their effective context "
                                "repeated frames from their delivered duration."}),
                 "default_steps": ("INT", {
                     "default": 20, "min": 1, "max": 10000,
@@ -4528,14 +4605,18 @@ class MiniMaxH3ChainContext:
         plan = state["plan"]
         cfg = plan["compatibility"]
         shot = plan["shots"][index - 1]
+        context_length = _shot_context_length(
+            shot, int(cfg["context_length"]))
         continuation_mode = shot.get(
             "continuation_mode", cfg.get("continuation_mode", "guide"))
         external_first = index == 1 and bool(state.get("external_context"))
-        if index == 1 and not external_first:
+        if not context_length or (index == 1 and not external_first):
             if any(
                     candidate.get(
                         "continuation_mode",
                         cfg.get("continuation_mode", "guide")) == "masked_av"
+                    and _shot_context_length(
+                        candidate, int(cfg["context_length"])) > 0
                     for candidate in plan["shots"]):
                 # Fail before spending minutes on scene 1 if this ComfyUI
                 # cannot run a masked continuation required by a later scene.
@@ -4565,7 +4646,7 @@ class MiniMaxH3ChainContext:
                 vae=vae,
                 latent=latent,
                 previous_frames=previous_frames,
-                context_length=cfg["context_length"],
+                context_length=context_length,
                 crop=cfg["crop"],
                 previous_latent=previous_latent,
                 audio_vae=audio_vae,
@@ -4586,7 +4667,7 @@ class MiniMaxH3ChainContext:
             vae=vae,
             latent=latent,
             context_frames=previous_frames,
-            context_length=cfg["context_length"],
+            context_length=context_length,
             encode_mode=cfg["encode_mode"],
             anchor_mode=cfg["anchor_mode"],
             crop=cfg["crop"],
@@ -4696,7 +4777,7 @@ class MiniMaxH3ChainSegmentSave:
                 "H3 chain generated_audio mode requires decoded audio on Segment "
                 "Save. Wire it through MiniMax H3 Contex Loop Trim first.")
         compact = _compact_latent(sampled_latent)
-        context_length = int(plan["compatibility"]["context_length"])
+        context_length = min(_plan_context_storage_length(plan), actual_frames)
         context_frames = _tensor_cpu_clone(images[-context_length:])
         parts = compact["samples"]
         tensors = {
@@ -4800,6 +4881,8 @@ class MiniMaxH3ChainSegmentSave:
                 "checkpoint_sha256": _file_sha256(published_checkpoint),
                 "prompt_file_sha256": _file_sha256(published_prompt),
             }
+            if "context_length" in shot:
+                segment["context_length"] = shot["context_length"]
             if published_blend is not None:
                 segment.update({
                     "blend_segment": _relative_output_path(published_blend),
@@ -5495,7 +5578,8 @@ class MiniMaxH3ChainLoopEnd:
             # Segment Save makes the new take active when this index completes
             # again while retaining the rejected take as an immutable revision.
             return self._recurse(flow, retry_state, dynprompt, unique_id)
-        context_length = int(plan["compatibility"]["context_length"])
+        context_length = min(
+            _plan_context_storage_length(plan), int(images.shape[0]))
         next_state = {
             "plan": plan,
             "index": index + 1,
@@ -6981,7 +7065,7 @@ def _active_checkpoint_revision(run_name: str, scene: int) -> str:
 
 
 def _checkpoint_plan_revision(segment: dict[str, Any]) -> dict[str, Any]:
-    return {
+    revision = {
         "scene": int(segment["index"]),
         "scene_id": str(segment.get("id") or ""),
         "revision": str(segment.get("revision") or ""),
@@ -6992,6 +7076,9 @@ def _checkpoint_plan_revision(segment: dict[str, Any]) -> dict[str, Any]:
         "raw_frames": int(segment.get("raw_frames", 0)),
         "video": _video_output_item(_absolute_output_path(segment["segment"])),
     }
+    if "context_length" in segment:
+        revision["context_length"] = int(segment["context_length"])
+    return revision
 
 
 async def _restore_checkpoint_revisions(request):

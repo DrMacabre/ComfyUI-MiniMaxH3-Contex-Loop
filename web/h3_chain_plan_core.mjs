@@ -6,6 +6,10 @@ export const MAX_SHOTS = 128;
 export const MAX_H3_FRAMES = 3592;
 export const MAX_SEED = 18446744073709551615n;
 export const CONTINUATION_MODES = Object.freeze(["guide", "masked_av"]);
+export const H3_CONTEXT_LENGTHS = Object.freeze([
+    1, 5, 22, 39, 56, 73, 90, 107, 124,
+    141, 158, 175, 192, 209, 226, 243,
+]);
 export const AUTO_SCENE_COLORS = Object.freeze([
     "#6ea8fe", "#ffb86b", "#63d69f", "#c493ff",
     "#ff7fa6", "#55d6e8", "#e6cb65", "#ff7878",
@@ -405,6 +409,24 @@ export function sceneContinuationMode(shot, planDefault = "guide") {
     return mode;
 }
 
+export function sceneContextLength(shot, planDefault = 22) {
+    const fallback = Number(planDefault);
+    if (!H3_CONTEXT_LENGTHS.includes(fallback)) {
+        throw new Error(`Unknown Plan context length “${String(planDefault)}”.`);
+    }
+    const value = shot?.context_length;
+    if (value === undefined || value === null
+            || (typeof value === "string" && !value.trim())) return fallback;
+    const resolved = Number(value);
+    if (typeof value === "boolean" || !Number.isInteger(resolved)
+            || (resolved !== 0 && !H3_CONTEXT_LENGTHS.includes(resolved))) {
+        throw new Error(
+            `Scene context length must be 0 or one of ${H3_CONTEXT_LENGTHS.join(", ")}.`,
+        );
+    }
+    return resolved;
+}
+
 export function validateH3Length(value) {
     const length = Number(value);
     if (!Number.isInteger(length) || length < 5 || length > MAX_H3_FRAMES || length % 17 !== 5) {
@@ -451,8 +473,8 @@ export function calculatePlanTiming(plan, settings = {}) {
     const defaultSteps = Number(plan?.defaults?.steps ?? settings.defaultSteps ?? 20);
     const hasSharedPrompt = sharedPrompt(plan ?? {}).text.trim().length > 0;
 
-    if (![1, 5, 22, 39].includes(contextLength)) {
-        errors.push("Context length must be 1, 5, 22, or 39.");
+    if (!H3_CONTEXT_LENGTHS.includes(contextLength)) {
+        errors.push(`Context length must be one of ${H3_CONTEXT_LENGTHS.join(", ")}.`);
     }
     if (!Number.isFinite(planDefaultDuration) || planDefaultDuration <= 0) {
         errors.push("Default duration must be a finite positive number.");
@@ -486,13 +508,20 @@ export function calculatePlanTiming(plan, settings = {}) {
             rowErrors.push(error.message);
         }
 
+        let sceneContext = contextLength;
+        try {
+            sceneContext = sceneContextLength(shot, contextLength);
+        } catch (error) {
+            rowErrors.push(error.message);
+        }
+
         let continuationMode = "guide";
         try {
             continuationMode = sceneContinuationMode(
                 shot, planContinuationMode,
             );
-            if (continuationMode === "masked_av") {
-                if (contextLength < 5) {
+            if (sceneContext > 0 && continuationMode === "masked_av") {
+                if (sceneContext < 5) {
                     rowErrors.push(
                         "Masked AV requires a context length of at least 5 frames.",
                     );
@@ -518,13 +547,13 @@ export function calculatePlanTiming(plan, settings = {}) {
         let deliveredFrames = rawFrames;
         let generationStartFrame = stitchedFrames;
         if (index > 1 && anchorMode === "head") {
-            if (rawFrames <= contextLength) {
+            if (sceneContext > 0 && rawFrames <= sceneContext) {
                 rowErrors.push(
-                    `${rawFrames} raw frames are not longer than the ${contextLength}-frame overlap.`,
+                    `${rawFrames} raw frames are not longer than the ${sceneContext}-frame overlap.`,
                 );
             }
-            deliveredFrames = Math.max(0, rawFrames - contextLength);
-            generationStartFrame = stitchedFrames - contextLength;
+            deliveredFrames = Math.max(0, rawFrames - sceneContext);
+            generationStartFrame = stitchedFrames - sceneContext;
         }
 
         rows.push({
@@ -535,6 +564,7 @@ export function calculatePlanTiming(plan, settings = {}) {
             deliveredFrames,
             deliveredSeconds: deliveredFrames / FPS,
             generationStartFrame,
+            contextLength: sceneContext,
             continuationMode,
             errors: rowErrors,
         });
@@ -542,9 +572,10 @@ export function calculatePlanTiming(plan, settings = {}) {
     }
 
     for (let offset = 0; offset < rows.length - 1; offset += 1) {
-        if (rows[offset].deliveredFrames < contextLength) {
+        const required = rows[offset + 1].contextLength;
+        if (rows[offset].deliveredFrames < required) {
             rows[offset].errors.push(
-                `Delivers fewer than ${contextLength} frames needed by the next scene.`,
+                `Delivers fewer than ${required} frames needed by the next scene.`,
             );
         }
     }

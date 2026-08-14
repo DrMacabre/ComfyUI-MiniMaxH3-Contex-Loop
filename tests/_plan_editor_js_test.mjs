@@ -5,6 +5,7 @@ import fs from "node:fs";
 import {
     AUTO_SCENE_COLORS,
     CONTINUATION_MODES,
+    H3_CONTEXT_LENGTHS,
     automaticSceneColor,
     calculatePlanTiming,
     derivedSceneSeed,
@@ -15,6 +16,7 @@ import {
     planToJson,
     promptValueToText,
     randomSceneSeed,
+    sceneContextLength,
     sceneContinuationMode,
     setShotLengthMode,
     setSharedPrompt,
@@ -25,6 +27,7 @@ import {
 
 assert.equal(AUTO_SCENE_COLORS.length, 12);
 assert.deepEqual(CONTINUATION_MODES, ["guide", "masked_av"]);
+assert.equal(H3_CONTEXT_LENGTHS.at(-1), 243);
 assert.equal(new Set(AUTO_SCENE_COLORS).size, AUTO_SCENE_COLORS.length);
 assert.equal(automaticSceneColor(0), AUTO_SCENE_COLORS[0]);
 assert.equal(automaticSceneColor(12), AUTO_SCENE_COLORS[0]);
@@ -73,6 +76,11 @@ assert.throws(
     () => sceneContinuationMode({continuation_mode: "unknown"}, "guide"),
     /Unknown scene continuation mode/,
 );
+assert.equal(sceneContextLength({}, 22), 22);
+assert.equal(sceneContextLength({context_length: ""}, 22), 22);
+assert.equal(sceneContextLength({context_length: 0}, 22), 0);
+assert.equal(sceneContextLength({context_length: 39}, 22), 39);
+assert.throws(() => sceneContextLength({context_length: 2}, 22), /must be 0/);
 
 const invalidDurationShot = {duration_seconds: 999};
 assert.throws(() => setShotLengthMode(invalidDurationShot, "frames", 15));
@@ -175,6 +183,25 @@ assert.match(calculatePlanTiming(mixedContinuationPlan, {
     defaultDurationSeconds: 5,
 }).errors.join("\n"), /Masked AV requires/);
 
+const mixedContextTiming = calculatePlanTiming({shots: [
+    {id: "one", prompt: "One.", length: 192},
+    {id: "clean", prompt: "Clean.", length: 192, context_length: 0,
+        continuation_mode: "masked_av"},
+    {id: "continued", prompt: "Continue.", length: 192, context_length: 39},
+]}, {
+    contextLength: 22,
+    encodeMode: "frames",
+    anchorMode: "before",
+    continuationMode: "guide",
+});
+assert.deepEqual(
+    mixedContextTiming.shots.map((shot) => shot.contextLength), [22, 0, 39],
+);
+assert.deepEqual(
+    mixedContextTiming.shots.map((shot) => shot.deliveredFrames), [192, 192, 192],
+);
+assert.deepEqual(mixedContextTiming.errors, []);
+
 const sharedOnlyPlan = parsePlanJson(JSON.stringify({
     prompt_prefix: "Shared identity and direction.",
     shots: [{id: "shared_only", prompt: ""}],
@@ -255,7 +282,9 @@ assert.match(editorSource, /Use derived/);
 assert.match(editorSource, /Continuation into scene/);
 assert.match(editorSource, /Guide · new shot/);
 assert.match(editorSource, /Masked AV · same shot/);
-assert.match(editorSource, /grid-template-columns:repeat\(2/);
+assert.match(editorSource, /Context into scene/);
+assert.match(editorSource, /0 · new scene/);
+assert.match(editorSource, /grid-template-columns:repeat\(3/);
 assert.match(editorSource, /Hide advanced/);
 assert.match(editorSource, /Show advanced/);
 assert.doesNotMatch(editorSource, /Hide steps|Show steps/);

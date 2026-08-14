@@ -169,6 +169,9 @@ def _editor_plan(archive: dict[str, Any]) -> dict[str, Any]:
             value["seed"] = str(shot["seed"])
         if shot.get("continuation_mode") in ("guide", "masked_av"):
             value["continuation_mode"] = shot["continuation_mode"]
+        if (shot.get("context_length") == 0
+                or shot.get("context_length") in H3_CONTEXT_LENGTHS):
+            value["context_length"] = int(shot["context_length"])
         shots.append(value)
     return {
         "prompt_prefix": archive.get("prompt_prefix", ""),
