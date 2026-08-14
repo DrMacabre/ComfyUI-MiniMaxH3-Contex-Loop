@@ -4,8 +4,8 @@ import {
     parsePlanJson,
     planToJson,
     promptValueToText,
-} from "./h3_chain_plan_core.mjs";
-import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs";
+} from "./h3_chain_plan_core.mjs?v=0.4.5";
+import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.4.5";
 import {
     applyCheckpointRevisionSet,
     applyReviewEdit,
@@ -16,7 +16,7 @@ import {
     reviewDurationText,
     reviewLocalDeadline,
     reviewSeed,
-} from "./h3_chain_review_core.mjs";
+} from "./h3_chain_review_core.mjs?v=0.4.5";
 
 const NODE_NAME = "MiniMaxH3ChainReview";
 const PLAN_NAME = "MiniMaxH3ChainPlan";

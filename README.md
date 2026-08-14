@@ -44,9 +44,11 @@ cd ComfyUI/custom_nodes
 git clone https://github.com/ethanfel/ComfyUI-MiniMaxH3-Contex-Loop.git
 ```
 
-Restart ComfyUI and hard-refresh the browser. An `ffmpeg` executable on `PATH`
-is preferred, but review and final assembly can fall back to ComfyUI's bundled
-PyAV.
+Restart ComfyUI and reload the browser. Release-versioned web-module imports
+prevent older cached helpers from disabling the Plan editor after an update,
+so clearing all browser data should not be necessary. An `ffmpeg` executable
+on `PATH` is preferred, but review and final assembly can fall back to
+ComfyUI's bundled PyAV.
 
 Version 0.4 expects a ComfyUI build containing the native **Add Guide for
 MiniMax H3** implementation from

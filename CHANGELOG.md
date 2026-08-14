@@ -4,6 +4,9 @@ Newest first. This file keeps release history out of the onboarding README.
 
 ## v0.4.5 — Scene context and checkpoint Plan recovery
 
+- Versioned every production `.mjs` import with the package release and added
+  a consistency regression check, preventing stale browser helper modules from
+  disabling the Plan DOM editor after an update.
 - Added per-scene context-length overrides to the Plan's existing Advanced
   controls and Plan Studio. Blank inherits the Plan default; `0` creates a
   visually independent scene.

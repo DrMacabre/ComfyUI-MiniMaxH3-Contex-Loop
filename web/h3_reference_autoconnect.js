@@ -6,7 +6,7 @@ import {
     convertCoreRef2VA,
     migrateLegacyVideoScheduleWidgets,
     migrateReferenceComplianceWidget,
-} from "./h3_reference_autoconnect_core.mjs";
+} from "./h3_reference_autoconnect_core.mjs?v=0.4.5";
 
 const EXTENSION = "minimax_h3_context_loop.reference_autoconnect";
 

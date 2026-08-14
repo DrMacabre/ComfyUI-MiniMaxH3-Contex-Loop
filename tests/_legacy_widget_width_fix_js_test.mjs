@@ -206,7 +206,7 @@ const mockedIntegrationSource = integrationSource
         "const app = globalThis.__h3WidthTestApp;",
     )
     .replace(
-        'import {\n    createLegacyWidgetWidthController,\n    graphNodes,\n} from "./h3_legacy_widget_width_fix_core.mjs";',
+        /import \{\n    createLegacyWidgetWidthController,\n    graphNodes,\n\} from "\.\/h3_legacy_widget_width_fix_core\.mjs\?v=[^"]+";/,
         "const {createLegacyWidgetWidthController, graphNodes} = globalThis.__h3WidthTestCore;",
     );
 await import(`data:text/javascript;base64,${Buffer.from(mockedIntegrationSource).toString("base64")}`);
