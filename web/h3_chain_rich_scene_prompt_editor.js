@@ -407,6 +407,13 @@ function mount(node) {
     for (const eventName of ["pointerdown", "pointerup", "mousedown", "mouseup", "click", "dblclick"]) {
         root.addEventListener(eventName, (event) => event.stopPropagation());
     }
+    // Keep ComfyUI/LiteGraph's canvas shortcuts from claiming Ctrl/Cmd+V (and
+    // the other native editing shortcuts) while focus is inside this DOM
+    // widget. stopPropagation deliberately preserves the browser's default
+    // contenteditable action; preventDefault here would break paste.
+    for (const eventName of ["keydown", "keyup", "keypress", "copy", "cut", "paste"]) {
+        root.addEventListener(eventName, (event) => event.stopPropagation());
+    }
     root.addEventListener("wheel", (event) => event.stopPropagation());
 
     const state = {

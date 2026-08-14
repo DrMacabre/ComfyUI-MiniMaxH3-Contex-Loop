@@ -56,6 +56,8 @@ const source = fs.readFileSync(
 assert.match(source, /MiniMaxH3ChainRichScenePromptEditor/);
 assert.match(source, /edits only the selected scene prompt/i);
 assert.match(source, /contentEditable = "true"/);
+assert.match(source, /"keydown", "keyup", "keypress", "copy", "cut", "paste"/);
+assert.match(source, /stopPropagation deliberately preserves the browser's default/);
 assert.match(source, /Keep the browser's live DOM and undo transaction intact/);
 assert.match(source, /tokenizeRichPrompt/);
 assert.match(source, /h3rp-token-picture/);

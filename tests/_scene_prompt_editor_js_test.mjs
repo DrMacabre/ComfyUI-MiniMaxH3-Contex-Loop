@@ -85,6 +85,8 @@ assert.match(source, /h3sp-token-thumb/);
 assert.match(source, /h3sp-popover audio/);
 assert.match(source, /mediaElement\.controls = true/);
 assert.match(source, /contentEditable = "true"/);
+assert.match(source, /"keydown", "keyup", "keypress", "copy", "cut", "paste"/);
+assert.match(source, /stopPropagation deliberately preserves the browser's default/);
 assert.match(source, /window\.setInterval\(\(\) => loadPlan\(false\), 500\)/);
 assert.match(source, /h3_prompt_history_core\.mjs/);
 assert.match(source, /promptRevisionNavigation/);
