@@ -31,9 +31,11 @@ giant cumulative image tensor.
 | 🖼️ | Lossless PNG re-decode from saved scene latents |
 | 🔬 | In-graph audio-seam diagnostics |
 
-On an updated ComfyUI, core owns guide placement and reference-payload merging;
-this pack does not patch H3. Older builds receive a one-time update warning and
-use the guarded compatibility fallback only when a Contex Loop node executes.
+In the default `guide` mode, updated ComfyUI core owns guide placement and
+reference-payload merging; this pack does not patch H3. The experimental
+`masked_av` mode additionally needs per-stream H3 video/audio noise masks from
+PR #15375. It prefers native support and lazily enables its vendored runtime
+compatibility only when that mode actually executes.
 
 ## Install
 
@@ -111,7 +113,8 @@ instead of overwriting an MP4 with the same requested name.
 | Setting | Good starting point | Meaning |
 |---|---:|---|
 | `width × height` | `960 × 544` | Multiples of 32 |
-| `context_length` | `22` | Repeated motion history carried into continuations |
+| `continuation_mode` | `guide` | Stable fixed-guide path; `masked_av` is the experimental clean-prefix path |
+| `context_length` | `22` guide / `39` masked | Repeated motion history carried into continuations |
 | `encode_mode` | `video` | Preserves motion in the VAE latent |
 | `anchor_mode` | `head` | Regenerates then trims the repeated opening context |
 | `crop` | `disabled` | Best when source and target framing already agree |
@@ -122,6 +125,26 @@ instead of overwriting an MP4 with the same requested name.
 Use `generation_fingerprint` to record model, VAE, LoRA, references, CFG,
 sampler, and scheduler choices that live outside the Plan. Change it when those
 dependencies change so incompatible checkpoints cannot be resumed silently.
+
+### Guide versus masked AV continuation
+
+`guide` leaves the target latent noisy and supplies the previous scene as
+fixed conditioning rows. H3 regenerates the repeated head, and Loop Trim
+removes it. This remains the default.
+
+`masked_av` writes the previous scene's decoded video tail into the beginning
+of the current target video latent, copies the matching tail from the previous
+sampled audio latent, and protects both streams with `0 = preserve`,
+`1 = generate` denoise masks. Wire the new **Chain Context latent** output to
+the sampler's `latent_image`; the output passes the original target through on
+scene 1 and in `guide` mode, so that one wire supports both modes.
+
+Masked continuation requires `encode_mode=video`, `anchor_mode=head`, and at
+least 5 context frames, on a ComfyUI build with native PR #15439 guide/MultiRef
+support. Use **39 frames** for comparisons: at 24 fps it is
+exactly 1.625 seconds and exactly 65 audio-latent steps at H3's 40 Hz audio
+grid. Changing continuation mode or its context settings changes the Plan
+compatibility hash, so old guide checkpoints cannot be resumed as masked AV.
 
 ## Audio at a glance
 

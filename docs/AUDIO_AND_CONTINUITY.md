@@ -13,6 +13,16 @@ exact, use `source_track`. For a short voice/timbre reference where H3 should
 generate new words, use `generated_audio` and schedule that short clip as an
 ordinary audio reference.
 
+These descriptions are for the default `guide` continuation mode. In
+experimental `masked_av`, Chain Context always preserves a matching video and
+audio prefix inside the target latent, including when final assembly uses
+`source_track`. For recursive scenes it copies the previous sampler's audio
+latent directly. For scene 1 after Existing Video Context, source audio and the
+H3 audio VAE must both be connected.
+
+Prefer a 39-frame masked prefix. It maps exactly to 65 audio steps; 22 frames
+maps to 36.666... steps and therefore requires rounding at the AV boundary.
+
 ## Source-track wiring
 
 Connect the same full ComfyUI AUDIO value to:
@@ -106,6 +116,11 @@ the decoded audio tail to the exact delivered-frame duration.
 `retain_overlap_frames` exposes an additional visual stream containing part of
 the repeated context for external stitchers. It does not alter the normal clean
 images output or audio.
+
+Both continuation modes return the prefix length as `trim_frames`. In masked
+mode those leading frames are decoded from preserved target-latent rows rather
+than regenerated guide-conditioned rows, but they still overlap the preceding
+scene and must be removed from delivered duration.
 
 ## Measure a join
 

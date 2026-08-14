@@ -143,6 +143,11 @@ from [`assets/`](assets/) to `ComfyUI/input/` before loading the workflow.
 The Ref2V set uses the same two credited Market Garden pictures, the same
 two-scene plan, and the same model/sampler stack at every level:
 
+All maintained workflows route Chain Context's LATENT output to the sampler.
+That output is a no-op pass-through in the default `guide` mode and carries the
+prepared target prefix in `masked_av`, so changing modes cannot silently leave
+the sampler on the unprepared conditioner latent.
+
 - [`MiniMax H3 Ref2V - Basic.json`](<MiniMax H3 Ref2V - Basic.json>) connects
   both Load Image nodes directly to ComfyUI's core
   `MiniMaxH3ReferenceToVideo`. Both images are global, so the prompts use the
@@ -154,9 +159,12 @@ two-scene plan, and the same model/sampler stack at every level:
   `clip_index` and `clip_count`, and the final reference fingerprint is
   connected to the Plan for checkpoint safety.
 - [`MiniMax H3 Ref2V - Studio Tagged.json`](<MiniMax H3 Ref2V - Studio Tagged.json>)
-  keeps that prompt-driven generation path and adds Plan Studio, Rich Scene Prompt
-  Editor, and an inline Run Manager. Both image loader outputs connect to raw
-  asset sockets as well as their Tagged Picture nodes. The manager archives image
+  keeps that prompt-driven generation path and adds Plan Studio, Rich Scene
+  Prompt Editor, and an inline Run Manager. It is also the experimental
+  `masked_av` example: Chain Context's latent output feeds the sampler, and a
+  39-frame video/65-step audio prefix is preserved before Loop Trim removes the
+  repeated delivery overlap. Both image loader outputs connect to raw asset
+  sockets as well as their Tagged Picture nodes. The manager archives image
   fallbacks by default and restores each saved run's Plan plus the matching
   loader selections.
 - [`MiniMax H3 Ref2V - Studio Tagged Source Audio.json`](<MiniMax H3 Ref2V - Studio Tagged Source Audio.json>)

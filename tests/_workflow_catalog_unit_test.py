@@ -333,11 +333,13 @@ def validate_ref2v(path, variant):
 
     plan_node = node(workflow, "MiniMaxH3ChainPlan")
     plan = json.loads(plan_node["widgets_values"][0])
-    assert plan_node["widgets_values"][3:6] == [896, 672, 22]
+    expected_context = 39 if variant == "studio" else 22
+    assert plan_node["widgets_values"][3:6] == [
+        896, 672, expected_context]
     expected_audio_mode = (
         "source_track" if variant == "source_audio" else "generated_audio")
     assert plan_node["widgets_values"][9:13] == [
-        expected_audio_mode, 22, 10, 8]
+        expected_audio_mode, expected_context, 10, 8]
     defaults = plan.get("defaults")
     if defaults is not None:
         assert defaults == {"duration_seconds": 10, "steps": 8}
@@ -426,6 +428,12 @@ def validate_ref2v(path, variant):
             assert socket(manager["inputs"], "asset_0")["link"] is not None
             assert socket(manager["inputs"], "asset_1")["link"] is not None
             assert manager["widgets_values"][0:3] == [True, True, False]
+            if variant == "studio":
+                assert plan_node["widgets_values"][-1] == "masked_av"
+                context = node(workflow, "MiniMaxH3ChainContext")
+                sampler = node(workflow, "SamplerCustomAdvanced")
+                assert socket(context["outputs"], "latent")["links"] == [
+                    socket(sampler["inputs"], "latent_image")["link"]]
             bindings = json.loads(manager["widgets_values"][3])
             assert len(bindings) == (3 if variant == "source_audio" else 2)
             assert {item["original_value"] for item in bindings} == {
@@ -589,6 +597,12 @@ def main():
         ref2v_source_audio_path.name,
         sequential_path.name,
     }
+    for path in EXAMPLES.glob("*.json"):
+        workflow = load(path)
+        context = node(workflow, "MiniMaxH3ChainContext")
+        sampler = node(workflow, "SamplerCustomAdvanced")
+        assert socket(context["outputs"], "latent")["links"] == [
+            socket(sampler["inputs"], "latent_image")["link"]], path.name
     t2v_normal, t2v_normal_plan = validate_t2v(
         t2v_normal_path, "MiniMaxH3ChainScenePromptEditor", 0)
     t2v_studio, t2v_studio_plan = validate_t2v(

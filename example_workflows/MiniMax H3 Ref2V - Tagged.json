@@ -843,8 +843,7 @@
           "name": "latent",
           "type": "LATENT",
           "links": [
-            27,
-            33
+            27
           ]
         },
         {
@@ -944,6 +943,13 @@
           "name": "is_continuation",
           "type": "BOOLEAN",
           "links": null
+        },
+        {
+          "name": "latent",
+          "type": "LATENT",
+          "links": [
+            33
+          ]
         }
       ],
       "title": "AUTO CONTEXT — clip 1 bypass / continuation",
@@ -2332,8 +2338,8 @@
     ],
     [
       33,
-      110,
-      1,
+      1703,
+      3,
       124,
       4,
       "LATENT"

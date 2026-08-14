@@ -1175,9 +1175,11 @@ def main():
             else:
                 raise AssertionError("Loop Start accepted a short non-silent song")
             conditioning = [["cond", {}]]
+            bypass_latent = av_latent()
             bypass = chain.MiniMaxH3ChainContext().apply(
-                started[1], conditioning, None, av_latent())
-            assert bypass == (conditioning, 0, False)
+                started[1], conditioning, None, bypass_latent)
+            assert bypass[:3] == (conditioning, 0, False)
+            assert bypass[3] is bypass_latent
             print("current/context: source window exact or 40 Hz aligned; short "
                   "silence pads safely")
 
@@ -1328,7 +1330,8 @@ def main():
                     audio_vae="audio-vae")
             finally:
                 chain.MiniMaxH3MotionContext = real_motion_context
-            assert external_conditioning == ("continued", 1, True)
+            assert external_conditioning[:3] == ("continued", 1, True)
+            assert external_conditioning[3] is context_call["latent"]
             assert context_call["context_latent"] is None
             assert context_call["audio_vae"] == "audio-vae"
             assert context_call["context_audio"] is external_state1[

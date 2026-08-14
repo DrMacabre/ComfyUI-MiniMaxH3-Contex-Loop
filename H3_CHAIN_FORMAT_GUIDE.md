@@ -163,6 +163,7 @@ shot value > JSON defaults > H3 Chain Plan node defaults.
 RECOMMENDED PLAN SETTINGS
 - width/height: multiples of 32; 960x544 is a good starting point.
 - context_length: 22
+- continuation_mode: guide
 - encode_mode: video
 - anchor_mode: head
 - crop: disabled
@@ -478,7 +479,8 @@ ID or moving it to another position changes its derived seed.
 | `run_name` | Filename-safe text; normalized to at most 96 characters | Give each independent render a unique name. Keep it unchanged only when resuming. |
 | `generation_fingerprint` | Any stable version string | Include model, VAE, LoRA, global-reference, CFG, sampler, and scheduler versions. Change it when any external generation dependency changes. |
 | `width`, `height` | Positive multiples of 32, UI range 32–4096 | `960 × 544` is the supplied long-form workflow setting. |
-| `context_length` | `1`, `5`, `22`, `39`, or `56` | Use `22` for the tested balance. `56` carries 2.33 seconds/17 latent steps for difficult long motion, but every continuation regenerates and trims those frames in head mode. |
+| `continuation_mode` | `guide` or `masked_av` | `guide` is the stable default. `masked_av` writes a preserved AV prefix into the target latent and requires Chain Context's latent output to feed the sampler. |
+| `context_length` | `1`, then native runs `5`, `22`, `39`, ... `243` | Use `22` for guide mode. Use `39` for masked AV so 24 fps video and 40 Hz audio meet on an exact 65-step boundary. Masked AV requires at least 5. |
 | `encode_mode` | `video` or `frames` | Use `video`. It preserves motion inside the VAE latent and is more efficient. |
 | `anchor_mode` | `head` or `before` | Use `head`; wire `trim_frames` into MiniMax H3 Contex Loop Trim. |
 | `crop` | `disabled` or `center` | Use `disabled` when references and output already share the intended framing. |

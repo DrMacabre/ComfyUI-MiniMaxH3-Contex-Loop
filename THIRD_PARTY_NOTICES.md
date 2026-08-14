@@ -44,6 +44,34 @@ checkpointed generated-audio and saved-prelude assembly, using cumulative
 delivered video-frame boundaries so per-scene rounding cannot accumulate into
 long-run A/V drift.
 
+The experimental masked AV chain mode directly adapts that GPL-3.0 project's
+masked existing-video extension and its capability-aware runtime compatibility
+for ComfyUI PR #15375. In this loop integration the preserved source is the
+previous accepted scene checkpoint: decoded tail frames are VAE-encoded into
+the next target video latent, its sampled audio-latent tail is copied directly,
+and both target prefixes receive `0 = preserve`, `1 = generate` masks.
+
+Adapted source files and integration:
+
+- `h3_mask_compat.py` — model-level PR #15375 capability detection/fallback;
+- `h3_mask_payload_compat.py` — native-first AV mask payload extraction;
+- `masked_context.py` — recursive target-prefix construction derived from the
+  MultiRef existing-video implementation.
+
+The referenced MultiRef revision is `4b484a3` (2026-08-14), GPL-3.0.
+Its mask-engine and mask-payload compatibility marker names are retained as a
+shared runtime ABI, so installing both packs does not stack equivalent
+PR #15375 wrappers.
+
+## ComfyUI MiniMax H3 per-token AV masks
+
+The underlying per-token video/audio latent masking design and upstream
+implementation are from
+[ComfyUI PR #15375](https://github.com/Comfy-Org/ComfyUI/pull/15375), authored
+by **drozbay**. The vendored fallback is scoped to masked target-latent
+operations, prefers native equivalent behavior automatically, and is not
+activated by ordinary guide-mode chains.
+
 ## ComfyUI MiniMax H3 Add Guide
 
 Native-guide compatibility targets

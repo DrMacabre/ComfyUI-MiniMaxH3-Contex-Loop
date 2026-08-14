@@ -32,6 +32,7 @@ PLAN_WIDGET_NAMES = (
     "base_seed",
     "segment_crf",
     "video_blend_frames",
+    "continuation_mode",
 )
 
 H3_CONTEXT_LENGTHS = (
@@ -121,7 +122,7 @@ def _workflow_inputs(document: Any, run_name: str) -> dict[str, Any]:
         if len(widgets) > 1 and _safe_name(widgets[1]) == run_name:
             exact.append(widgets)
     selected = exact[0] if exact else (candidates[0] if len(candidates) == 1 else None)
-    if selected is None or len(selected) < len(PLAN_WIDGET_NAMES) - 1:
+    if selected is None or len(selected) < 15:
         return {}
     # widgets_values is positional and old workflows can predate fields added
     # near the front of the Plan. Refuse a shifted layout rather than applying
@@ -134,14 +135,17 @@ def _workflow_inputs(document: Any, run_name: str) -> dict[str, Any]:
             or selected[9] not in (
                 "source_track", "generated_audio", "source_plus_timeline")):
         return {}
+    if len(selected) > 16 and selected[16] not in ("guide", "masked_av"):
+        return {}
     restored = {}
     for name, value in zip(PLAN_WIDGET_NAMES, selected):
         value = _restorable_widget_value(name, value)
         if value is not None:
             restored[name] = value
-    # 0.3 workflows end at segment_crf. The new widget is deliberately last,
-    # so old positional values remain exact and receive the disabled default.
+    # 0.3 workflows end at segment_crf. New widgets are appended, so old
+    # positional values remain exact and receive their compatibility defaults.
     restored.setdefault("video_blend_frames", 0)
+    restored.setdefault("continuation_mode", "guide")
     return restored
 
 
@@ -186,12 +190,14 @@ def _archive_inputs(archive: Any, run_name: str) -> dict[str, Any]:
             "generation_fingerprint", "width", "height", "context_length",
             "encode_mode", "anchor_mode", "crop", "audio_mode",
             "audio_context_length", "segment_crf", "video_blend_frames",
+            "continuation_mode",
         ):
             if name in compatibility:
                 restored[name] = compatibility[name]
     if "segment_crf" in archive:
         restored["segment_crf"] = archive["segment_crf"]
     restored.setdefault("video_blend_frames", 0)
+    restored.setdefault("continuation_mode", "guide")
     return restored
 
 

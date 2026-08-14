@@ -25,6 +25,7 @@ def main():
     }, "old_run")
     assert old_restore["segment_crf"] == 18
     assert old_restore["video_blend_frames"] == 0
+    assert old_restore["continuation_mode"] == "guide"
 
     with tempfile.TemporaryDirectory() as temporary:
         root = pathlib.Path(temporary)
@@ -59,6 +60,7 @@ def main():
             "base_seed": "18446744073709551615",
             "segment_crf": 17,
             "video_blend_frames": 22,
+            "continuation_mode": "masked_av",
         }
         write(exact / "api_prompt.json", {
             "12": {"class_type": "MiniMaxH3ChainPlan", "inputs": exact_inputs},
@@ -119,6 +121,7 @@ def main():
         assert restored["anchor_mode"] == "before"
         assert restored["segment_crf"] == 19
         assert restored["video_blend_frames"] == 0
+        assert restored["continuation_mode"] == "guide"
         restored_plan = json.loads(restored["plan_json"])
         assert restored_plan["shots"][0]["prompt"] == "Fallback prompt."
         assert restored_plan["shots"][0]["seed"] == "9"

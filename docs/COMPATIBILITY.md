@@ -6,6 +6,20 @@ Installing the pack does not globally alter ordinary ComfyUI workflows. Its H3
 conditioning patches activate when a Contex Loop Context node executes and
 self-check the live model/layout assumptions before use.
 
+The two continuation engines are capability-gated independently:
+
+- `guide` prefers native Add Guide / MultiRef behavior from ComfyUI PR #15439
+  and uses the existing guarded guide fallback only on older builds;
+- `masked_av` prefers native per-token H3 AV masks from PR #15375 and lazily
+  installs only missing mask-engine, payload, preprocessing, and inpaint-scale
+  behavior when the masked path executes. It still requires the native #15439
+  Add Guide / MultiRef core baseline; masked mode is not enabled on the older
+  guide-fallback architecture.
+
+Importing the node pack or running a guide-only workflow does not activate the
+masked runtime compatibility. A partially updated native mask engine is
+rejected rather than mixed with the vendored snapshot.
+
 After updating ComfyUI or H3 optimization packs, restart the process fully so
 patch ownership is rebuilt cleanly.
 

@@ -2,6 +2,20 @@
 
 Newest first. This file keeps release history out of the onboarding README.
 
+## Unreleased — Masked AV target-prefix continuation
+
+- Added experimental Plan `continuation_mode=masked_av`. Chain Context
+  VAE-encodes the preceding scene's decoded tail into the next target video
+  latent, copies the matching sampled audio-latent tail, and emits nested
+  per-stream masks where `0` preserves the prefix and `1` generates the future.
+- Appended a sampler-ready LATENT output to Chain Context without changing its
+  existing output indices; guide mode and scene 1 pass the original latent
+  through unchanged.
+- Added lazy native-first PR #15375 compatibility for H3 mask payloads,
+  preprocessing, inpaint scaling, and per-row diffusion timesteps.
+- Converted Studio Tagged into the wired 39-frame / 65-audio-step masked AV
+  example while retaining Tagged Ref2VA and Plan Studio authoring.
+
 ## v0.4.2 — Checkpoint revision recovery
 
 - Extended the existing Review Gate checkpoint browser to discover every
