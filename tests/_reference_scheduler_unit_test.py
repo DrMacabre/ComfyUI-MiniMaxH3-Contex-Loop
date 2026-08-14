@@ -376,6 +376,8 @@ tagged_audio_inputs = chain.MiniMaxH3TaggedAudioReference.INPUT_TYPES()[
 assert "scenes" not in tagged_picture_inputs
 assert "scenes" not in tagged_video_inputs
 assert "scenes" not in tagged_audio_inputs
+assert tagged_audio_inputs["timeline_mode"][0] == [
+    "standalone", "source_timeline"]
 tagged_picture = chain.torch.zeros((1, 4, 4, 3))
 tagged_audio = {
     "waveform": chain.torch.zeros((1, 1, 8000)),
@@ -400,6 +402,63 @@ assert tagged_summary == (
     "scene 2/3: @look -> <Picture 1>; @voice -> <Audio 1>")
 assert [entry["tag"] for entry in tagged_bindings["pictures"]] == ["look"]
 assert "face" not in tagged_bindings["aliases"]
+
+timeline_audio = {
+    "waveform": chain.torch.arange(
+        1000, dtype=chain.torch.float32).reshape(1, 1, 1000),
+    "sample_rate": 100,
+}
+timeline_tagged = chain.MiniMaxH3TaggedAudioReference().add(
+    timeline_audio, "song", "source_timeline", False)[0]
+timeline_entry = timeline_tagged["entries"][0]
+assert timeline_entry["timeline_mode"] == "source_timeline"
+assert chain._reference_entry_contract(timeline_entry)[
+    "timeline_mode"] == "source_timeline"
+timeline_state = {
+    "index": 2,
+    "plan": {
+        "compatibility": {
+            "audio_mode": "source_track",
+            "source_audio_hash": chain._audio_fingerprint(timeline_audio),
+            "source_audio_silent_padding": False,
+        },
+        "shots": [
+            {"raw_frames": 22, "audio_start_seconds": 0.0,
+             "audio_duration_seconds": 22 / 24},
+            {"raw_frames": 22, "audio_start_seconds": 0.5,
+             "audio_duration_seconds": 22 / 24},
+        ],
+    },
+}
+timeline_slice, timeline_detail = chain._tagged_audio_reference_value(
+    timeline_entry, timeline_state, 2, 2, 22)
+assert int(timeline_slice["waveform"].shape[-1]) == 92
+assert float(timeline_slice["waveform"][0, 0, 0]) == 50
+assert "@song source timeline 0.500..1.417s" in timeline_detail
+different_timeline_state = {
+    **timeline_state,
+    "plan": {
+        **timeline_state["plan"],
+        "compatibility": {
+            **timeline_state["plan"]["compatibility"],
+            "source_audio_hash": "different-track",
+        },
+    },
+}
+try:
+    chain._tagged_audio_reference_value(
+        timeline_entry, different_timeline_state, 2, 2, 22)
+except ValueError as exc:
+    assert "different full source track" in str(exc)
+else:
+    raise AssertionError("source-timeline audio accepted a mismatched track")
+try:
+    chain._tagged_audio_reference_value(timeline_entry, None, 2, 2, 22)
+except ValueError as exc:
+    assert "fingerprint-to-Plan" in str(exc)
+    assert "source_audio_slice" in str(exc)
+else:
+    raise AssertionError("source-timeline audio accepted missing state")
 
 tagged_sequential = chain.MiniMaxH3TaggedVideoReference().add(
     sequential_video, "motion", "motion_audio", "sequential",

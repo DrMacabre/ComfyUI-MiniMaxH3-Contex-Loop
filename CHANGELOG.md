@@ -2,6 +2,21 @@
 
 Newest first. This file keeps release history out of the onboarding README.
 
+## v0.4.1 — Tagged source audio and UI fixes
+
+- Added `source_timeline` playback to Tagged Audio Ref. It fingerprints the full
+  Loop source track while Tagged Ref2VA derives each exact scene slice from
+  Current Shot state, avoiding the circular dependency caused by returning a
+  dynamically sliced audio fingerprint to Plan.
+- Corrected every maintained Ref2V example to load the Ref2VA diffusion model
+  instead of the FL2VA checkpoint inherited from the workflow template.
+- Kept the Run Manager's serialized asset-binding state hidden across legacy
+  and current canvas renderers so its internal JSON field cannot leak into the
+  visible node layout.
+- Constrained the main Plan editor to its assigned DOM-widget bounds and fully
+  suppressed its internal `plan_json` canvas widget, preventing an intermittent
+  invisible hit layer from blocking the native Plan settings.
+
 ## v0.4.0 — Prompt-driven Ref2VA and Studio authoring
 
 - Added Tagged Picture, Video, and Audio references. Register stable aliases

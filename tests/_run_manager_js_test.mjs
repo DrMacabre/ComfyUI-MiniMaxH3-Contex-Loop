@@ -27,6 +27,8 @@ assert.match(source, /Connect loader asset/);
 assert.match(source, /Archive video/);
 assert.match(source, /removeLegacyStatusOutput/);
 assert.match(source, /output\.name === "asset_status"/);
+assert.match(source, /widget\.hidden = true/);
+assert.match(source, /widget\.draw = \(\) => \{\}/);
 const backend = fs.readFileSync(
     new URL("../chain_nodes.py", import.meta.url), "utf8",
 );

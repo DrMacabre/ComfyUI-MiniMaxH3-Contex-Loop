@@ -313,6 +313,8 @@ def validate_ref2v(path, variant):
     })
     assert node(workflow, "ModelAttentionBackend")["widgets_values"] == [
         "comfy kitchen attention"]
+    assert node(workflow, "UNETLoader")["widgets_values"][0] == (
+        "MiniMax-H3/minimax_h3_ref2va_pruned_int8_convrot.safetensors")
     assert node(workflow, "LoraLoaderModelOnly")["widgets_values"] == [
         "MiniMax H3/minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors",
         1.0,
@@ -447,6 +449,8 @@ def validate_sequential_motion_ref(path):
     workflow = load(path)
     validate_links(workflow)
     assert path.name.startswith("EXPERIMENTAL ")
+    assert node(workflow, "UNETLoader")["widgets_values"][0] == (
+        "MiniMax-H3/minimax_h3_ref2va_pruned_int8_convrot.safetensors")
 
     loader = node(workflow, "LoadVideo")
     prep = node(workflow, "MiniMaxH3ReferenceVideoPrepare")

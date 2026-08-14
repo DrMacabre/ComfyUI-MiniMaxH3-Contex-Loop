@@ -46,8 +46,12 @@ function injectStyles() {
             --h3c-muted: color-mix(in srgb, var(--h3c-text) 58%, transparent);
             --h3c-accent: #7fa8ff;
             box-sizing: border-box;
+            width: 100%;
+            height: 100%;
+            max-height: 100%;
             min-height: 0;
             overflow: auto;
+            contain: layout paint;
             padding: 10px;
             border: 1px solid var(--h3c-border);
             border-radius: 8px;
@@ -253,8 +257,14 @@ function inputConnected(node, name) {
 function collapseWidget(widget) {
     widget._h3OriginalType ??= widget.type;
     widget._h3OriginalComputeSize ??= widget.computeSize;
+    widget._h3OriginalDraw ??= widget.draw;
+    widget.hidden = true;
     widget.type = "hidden";
     widget.computeSize = () => [0, -4];
+    // Modern and legacy canvas paths do not agree on whether a hidden widget
+    // may still draw. This field is internal editor state; preserve its value
+    // for serialization while ensuring it can never cover native settings.
+    widget.draw = () => {};
 
     // Multiline STRING widgets are real DOM textareas in current ComfyUI.
     // Collapsing only the LiteGraph geometry leaves that textarea floating at

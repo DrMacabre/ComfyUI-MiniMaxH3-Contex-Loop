@@ -112,8 +112,14 @@ function collapseWidget(widget) {
     if (!widget) return;
     widget._h3OriginalType ??= widget.type;
     widget._h3OriginalComputeSize ??= widget.computeSize;
+    widget._h3OriginalDraw ??= widget.draw;
+    widget.hidden = true;
     widget.type = "hidden";
     widget.computeSize = () => [0, -4];
+    // Some ComfyUI canvas/front-end combinations still invoke draw() for a
+    // widget after its type and geometry have been collapsed. Keep the value
+    // serializable, but make the internal archive state visually inert.
+    widget.draw = () => {};
     for (const item of new Set([widget.inputEl, widget.element])) {
         if (!item?.style) continue;
         item.style.setProperty("display", "none", "important");

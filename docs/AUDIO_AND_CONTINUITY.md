@@ -30,6 +30,31 @@ the waveform so a changed or incorrectly wired track cannot silently resume old
 checkpoints. The track must cover the total delivered video; a truly silent
 placeholder may be shorter and is padded safely.
 
+### Tagged Ref2VA source timeline
+
+Tagged references need a static media path because their fingerprint normally
+returns to Plan. Connecting `Current Shot source_audio_slice` to Tagged Audio
+Ref would close this cycle:
+
+```text
+Plan → Loop Start → Current Shot → Tagged Audio Ref → fingerprint → Plan
+```
+
+Use the Tagged Audio Ref `source_timeline` mode instead:
+
+```text
+Load Audio ─┬→ Loop Start
+            ├→ Current Shot
+            └→ Tagged Audio Ref ─┬→ Tagged Ref2VA
+                                 └→ fingerprint → Plan
+
+Current Shot state ─────────────────→ Tagged Ref2VA
+```
+
+The Tagged Audio Ref hashes the full source track. Tagged Ref2VA validates it
+against Loop Start and derives the active scene's overlap-aware slice internally.
+Its optional alignment switch changes only that derived reference slice.
+
 ## Experimental reference-grid alignment
 
 For 362 video frames, the exact picture duration is 15.083333 seconds. Stock H3

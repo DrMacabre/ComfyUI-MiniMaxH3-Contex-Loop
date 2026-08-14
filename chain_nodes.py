@@ -100,6 +100,7 @@ H3_CONTEXT_LENGTHS = (
     141, 158, 175, 192, 209, 226, 243,
 )
 AUDIO_MODES = ("source_track", "generated_audio", "source_plus_timeline")
+REFERENCE_AUDIO_TIMELINE_MODES = ("standalone", "source_timeline")
 
 PLAN_TYPE = "H3_CHAIN_PLAN"
 STATE_TYPE = "H3_CHAIN_STATE"
@@ -409,11 +410,16 @@ def _reference_entry_contract(entry: dict[str, Any]) -> dict[str, Any]:
         "audio_hash",
     )
     contract = {key: entry[key] for key in keys if key in entry}
-    # Keep the compatibility default bit-identical to schedules created before
-    # timeline modes existed. Only sequential playback changes checkpoints.
-    timeline_mode = str(entry.get("timeline_mode") or "restart_each_scene")
-    if timeline_mode != "restart_each_scene":
+    # Keep old schedules bit-identical. Timeline metadata enters the resume
+    # contract only when a reference opts into non-default playback.
+    default_timeline = (
+        "standalone" if entry.get("kind") == "audio"
+        else "restart_each_scene")
+    timeline_mode = str(entry.get("timeline_mode") or default_timeline)
+    if timeline_mode != default_timeline:
         contract["timeline_mode"] = timeline_mode
+    if bool(entry.get("align_audio_reference")):
+        contract["align_audio_reference"] = True
     if str(entry.get("activation") or "schedule") != "schedule":
         contract["activation"] = str(entry["activation"])
     return contract
@@ -476,7 +482,8 @@ def _append_scheduled_reference(
         value: Any, content_hash: str, audio: Any = None,
         audio_tag: Any = "", audio_hash: str = "",
         compliance_mode: str = "strict",
-        timeline_mode: Any = "restart_each_scene") -> dict[str, Any]:
+        timeline_mode: Any = None,
+        align_audio_reference: Any = False) -> dict[str, Any]:
     compliance = _reference_compliance_mode(compliance_mode)
     entries = _reference_schedule_entries(previous)
     try:
@@ -513,6 +520,15 @@ def _append_scheduled_reference(
                 "Scheduled video timeline_mode must be one of %s." %
                 (REFERENCE_VIDEO_TIMELINE_MODES,))
         entry["timeline_mode"] = normalized_timeline
+    elif kind == "audio":
+        normalized_timeline = str(
+            timeline_mode or "standalone").strip().lower()
+        if normalized_timeline not in REFERENCE_AUDIO_TIMELINE_MODES:
+            raise ValueError(
+                "Scheduled audio timeline_mode must be one of %s." %
+                (REFERENCE_AUDIO_TIMELINE_MODES,))
+        entry["timeline_mode"] = normalized_timeline
+        entry["align_audio_reference"] = bool(align_audio_reference)
     if audio is not None:
         try:
             normalized_audio_tag = _normalize_reference_tag(
@@ -553,7 +569,8 @@ def _append_tagged_reference(
         previous: Any, *, kind: str, tag: Any, value: Any,
         content_hash: str, audio: Any = None, audio_tag: Any = "",
         audio_hash: str = "", compliance_mode: str = "strict",
-        timeline_mode: Any = "restart_each_scene") -> dict[str, Any]:
+        timeline_mode: Any = None,
+        align_audio_reference: Any = False) -> dict[str, Any]:
     if previous is None:
         seed = None
     else:
@@ -562,7 +579,8 @@ def _append_tagged_reference(
         seed, kind=kind, tag=tag, scenes="all", value=value,
         content_hash=content_hash, audio=audio, audio_tag=audio_tag,
         audio_hash=audio_hash, compliance_mode=compliance_mode,
-        timeline_mode=timeline_mode)
+        timeline_mode=timeline_mode,
+        align_audio_reference=align_audio_reference)
     entries = collection["entries"]
     entries[-1]["activation"] = "prompt"
     return _make_tagged_references(entries)
@@ -657,6 +675,84 @@ def _scheduled_video_reference_slice(
     detail = "@%s sequential frames %d:%d (origin scene %d)" % (
         entry.get("tag", "video"), source_start, source_end, origin_scene)
     return sliced_video, sliced_audio, detail
+
+
+def _tagged_audio_reference_value(
+        entry: dict[str, Any], state: Any, scene: int, scene_count: int,
+        length: int) -> tuple[Any, str]:
+    """Resolve a tagged standalone clip or an exact Plan-timeline slice."""
+    timeline_mode = str(entry.get("timeline_mode") or "standalone")
+    audio = entry["value"]
+    if timeline_mode == "standalone":
+        return audio, ""
+    if timeline_mode != "source_timeline":
+        raise ValueError(
+            "Tagged audio @%s has unknown timeline mode %r." %
+            (entry.get("tag", "audio"), timeline_mode))
+    if not isinstance(state, dict) or not isinstance(state.get("plan"), dict):
+        raise ValueError(
+            "Tagged audio @%s uses source_timeline and requires Current Shot "
+            "state on Tagged Ref2VA's state input. Keep the full source track "
+            "connected to Tagged Audio Ref; do not connect "
+            "source_audio_slice there because its fingerprint-to-Plan link "
+            "would create a cycle." % entry.get("tag", "audio"))
+    if int(state.get("index", -1)) != int(scene):
+        raise ValueError(
+            "Tagged Ref2VA received scene %d but Current Shot state is at "
+            "scene %s." % (int(scene), state.get("index")))
+    plan = state["plan"]
+    shots = plan.get("shots")
+    if not isinstance(shots, list) or len(shots) != int(scene_count):
+        raise ValueError(
+            "Tagged audio @%s source_timeline requires state from the same "
+            "%d-scene Plan connected to Tagged Ref2VA." %
+            (entry.get("tag", "audio"), int(scene_count)))
+    current = shots[int(scene) - 1]
+    if int(current.get("raw_frames", -1)) != int(length):
+        raise ValueError(
+            "Tagged Ref2VA length %d does not match scene %d's %s raw frames "
+            "in Current Shot state." %
+            (int(length), int(scene), current.get("raw_frames")))
+    compatibility = plan.get("compatibility")
+    if not isinstance(compatibility, dict) or compatibility.get(
+            "audio_mode") not in ("source_track", "source_plus_timeline"):
+        raise ValueError(
+            "Tagged audio @%s source_timeline requires the Plan audio mode "
+            "source_track or source_plus_timeline." %
+            entry.get("tag", "audio"))
+    expected_hash = str(compatibility.get("source_audio_hash") or "")
+    entry_hash = str(entry.get("content_hash") or "")
+    if not expected_hash or expected_hash == "none":
+        raise ValueError(
+            "Tagged audio @%s source_timeline has no Loop Start source-audio "
+            "fingerprint to validate." % entry.get("tag", "audio"))
+    if not entry_hash or entry_hash != expected_hash:
+        raise ValueError(
+            "Tagged audio @%s source_timeline received a different full "
+            "source track than H3 Chain Loop Start. Wire the same Load Audio "
+            "output to both nodes." % entry.get("tag", "audio"))
+    external_lead = int(current.get("external_context_frames", 0))
+    if int(scene) == 1 and external_lead > 0:
+        sliced = _slice_audio_after_external_context(
+            audio, state.get("previous_audio"), int(current["raw_frames"]),
+            external_lead, pad_silence=bool(compatibility.get(
+                "source_audio_silent_padding")))
+    else:
+        sliced = _slice_audio(
+            audio, current["audio_start_seconds"],
+            current["audio_duration_seconds"],
+            pad_silence=bool(compatibility.get(
+                "source_audio_silent_padding")))
+    if bool(entry.get("align_audio_reference")):
+        sliced, alignment = _align_audio_reference_to_h3_grid(
+            sliced, int(length))
+    else:
+        alignment = "frame-exact"
+    start = float(current["audio_start_seconds"])
+    end = start + float(current["audio_duration_seconds"])
+    detail = "@%s source timeline %.3f..%.3fs; %s" % (
+        entry.get("tag", "audio"), start, end, alignment)
+    return sliced, detail
 
 
 def _active_reference_bindings(
@@ -2954,6 +3050,21 @@ class MiniMaxH3TaggedAudioReference:
                     "default": "voice",
                     "tooltip": "Stable audio @tag. This reference is sent to "
                                "H3 only when the current prompt contains it."}),
+                "timeline_mode": (list(REFERENCE_AUDIO_TIMELINE_MODES), {
+                    "default": "standalone",
+                    "tooltip": "standalone sends this AUDIO value unchanged "
+                               "whenever @tag is active. source_timeline treats "
+                               "it as the same full source track used by Loop "
+                               "Start and derives the exact current-scene slice "
+                               "inside Tagged Ref2VA. This preserves a static "
+                               "fingerprint-to-Plan connection without a "
+                               "circular Current Shot link."}),
+                "align_audio_reference": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "source_timeline only. Apply the same optional "
+                               "15.070s-safe H3 audio-grid cap as Current Shot. "
+                               "The full source track and final assembled audio "
+                               "are not modified."}),
             },
             "optional": {
                 "previous": (TAGGED_REFERENCE_TYPE, {
@@ -2966,11 +3077,14 @@ class MiniMaxH3TaggedAudioReference:
     RETURN_NAMES = ("references", "reference_fingerprint", "status")
     FUNCTION = "add"
     CATEGORY = "conditioning/minimax/contex_loop/references/prompt_driven"
-    DESCRIPTION = ("Register one standalone audio reference under a stable "
-                   "@tag. It is active only in scene prompts that mention it; "
-                   "no scene-number selector is required.")
+    DESCRIPTION = ("Register audio under a stable @tag. It can remain a fixed "
+                   "standalone reference or hold the full Loop source track "
+                   "while Tagged Ref2VA derives an exact per-scene timeline "
+                   "slice without creating a fingerprint cycle.")
 
-    def add(self, audio, tag, previous=None, dynprompt=None, unique_id=None):
+    def add(self, audio, tag, timeline_mode="standalone",
+            align_audio_reference=False, previous=None, dynprompt=None,
+            unique_id=None):
         mode = _downstream_reference_compliance(dynprompt, unique_id)
         try:
             if audio is None:
@@ -2981,15 +3095,20 @@ class MiniMaxH3TaggedAudioReference:
             _validate_audio(audio, "Tagged H3 standalone audio")
             references = _append_tagged_reference(
                 previous, kind="audio", tag=tag, value=audio,
-                content_hash=_audio_fingerprint(audio), compliance_mode=mode)
+                content_hash=_audio_fingerprint(audio), compliance_mode=mode,
+                timeline_mode=timeline_mode,
+                align_audio_reference=align_audio_reference)
         except (TypeError, ValueError) as exc:
             if mode == "disabled":
                 return _skipped_tagged_reference_result(
                     previous, "Tagged audio reference", exc)
             raise
         entry = references["entries"][-1]
-        status = "@%s audio; prompt activated; %d sources; %s" % (
-            entry["tag"], len(references["entries"]),
+        aligned = "; H3-grid aligned" if entry.get(
+            "align_audio_reference") else ""
+        status = "@%s audio; prompt activated; %s%s; %d sources; %s" % (
+            entry["tag"], entry["timeline_mode"], aligned,
+            len(references["entries"]),
             references["fingerprint"][:12])
         return references, references["fingerprint"], status
 
@@ -3188,10 +3307,11 @@ class MiniMaxH3TaggedReferenceToVideo:
             ordered[name] = required[name]
         optional = {
             "state": (STATE_TYPE, {
-                "tooltip": "Current Shot state. Required only for a tagged "
-                           "video using sequential timeline mode; it finds "
-                           "the first Plan scene containing either paired tag "
-                           "and calculates exact overlap-aware source offsets."}),
+                "tooltip": "Current Shot state. Required by tagged video "
+                           "sequential mode and tagged audio source_timeline. "
+                           "It supplies the exact scene and overlap-aware "
+                           "source offsets without routing dynamic media back "
+                           "through the Plan fingerprint."}),
             "reference_policy": (list(REFERENCE_COMPLIANCE_MODES), {
                 "default": "strict",
                 "tooltip": "strict validates sources and stock H3 reference "
@@ -3261,8 +3381,12 @@ class MiniMaxH3TaggedReferenceToVideo:
             if detail:
                 slice_details.append(detail)
         for index, entry in enumerate(bindings["audios"]):
+            audio, detail = _tagged_audio_reference_value(
+                entry, state, clip_index, clip_count, length)
             ref2va.set_input(
-                "ref_audios.ref_audio_%d" % index, entry["value"])
+                "ref_audios.ref_audio_%d" % index, audio)
+            if detail:
+                slice_details.append(detail)
         if isinstance(references, dict) and references.get("fingerprint"):
             fingerprint = str(references["fingerprint"])
         elif _reference_compliance_mode(reference_policy) == "disabled":

@@ -35,7 +35,7 @@
         "Node name for S&R": "UNETLoader"
       },
       "widgets_values": [
-        "MiniMax-H3/minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+        "MiniMax-H3/minimax_h3_ref2va_pruned_int8_convrot.safetensors",
         "default"
       ]
     },

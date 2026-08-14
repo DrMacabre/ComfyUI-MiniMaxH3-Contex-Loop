@@ -145,6 +145,7 @@ Load Image ─→ Tagged Picture Ref ─┐
 Standalone AUDIO ─→ Tagged Audio Ref ──────────────┴→ Tagged Ref2VA
 
 Current Shot prompt / scene / dimensions / length ───────────────────↗
+Current Shot state ──────────────────────────────────────────────────↗
 ```
 
 Register stable aliases such as `@hero`, `@performance`, and `@voice`, then
@@ -152,6 +153,13 @@ mention only the media needed by each scene. Tagged Ref2VA activates those
 sources and compiles their aliases to compact native `<Picture N>`, `<Video N>`,
 and `<Audio N>` labels. It does not insert subject definitions or other prompt
 text; the user remains responsible for the complete H3 prompt.
+
+For a song or other full source track, set Tagged Audio Ref to
+`source_timeline`, keep the full loader AUDIO connected to that node, and wire
+Current Shot `state` to Tagged Ref2VA. Tagged Ref2VA then derives the exact
+scene-local audio window internally. Do not connect `source_audio_slice` to the
+Tagged Audio Ref: returning that node's fingerprint to Plan would make a graph
+cycle.
 
 The original numeric-range nodes remain available in the **legacy schedule**
 category when explicit selectors are useful.
