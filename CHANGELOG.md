@@ -2,7 +2,7 @@
 
 Newest first. This file keeps release history out of the onboarding README.
 
-## Unreleased — Masked AV target-prefix continuation
+## v0.4.3 — Per-scene continuation modes
 
 - Added per-scene `continuation_mode` overrides in Plan JSON, the compact Plan
   editor advanced controls, and Plan Studio. The Plan node setting remains the
