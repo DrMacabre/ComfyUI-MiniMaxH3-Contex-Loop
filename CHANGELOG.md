@@ -2,7 +2,7 @@
 
 Newest first. This file keeps release history out of the onboarding README.
 
-## Unreleased — Scene context and checkpoint Plan recovery
+## v0.4.5 — Scene context and checkpoint Plan recovery
 
 - Added per-scene context-length overrides to the Plan's existing Advanced
   controls and Plan Studio. Blank inherits the Plan default; `0` creates a
