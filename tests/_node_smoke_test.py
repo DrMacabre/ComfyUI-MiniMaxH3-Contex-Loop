@@ -70,7 +70,14 @@ def main():
     sys.modules["comfy"].ldm = sys.modules["comfy.ldm"]
     sys.modules["comfy.ldm"].minimax = sys.modules["comfy.ldm.minimax"]
     sys.modules["comfy.ldm.minimax"].model = mm
-    sys.modules["torch"] = make_torch()
+    torch_stub = make_torch()
+    torch_nn = types.ModuleType("torch.nn")
+    torch_functional = types.ModuleType("torch.nn.functional")
+    torch_nn.functional = torch_functional
+    torch_stub.nn = torch_nn
+    sys.modules["torch"] = torch_stub
+    sys.modules["torch.nn"] = torch_nn
+    sys.modules["torch.nn.functional"] = torch_functional
 
     cu = types.ModuleType("comfy.utils")
     cu.common_upscale = lambda s, w, h, m, c: T(

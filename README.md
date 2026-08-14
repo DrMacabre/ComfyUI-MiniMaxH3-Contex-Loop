@@ -28,6 +28,7 @@ giant cumulative image tensor.
 | 🕘 | Branching prompt history and saved-run restoration |
 | 🧭 | Optional Plan Studio and Rich Scene Prompt Editor |
 | ⏩ | Existing-video continuation and optional source prepend |
+| 🩹 | Native-first spatial/temporal AV masks for video inpainting |
 | 🖼️ | Lossless PNG re-decode from saved scene latents |
 | 🔬 | In-graph audio-seam diagnostics |
 
@@ -75,6 +76,9 @@ Start with the maintained v0.4 example for your generation mode:
   for a fully wired `source_timeline` audio-reference example.
 - [Sequential motion reference](<example_workflows/EXPERIMENTAL MiniMax H3 Ref2V - Sequential Motion.json>)
   remains explicitly experimental.
+- [Masked video inpaint](<example_workflows/MiniMax H3 - Masked Video Inpaint.json>)
+  encodes a real source AV target, previews H3's 32px mask cells, and preserves
+  source audio while regenerating only the selected video region.
 
 Normal workflows use the stable Plan and Scene Prompt Editor. Studio workflows
 add the optional timeline-oriented Plan Studio and Rich Scene Prompt Editor.
@@ -166,6 +170,28 @@ grid. A per-scene override participates in the Plan/history hashes from that
 scene onward, so a checkpoint cannot silently resume under the wrong method.
 When modes are mixed, use settings compatible with masked AV for the whole
 Plan—normally `context_length=39`, `encode_mode=video`, and `anchor_mode=head`.
+
+### General masked editing
+
+The public **Masking · Trim Source AV**, **Masking · Grid Preview**, and
+**Masking · Apply Target Mask** nodes expose the same per-row H3 machinery for
+manual video editing. A source AV latent supplies the clean content; a static
+or tracked mask selects spatial and temporal rows to regenerate. Existing
+masks are intersected, so a spatial edit can compose with the exact prefix
+created by chain `masked_av` while preservation remains authoritative.
+
+The bundled inpaint workflow uses distinct `MiniMaxH3Contex…` node IDs and can
+coexist with the earlier standalone PerRowMasking pack. It needs no MODEL patch
+node: mask compatibility activates lazily when Apply Target Mask executes.
+See [Masked editing](docs/MASKED_EDITING.md) for audio modes, grid behavior,
+outpainting preparation, and the two-ended target needed for clip bridging.
+
+For timeline-driven FL2VA, **Masking · Master Audio + Video Prefix** inserts
+the exact current interval from a prerecorded audio timeline into the target
+audio latent and protects the complete audio stream. The source can be music,
+dialogue, narration, or effects. Clip 1 generates all picture rows; later
+clips also protect the preceding decoded-video tail while future picture rows
+remain denoisable.
 
 ## Audio at a glance
 
@@ -271,6 +297,8 @@ archive loader-backed image/audio/video assets under the run folder. See
   checkpoints, Run Manager assets, partial output, and PNG export.
 - [Advanced workflows](docs/ADVANCED_WORKFLOWS.md) — existing-video extension,
   long context, last-frame targets, and performance re-filming.
+- [Masked editing](docs/MASKED_EDITING.md) — video inpainting, H3 mask cells,
+  audio preservation, outpainting, and clip-bridge target preparation.
 - [Compatibility](docs/COMPATIBILITY.md) — patch ownership, native guides,
   SolAttn, H3-Multishot, and frontend workarounds.
 - [Example workflow notes](example_workflows/README.md)

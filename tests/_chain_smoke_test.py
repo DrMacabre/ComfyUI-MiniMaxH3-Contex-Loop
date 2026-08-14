@@ -149,6 +149,10 @@ def main():
         "MiniMaxH3ChainAssemble",
         "MiniMaxH3LoopTrim",
         "MiniMaxH3ContexLoopSeamProbe",
+        "MiniMaxH3ContexTrimSourceAV",
+        "MiniMaxH3ContexMaskedTarget",
+        "MiniMaxH3ContexMaskGridPreview",
+        "MiniMaxH3ContexMasterAudioMaskedAV",
     }
     assert required <= set(package.NODE_CLASS_MAPPINGS)
     upstream_ids = {
@@ -156,8 +160,17 @@ def main():
         "MiniMaxH3MotionContextTrim",
         "MiniMaxH3MotionContextSaveLatent",
         "MiniMaxH3MotionContextLoadLatent",
+        "MiniMaxH3SongMaskedAVContext",
+        "MiniMaxH3ContexSongMaskedAVContext",
     }
     assert not upstream_ids.intersection(package.NODE_CLASS_MAPPINGS)
+    retired_mask_pack_ids = {
+        "MiniMaxH3TrimSourceAV",
+        "MiniMaxH3PerRowMaskPatch",
+        "MiniMaxH3SetGenerationMask",
+        "MiniMaxH3MaskGridPreview",
+    }
+    assert not retired_mask_pack_ids.intersection(package.NODE_CLASS_MAPPINGS)
     layout_patch = sys.modules[package.__name__ + ".patch_layout"]
     payload_patch = sys.modules[package.__name__ + ".patch_payload"]
     for module in (layout_patch, payload_patch):

@@ -13,6 +13,7 @@ example_workflows/
 │   ├── jigen_market_garden_doom_opening.png
 │   └── jigen_market_garden_doom_last.png
 ├── EXPERIMENTAL MiniMax H3 Ref2V - Sequential Motion.json
+├── MiniMax H3 - Masked Video Inpaint.json
 ├── MiniMax H3 FL2V - Normal.json
 ├── MiniMax H3 I2V - Normal.json
 ├── MiniMax H3 I2V - Studio.json
@@ -36,6 +37,32 @@ restoration. The former numeric-range examples are retained in `Archive/`.
 The additional sequential-motion workflow is deliberately prefixed
 `EXPERIMENTAL` because it combines a long advancing Ref2VA video timeline with
 recursive Motion Context.
+
+The masked-video workflow is a standalone editing graph rather than a chain
+authoring variant. It encodes real source AV as the sampler target and uses an
+arbitrary per-row denoise mask for inpainting.
+
+## Masked video inpaint
+
+[`MiniMax H3 - Masked Video Inpaint.json`](<MiniMax H3 - Masked Video Inpaint.json>)
+adapts the earlier standalone PerRowMasking experiment to this pack's
+native-first H3 mask runtime. It contains no MODEL patch node.
+
+1. Select a 24 fps source video with audio.
+2. Select or paint a mask; white regenerates and black preserves.
+3. Verify the effective 32×32 H3 cells in Grid Preview.
+4. Edit the core H3 prompt and sample the masked source target.
+
+The workflow preserves source audio, broadcasts its static example mask across
+the shot, and can accept a tracked mask batch instead. Trim Source AV supplies
+the valid `17k+5` length to H3 conditioning. The conditioner creates the prompt
+and target dimensions, but its empty latent is deliberately unused: the
+sampler receives the encoded source AV from Apply Target Mask.
+
+Apply Target Mask intersects any existing nested AV mask, which allows this
+manual spatial path to compose with a chain `masked_av` prefix. See
+[Masked editing](../docs/MASKED_EDITING.md) for audio modes and preparation of
+outpaint or two-clip bridge targets.
 
 ## T2V
 

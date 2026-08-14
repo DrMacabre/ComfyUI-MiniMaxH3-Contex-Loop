@@ -589,6 +589,8 @@ def main():
         EXAMPLES / "MiniMax H3 Ref2V - Studio Tagged Source Audio.json")
     sequential_path = (
         EXAMPLES / "EXPERIMENTAL MiniMax H3 Ref2V - Sequential Motion.json")
+    masked_inpaint_path = (
+        EXAMPLES / "MiniMax H3 - Masked Video Inpaint.json")
     assert set(path.name for path in EXAMPLES.glob("*.json")) == {
         t2v_normal_path.name, t2v_studio_path.name,
         i2v_normal_path.name, i2v_studio_path.name,
@@ -596,9 +598,13 @@ def main():
         ref2v_tagged_path.name, ref2v_studio_path.name,
         ref2v_source_audio_path.name,
         sequential_path.name,
+        masked_inpaint_path.name,
     }
     for path in EXAMPLES.glob("*.json"):
         workflow = load(path)
+        if path == masked_inpaint_path:
+            validate_links(workflow)
+            continue
         context = node(workflow, "MiniMaxH3ChainContext")
         sampler = node(workflow, "SamplerCustomAdvanced")
         assert socket(context["outputs"], "latent")["links"] == [
@@ -633,6 +639,18 @@ def main():
     ]
     sequential, _sequential_plan = validate_sequential_motion_ref(
         sequential_path)
+    masked_inpaint = load(masked_inpaint_path)
+    masked_types = {item["type"] for item in masked_inpaint["nodes"]}
+    assert {
+        "MiniMaxH3ContexTrimSourceAV",
+        "MiniMaxH3ContexMaskGridPreview",
+        "MiniMaxH3ContexMaskedTarget",
+    } <= masked_types
+    assert "MiniMaxH3PerRowMaskPatch" not in masked_types
+    masked_target = node(masked_inpaint, "MiniMaxH3ContexMaskedTarget")
+    masked_sampler = node(masked_inpaint, "SamplerCustomAdvanced")
+    assert socket(masked_target["outputs"], "masked_target")["links"] == [
+        socket(masked_sampler["inputs"], "latent_image")["link"]]
 
     def generation_types(workflow):
         return collections.Counter(
@@ -664,10 +682,10 @@ def main():
     assert last_asset.is_file()
     assert hashlib.sha256(last_asset.read_bytes()).hexdigest() == (
         FL2V_LAST_ASSET_SHA256)
-
     print("H3 workflow catalog: T2VA, I2VA, indexed A-B-A FL2VA, Basic / "
-          "Tagged / Studio Tagged / source-timeline audio Ref2VA, and "
-          "experimental sequential motion Ref2VA; valid links, bundled "
+          "Tagged / Studio Tagged / source-timeline audio Ref2VA, "
+          "experimental sequential-motion Ref2VA, and masked video inpaint; "
+          "valid links, bundled "
           "assets, timeline wiring, six-section prompts, restoration, and "
           "attribution pass")
 

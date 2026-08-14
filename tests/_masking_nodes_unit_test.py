@@ -1,0 +1,222 @@
+#!/usr/bin/env python3
+"""CPU regressions for general MiniMax H3 masked-target nodes."""
+
+import importlib.util
+import json
+import os
+import sys
+import types
+
+import torch
+
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PACKAGE = "h3_general_mask_test_pkg"
+
+
+class NestedTensor:
+    def __init__(self, parts):
+        self.parts = tuple(parts)
+        self.is_nested = True
+
+    def unbind(self):
+        return list(self.parts)
+
+
+def _load(name):
+    path = os.path.join(ROOT, "%s.py" % name)
+    spec = importlib.util.spec_from_file_location(
+        "%s.%s" % (PACKAGE, name), path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def main():
+    package = types.ModuleType(PACKAGE)
+    package.__path__ = [ROOT]
+    sys.modules[PACKAGE] = package
+
+    comfy = types.ModuleType("comfy")
+    comfy.__path__ = []
+    nested = types.ModuleType("comfy.nested_tensor")
+    nested.NestedTensor = NestedTensor
+    comfy.nested_tensor = nested
+    sys.modules["comfy"] = comfy
+    sys.modules["comfy.nested_tensor"] = nested
+
+    ops = _load("masking_ops")
+    _load("masking_support")
+    nodes = _load("masking_nodes")
+    support_calls = []
+    nodes.require_h3_mask_support = lambda operation: support_calls.append(
+        operation)
+
+    assert ops.floor_h3_frame_count(140) == 124
+    frames = torch.zeros((140, 32, 64, 3))
+    audio = {
+        "waveform": torch.zeros((1, 2, 300_000)),
+        "sample_rate": 48_000,
+    }
+    trimmed_frames, trimmed_audio, length, info = (
+        nodes.MiniMaxH3ContexTrimSourceAV().trim(frames, audio))
+    assert trimmed_frames.shape[0] == 124
+    assert trimmed_audio["waveform"].shape[-1] == 248_000
+    assert length == 124 and "dropped 16" in info
+
+    pixel_mask = torch.zeros((1, 64, 64))
+    pixel_mask[:, :16, :16] = 1.0
+    _raw, snapped, cells = ops.quantize_h3_pixel_mask(
+        pixel_mask, 1, 64, 64)
+    assert cells[0, 0].tolist() == [[1.0, 0.0], [0.0, 0.0]]
+    assert torch.all(snapped[:, :32, :32] == 1.0)
+
+    video = torch.zeros((1, 16, 2, 4, 4))
+    source_audio = torch.zeros((1, 32, 2, 6))
+    target = {"samples": NestedTensor((video, source_audio))}
+    edit_mask = torch.zeros((1, 64, 64))
+    edit_mask[:, :32, :32] = 1.0
+    masked, mask_info = nodes.MiniMaxH3ContexMaskedTarget().apply(
+        target,
+        edit_mask,
+        "white = generate",
+        "preserve source audio",
+    )
+    video_mask, audio_mask = masked["noise_mask"].unbind()
+    assert video_mask.shape == (1, 1, 2, 4, 4)
+    assert audio_mask.shape == (1, 1, 2, 6)
+    assert torch.all(video_mask[..., :2, :2] == 1.0)
+    assert torch.all(video_mask[..., 2:, :] == 0.0)
+    assert not torch.count_nonzero(audio_mask)
+    assert "existing mask none" in mask_info
+    assert support_calls == ["general masked-target generation"]
+
+    old_video_mask = torch.ones((1, 1, 2, 4, 4))
+    old_video_mask[:, :, :1] = 0.0
+    old_audio_mask = torch.ones((1, 1, 2, 6))
+    old_audio_mask[..., :2] = 0.0
+    prefixed = {
+        "samples": target["samples"],
+        "noise_mask": NestedTensor((old_video_mask, old_audio_mask)),
+    }
+    combined, combined_info = nodes.MiniMaxH3ContexMaskedTarget().apply(
+        prefixed,
+        torch.ones((1, 64, 64)),
+        "white = generate",
+        "generate all audio",
+    )
+    combined_video, combined_audio = combined["noise_mask"].unbind()
+    assert not torch.count_nonzero(combined_video[:, :, :1])
+    assert torch.all(combined_video[:, :, 1:] == 1.0)
+    assert not torch.count_nonzero(combined_audio[..., :2])
+    assert torch.all(combined_audio[..., 2:] == 1.0)
+    assert "existing mask intersected" in combined_info
+
+    temporal = torch.stack((
+        torch.zeros((8, 8)),
+        torch.ones((8, 8)),
+    ))
+    followed, _ = nodes.MiniMaxH3ContexMaskedTarget().apply(
+        target,
+        temporal,
+        "white = generate",
+        "follow video mask",
+    )
+    followed_audio = followed["noise_mask"].unbind()[1]
+    assert float(followed_audio[..., 0].max()) == 0.0
+    assert float(followed_audio[..., -1].min()) == 1.0
+
+    try:
+        nodes.MiniMaxH3ContexMaskedTarget().apply(
+            target,
+            edit_mask,
+            "white = generate",
+            "custom audio mask",
+        )
+    except ValueError as exc:
+        assert "requires the optional audio_mask" in str(exc)
+    else:
+        raise AssertionError("custom audio mode accepted a missing audio mask")
+
+    preview_mask, preview, preview_info = (
+        nodes.MiniMaxH3ContexMaskGridPreview().preview(
+            torch.zeros((3, 64, 64, 3)),
+            edit_mask,
+            "runtime exact (latent max)",
+            0,
+            2,
+            0.38,
+            True,
+            True,
+        ))
+    assert preview_mask.shape == (3, 64, 64)
+    assert preview.shape == (1, 64, 64, 3)
+    assert "preview frame 2/2" in preview_info
+
+    expected_ids = {
+        "MiniMaxH3ContexTrimSourceAV",
+        "MiniMaxH3ContexMaskedTarget",
+        "MiniMaxH3ContexMaskGridPreview",
+    }
+    assert expected_ids == set(nodes.NODE_CLASS_MAPPINGS)
+    old_pack_ids = {
+        "MiniMaxH3TrimSourceAV",
+        "MiniMaxH3SetGenerationMask",
+        "MiniMaxH3MaskGridPreview",
+        "MiniMaxH3PerRowMaskPatch",
+    }
+    assert not old_pack_ids.intersection(nodes.NODE_CLASS_MAPPINGS)
+
+    workflow_path = os.path.join(
+        ROOT, "example_workflows", "MiniMax H3 - Masked Video Inpaint.json")
+    with open(workflow_path, "r", encoding="utf-8") as handle:
+        workflow = json.load(handle)
+    workflow_nodes = {item["id"]: item for item in workflow["nodes"]}
+    workflow_types = {item["type"] for item in workflow["nodes"]}
+    assert expected_ids <= workflow_types
+    assert not old_pack_ids.intersection(workflow_types)
+    seen_links = set()
+    for link in workflow["links"]:
+        link_id, source_id, source_slot, target_id, target_slot, link_type = link
+        assert link_id not in seen_links
+        seen_links.add(link_id)
+        source = workflow_nodes[source_id]["outputs"][source_slot]
+        target_input = workflow_nodes[target_id]["inputs"][target_slot]
+        assert link_id in source["links"]
+        assert target_input["link"] == link_id
+        assert source["type"] == link_type
+        assert target_input["type"] in (link_type, "*")
+    assert workflow["last_link_id"] == max(seen_links)
+    assert workflow["last_node_id"] == max(workflow_nodes)
+
+    masked_node = next(
+        item for item in workflow["nodes"]
+        if item["type"] == "MiniMaxH3ContexMaskedTarget")
+    sampler = next(
+        item for item in workflow["nodes"]
+        if item["type"] == "SamplerCustomAdvanced")
+    mask_link = next(
+        link for link in workflow["links"]
+        if link[0] == sampler["inputs"][4]["link"])
+    assert mask_link[1:3] == [masked_node["id"], 0]
+
+    sigma = next(
+        item for item in workflow["nodes"]
+        if item["type"] == "MiniMaxH3SigmaShift")
+    model_targets = {
+        (link[3], link[4]) for link in workflow["links"]
+        if link[1] == sigma["id"] and link[2] == 0}
+    guider = next(
+        item for item in workflow["nodes"] if item["type"] == "BasicGuider")
+    scheduler = next(
+        item for item in workflow["nodes"] if item["type"] == "BasicScheduler")
+    assert model_targets == {(guider["id"], 0), (scheduler["id"], 0)}
+    print(
+        "general H3 masking: AV trim, 32px grid, spatial/temporal masks, "
+        "custom audio control, prefix-safe intersection, and native-first "
+        "example wiring pass")
+
+
+if __name__ == "__main__":
+    main()

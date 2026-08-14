@@ -57,11 +57,16 @@ Adapted source files and integration:
 - `h3_mask_payload_compat.py` — native-first AV mask payload extraction;
 - `masked_context.py` — recursive target-prefix construction derived from the
   MultiRef existing-video implementation.
+- `master_audio_context.py` — exact master-audio target replacement and
+  optional protected video-prefix construction adapted from MultiRef Update 4.
 
 The referenced MultiRef revision is `4b484a3` (2026-08-14), GPL-3.0.
 Its mask-engine and mask-payload compatibility marker names are retained as a
 shared runtime ABI, so installing both packs does not stack equivalent
 PR #15375 wrappers.
+
+The master-audio node adapts MultiRef Update 4 at merged revision `9118251`
+(2026-08-14).
 
 ## ComfyUI MiniMax H3 per-token AV masks
 
@@ -71,6 +76,21 @@ implementation are from
 by **drozbay**. The vendored fallback is scoped to masked target-latent
 operations, prefers native equivalent behavior automatically, and is not
 activated by ordinary guide-mode chains.
+
+## ComfyUI-MiniMaxH3-PerRowMasking
+
+The public general-masking workflow and its source-media/mask-grid utilities
+adapt the earlier experimental
+[ComfyUI-MiniMaxH3-PerRowMasking](https://github.com/ethanfel/ComfyUI-MiniMaxH3-PerRowMasking)
+repository by **ethanfel**. That GPL-3.0 project established the source AV
+`17k+5` trim, exact 32×32 effective-cell preview, mask-convention controls,
+source-latent workflow, and audio-preservation UI used as the starting point.
+
+This integration uses revision `d6a7964b9fd64f65f1773f84cba3b29665128e59`
+(2026-08-07). It does not copy that project's temporary per-model forward
+wrapper. Instead, Apply Target Mask reuses this pack's newer capability-aware
+PR #15375 engine, composes existing nested masks, and exposes additional
+temporal/custom audio-mask modes under distinct node IDs for safe co-install.
 
 ## ComfyUI MiniMax H3 Add Guide
 

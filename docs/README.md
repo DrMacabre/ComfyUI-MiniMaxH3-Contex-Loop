@@ -9,6 +9,7 @@ Choose the guide that matches the task in front of you.
 | [Audio and continuity](AUDIO_AND_CONTINUITY.md) | Source tracks, generated audio, 15.070-second reference alignment, trimming, and seam analysis |
 | [Runs, review, and recovery](RUNS_AND_RECOVERY.md) | Review Gate, retries, checkpoints, Run Manager assets, resume, assembly, and PNG export |
 | [Advanced workflows](ADVANCED_WORKFLOWS.md) | Existing-video extension, performance re-filming, long context, and last-frame targets |
+| [Masked editing](MASKED_EDITING.md) | Video inpainting, 32px mask cells, audio masks, outpainting preparation, and clip-bridge targets |
 | [Compatibility](COMPATIBILITY.md) | Patch ownership, native Add Guide, SolAttn, H3-Multishot, and frontend compatibility |
 
 Other references:

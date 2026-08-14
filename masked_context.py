@@ -32,33 +32,10 @@ _LOG = logging.getLogger("minimax_h3_context_loop.masked_prefix")
 
 
 def _require_h3_mask_support():
-    """Prefer native H3 AV masks, otherwise install the vendored fallback."""
-    from .patch_layout import native_guides_available
+    """Compatibility alias retained for focused tests and chain callers."""
+    from .masking_support import require_h3_mask_support
 
-    if not native_guides_available():
-        raise RuntimeError(
-            "h3_masked_prefix: masked AV continuation requires the native "
-            "MiniMax H3 Add Guide / MultiRef core from ComfyUI PR #15439. "
-            "Update ComfyUI before using this experimental mode."
-        )
-    from .h3_mask_compat import ensure_h3_mask_compat
-    from .h3_mask_payload_compat import ensure_av_mask_payload_compat
-
-    ensure_h3_mask_compat()
-    ensure_av_mask_payload_compat()
-
-    import comfy.model_base
-
-    cls = getattr(comfy.model_base, "MiniMaxH3", None)
-    if (
-        cls is None
-        or "process_denoise_mask" not in cls.__dict__
-        or "scale_latent_inpaint" not in cls.__dict__
-    ):
-        raise RuntimeError(
-            "h3_masked_prefix: H3 per-stream AV mask support could not be "
-            "enabled. Check the ComfyUI console capability report."
-        )
+    return require_h3_mask_support("masked AV continuation")
 
 
 def _snap_prefix_length(requested, available, target_frames):

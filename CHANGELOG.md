@@ -2,6 +2,24 @@
 
 Newest first. This file keeps release history out of the onboarding README.
 
+## Unreleased — General masked targets
+
+- Added an exact master-audio target composer for timeline-driven FL2VA. It
+  VAE-encodes the current interval from music, dialogue, narration, or effects
+  into the complete H3 audio target, protects every audio row, and optionally
+  protects a native previous-video prefix while future video rows remain
+  denoisable.
+- Added public source-AV trim, 32px mask-grid preview, and arbitrary H3 masked
+  target nodes for static or tracked video inpainting.
+- Added preserve, generate, follow-video, and custom audio-mask modes. New
+  masks intersect existing nested masks, allowing spatial edits to compose
+  with the chain's protected `masked_av` prefix.
+- Adapted the complete masked-video inpaint workflow to the existing
+  native-first PR #15375 compatibility. The old per-row MODEL patch is not
+  required, and distinct public IDs allow both packs to remain installed.
+- Documented how the same mask contract extends to prepared outpaint canvases,
+  temporal repairs, and two-ended clip-bridge targets.
+
 ## v0.4.10 — Final-output publishing
 
 - Fixed scene and final MP4 publication in ComfyUI's global Media Assets panel

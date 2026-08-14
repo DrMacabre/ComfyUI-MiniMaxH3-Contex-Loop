@@ -1,0 +1,1657 @@
+{
+  "id": "57c5539b-6838-4d94-a883-55286e837d13",
+  "revision": 0,
+  "last_node_id": 31,
+  "last_link_id": 38,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "LoadVideo",
+      "pos": [
+        -2500,
+        -40
+      ],
+      "size": [
+        300,
+        80
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "VIDEO",
+          "type": "VIDEO",
+          "links": [
+            1
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LoadVideo"
+      },
+      "widgets_values": [
+        "source_video.mp4"
+      ]
+    },
+    {
+      "id": 2,
+      "type": "GetVideoComponents",
+      "pos": [
+        -2140,
+        -40
+      ],
+      "size": [
+        290,
+        110
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "video",
+          "type": "VIDEO",
+          "link": 1
+        }
+      ],
+      "outputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "links": [
+            2
+          ]
+        },
+        {
+          "name": "audio",
+          "type": "AUDIO",
+          "links": [
+            3
+          ]
+        },
+        {
+          "name": "fps",
+          "type": "FLOAT",
+          "links": null
+        },
+        {
+          "name": "bit_depth",
+          "type": "INT",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "GetVideoComponents"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 3,
+      "type": "MiniMaxH3ContexTrimSourceAV",
+      "pos": [
+        -1790,
+        -40
+      ],
+      "size": [
+        360,
+        150
+      ],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "frames",
+          "type": "IMAGE",
+          "link": 2
+        },
+        {
+          "name": "audio",
+          "type": "AUDIO",
+          "link": 3
+        }
+      ],
+      "outputs": [
+        {
+          "name": "trimmed_frames",
+          "type": "IMAGE",
+          "links": [
+            4
+          ]
+        },
+        {
+          "name": "trimmed_audio",
+          "type": "AUDIO",
+          "links": [
+            5
+          ]
+        },
+        {
+          "name": "h3_length",
+          "type": "INT",
+          "links": [
+            6
+          ]
+        },
+        {
+          "name": "trim_info",
+          "type": "STRING",
+          "links": [
+            7
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "MiniMaxH3ContexTrimSourceAV"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 4,
+      "type": "PreviewAny",
+      "pos": [
+        -1760,
+        180
+      ],
+      "size": [
+        330,
+        90
+      ],
+      "flags": {},
+      "order": 9,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "source",
+          "type": "*",
+          "link": 7
+        }
+      ],
+      "outputs": [
+        {
+          "name": "STRING",
+          "type": "STRING",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "PreviewAny"
+      },
+      "widgets_values": [],
+      "title": "Trim report"
+    },
+    {
+      "id": 5,
+      "type": "ImageScale",
+      "pos": [
+        -1360,
+        -40
+      ],
+      "size": [
+        310,
+        150
+      ],
+      "flags": {},
+      "order": 7,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "link": 4
+        }
+      ],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            8,
+            9
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "ImageScale"
+      },
+      "widgets_values": [
+        "lanczos",
+        1344,
+        768,
+        "center"
+      ],
+      "title": "Resize/crop exact H3 canvas"
+    },
+    {
+      "id": 6,
+      "type": "LoadImageMask",
+      "pos": [
+        -1360,
+        310
+      ],
+      "size": [
+        310,
+        310
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "MASK",
+          "type": "MASK",
+          "links": [
+            10
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LoadImageMask"
+      },
+      "widgets_values": [
+        "inpaint_mask.png",
+        "red"
+      ],
+      "title": "Upload mask — white regenerates"
+    },
+    {
+      "id": 7,
+      "type": "MiniMaxH3ContexMaskGridPreview",
+      "pos": [
+        -980,
+        140
+      ],
+      "size": [
+        370,
+        300
+      ],
+      "flags": {},
+      "order": 10,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "link": 9
+        },
+        {
+          "name": "mask",
+          "type": "MASK",
+          "link": 10
+        }
+      ],
+      "outputs": [
+        {
+          "name": "snapped_mask",
+          "type": "MASK",
+          "links": [
+            11
+          ]
+        },
+        {
+          "name": "grid_preview",
+          "type": "IMAGE",
+          "links": [
+            12
+          ]
+        },
+        {
+          "name": "grid_info",
+          "type": "STRING",
+          "links": [
+            38
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "MiniMaxH3ContexMaskGridPreview"
+      },
+      "widgets_values": [
+        "runtime exact (latent max)",
+        0,
+        0,
+        0.38,
+        true,
+        true
+      ]
+    },
+    {
+      "id": 8,
+      "type": "PreviewImage",
+      "pos": [
+        -540,
+        120
+      ],
+      "size": [
+        380,
+        330
+      ],
+      "flags": {},
+      "order": 14,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 12
+        }
+      ],
+      "outputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "PreviewImage"
+      },
+      "widgets_values": [],
+      "title": "Verify generated 32×32 cells"
+    },
+    {
+      "id": 9,
+      "type": "VAELoader",
+      "pos": [
+        -2500,
+        830
+      ],
+      "size": [
+        590,
+        70
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "VAE",
+          "type": "VAE",
+          "links": [
+            13,
+            24,
+            33
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "VAELoader",
+        "models": [
+          {
+            "name": "minimax_h3_video_vae_fp16.safetensors",
+            "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/vae/minimax_h3_video_vae_fp16.safetensors",
+            "directory": "vae"
+          }
+        ]
+      },
+      "widgets_values": [
+        "minimax_h3_video_vae_fp16.safetensors"
+      ],
+      "title": "MiniMax H3 video VAE"
+    },
+    {
+      "id": 10,
+      "type": "VAELoader",
+      "pos": [
+        -2500,
+        950
+      ],
+      "size": [
+        590,
+        70
+      ],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "VAE",
+          "type": "VAE",
+          "links": [
+            14,
+            34
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "VAELoader",
+        "models": [
+          {
+            "name": "minimax_h3_audio_vae_fp32.safetensors",
+            "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/vae/minimax_h3_audio_vae_fp32.safetensors",
+            "directory": "vae"
+          }
+        ]
+      },
+      "widgets_values": [
+        "minimax_h3_audio_vae_fp32.safetensors"
+      ],
+      "title": "MiniMax H3 audio VAE"
+    },
+    {
+      "id": 11,
+      "type": "VAEEncode",
+      "pos": [
+        -980,
+        -120
+      ],
+      "size": [
+        250,
+        70
+      ],
+      "flags": {},
+      "order": 11,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "pixels",
+          "type": "IMAGE",
+          "link": 8
+        },
+        {
+          "name": "vae",
+          "type": "VAE",
+          "link": 13
+        }
+      ],
+      "outputs": [
+        {
+          "name": "LATENT",
+          "type": "LATENT",
+          "links": [
+            15
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "VAEEncode"
+      },
+      "widgets_values": [],
+      "title": "Encode source video"
+    },
+    {
+      "id": 12,
+      "type": "VAEEncodeAudio",
+      "pos": [
+        -980,
+        -20
+      ],
+      "size": [
+        250,
+        70
+      ],
+      "flags": {},
+      "order": 12,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "audio",
+          "type": "AUDIO",
+          "link": 5
+        },
+        {
+          "name": "vae",
+          "type": "VAE",
+          "link": 14
+        }
+      ],
+      "outputs": [
+        {
+          "name": "LATENT",
+          "type": "LATENT",
+          "links": [
+            16
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "VAEEncodeAudio"
+      },
+      "widgets_values": [],
+      "title": "Encode source audio"
+    },
+    {
+      "id": 13,
+      "type": "LTXVConcatAVLatent",
+      "pos": [
+        -650,
+        -80
+      ],
+      "size": [
+        290,
+        90
+      ],
+      "flags": {},
+      "order": 13,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "video_latent",
+          "type": "LATENT",
+          "link": 15
+        },
+        {
+          "name": "audio_latent",
+          "type": "LATENT",
+          "link": 16
+        }
+      ],
+      "outputs": [
+        {
+          "name": "latent",
+          "type": "LATENT",
+          "links": [
+            17
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LTXVConcatAVLatent"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 14,
+      "type": "MiniMaxH3ContexMaskedTarget",
+      "pos": [
+        -300,
+        -80
+      ],
+      "size": [
+        340,
+        180
+      ],
+      "flags": {},
+      "order": 15,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "target_latent",
+          "type": "LATENT",
+          "link": 17
+        },
+        {
+          "name": "mask",
+          "type": "MASK",
+          "link": 11
+        }
+      ],
+      "outputs": [
+        {
+          "name": "masked_target",
+          "type": "LATENT",
+          "links": [
+            18
+          ]
+        },
+        {
+          "name": "mask_info",
+          "type": "STRING",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "MiniMaxH3ContexMaskedTarget"
+      },
+      "widgets_values": [
+        "white = generate",
+        "preserve source audio"
+      ]
+    },
+    {
+      "id": 15,
+      "type": "UNETLoader",
+      "pos": [
+        -2500,
+        1200
+      ],
+      "size": [
+        590,
+        90
+      ],
+      "flags": {},
+      "order": 6,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "MODEL",
+          "type": "MODEL",
+          "links": [
+            19
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "UNETLoader",
+        "models": [
+          {
+            "name": "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+            "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+            "directory": "diffusion_models"
+          }
+        ]
+      },
+      "widgets_values": [
+        "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+        "default"
+      ],
+      "title": "MiniMax H3 model"
+    },
+    {
+      "id": 16,
+      "type": "MiniMaxH3SigmaShift",
+      "pos": [
+        -1840,
+        1200
+      ],
+      "size": [
+        300,
+        120
+      ],
+      "flags": {},
+      "order": 16,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 19
+        }
+      ],
+      "outputs": [
+        {
+          "name": "MODEL",
+          "type": "MODEL",
+          "links": [
+            21,
+            22
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "MiniMaxH3SigmaShift"
+      },
+      "widgets_values": [
+        12,
+        3
+      ]
+    },
+    {
+      "id": 18,
+      "type": "CLIPLoader",
+      "pos": [
+        -2500,
+        1390
+      ],
+      "size": [
+        590,
+        120
+      ],
+      "flags": {},
+      "order": 8,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "CLIP",
+          "type": "CLIP",
+          "links": [
+            23
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "CLIPLoader",
+        "models": [
+          {
+            "name": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+            "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+            "directory": "text_encoders"
+          }
+        ]
+      },
+      "widgets_values": [
+        "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+        "minimax",
+        "default"
+      ],
+      "title": "MiniMax H3 text encoder"
+    },
+    {
+      "id": 19,
+      "type": "MiniMaxH3ImageToVideo",
+      "pos": [
+        -1040,
+        1060
+      ],
+      "size": [
+        430,
+        510
+      ],
+      "flags": {},
+      "order": 18,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "clip",
+          "type": "CLIP",
+          "link": 23
+        },
+        {
+          "name": "vae",
+          "type": "VAE",
+          "link": 24
+        },
+        {
+          "name": "first_frame",
+          "type": "IMAGE",
+          "link": null,
+          "shape": 7
+        },
+        {
+          "name": "last_frame",
+          "type": "IMAGE",
+          "link": null,
+          "shape": 7
+        },
+        {
+          "name": "prompt",
+          "type": "STRING",
+          "link": null,
+          "widget": {
+            "name": "prompt"
+          }
+        },
+        {
+          "name": "width",
+          "type": "INT",
+          "link": null,
+          "widget": {
+            "name": "width"
+          }
+        },
+        {
+          "name": "height",
+          "type": "INT",
+          "link": null,
+          "widget": {
+            "name": "height"
+          }
+        },
+        {
+          "name": "length",
+          "type": "INT",
+          "link": 6,
+          "widget": {
+            "name": "length"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "name": "positive",
+          "type": "CONDITIONING",
+          "links": [
+            25
+          ]
+        },
+        {
+          "name": "LATENT",
+          "type": "LATENT",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "MiniMaxH3ImageToVideo"
+      },
+      "widgets_values": [
+        "Video editing. Regenerate only the selected masked region. Replace the object inside that region with a polished red metal sphere that follows the original object's position, scale, perspective, and motion throughout the complete shot. Preserve every unmasked subject, the background, camera movement, framing, lighting, shadows, timing, and scene composition exactly. Keep the source audio unchanged and synchronized.",
+        1344,
+        768,
+        124
+      ],
+      "title": "Prompt conditioning only — ignore empty latent"
+    },
+    {
+      "id": 20,
+      "type": "BasicGuider",
+      "pos": [
+        -500,
+        1120
+      ],
+      "size": [
+        300,
+        80
+      ],
+      "flags": {},
+      "order": 20,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 22
+        },
+        {
+          "name": "conditioning",
+          "type": "CONDITIONING",
+          "link": 25
+        }
+      ],
+      "outputs": [
+        {
+          "name": "GUIDER",
+          "type": "GUIDER",
+          "links": [
+            26
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "BasicGuider"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 21,
+      "type": "BasicScheduler",
+      "pos": [
+        -500,
+        1240
+      ],
+      "size": [
+        300,
+        140
+      ],
+      "flags": {},
+      "order": 19,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 21
+        }
+      ],
+      "outputs": [
+        {
+          "name": "SIGMAS",
+          "type": "SIGMAS",
+          "links": [
+            27
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "BasicScheduler"
+      },
+      "widgets_values": [
+        "simple",
+        20,
+        1
+      ]
+    },
+    {
+      "id": 22,
+      "type": "KSamplerSelect",
+      "pos": [
+        -500,
+        1420
+      ],
+      "size": [
+        300,
+        80
+      ],
+      "flags": {},
+      "order": 21,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "SAMPLER",
+          "type": "SAMPLER",
+          "links": [
+            28
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "KSamplerSelect"
+      },
+      "widgets_values": [
+        "res_multistep"
+      ]
+    },
+    {
+      "id": 23,
+      "type": "RandomNoise",
+      "pos": [
+        -500,
+        1540
+      ],
+      "size": [
+        300,
+        90
+      ],
+      "flags": {},
+      "order": 22,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "NOISE",
+          "type": "NOISE",
+          "links": [
+            29
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "RandomNoise"
+      },
+      "widgets_values": [
+        1,
+        "randomize"
+      ]
+    },
+    {
+      "id": 24,
+      "type": "SamplerCustomAdvanced",
+      "pos": [
+        -100,
+        1190
+      ],
+      "size": [
+        330,
+        180
+      ],
+      "flags": {},
+      "order": 23,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "noise",
+          "type": "NOISE",
+          "link": 29
+        },
+        {
+          "name": "guider",
+          "type": "GUIDER",
+          "link": 26
+        },
+        {
+          "name": "sampler",
+          "type": "SAMPLER",
+          "link": 28
+        },
+        {
+          "name": "sigmas",
+          "type": "SIGMAS",
+          "link": 27
+        },
+        {
+          "name": "latent_image",
+          "type": "LATENT",
+          "link": 18
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "LATENT",
+          "links": [
+            30
+          ]
+        },
+        {
+          "name": "denoised_output",
+          "type": "LATENT",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "SamplerCustomAdvanced"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 25,
+      "type": "LTXVSeparateAVLatent",
+      "pos": [
+        300,
+        1190
+      ],
+      "size": [
+        300,
+        90
+      ],
+      "flags": {},
+      "order": 24,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "av_latent",
+          "type": "LATENT",
+          "link": 30
+        }
+      ],
+      "outputs": [
+        {
+          "name": "video_latent",
+          "type": "LATENT",
+          "links": [
+            31
+          ]
+        },
+        {
+          "name": "audio_latent",
+          "type": "LATENT",
+          "links": [
+            32
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LTXVSeparateAVLatent"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 26,
+      "type": "VAEDecode",
+      "pos": [
+        670,
+        1110
+      ],
+      "size": [
+        250,
+        70
+      ],
+      "flags": {},
+      "order": 25,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "samples",
+          "type": "LATENT",
+          "link": 31
+        },
+        {
+          "name": "vae",
+          "type": "VAE",
+          "link": 33
+        }
+      ],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            35
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "VAEDecode"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 27,
+      "type": "VAEDecodeAudio",
+      "pos": [
+        670,
+        1240
+      ],
+      "size": [
+        250,
+        70
+      ],
+      "flags": {},
+      "order": 26,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "samples",
+          "type": "LATENT",
+          "link": 32
+        },
+        {
+          "name": "vae",
+          "type": "VAE",
+          "link": 34
+        }
+      ],
+      "outputs": [
+        {
+          "name": "AUDIO",
+          "type": "AUDIO",
+          "links": [
+            36
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "VAEDecodeAudio"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 28,
+      "type": "CreateVideo",
+      "pos": [
+        990,
+        1140
+      ],
+      "size": [
+        280,
+        120
+      ],
+      "flags": {},
+      "order": 27,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 35
+        },
+        {
+          "name": "audio",
+          "type": "AUDIO",
+          "link": 36,
+          "shape": 7
+        }
+      ],
+      "outputs": [
+        {
+          "name": "VIDEO",
+          "type": "VIDEO",
+          "links": [
+            37
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "CreateVideo"
+      },
+      "widgets_values": [
+        24,
+        8
+      ]
+    },
+    {
+      "id": 29,
+      "type": "SaveVideo",
+      "pos": [
+        1340,
+        1120
+      ],
+      "size": [
+        520,
+        130
+      ],
+      "flags": {},
+      "order": 28,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "video",
+          "type": "VIDEO",
+          "link": 37
+        }
+      ],
+      "outputs": [
+        {
+          "name": "video",
+          "type": "VIDEO",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "SaveVideo"
+      },
+      "widgets_values": [
+        "video/MiniMax_H3_Masked_Inpaint",
+        "auto",
+        "auto"
+      ]
+    },
+    {
+      "id": 30,
+      "type": "MarkdownNote",
+      "pos": [
+        -2500,
+        -650
+      ],
+      "size": [
+        900,
+        500
+      ],
+      "flags": {},
+      "order": 29,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "properties": {},
+      "widgets_values": [
+        "## MiniMax H3 masked video inpainting\n\n1. Upload a **24 fps** source video containing an audio track.\n2. Upload or paint a mask image. **White regenerates; black preserves.** One mask image is broadcast across the full video.\n3. Edit the H3 prompt to describe the intended replacement inside the mask.\n4. Queue the workflow.\n\n**Trim Source AV** drops trailing frames to the largest valid `17k+5` length and trims audio to the same 24 fps duration. Its `h3_length` output controls H3 conditioning.\n\nThe resized source frames feed the video VAE and the 32×32 grid preview. Replace the static mask with **SAM3 Track to Mask** for a moving temporal mask. Grid Preview shows one selected frame but its snapped-mask output contains the complete batch.\n\n**Apply Target Mask** attaches the spatial mask to the real encoded source AV latent. This example preserves the complete source audio. The node activates native H3 masks—or the bundled compatibility—automatically; no MODEL patch node is required.\n\nThe source video belongs in the sampler target latent. Do not also connect it as an H3 video reference merely to make inpainting work."
+      ],
+      "title": "How to use this workflow",
+      "color": "#222",
+      "bgcolor": "#000"
+    },
+    {
+      "id": 31,
+      "type": "PreviewAny",
+      "pos": [
+        -540,
+        500
+      ],
+      "size": [
+        380,
+        90
+      ],
+      "flags": {},
+      "order": 30,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "source",
+          "type": "*",
+          "link": 38
+        }
+      ],
+      "outputs": [
+        {
+          "name": "STRING",
+          "type": "STRING",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "PreviewAny"
+      },
+      "widgets_values": [],
+      "title": "H3 grid report"
+    }
+  ],
+  "links": [
+    [
+      1,
+      1,
+      0,
+      2,
+      0,
+      "VIDEO"
+    ],
+    [
+      2,
+      2,
+      0,
+      3,
+      0,
+      "IMAGE"
+    ],
+    [
+      3,
+      2,
+      1,
+      3,
+      1,
+      "AUDIO"
+    ],
+    [
+      4,
+      3,
+      0,
+      5,
+      0,
+      "IMAGE"
+    ],
+    [
+      5,
+      3,
+      1,
+      12,
+      0,
+      "AUDIO"
+    ],
+    [
+      6,
+      3,
+      2,
+      19,
+      7,
+      "INT"
+    ],
+    [
+      7,
+      3,
+      3,
+      4,
+      0,
+      "STRING"
+    ],
+    [
+      8,
+      5,
+      0,
+      11,
+      0,
+      "IMAGE"
+    ],
+    [
+      9,
+      5,
+      0,
+      7,
+      0,
+      "IMAGE"
+    ],
+    [
+      10,
+      6,
+      0,
+      7,
+      1,
+      "MASK"
+    ],
+    [
+      11,
+      7,
+      0,
+      14,
+      1,
+      "MASK"
+    ],
+    [
+      12,
+      7,
+      1,
+      8,
+      0,
+      "IMAGE"
+    ],
+    [
+      13,
+      9,
+      0,
+      11,
+      1,
+      "VAE"
+    ],
+    [
+      14,
+      10,
+      0,
+      12,
+      1,
+      "VAE"
+    ],
+    [
+      15,
+      11,
+      0,
+      13,
+      0,
+      "LATENT"
+    ],
+    [
+      16,
+      12,
+      0,
+      13,
+      1,
+      "LATENT"
+    ],
+    [
+      17,
+      13,
+      0,
+      14,
+      0,
+      "LATENT"
+    ],
+    [
+      18,
+      14,
+      0,
+      24,
+      4,
+      "LATENT"
+    ],
+    [
+      19,
+      15,
+      0,
+      16,
+      0,
+      "MODEL"
+    ],
+    [
+      21,
+      16,
+      0,
+      21,
+      0,
+      "MODEL"
+    ],
+    [
+      22,
+      16,
+      0,
+      20,
+      0,
+      "MODEL"
+    ],
+    [
+      23,
+      18,
+      0,
+      19,
+      0,
+      "CLIP"
+    ],
+    [
+      24,
+      9,
+      0,
+      19,
+      1,
+      "VAE"
+    ],
+    [
+      25,
+      19,
+      0,
+      20,
+      1,
+      "CONDITIONING"
+    ],
+    [
+      26,
+      20,
+      0,
+      24,
+      1,
+      "GUIDER"
+    ],
+    [
+      27,
+      21,
+      0,
+      24,
+      3,
+      "SIGMAS"
+    ],
+    [
+      28,
+      22,
+      0,
+      24,
+      2,
+      "SAMPLER"
+    ],
+    [
+      29,
+      23,
+      0,
+      24,
+      0,
+      "NOISE"
+    ],
+    [
+      30,
+      24,
+      0,
+      25,
+      0,
+      "LATENT"
+    ],
+    [
+      31,
+      25,
+      0,
+      26,
+      0,
+      "LATENT"
+    ],
+    [
+      32,
+      25,
+      1,
+      27,
+      0,
+      "LATENT"
+    ],
+    [
+      33,
+      9,
+      0,
+      26,
+      1,
+      "VAE"
+    ],
+    [
+      34,
+      10,
+      0,
+      27,
+      1,
+      "VAE"
+    ],
+    [
+      35,
+      26,
+      0,
+      28,
+      0,
+      "IMAGE"
+    ],
+    [
+      36,
+      27,
+      0,
+      28,
+      1,
+      "AUDIO"
+    ],
+    [
+      37,
+      28,
+      0,
+      29,
+      0,
+      "VIDEO"
+    ],
+    [
+      38,
+      7,
+      2,
+      31,
+      0,
+      "STRING"
+    ]
+  ],
+  "groups": [
+    {
+      "id": 1,
+      "title": "1. Source video, valid H3 length, and generation mask",
+      "bounding": [
+        -2550,
+        -170,
+        2500,
+        850
+      ],
+      "color": "#3f789e",
+      "flags": {}
+    },
+    {
+      "id": 2,
+      "title": "2. MiniMax H3 models",
+      "bounding": [
+        -2550,
+        740,
+        1500,
+        900
+      ],
+      "color": "#3f789e",
+      "flags": {}
+    },
+    {
+      "id": 3,
+      "title": "3. Prompt conditioning",
+      "bounding": [
+        -1080,
+        950,
+        940,
+        700
+      ],
+      "color": "#3f789e",
+      "flags": {}
+    },
+    {
+      "id": 4,
+      "title": "4. Per-row masked sampling",
+      "bounding": [
+        -560,
+        1030,
+        850,
+        700
+      ],
+      "color": "#3f789e",
+      "flags": {}
+    },
+    {
+      "id": 5,
+      "title": "5. Decode source-preserving result",
+      "bounding": [
+        250,
+        1030,
+        1660,
+        600
+      ],
+      "color": "#3f789e",
+      "flags": {}
+    }
+  ],
+  "config": {},
+  "extra": {
+    "frontendVersion": "1.48.6",
+    "ds": {
+      "scale": 0.62,
+      "offset": [
+        1630,
+        420
+      ]
+    }
+  },
+  "version": 0.4
+}
