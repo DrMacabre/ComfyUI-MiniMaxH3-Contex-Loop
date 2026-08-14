@@ -19,6 +19,7 @@ example_workflows/
 ├── MiniMax H3 Ref2V - Basic.json
 ├── MiniMax H3 Ref2V - Tagged.json
 ├── MiniMax H3 Ref2V - Studio Tagged.json
+├── MiniMax H3 Ref2V - Studio Tagged Source Audio.json
 ├── MiniMax H3 T2V - Normal.json
 ├── MiniMax H3 T2V - Studio.json
 └── Archive/
@@ -158,6 +159,12 @@ two-scene plan, and the same model/sampler stack at every level:
   asset sockets as well as their Tagged Picture nodes. The manager archives image
   fallbacks by default and restores each saved run's Plan plus the matching
   loader selections.
+- [`MiniMax H3 Ref2V - Studio Tagged Source Audio.json`](<MiniMax H3 Ref2V - Studio Tagged Source Audio.json>)
+  derives from Studio Tagged and adds a full-track Load Audio fan-out to Loop
+  Start, Current Shot, final/recovery assembly, Run Manager, and Tagged Audio
+  Ref. The audio node uses `@audio_1`, `source_timeline`, and enabled
+  `align_audio_reference`; Tagged Ref2VA receives Current Shot state and the
+  final audio-reference fingerprint returns to Plan without a graph cycle.
 - [`EXPERIMENTAL MiniMax H3 Ref2V - Sequential Motion.json`](<EXPERIMENTAL MiniMax H3 Ref2V - Sequential Motion.json>)
   adds one long video with embedded audio as `@motion` + `@motion_audio` and
   sets its Tagged Video timeline to `sequential`. Current Shot `state` is mandatory:

@@ -67,6 +67,8 @@ Start with the maintained v0.4 example for your generation mode:
 - [Ref2V — Basic](<example_workflows/MiniMax H3 Ref2V - Basic.json>),
   [Tagged](<example_workflows/MiniMax H3 Ref2V - Tagged.json>), or
   [Studio Tagged](<example_workflows/MiniMax H3 Ref2V - Studio Tagged.json>).
+  Use [Studio Tagged Source Audio](<example_workflows/MiniMax H3 Ref2V - Studio Tagged Source Audio.json>)
+  for a fully wired `source_timeline` audio-reference example.
 - [Sequential motion reference](<example_workflows/EXPERIMENTAL MiniMax H3 Ref2V - Sequential Motion.json>)
   remains explicitly experimental.
 
@@ -159,7 +161,10 @@ For a song or other full source track, set Tagged Audio Ref to
 Current Shot `state` to Tagged Ref2VA. Tagged Ref2VA then derives the exact
 scene-local audio window internally. Do not connect `source_audio_slice` to the
 Tagged Audio Ref: returning that node's fingerprint to Plan would make a graph
-cycle.
+cycle. The
+[Studio Tagged Source Audio example](<example_workflows/MiniMax H3 Ref2V - Studio Tagged Source Audio.json>)
+shows the full loader fan-out, `@audio_1` activation, source-track Plan mode,
+H3-grid alignment, assembly, recovery, and Run Manager asset binding.
 
 The original numeric-range nodes remain available in the **legacy schedule**
 category when explicit selectors are useful.

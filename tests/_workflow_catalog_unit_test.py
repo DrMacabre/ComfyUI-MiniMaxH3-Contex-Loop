@@ -334,8 +334,10 @@ def validate_ref2v(path, variant):
     plan_node = node(workflow, "MiniMaxH3ChainPlan")
     plan = json.loads(plan_node["widgets_values"][0])
     assert plan_node["widgets_values"][3:6] == [896, 672, 22]
+    expected_audio_mode = (
+        "source_track" if variant == "source_audio" else "generated_audio")
     assert plan_node["widgets_values"][9:13] == [
-        "generated_audio", 22, 10, 8]
+        expected_audio_mode, 22, 10, 8]
     defaults = plan.get("defaults")
     if defaults is not None:
         assert defaults == {"duration_seconds": 10, "steps": 8}
@@ -425,12 +427,17 @@ def validate_ref2v(path, variant):
             assert socket(manager["inputs"], "asset_1")["link"] is not None
             assert manager["widgets_values"][0:3] == [True, True, False]
             bindings = json.loads(manager["widgets_values"][3])
-            assert len(bindings) == 2
+            assert len(bindings) == (3 if variant == "source_audio" else 2)
             assert {item["original_value"] for item in bindings} == {
                 "jigen_market_garden_doom_opening.png",
                 "jigen_market_garden_doom_last.png",
+                *({"SELECT_FULL_SOURCE_TRACK.wav"}
+                  if variant == "source_audio" else set()),
             }
-            assert all(item["role"] == "picture" for item in bindings)
+            expected_roles = (
+                {"picture", "source_track"}
+                if variant == "source_audio" else {"picture"})
+            assert {item["role"] for item in bindings} == expected_roles
             assert all(loader.get("properties", {}).get(
                 "h3_asset_binding_ids", {}).get("0")
                 for loader in loaders)
@@ -442,6 +449,51 @@ def validate_ref2v(path, variant):
         for item in workflow["nodes"] if item.get("type") == "Note")
     assert "ᴊɪɢᴇɴ" in notes and I2V_SOURCE_URL in notes
     assert "subject_definitions:" in notes and "non_diegetic_music:" in notes
+    return workflow, plan
+
+
+def validate_ref2v_source_audio(path):
+    workflow, plan = validate_ref2v(path, "source_audio")
+    audio_loader = node(workflow, "LoadAudio")
+    audio_ref = node(workflow, "MiniMaxH3TaggedAudioReference")
+    conditioner = node(workflow, "MiniMaxH3TaggedReferenceToVideo")
+    plan_node = node(workflow, "MiniMaxH3ChainPlan")
+    current = node(workflow, "MiniMaxH3ChainCurrent")
+    loop_start = node(workflow, "MiniMaxH3ChainLoopStart")
+    manifest_load = node(workflow, "MiniMaxH3ChainManifestLoad")
+    manager = node(workflow, "MiniMaxH3ChainRunManager")
+    assembles = [item for item in workflow["nodes"]
+                 if item.get("type") == "MiniMaxH3ChainAssemble"]
+    assert len(assembles) == 2
+
+    assert audio_loader["widgets_values"][0] == "SELECT_FULL_SOURCE_TRACK.wav"
+    assert audio_ref["widgets_values"] == [
+        "audio_1", "source_timeline", True]
+    assert socket(audio_ref["inputs"], "audio")["link"] is not None
+    assert socket(audio_ref["inputs"], "previous")["link"] is not None
+    assert socket(conditioner["inputs"], "references")["link"] == (
+        socket(audio_ref["outputs"], "references")["links"][0])
+    assert socket(conditioner["inputs"], "state")["link"] in (
+        socket(current["outputs"], "state")["links"])
+    assert socket(plan_node["inputs"], "generation_fingerprint")["link"] == (
+        socket(audio_ref["outputs"], "reference_fingerprint")["links"][0])
+
+    source_consumers = [loop_start, current, manifest_load, *assembles]
+    source_links = {
+        socket(item["inputs"], "source_audio")["link"]
+        for item in source_consumers
+    }
+    source_links.add(socket(audio_ref["inputs"], "audio")["link"])
+    source_links.add(socket(manager["inputs"], "asset_2")["link"])
+    assert None not in source_links
+    assert source_links == set(socket(
+        audio_loader["outputs"], "AUDIO")["links"])
+    assert audio_loader["properties"]["h3_asset_binding_ids"]["0"] == (
+        "ref2v-source-audio-v1")
+    assert manager["properties"]["h3_asset_roles"][
+        "ref2v-source-audio-v1"] == "source_track"
+    assert all("@audio_1" in prompt_text(shot["prompt"])
+               for shot in plan["shots"])
     return workflow, plan
 
 
@@ -525,6 +577,8 @@ def main():
     ref2v_basic_path = EXAMPLES / "MiniMax H3 Ref2V - Basic.json"
     ref2v_tagged_path = EXAMPLES / "MiniMax H3 Ref2V - Tagged.json"
     ref2v_studio_path = EXAMPLES / "MiniMax H3 Ref2V - Studio Tagged.json"
+    ref2v_source_audio_path = (
+        EXAMPLES / "MiniMax H3 Ref2V - Studio Tagged Source Audio.json")
     sequential_path = (
         EXAMPLES / "EXPERIMENTAL MiniMax H3 Ref2V - Sequential Motion.json")
     assert set(path.name for path in EXAMPLES.glob("*.json")) == {
@@ -532,6 +586,7 @@ def main():
         i2v_normal_path.name, i2v_studio_path.name,
         fl2v_normal_path.name, ref2v_basic_path.name,
         ref2v_tagged_path.name, ref2v_studio_path.name,
+        ref2v_source_audio_path.name,
         sequential_path.name,
     }
     t2v_normal, t2v_normal_plan = validate_t2v(
@@ -551,8 +606,17 @@ def main():
         ref2v_tagged_path, "tagged")
     ref2v_studio, ref2v_studio_plan = validate_ref2v(
         ref2v_studio_path, "studio")
+    ref2v_source_audio, ref2v_source_audio_plan = (
+        validate_ref2v_source_audio(ref2v_source_audio_path))
     assert comparable_plan(ref2v_tagged_plan) == comparable_plan(
         ref2v_studio_plan)
+    assert [
+        (shot["id"], shot["length"], shot["steps"], shot["seed"])
+        for shot in ref2v_studio_plan["shots"]
+    ] == [
+        (shot["id"], shot["length"], shot["steps"], shot["seed"])
+        for shot in ref2v_source_audio_plan["shots"]
+    ]
     sequential, _sequential_plan = validate_sequential_motion_ref(
         sequential_path)
 
@@ -574,9 +638,10 @@ def main():
         workflow["extra"]["comfyui_mcp"]["workflow_uuid"]
         for workflow in (
             t2v_normal, t2v_studio, i2v_normal, i2v_studio, fl2v_normal,
-            ref2v_basic, ref2v_tagged, ref2v_studio, sequential)
+            ref2v_basic, ref2v_tagged, ref2v_studio, ref2v_source_audio,
+            sequential)
     }
-    assert len(uuids) == 9
+    assert len(uuids) == 10
 
     asset = EXAMPLES / "assets" / "jigen_market_garden_doom_opening.png"
     assert asset.is_file()
@@ -587,9 +652,10 @@ def main():
         FL2V_LAST_ASSET_SHA256)
 
     print("H3 workflow catalog: T2VA, I2VA, indexed A-B-A FL2VA, Basic / "
-          "Tagged / Studio Tagged Ref2VA, and experimental sequential "
-          "motion Ref2VA; valid links, bundled assets, timeline wiring, "
-          "six-section prompts, restoration, and attribution pass")
+          "Tagged / Studio Tagged / source-timeline audio Ref2VA, and "
+          "experimental sequential motion Ref2VA; valid links, bundled "
+          "assets, timeline wiring, six-section prompts, restoration, and "
+          "attribution pass")
 
 
 if __name__ == "__main__":
