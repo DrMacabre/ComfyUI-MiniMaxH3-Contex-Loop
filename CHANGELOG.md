@@ -6,7 +6,11 @@ Newest first. This file keeps release history out of the onboarding README.
 
 - Added per-scene context-length overrides to the Plan's existing Advanced
   controls and Plan Studio. Blank inherits the Plan default; `0` creates a
-  genuinely independent scene with no predecessor video or audio context.
+  visually independent scene.
+- Added an independent per-scene generated-audio context override. A guide
+  scene can now use zero video context while retaining preceding dialogue,
+  ambience, or music; explicit audio `0` disables the carry, while masked AV
+  remains locked to one synchronized prefix.
 - Made timing, masked/guide behavior, imported-video scene 1 handling, resume
   hashes, checkpoint tail storage, Run Manager recovery, and checkpoint
   revision recovery preserve the effective per-scene context.

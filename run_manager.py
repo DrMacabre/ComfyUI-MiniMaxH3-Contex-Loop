@@ -172,6 +172,10 @@ def _editor_plan(archive: dict[str, Any]) -> dict[str, Any]:
         if (shot.get("context_length") == 0
                 or shot.get("context_length") in H3_CONTEXT_LENGTHS):
             value["context_length"] = int(shot["context_length"])
+        audio_context = shot.get("audio_context_length")
+        if (isinstance(audio_context, int) and not isinstance(audio_context, bool)
+                and 0 <= audio_context <= 240):
+            value["audio_context_length"] = audio_context
         shots.append(value)
     return {
         "prompt_prefix": archive.get("prompt_prefix", ""),

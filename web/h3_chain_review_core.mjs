@@ -1,6 +1,7 @@
 import {
     MAX_SEED,
     promptTextToLines,
+    sceneAudioContextLength,
     sceneContextLength,
     sharedPrompt,
 } from "./h3_chain_plan_core.mjs";
@@ -196,6 +197,14 @@ export function applyCheckpointRevisionSet(plan, revisions) {
             sceneContextLength(shot);
         } else {
             delete shot.context_length;
+        }
+        if (Object.hasOwn(revision, "audio_context_length")) {
+            shot.audio_context_length = Number(revision.audio_context_length);
+            sceneAudioContextLength(
+                shot, 22, sceneContextLength(shot),
+            );
+        } else {
+            delete shot.audio_context_length;
         }
         delete shot.frames;
         delete shot.duration_seconds;

@@ -290,6 +290,35 @@ def main():
         conditioning, VideoVAE(), target)
     assert clean_result[:3] == (conditioning, 0, False)
     assert clean_result[3] is target
+    audio_only_plan = chain._normalize_plan(
+        json.dumps({"shots": [
+            {"id": "one", "prompt": "first", "length": 192},
+            {"id": "audio_only", "prompt": "new visual", "length": 192,
+             "context_length": 0, "audio_context_length": 33},
+        ]}),
+        "audio_only_context_test", 64, 32, 22, "video", "head",
+        "disabled", "generated_audio", 22, 8.0, 8, 1, 18,
+        "model-stack-v1", 0, "guide",
+    )
+    assert audio_only_plan["shots"][1]["delivered_frames"] == 192
+    assert audio_only_plan["shots"][1]["audio_context_length"] == 33
+    assert chain._history_contract(audio_only_plan, 2)["shots"][1][
+        "audio_context_length"] == 33
+    assert chain._effective_editor_plan(audio_only_plan)["shots"][1][
+        "audio_context_length"] == 33
+    original_activate = nodes._activate_inline_patches
+    nodes._activate_inline_patches = lambda: "native"
+    try:
+        audio_only_result = chain.MiniMaxH3ChainContext().apply(
+            {"plan": audio_only_plan, "index": 2,
+             "previous_frames": frames, "previous_latent": previous},
+            conditioning, VideoVAE(), target)
+    finally:
+        nodes._activate_inline_patches = original_activate
+    assert audio_only_result[1:3] == (0, True)
+    assert audio_only_result[3] is target
+    assert any("audio_latent" in keyframe for keyframe in
+               audio_only_result[0][0][1]["minimax_keyframes"])
     mixed_state = {
         "plan": mixed_plan,
         "index": 2,
@@ -342,10 +371,25 @@ def main():
         chain.MiniMaxH3ChainExternalVideo().prepare(
             zero_external_plan, frames, 24.0, False, imported_audio))
     assert int(zero_external_context["context_frames"].shape[0]) == 0
-    assert zero_external_context["context_audio"] is None
+    assert int(zero_external_context[
+        "context_audio"]["waveform"].shape[-1]) == 2200
     zero_external_prepared = chain._plan_with_external_context(
         zero_external_plan, zero_external_context)
     assert zero_external_prepared["shots"][0]["delivered_frames"] == 192
+    fully_clean_external_plan = chain._normalize_plan(
+        json.dumps({"shots": [
+            {"id": "fully_clean", "prompt": "first", "length": 192,
+             "context_length": 0, "audio_context_length": 0},
+        ]}),
+        "fully_clean_external_test", 64, 32, 22, "video", "head",
+        "disabled", "generated_audio", 22, 8.0, 8, 1, 18,
+        "model-stack-v1", 0, "guide",
+    )
+    fully_clean_context, _status = (
+        chain.MiniMaxH3ChainExternalVideo().prepare(
+            fully_clean_external_plan, frames, 24.0, False, imported_audio))
+    assert int(fully_clean_context["context_frames"].shape[0]) == 0
+    assert fully_clean_context["context_audio"] is None
     first_state = {
         "plan": plan,
         "index": 1,

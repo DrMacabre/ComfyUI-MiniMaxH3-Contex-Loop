@@ -139,12 +139,15 @@ and `masked_av` when the same shot should continue seamlessly. Scene 1 uses
 its choice only when Existing Video Context supplies a predecessor. In Plan
 JSON, set `shots[n].continuation_mode`; omitting it inherits the Plan node.
 
-The same Advanced group has a per-scene **Context into scene** selector.
-Leaving it blank inherits the Plan node's `context_length`; `0` starts a truly
-independent scene with no preceding video or audio context. Other values set
-the incoming overlap for only that scene. For scene 1, this controls Existing
-Video Context; a zero-context imported original can still be prepended during
-assembly without conditioning the generated scene.
+The same Advanced group has per-scene **Context into scene** and **Audio
+context** controls. Blank inherits the corresponding Plan default. Video `0`
+starts a visually independent scene; a positive audio value can still carry
+dialogue, ambience, or music into that new shot. Explicit audio `0` carries no
+preceding generated sound. For scene 1, these control Existing Video Context;
+a zero-video-context imported original can still be prepended during assembly.
+Independent audio context applies to guide mode with generated-audio continuity.
+Masked AV always keeps its audio and video prefix lengths synchronized, while
+`source_track` continues to use its exact timeline slice.
 
 `masked_av` writes the previous scene's decoded video tail into the beginning
 of the current target video latent, copies the matching tail from the previous

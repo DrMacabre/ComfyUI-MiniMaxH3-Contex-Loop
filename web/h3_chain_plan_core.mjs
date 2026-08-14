@@ -427,6 +427,26 @@ export function sceneContextLength(shot, planDefault = 22) {
     return resolved;
 }
 
+export function sceneAudioContextLength(
+    shot, planDefault = 22, videoContextLength = 22,
+) {
+    const fallback = Number(planDefault);
+    if (!Number.isInteger(fallback) || fallback < 0 || fallback > 240) {
+        throw new Error("Plan audio context length must be between 0 and 240 frames.");
+    }
+    const value = shot?.audio_context_length;
+    if (value === undefined || value === null
+            || (typeof value === "string" && !value.trim())) {
+        return fallback || Number(videoContextLength);
+    }
+    const resolved = Number(value);
+    if (typeof value === "boolean" || !Number.isInteger(resolved)
+            || resolved < 0 || resolved > 240) {
+        throw new Error("Scene audio context length must be between 0 and 240 frames.");
+    }
+    return resolved;
+}
+
 export function validateH3Length(value) {
     const length = Number(value);
     if (!Number.isInteger(length) || length < 5 || length > MAX_H3_FRAMES || length % 17 !== 5) {
@@ -465,6 +485,7 @@ export function calculatePlanTiming(plan, settings = {}) {
     const errors = [];
     const rows = [];
     const contextLength = Number(settings.contextLength ?? 22);
+    const audioContextLength = Number(settings.audioContextLength ?? 22);
     const encodeMode = settings.encodeMode ?? "video";
     const anchorMode = settings.anchorMode ?? "head";
     const planContinuationMode = settings.continuationMode ?? "guide";
@@ -475,6 +496,10 @@ export function calculatePlanTiming(plan, settings = {}) {
 
     if (!H3_CONTEXT_LENGTHS.includes(contextLength)) {
         errors.push(`Context length must be one of ${H3_CONTEXT_LENGTHS.join(", ")}.`);
+    }
+    if (!Number.isInteger(audioContextLength)
+            || audioContextLength < 0 || audioContextLength > 240) {
+        errors.push("Audio context length must be between 0 and 240 frames.");
     }
     if (!Number.isFinite(planDefaultDuration) || planDefaultDuration <= 0) {
         errors.push("Default duration must be a finite positive number.");
@@ -511,6 +536,15 @@ export function calculatePlanTiming(plan, settings = {}) {
         let sceneContext = contextLength;
         try {
             sceneContext = sceneContextLength(shot, contextLength);
+        } catch (error) {
+            rowErrors.push(error.message);
+        }
+
+        let sceneAudioContext = audioContextLength || sceneContext;
+        try {
+            sceneAudioContext = sceneAudioContextLength(
+                shot, audioContextLength, sceneContext,
+            );
         } catch (error) {
             rowErrors.push(error.message);
         }
@@ -565,6 +599,8 @@ export function calculatePlanTiming(plan, settings = {}) {
             deliveredSeconds: deliveredFrames / FPS,
             generationStartFrame,
             contextLength: sceneContext,
+            audioContextLength: continuationMode === "masked_av"
+                ? sceneContext : sceneAudioContext,
             continuationMode,
             errors: rowErrors,
         });

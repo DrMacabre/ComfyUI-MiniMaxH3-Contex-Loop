@@ -97,6 +97,7 @@ def write_revision(run, scene, token, seed, active=False, predecessor=None):
         "seed": str(seed),
         "steps": 8,
         "context_length": 0 if scene == 1 else 39,
+        "audio_context_length": 33 if scene == 1 else 44,
         "segment_sha256": digest(segment_path),
         "checkpoint_sha256": digest(checkpoint_path),
         "prompt_file_sha256": digest(prompt_path),
@@ -173,6 +174,8 @@ async def check():
         restored = json.loads(restore.text)
         assert [item["seed"] for item in restored["restored"]] == ["101", "102"]
         assert [item["context_length"] for item in restored["restored"]] == [0, 39]
+        assert [item["audio_context_length"] for item in
+                restored["restored"]] == [33, 44]
         active_one = json.loads((run / "checkpoints" / "clip_0001.json").read_text())
         active_two = json.loads((run / "checkpoints" / "clip_0002.json").read_text())
         assert active_one["segment"]["revision"] == old_one

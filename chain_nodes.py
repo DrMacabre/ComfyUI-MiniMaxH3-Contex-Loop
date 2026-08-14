@@ -1034,6 +1034,32 @@ def _shot_context_length(shot: dict[str, Any],
     return resolved
 
 
+def _shot_audio_context_length(shot: dict[str, Any],
+                               default_audio_context_length: int,
+                               video_context_length: int) -> int:
+    """Resolve generated-audio carry; an explicit scene zero means none."""
+    value = shot.get("audio_context_length")
+    inherited = value is None or (
+        isinstance(value, str) and not value.strip())
+    if inherited:
+        configured = int(default_audio_context_length)
+        return configured or int(video_context_length)
+    if isinstance(value, bool) or (
+            isinstance(value, float) and not value.is_integer()):
+        raise ValueError(
+            "H3 scene audio context length must be between 0 and 240 frames.")
+    try:
+        resolved = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "H3 scene audio context length must be between 0 and 240 frames."
+        ) from exc
+    if resolved < 0 or resolved > 240:
+        raise ValueError(
+            "H3 scene audio context length must be between 0 and 240 frames.")
+    return resolved
+
+
 def _plan_context_storage_length(plan: dict[str, Any]) -> int:
     """Tail length checkpoints retain for all transitions in this plan."""
     cfg = plan["compatibility"]
@@ -1059,6 +1085,8 @@ def _history_contract(plan: dict[str, Any], through_index: int) -> dict[str, Any
             contract["continuation_mode"] = shot["continuation_mode"]
         if "context_length" in shot:
             contract["context_length"] = shot["context_length"]
+        if "audio_context_length" in shot:
+            contract["audio_context_length"] = shot["audio_context_length"]
         shots.append(contract)
     return {
         "version": PLAN_VERSION,
@@ -1580,6 +1608,10 @@ def _normalize_plan(
     context_length = int(context_length)
     if context_length not in H3_CONTEXT_LENGTHS:
         raise ValueError("H3 context length must be one of %s." % (H3_CONTEXT_LENGTHS,))
+    audio_context_length = int(audio_context_length)
+    if audio_context_length < 0 or audio_context_length > 240:
+        raise ValueError(
+            "H3 audio context length must be between 0 and 240 frames.")
     if encode_mode not in ("video", "frames"):
         raise ValueError("Unknown H3 context encode mode %r." % encode_mode)
     if anchor_mode not in ("head", "before"):
@@ -1631,6 +1663,8 @@ def _normalize_plan(
 
         try:
             shot_context_length = _shot_context_length(item, context_length)
+            shot_audio_context_length = _shot_audio_context_length(
+                item, audio_context_length, shot_context_length)
         except ValueError as exc:
             raise ValueError("Shot %d: %s" % (index, exc)) from exc
         resolved_context_lengths.append(shot_context_length)
@@ -1732,12 +1766,17 @@ def _normalize_plan(
         if "continuation_mode" in item:
             shot["continuation_mode"] = shot_continuation_mode
         # Blank/null means inherit. Keep the explicit zero because it is the
-        # generation-significant spelling of a completely independent scene.
+        # generation-significant spelling of a visually independent scene.
         explicit_context = item.get("context_length")
         if explicit_context is not None and not (
                 isinstance(explicit_context, str)
                 and not explicit_context.strip()):
             shot["context_length"] = shot_context_length
+        explicit_audio_context = item.get("audio_context_length")
+        if explicit_audio_context is not None and not (
+                isinstance(explicit_audio_context, str)
+                and not explicit_audio_context.strip()):
+            shot["audio_context_length"] = shot_audio_context_length
         shots.append(shot)
         stitched_frames += delivered_frames
 
@@ -1760,7 +1799,7 @@ def _normalize_plan(
         "anchor_mode": anchor_mode,
         "crop": crop,
         "audio_mode": audio_mode,
-        "audio_context_length": max(0, int(audio_context_length)),
+        "audio_context_length": audio_context_length,
         "segment_crf": segment_crf,
         "video_blend_frames": video_blend_frames,
         # Model, VAE, references, CFG, and scheduler live outside this node's
@@ -2065,7 +2104,9 @@ def _effective_editor_plan(plan: dict[str, Any]) -> dict[str, Any]:
         }, **({"continuation_mode": shot["continuation_mode"]}
                if "continuation_mode" in shot else {}),
              **({"context_length": shot["context_length"]}
-                if "context_length" in shot else {}))
+                if "context_length" in shot else {}),
+             **({"audio_context_length": shot["audio_context_length"]}
+                if "audio_context_length" in shot else {}))
             for shot in plan["shots"]],
     }
 
@@ -2233,7 +2274,8 @@ def _public_segment(value: dict[str, Any]) -> dict[str, Any]:
         "generated_audio", "generated_audio_sha256",
         "raw_frames", "delivered_frames", "history_hash",
         "prompt_prefix", "scene_prompt", "prompt", "prompt_hash", "archives",
-        "seed", "steps", "context_length", "sample_rate", "segment_sha256",
+        "seed", "steps", "context_length", "audio_context_length",
+        "sample_rate", "segment_sha256",
         "checkpoint_sha256", "prompt_file_sha256", "predecessor_revision",
         "predecessor_checkpoint_sha256") if key in value}
 
@@ -3656,12 +3698,9 @@ class MiniMaxH3ChainExternalVideo:
                 source_audio, source_rate, normalized_samples,
                 int(_source_waveform.shape[1]),
                 "H3 existing-video source audio")
-            configured_audio_frames = int(cfg["audio_context_length"])
             first_continuation_mode = plan["shots"][0].get(
                 "continuation_mode", cfg.get("continuation_mode", "guide"))
-            if not context_length:
-                audio_context_frames = 0
-            elif first_continuation_mode == "masked_av":
+            if first_continuation_mode == "masked_av":
                 # A clean target AV prefix is one physical interval. Unlike
                 # guide mode, masked continuation cannot use an independently
                 # sized audio-reference window.
@@ -3669,7 +3708,9 @@ class MiniMaxH3ChainExternalVideo:
             else:
                 audio_context_frames = min(
                     normalized_count,
-                    configured_audio_frames or context_length)
+                    _shot_audio_context_length(
+                        plan["shots"][0], int(cfg["audio_context_length"]),
+                        context_length))
             if audio_context_frames:
                 context_samples = int(round(
                     audio_context_frames / float(FPS) * source_rate))
@@ -3830,7 +3871,8 @@ class MiniMaxH3ChainPlan:
                                "continue motion. Use 22 for guide mode and 39 "
                                "for masked_av so the AV clocks meet exactly. "
                                "A scene's Advanced selector can override this; "
-                               "blank inherits it and 0 starts a new scene. With head "
+                               "blank inherits it and 0 starts a visually new scene. "
+                               "Audio context is controlled separately. With head "
                                "anchors, those frames are regenerated at the "
                                "start and Loop Trim removes them, so later scenes "
                                "deliver raw scene frames minus context_length. "
@@ -3888,7 +3930,9 @@ class MiniMaxH3ChainPlan:
                                "it because each scene receives a fresh exact "
                                "slice from the external track. masked_av also "
                                "ignores it and always preserves audio for the "
-                               "same duration as context_length."}),
+                               "same duration as context_length. A scene's "
+                               "Advanced Audio context can override this default; "
+                               "there, explicit 0 means no audio carry."}),
                 "default_duration_seconds": ("FLOAT", {
                     "default": 15.0, "min": 0.1,
                     "max": MAX_H3_FRAMES / FPS, "step": 0.01,
@@ -4585,10 +4629,12 @@ class MiniMaxH3ChainContext:
                     "latent")
     OUTPUT_TOOLTIPS = (
         "Conditioning ready for the H3 guider/sampler: scene 1 passes through "
-        "unless Existing Video Context seeds it; later scenes always continue.",
+        "unless Existing Video Context seeds it; later scenes use their "
+        "effective video and/or generated-audio context.",
         "Repeated leading frames to remove after decoding. Connect to "
         "MiniMax H3 Contex Loop Trim.",
-        "True for resumed/continued scenes, false for the first scene.",
+        "True when preceding video or generated audio is carried, including "
+        "audio-only guide continuation; false for a fully independent scene.",
         "Sampler-ready target latent. In guide mode this is the input latent "
         "unchanged. In masked_av mode its preserved AV prefix and nested "
         "denoise mask carry the previous scene into the current target. Wire "
@@ -4597,8 +4643,8 @@ class MiniMaxH3ChainContext:
     FUNCTION = "apply"
     CATEGORY = "conditioning/minimax/contex_loop"
     DESCRIPTION = ("Apply each scene's inherited or overridden guide/masked "
-                   "AV continuation, including scene 1 when Existing Video "
-                   "Context is connected.")
+                   "AV continuation, including independent guide audio carry "
+                   "and scene 1 Existing Video Context.")
 
     def apply(self, state, conditioning, vae, latent, audio_vae=None):
         index = int(state["index"])
@@ -4607,10 +4653,18 @@ class MiniMaxH3ChainContext:
         shot = plan["shots"][index - 1]
         context_length = _shot_context_length(
             shot, int(cfg["context_length"]))
+        audio_context_length = _shot_audio_context_length(
+            shot, int(cfg["audio_context_length"]), context_length)
         continuation_mode = shot.get(
             "continuation_mode", cfg.get("continuation_mode", "guide"))
         external_first = index == 1 and bool(state.get("external_context"))
-        if not context_length or (index == 1 and not external_first):
+        generated_audio_context = (
+            continuation_mode == "guide"
+            and cfg["audio_mode"] in (
+                "generated_audio", "source_plus_timeline")
+            and audio_context_length > 0)
+        has_context = context_length > 0 or generated_audio_context
+        if not has_context or (index == 1 and not external_first):
             if any(
                     candidate.get(
                         "continuation_mode",
@@ -4654,12 +4708,11 @@ class MiniMaxH3ChainContext:
                                 if external_first else None),
             )
             return (out_conditioning, trim, True, out_latent)
-        use_latent_audio = cfg["audio_mode"] in (
-            "generated_audio", "source_plus_timeline")
-        previous_latent = state.get("previous_latent") if use_latent_audio else None
+        previous_latent = (state.get("previous_latent")
+                           if generated_audio_context else None)
         previous_audio = (state.get("previous_audio")
-                          if use_latent_audio and external_first else None)
-        if (use_latent_audio and previous_latent is None
+                          if generated_audio_context and external_first else None)
+        if (generated_audio_context and previous_latent is None
                 and previous_audio is None and not external_first):
             raise ValueError("H3 chain continuation has no previous AV latent.")
         out, trim = MiniMaxH3MotionContext().apply(
@@ -4671,7 +4724,8 @@ class MiniMaxH3ChainContext:
             encode_mode=cfg["encode_mode"],
             anchor_mode=cfg["anchor_mode"],
             crop=cfg["crop"],
-            audio_context_length=cfg["audio_context_length"],
+            audio_context_length=(audio_context_length
+                                  if generated_audio_context else 0),
             audio_mode="timeline",
             context_latent=previous_latent,
             audio_vae=audio_vae,
@@ -4883,6 +4937,9 @@ class MiniMaxH3ChainSegmentSave:
             }
             if "context_length" in shot:
                 segment["context_length"] = shot["context_length"]
+            if "audio_context_length" in shot:
+                segment["audio_context_length"] = shot[
+                    "audio_context_length"]
             if published_blend is not None:
                 segment.update({
                     "blend_segment": _relative_output_path(published_blend),
@@ -7078,6 +7135,9 @@ def _checkpoint_plan_revision(segment: dict[str, Any]) -> dict[str, Any]:
     }
     if "context_length" in segment:
         revision["context_length"] = int(segment["context_length"])
+    if "audio_context_length" in segment:
+        revision["audio_context_length"] = int(
+            segment["audio_context_length"])
     return revision
 
 

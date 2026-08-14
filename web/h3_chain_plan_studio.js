@@ -112,6 +112,7 @@ function injectStyles() {
             grid-template-columns:minmax(130px,1.3fr) minmax(175px,1.3fr) minmax(65px,.5fr) minmax(135px,1.1fr) minmax(120px,.85fr) minmax(140px,1fr); margin-bottom:8px; }
         .h3studio-field { display:flex; min-width:0; flex-direction:column; gap:3px; color:var(--hs-muted); }
         .h3studio-length { display:grid; grid-template-columns:112px minmax(80px,1fr); gap:5px; }
+        .h3studio-context-pair { display:grid; grid-template-columns:1fr 1fr; gap:5px; }
         .h3studio-prompt { min-height:250px; width:100%; font:15px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace !important; }
         .h3studio-prompt-tools { display:flex; align-items:center; gap:6px; margin:7px 0; flex-wrap:wrap; }
         .h3studio-prompt-delegated { margin-top:10px; padding:12px; border:1px dashed var(--hs-border);
@@ -326,6 +327,7 @@ function mount(node) {
     function settings() {
         return {
             contextLength:widget(state.planNode, "context_length")?.value ?? 22,
+            audioContextLength:widget(state.planNode, "audio_context_length")?.value ?? 22,
             encodeMode:widget(state.planNode, "encode_mode")?.value ?? "video",
             anchorMode:widget(state.planNode, "anchor_mode")?.value ?? "head",
             continuationMode:widget(state.planNode, "continuation_mode")?.value ?? "guide",
@@ -337,6 +339,7 @@ function mount(node) {
     function settingsSignature(planNode = state.planNode) {
         return JSON.stringify([
             widget(planNode, "context_length")?.value ?? 22,
+            widget(planNode, "audio_context_length")?.value ?? 22,
             widget(planNode, "encode_mode")?.value ?? "video",
             widget(planNode, "anchor_mode")?.value ?? "head",
             widget(planNode, "continuation_mode")?.value ?? "guide",
@@ -752,7 +755,7 @@ function mount(node) {
         const context = element("select");
         for (const [value, label] of [
             ["", `Plan default · ${settings().contextLength}`],
-            ["0", "0 · new scene"],
+            ["0", "0 · new visual"],
             ...H3_CONTEXT_LENGTHS.map((value) => [String(value), `${value} frames`]),
         ]) {
             const option = element("option", "", label);
@@ -762,8 +765,8 @@ function mount(node) {
         context.value = Object.hasOwn(shot, "context_length")
             && shot.context_length !== null ? String(shot.context_length) : "";
         context.title = state.active === 0
-            ? "Blank inherits the Plan context. Zero ignores Existing Video Context for generation."
-            : "Context entering this scene. Blank inherits the Plan default; zero starts with no preceding video or audio context.";
+            ? "Blank inherits the Plan video context. Zero ignores Existing Video Context visually."
+            : "Video context entering this scene. Blank inherits the Plan default; zero starts a visually new scene. Audio is controlled beside it.";
         context.addEventListener("change", () => {
             if (context.value === "") delete shot.context_length;
             else shot.context_length = Number(context.value);
@@ -771,6 +774,25 @@ function mount(node) {
             writePlan();
             renderStatus();
         });
+        const audioContext = element("input");
+        audioContext.type = "number";
+        audioContext.min = "0";
+        audioContext.max = "240";
+        audioContext.step = "1";
+        audioContext.value = shot.audio_context_length ?? "";
+        const planAudioContextLength = Number(settings().audioContextLength);
+        audioContext.placeholder = planAudioContextLength
+            ? String(planAudioContextLength)
+            : `Video ${settings().contextLength}`;
+        audioContext.title = "Blank inherits the Plan audio context; an explicit 0 carries no prior generated audio. Positive audio context works with zero video context in guide generated-audio modes. Masked AV remains synchronized to video.";
+        audioContext.addEventListener("change", () => {
+            if (audioContext.value === "") delete shot.audio_context_length;
+            else shot.audio_context_length = Number(audioContext.value);
+            writePlan();
+            renderStatus();
+        });
+        const contextPair = element("span", "h3studio-context-pair");
+        contextPair.append(context, audioContext);
         const continuation = element("select");
         for (const [value, label] of [
             ["", `Plan default · ${settings().continuationMode}`],
@@ -797,7 +819,7 @@ function mount(node) {
         form.append(
             field("Scene ID", id), field("Length", lengthControl),
             field("Steps", steps), field("Seed", seedWrap),
-            field("Context", context),
+            field("Context V / A", contextPair),
             field("Continuation", continuation),
         );
 

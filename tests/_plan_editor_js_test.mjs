@@ -16,6 +16,7 @@ import {
     planToJson,
     promptValueToText,
     randomSceneSeed,
+    sceneAudioContextLength,
     sceneContextLength,
     sceneContinuationMode,
     setShotLengthMode,
@@ -81,6 +82,14 @@ assert.equal(sceneContextLength({context_length: ""}, 22), 22);
 assert.equal(sceneContextLength({context_length: 0}, 22), 0);
 assert.equal(sceneContextLength({context_length: 39}, 22), 39);
 assert.throws(() => sceneContextLength({context_length: 2}, 22), /must be 0/);
+assert.equal(sceneAudioContextLength({}, 22, 0), 22);
+assert.equal(sceneAudioContextLength({}, 0, 39), 39);
+assert.equal(sceneAudioContextLength({audio_context_length: 0}, 22, 39), 0);
+assert.equal(sceneAudioContextLength({audio_context_length: 33}, 22, 0), 33);
+assert.throws(
+    () => sceneAudioContextLength({audio_context_length: 241}, 22, 0),
+    /between 0 and 240/,
+);
 
 const invalidDurationShot = {duration_seconds: 999};
 assert.throws(() => setShotLengthMode(invalidDurationShot, "frames", 15));
@@ -202,6 +211,22 @@ assert.deepEqual(
 );
 assert.deepEqual(mixedContextTiming.errors, []);
 
+const audioOnlyTiming = calculatePlanTiming({shots: [
+    {id: "one", prompt: "One.", length: 192},
+    {id: "audio_only", prompt: "New picture, continuous sound.", length: 192,
+        context_length: 0, audio_context_length: 33},
+]}, {
+    contextLength: 22,
+    audioContextLength: 22,
+    encodeMode: "video",
+    anchorMode: "head",
+    continuationMode: "guide",
+});
+assert.equal(audioOnlyTiming.shots[1].contextLength, 0);
+assert.equal(audioOnlyTiming.shots[1].audioContextLength, 33);
+assert.equal(audioOnlyTiming.shots[1].deliveredFrames, 192);
+assert.deepEqual(audioOnlyTiming.errors, []);
+
 const sharedOnlyPlan = parsePlanJson(JSON.stringify({
     prompt_prefix: "Shared identity and direction.",
     shots: [{id: "shared_only", prompt: ""}],
@@ -282,9 +307,10 @@ assert.match(editorSource, /Use derived/);
 assert.match(editorSource, /Continuation into scene/);
 assert.match(editorSource, /Guide · new shot/);
 assert.match(editorSource, /Masked AV · same shot/);
-assert.match(editorSource, /Context into scene/);
-assert.match(editorSource, /0 · new scene/);
-assert.match(editorSource, /grid-template-columns:repeat\(3/);
+assert.match(editorSource, /Video context/);
+assert.match(editorSource, /Audio context/);
+assert.match(editorSource, /0 · new visual/);
+assert.match(editorSource, /grid-template-columns:repeat\(4/);
 assert.match(editorSource, /Hide advanced/);
 assert.match(editorSource, /Show advanced/);
 assert.doesNotMatch(editorSource, /Hide steps|Show steps/);

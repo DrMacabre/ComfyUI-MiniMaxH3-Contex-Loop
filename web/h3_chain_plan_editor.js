@@ -170,7 +170,7 @@ function injectStyles() {
             align-items:center; gap:6px; }
         .h3c-seed-status { grid-column:1 / -1; color:var(--h3c-muted);
             overflow-wrap:anywhere; }
-        .h3c-advanced-fields { display: none; grid-template-columns:repeat(3, minmax(180px, 1fr)); gap: 7px; margin-top: 8px; }
+        .h3c-advanced-fields { display: none; grid-template-columns:repeat(4, minmax(140px, 1fr)); gap: 7px; margin-top: 8px; }
         .h3c-editor.h3c-show-advanced .h3c-advanced-fields { display: grid; }
         .h3c-errors { display: none; margin: 7px 0; padding: 7px; border-radius: 5px; color: #ffb4b8; background: #5d202866; white-space: pre-wrap; }
         .h3c-errors.h3c-open { display: block; }
@@ -466,6 +466,7 @@ function mountEditor(node) {
     function currentSettings() {
         return {
             contextLength: widgetValue(node, "context_length", 22),
+            audioContextLength: widgetValue(node, "audio_context_length", 22),
             encodeMode: widgetValue(node, "encode_mode", "video"),
             anchorMode: widgetValue(node, "anchor_mode", "head"),
             continuationMode: widgetValue(node, "continuation_mode", "guide"),
@@ -835,7 +836,7 @@ function mountEditor(node) {
         const planContextLength = Number(widgetValue(node, "context_length", 22));
         for (const [value, label] of [
             ["", `Plan default · ${planContextLength}`],
-            ["0", "0 · new scene"],
+            ["0", "0 · new visual"],
             ...H3_CONTEXT_LENGTHS.map((value) => [String(value), `${value} frames`]),
         ]) {
             const option = element("option", "", label);
@@ -845,12 +846,27 @@ function mountEditor(node) {
         context.value = Object.hasOwn(shot, "context_length")
             && shot.context_length !== null ? String(shot.context_length) : "";
         context.title = index === 0
-            ? "Context entering this scene. Blank inherits the Plan default. Zero makes scene 1 independent even when Existing Video Context is connected; the original may still be prepended during assembly."
-            : "Frames carried from the preceding scene into this one. Blank inherits the Plan default; zero creates a completely new scene with no preceding video or audio context.";
+            ? "Video context entering this scene. Blank inherits the Plan default. Zero makes scene 1 visually independent even when Existing Video Context is connected; the original may still be prepended during assembly."
+            : "Video frames carried from the preceding scene into this one. Blank inherits the Plan default; zero creates a visually new scene. Audio context is controlled separately.";
         context.addEventListener("change", () => {
             if (context.value === "") delete shot.context_length;
             else shot.context_length = Number(context.value);
             sceneContextLength(shot, planContextLength);
+            syncPlan();
+        });
+        const audioContext = numberInput(shot.audio_context_length ?? "", {
+            min: "0", max: "240", step: "1",
+        });
+        const planAudioContextLength = Number(widgetValue(
+            node, "audio_context_length", 22,
+        ));
+        audioContext.placeholder = planAudioContextLength
+            ? String(planAudioContextLength)
+            : `Follow video · ${planContextLength}`;
+        audioContext.title = "Generated-audio context entering this scene. Blank inherits the Plan audio default (whose 0 follows video context). An explicit 0 carries no prior generated sound. A positive value can continue audio when video context is 0. Masked AV ignores this override and keeps audio synchronized to its video prefix; source_track uses its exact timeline slice instead.";
+        audioContext.addEventListener("input", () => {
+            if (audioContext.value === "") delete shot.audio_context_length;
+            else shot.audio_context_length = Number(audioContext.value);
             syncPlan();
         });
         const continuation = element("select", "h3c-continuation");
@@ -884,7 +900,8 @@ function mountEditor(node) {
         });
         advanced.append(
             field("Steps (blank = default)", steps),
-            field("Context into scene", context),
+            field("Video context", context),
+            field("Audio context", audioContext),
             field("Continuation into scene", continuation),
         );
         card.append(
@@ -1144,7 +1161,7 @@ function mountEditor(node) {
     };
 
     for (const name of [
-        "context_length", "encode_mode", "anchor_mode", "continuation_mode",
+        "context_length", "audio_context_length", "encode_mode", "anchor_mode", "continuation_mode",
         "default_duration_seconds", "default_steps", "base_seed",
     ]) {
         const widget = node.widgets?.find((item) => item.name === name);

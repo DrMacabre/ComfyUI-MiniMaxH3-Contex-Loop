@@ -217,6 +217,7 @@ Shot = string | {
   "steps"?: integer,
   "seed"?: integer | digit string,
   "context_length"?: 0 | 1 | 5 | 22 | 39 | ... | 243,
+  "audio_context_length"?: integer, // 0..240
   "continuation_mode"?: "guide" | "masked_av"
 }
 ```
@@ -483,13 +484,21 @@ camera, action, or environment. Use `masked_av` when it directly continues the
 same shot and should preserve the preceding AV prefix exactly. Scene 1 uses the
 field only when Existing Video Context supplies a predecessor.
 
-`context_length` overrides the incoming context for one scene. Omit it (or
+`context_length` overrides incoming video context for one scene. Omit it (or
 leave the visual selector blank) to inherit the Plan node setting. Set it to
-`0` for a completely new scene with no predecessor video or audio context.
-Positive values use the same native H3 choices as the Plan setting. Scene 1's
-override applies when Existing Video Context is connected.
+`0` for a completely new visual scene. Positive values use the same native H3
+choices as the Plan setting. Scene 1's override applies when Existing Video
+Context is connected.
 
-The compact Plan editor places both selectors beside Steps under **Show
+`audio_context_length` independently controls prior generated sound in guide
+mode. Blank inherits the Plan audio setting; when that Plan setting is `0`, it
+follows the scene's effective video context. An explicit per-scene `0` means no
+audio carry, while a positive value can continue sound with video context `0`.
+It applies to `generated_audio` and `source_plus_timeline`; `source_track` uses
+its exact timeline slice. Masked AV ignores the independent value and preserves
+audio for the same physical interval as its video prefix.
+
+The compact Plan editor places these controls beside Steps under **Show
 advanced**; Plan Studio keeps them in the existing scene-properties row.
 
 ## H3 Chain Plan node settings

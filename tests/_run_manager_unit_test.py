@@ -76,6 +76,7 @@ def main():
                 "id": "fallback", "scene_prompt": "Fallback prompt.",
                 "raw_frames": 39, "steps": 20, "seed": 9,
                 "context_length": 0,
+                "audio_context_length": 33,
             }],
             "compatibility": {
                 "width": 768, "height": 448, "context_length": 5,
@@ -130,6 +131,7 @@ def main():
         assert restored_plan["shots"][0]["prompt"] == "Fallback prompt."
         assert restored_plan["shots"][0]["seed"] == "9"
         assert restored_plan["shots"][0]["context_length"] == 0
+        assert restored_plan["shots"][0]["audio_context_length"] == 33
 
     print("H3 Run Manager: discovery, exact API restoration and Plan fallback pass")
 

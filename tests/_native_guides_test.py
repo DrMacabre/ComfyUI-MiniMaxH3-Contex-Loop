@@ -332,6 +332,20 @@ def main():
     assert tuple(keyframes[1]["audio_latent"].shape)[-1] == 37
     assert abs(keyframes[1]["resolved_frame_index"]) < 1e-6
 
+    audio_only_output, audio_only_trim = nodes.MiniMaxH3MotionContext().apply(
+        conditioning=[["conditioning", {"minimax_refs": refs}]],
+        vae=VAE(), latent=target, context_frames=context[:0], context_length=0,
+        encode_mode="video", anchor_mode="head", crop="disabled",
+        audio_context_length=33, audio_mode="timeline",
+        context_latent=previous,
+    )
+    assert audio_only_trim == 0
+    audio_only_metadata = audio_only_output[0][1]
+    assert audio_only_metadata["minimax_refs"] == refs
+    assert len(audio_only_metadata["minimax_keyframes"]) == 1
+    assert "audio_latent" in audio_only_metadata["minimax_keyframes"][0]
+    assert "latent" not in audio_only_metadata["minimax_keyframes"][0]
+
     first_anchor = T(np.zeros((1, 16, 1, height, width)))
     last_anchor = T(np.zeros((1, 16, 1, height, width)))
     anchored_output, anchored_trim = nodes.MiniMaxH3MotionContext().apply(

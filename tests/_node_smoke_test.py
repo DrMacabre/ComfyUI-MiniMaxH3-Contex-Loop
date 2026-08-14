@@ -266,6 +266,21 @@ def main():
     assert mm.PackedLayout.__init__ is not stock_layout_init
     assert MiniMaxH3.extra_conds is not stock_extra_conds
 
+    video_context_capture = captured.copy()
+    audio_only, audio_only_trim = node.apply(
+        conditioning=r2v_conditioning, vae=VAE(), latent=target,
+        context_frames=context[:0], context_length=0, encode_mode="video",
+        anchor_mode="head", crop="disabled", audio_context_length=33,
+        audio_mode="timeline", context_latent=prev)
+    assert audio_only_trim == 0
+    audio_only_refs = audio_only[0][1]["minimax_refs"]
+    assert audio_only_refs[:3] == r2v_refs
+    assert audio_only_refs[-1]["kind"] == "audio"
+    assert nodes.MC_AUDIO_KEY in audio_only_refs[-1]
+    captured.clear()
+    captured.update(video_context_capture)
+    print("audio-only context: zero video blocks, prior latent sound retained")
+
     # Once an opted-in graph has installed the wrappers, an ordinary H3 graph
     # with stock keyframes + refs must still get stock overwrite semantics.
     ordinary = MiniMaxH3().extra_conds(
