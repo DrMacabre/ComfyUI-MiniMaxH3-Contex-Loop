@@ -995,7 +995,7 @@ function mountEditor(node) {
             render();
         });
         add.disabled = state.plan.shots.length >= MAX_SHOTS;
-        const advanced = button(state.advanced ? "Hide steps" : "Show steps", "Show or hide per-scene sampler-step overrides", () => {
+        const advanced = button(state.advanced ? "Hide advanced" : "Show advanced", "Show or hide per-scene sampler-step and continuation overrides", () => {
             state.advanced = !state.advanced;
             savePanelState();
             render();
