@@ -2,6 +2,15 @@
 
 Newest first. This file keeps release history out of the onboarding README.
 
+## Unreleased — Checkpoint Plan recovery
+
+- Made Review Gate's ordinary **Load checkpoint** action restore the saved
+  run's complete Plan before arming Loop Start. Prompts and Plan settings no
+  longer remain from whichever workflow happened to be open.
+- Reapplied the exact selected checkpoint metadata for every saved predecessor
+  scene, including active revisions, while keeping plan-only recovery free of
+  archived-asset materialization side effects.
+
 ## v0.4.4 — Review retry persistence
 
 - Kept each Review Gate retry's edited scene prompt, seed, and length bound to

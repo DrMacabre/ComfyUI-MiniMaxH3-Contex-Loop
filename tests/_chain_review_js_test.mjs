@@ -160,6 +160,21 @@ assert.match(reviewSource, /reviewDurationText\(data\.raw_frames\)/);
 assert.match(reviewSource, /h3r-video-panel/);
 assert.match(reviewSource, /checkpoint-revisions\/restore/);
 assert.match(reviewSource, /checkpoint-revisions\/delete/);
+const checkpointLoadStart = reviewSource.indexOf(
+    'loadResume.addEventListener("click"',
+);
+const checkpointLoadSource = reviewSource.slice(
+    checkpointLoadStart,
+    reviewSource.indexOf("function stopCountdown", checkpointLoadStart),
+);
+assert.match(checkpointLoadSource, /include_assets: "false"/);
+assert.match(checkpointLoadSource, /restoreSavedPlanInputs\(node, runBody\.plan_inputs\)/);
+assert.match(checkpointLoadSource, /if \(selections\.length\)/);
+assert.ok(
+    checkpointLoadSource.indexOf("restoreSavedPlanInputs")
+        < checkpointLoadSource.indexOf("prepareResume"),
+    "the complete saved Plan must be restored before Loop Start is armed",
+);
 assert.match(reviewSource, /Permanently delete scene/);
 assert.match(reviewSource, /Restore & load/);
 assert.match(reviewSource, /h3r-video-grip/);

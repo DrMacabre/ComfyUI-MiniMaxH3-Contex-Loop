@@ -258,7 +258,61 @@ function updatePlanFromCheckpointRevisions(reviewNode, revisions) {
     widget.callback?.(value);
     planNode._h3ChainEditorRefresh?.();
     planNode.graph?.setDirtyCanvas?.(true, true);
+    for (const revision of revisions ?? []) {
+        const sceneIndex = Number(revision?.scene) - 1;
+        if (sceneIndex < 0 || sceneIndex >= plan.shots.length) continue;
+        publishCompanionPrompt(
+            reviewNode,
+            planNode,
+            sceneIndex,
+            promptValueToText(plan.shots[sceneIndex]?.prompt),
+        );
+    }
     return true;
+}
+
+function restoreSavedPlanInputs(reviewNode, inputs) {
+    const planNode = upstreamPlanNode(reviewNode);
+    if (!planNode || !inputs || typeof inputs !== "object") {
+        throw new Error("The saved run has no Plan inputs to restore.");
+    }
+    const names = Object.keys(inputs).sort((left, right) =>
+        Number(left === "plan_json") - Number(right === "plan_json"));
+    const applied = [];
+    const unavailable = [];
+    const graph = planNode.graph ?? app.graph;
+    graph?.beforeChange?.();
+    try {
+        for (const name of names) {
+            const widget = widgetByName(planNode, name);
+            if (!widget) {
+                unavailable.push(name);
+                continue;
+            }
+            widget.value = inputs[name];
+            widget.callback?.(inputs[name]);
+            applied.push(name);
+        }
+    } finally {
+        graph?.afterChange?.();
+    }
+    if (!applied.includes("plan_json")) {
+        throw new Error("The connected Plan does not expose an editable plan_json widget.");
+    }
+    const planWidget = widgetByName(planNode, "plan_json");
+    const plan = parsePlanJson(String(planWidget?.value ?? ""));
+    planNode._h3ChainEditorRefresh?.();
+    planNode.graph?.setDirtyCanvas?.(true, true);
+    app.graph?.setDirtyCanvas?.(true, true);
+    for (const [sceneIndex, shot] of plan.shots.entries()) {
+        publishCompanionPrompt(
+            reviewNode,
+            planNode,
+            sceneIndex,
+            promptValueToText(shot.prompt),
+        );
+    }
+    return {sceneCount: plan.shots.length, unavailable};
 }
 
 function formatBytes(value) {
@@ -628,7 +682,7 @@ function mount(node) {
     loadResume.type = "button";
     loadResume.className = "h3r-button h3r-approve";
     loadResume.textContent = "Load checkpoint";
-    loadResume.title = "Preview the selected predecessor checkpoint and set H3 Chain Loop Start to the chosen resume scene. Queue the workflow afterward to actually resume.";
+    loadResume.title = "Restore the saved run's full Plan, preview the selected predecessor checkpoint, and set H3 Chain Loop Start to the chosen resume scene. Queue the workflow afterward to actually resume.";
     const resumeStatus = document.createElement("div");
     resumeStatus.className = "h3r-resume-status";
     resumeStatus.textContent = "Refresh to discover saved scenes for this run.";
@@ -816,6 +870,7 @@ function mount(node) {
         const resumeScene = Number(resumeSelect.value);
         if (!Number.isInteger(resumeScene)) return;
         try {
+            const context = planResumeContext(node);
             const selections = selectedRevisionChain();
             const changed = selections.some((item) => !item.active);
             let restored = [];
@@ -829,7 +884,19 @@ function mount(node) {
                     "The current revisions will remain available in revision history.",
                 );
                 if (!confirmed) return;
-                const context = planResumeContext(node);
+            }
+            const runQuery = new URLSearchParams({
+                run_name: context.runName,
+                include_assets: "false",
+            });
+            const runResponse = await api.fetchApi(
+                `/minimax_h3_context_loop/run?${runQuery.toString()}`,
+            );
+            const runBody = await runResponse.json();
+            if (!runResponse.ok) throw new Error(
+                runBody.error || `HTTP ${runResponse.status}`,
+            );
+            if (selections.length) {
                 const response = await api.fetchApi(
                     "/minimax_h3_context_loop/checkpoint-revisions/restore", {
                         method: "POST",
@@ -849,11 +916,18 @@ function mount(node) {
                     body.error || `HTTP ${response.status}`,
                 );
                 restored = body.restored ?? [];
-                if (!updatePlanFromCheckpointRevisions(node, restored)) {
-                    throw new Error(
-                        "Checkpoint files were restored, but the connected Plan editor could not be updated.",
-                    );
-                }
+            }
+            const savedPlan = restoreSavedPlanInputs(node, runBody.plan_inputs);
+            if (savedPlan.sceneCount < resumeScene) {
+                throw new Error(
+                    `The saved Plan has ${savedPlan.sceneCount} scenes and cannot resume scene ${resumeScene}.`,
+                );
+            }
+            if (restored.length &&
+                    !updatePlanFromCheckpointRevisions(node, restored)) {
+                throw new Error(
+                    "Checkpoint files were restored, but the connected Plan editor could not be updated.",
+                );
             }
             if (!prepareResume(node, resumeScene)) {
                 throw new Error("Could not find the connected H3 Chain Loop Start node.");
@@ -874,8 +948,11 @@ function mount(node) {
                     ? `partial through checkpoint ${choice.savedScene}`
                     : `saved scene ${choice.savedScene} · ${choice.sceneId}`;
             }
-            const finalStatus = `${restored.length ? `Restored ${restored.length} checkpoint revision${restored.length === 1 ? "" : "s"}. ` : ""}Checkpoint ${resumeScene - 1} loaded for preview. Loop Start is armed for scene ${resumeScene}; queue the workflow to validate and resume.`;
-            if (restored.length) await refreshResumeOptions();
+            const unavailable = savedPlan.unavailable.length
+                ? ` Current Plan has no ${savedPlan.unavailable.join(", ")} control. ` : " ";
+            const finalStatus = `Restored the saved ${savedPlan.sceneCount}-scene Plan and ${restored.length} checkpoint scene${restored.length === 1 ? "" : "s"}.` +
+                unavailable + `Checkpoint ${resumeScene - 1} loaded for preview. Loop Start is armed for scene ${resumeScene}; queue the workflow to validate and resume.`;
+            if (changed) await refreshResumeOptions();
             resumeStatus.textContent = finalStatus;
         } catch (error) {
             resumeStatus.textContent = error.message;

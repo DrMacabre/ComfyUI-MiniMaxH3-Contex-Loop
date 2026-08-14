@@ -102,6 +102,9 @@ def main():
                     if key != "plan_json"}
         assert loaded["scene_count"] == 1
         assert loaded["sources"][-1] == "api_prompt.json"
+        plan_only = manager.load_plan("variant_exact")
+        assert plan_only["plan_inputs"] == loaded["plan_inputs"]
+        assert "assets" not in plan_only
 
         # Connected API inputs are skipped, leaving the effective archived
         # fallback value intact instead of replacing a graph connection.

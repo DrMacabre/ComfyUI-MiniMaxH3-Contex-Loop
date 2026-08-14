@@ -7414,9 +7414,14 @@ async def _list_saved_runs(_request):
 
 async def _load_saved_run(request):
     run_name = request.query.get("run_name", "")
+    include_assets = str(request.query.get(
+        "include_assets", "true")).strip().lower() not in (
+            "0", "false", "no")
     try:
+        manager = RunArchiveManager(_output_root(), _input_root())
+        loader = manager.load_run if include_assets else manager.load_plan
         payload = await asyncio.to_thread(
-            RunArchiveManager(_output_root(), _input_root()).load_run, run_name)
+            loader, run_name)
     except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
         return web.json_response({"error": str(exc)}, status=400)
     return web.json_response(payload)

@@ -292,7 +292,8 @@ class RunArchiveManager:
         runs.sort(key=lambda item: item["modified_at"], reverse=True)
         return runs
 
-    def load_run(self, run_name: Any) -> dict[str, Any]:
+    def load_plan(self, run_name: Any) -> dict[str, Any]:
+        """Load the complete saved Plan without restoring archived assets."""
         directory, run = self._run_dir(run_name)
         if not os.path.isdir(directory):
             raise ValueError("H3 run %r does not exist." % run)
@@ -335,16 +336,25 @@ class RunArchiveManager:
             raise ValueError("Could not restore H3 run %r: %s." % (run, detail))
         parsed = json.loads(restored["plan_json"])
         shots = parsed.get("shots") if isinstance(parsed, dict) else parsed
+        return {
+            "run_name": run,
+            "scene_count": len(shots) if isinstance(shots, list) else None,
+            "plan_inputs": restored,
+            "sources": sources,
+            "warnings": warnings,
+        }
+
+    def load_run(self, run_name: Any) -> dict[str, Any]:
+        payload = self.load_plan(run_name)
+        run = payload["run_name"]
+        warnings = list(payload["warnings"])
         try:
             assets = self.assets.prepare_restore(run)
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             assets = {"run_name": run, "bindings": [], "warnings": [str(exc)]}
         warnings.extend(assets.get("warnings") or [])
         return {
-            "run_name": run,
-            "scene_count": len(shots) if isinstance(shots, list) else None,
-            "plan_inputs": restored,
-            "sources": sources,
+            **payload,
             "warnings": warnings,
             "assets": assets,
         }
