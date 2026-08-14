@@ -141,6 +141,21 @@ assert.match(reviewSource, /data\.final_video \?\? data\.partial_video/);
 assert.match(reviewSource, /final assembled video/);
 assert.match(reviewSource, /Duration \(s\)/);
 assert.match(reviewSource, /body\.length/);
+const submitStart = reviewSource.indexOf("async function submit");
+const submitSource = reviewSource.slice(
+    submitStart,
+    reviewSource.indexOf("node._h3ReviewHandler", submitStart),
+);
+assert.match(submitSource, /const submittedToken = submittedReview\.token/);
+assert.match(submitSource, /const submittedIndex = submittedReview\.clip_index/);
+assert.match(submitSource, /const submittedPrompt = prompt\.value/);
+assert.match(submitSource, /token: submittedToken/);
+assert.match(submitSource, /scene_prompt: submittedPrompt/);
+assert.match(
+    submitSource,
+    /updatePlan\(\s*node, submittedIndex, acceptedPrompt, body\.seed, body\.length\)/,
+);
+assert.match(reviewSource, /publishCompanionPrompt/);
 assert.match(reviewSource, /reviewDurationText\(data\.raw_frames\)/);
 assert.match(reviewSource, /h3r-video-panel/);
 assert.match(reviewSource, /checkpoint-revisions\/restore/);

@@ -6832,6 +6832,9 @@ async def _submit_review_decision(request):
     return web.json_response({
         "ok": True,
         "action": decision["action"],
+        "scene_prompt": str(decision.get(
+            "scene_prompt", pending.get("public", {}).get(
+                "scene_prompt", ""))),
         "seed": str(decision.get("seed", pending["current_seed"])),
         "length": int(decision.get(
             "raw_frames", pending["current_length"])),

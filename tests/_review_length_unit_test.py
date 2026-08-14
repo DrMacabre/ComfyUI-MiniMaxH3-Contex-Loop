@@ -158,9 +158,12 @@ async def check_route_validation():
         accepted = await chain._submit_review_decision(
             RetryRequest(token, 73))
         assert accepted.status == 200
-        assert json.loads(accepted.text)["length"] == 73
+        accepted_body = json.loads(accepted.text)
+        assert accepted_body["length"] == 73
+        assert accepted_body["scene_prompt"] == "Route retry."
         await asyncio.sleep(0)
         assert future.result()["raw_frames"] == 73
+        assert future.result()["scene_prompt"] == "Route retry."
     finally:
         chain._PENDING_REVIEWS.pop(token, None)
 

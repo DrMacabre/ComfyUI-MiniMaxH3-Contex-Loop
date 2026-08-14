@@ -1,6 +1,11 @@
 import {app} from "/scripts/app.js";
 import {api} from "/scripts/api.js";
-import {parsePlanJson, planToJson} from "./h3_chain_plan_core.mjs";
+import {
+    parsePlanJson,
+    planToJson,
+    promptValueToText,
+} from "./h3_chain_plan_core.mjs";
+import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs";
 import {
     applyCheckpointRevisionSet,
     applyReviewEdit,
@@ -25,6 +30,13 @@ const mountedReviewNodes = new Set();
 let notificationAudioContext = null;
 let pendingFetchPromise = null;
 let pendingPollTimer = null;
+
+// A browser can briefly retain the preceding companion module after updating
+// a custom node. Namespace access keeps Review Gate mountable in that state;
+// prompt synchronization becomes a no-op until the module cache refreshes.
+function publishCompanionPrompt(...args) {
+    return promptCompanionSync.publishCompanionPrompt?.(...args) ?? 0;
+}
 
 function ensureNotificationAudioContext() {
     const AudioContext = window.AudioContext ?? window.webkitAudioContext;
@@ -216,6 +228,7 @@ function updatePlan(reviewNode, index, prompt, seed, length) {
     const planNode = upstreamPlanNode(reviewNode);
     const widget = planNode?.widgets?.find((item) => item.name === "plan_json");
     if (!widget) return false;
+    const sceneIndex = Number(index) - 1;
     const plan = applyReviewEdit(
         parsePlanJson(String(widget.value ?? "")), index, prompt, seed, length,
     );
@@ -224,6 +237,12 @@ function updatePlan(reviewNode, index, prompt, seed, length) {
     widget.callback?.(value);
     planNode._h3ChainEditorRefresh?.();
     planNode.graph?.setDirtyCanvas?.(true, true);
+    publishCompanionPrompt(
+        reviewNode,
+        planNode,
+        sceneIndex,
+        promptValueToText(plan.shots[sceneIndex]?.prompt),
+    );
     return true;
 }
 
@@ -903,6 +922,13 @@ function mount(node) {
             }
         }
         try {
+            // Freeze one coherent review edit before yielding to the server.
+            // Websocket recovery can replace `current`, and a companion UI can
+            // refresh the live controls, while this request is in flight.
+            const submittedReview = current;
+            const submittedToken = submittedReview.token;
+            const submittedIndex = submittedReview.clip_index;
+            const submittedPrompt = prompt.value;
             const normalizedSeed = action === "retry" ? reviewSeed(seed.value) : seed.value;
             const normalizedDuration = action === "retry" || action === "reroll"
                 ? reviewDuration(duration.value) : null;
@@ -916,9 +942,9 @@ function mount(node) {
                 method: "POST",
                 headers: {"Content-Type": "application/json"},
                 body: JSON.stringify({
-                    token: current.token,
+                    token: submittedToken,
                     action,
-                    scene_prompt: prompt.value,
+                    scene_prompt: submittedPrompt,
                     seed: normalizedSeed,
                     length: normalizedDuration?.length,
                 }),
@@ -926,23 +952,29 @@ function mount(node) {
             const body = await response.json();
             if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
             if (action === "approve") {
-                status.textContent = current.unload_models_while_waiting
+                status.textContent = submittedReview.unload_models_while_waiting
                     ? "Approval received — workflow is resuming and reloading the model stack."
                     : "Approval received — workflow resumed.";
             } else if (action === "retry" || action === "reroll") {
-                seed.value = body.seed;
-                duration.value = reviewDurationText(body.length);
+                const acceptedPrompt = typeof body.scene_prompt === "string"
+                    ? body.scene_prompt : submittedPrompt.trim();
+                const acceptedDuration = reviewDurationText(body.length);
                 const saved = updatePlan(
-                    node, current.clip_index, prompt.value, body.seed, body.length);
-                status.textContent = `Retrying scene with seed ${body.seed} at ${body.length} frames (${duration.value}s).` +
+                    node, submittedIndex, acceptedPrompt, body.seed, body.length);
+                if (current?.token === submittedToken) {
+                    prompt.value = acceptedPrompt;
+                    seed.value = body.seed;
+                    duration.value = acceptedDuration;
+                }
+                status.textContent = `Retrying scene with seed ${body.seed} at ${body.length} frames (${acceptedDuration}s).` +
                     (saved ? " The Plan editor was updated." : "");
             } else if (action === "stop") {
-                const prepared = current.clip_index < current.clip_count &&
-                    prepareResume(node, current.clip_index + 1);
-                status.textContent = (current.assemble_partial_on_stop
+                const prepared = submittedReview.clip_index < submittedReview.clip_count &&
+                    prepareResume(node, submittedReview.clip_index + 1);
+                status.textContent = (submittedReview.assemble_partial_on_stop
                     ? "Stop accepted — assembling the partial video…"
                     : "Stopped at the accepted checkpoint.") +
-                    (prepared ? ` Loop Start is ready at clip ${current.clip_index + 1}.` : "");
+                    (prepared ? ` Loop Start is ready at clip ${submittedReview.clip_index + 1}.` : "");
                 setTimeout(refreshResumeOptions, 0);
             }
         } catch (error) {

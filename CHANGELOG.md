@@ -2,6 +2,14 @@
 
 Newest first. This file keeps release history out of the onboarding README.
 
+## v0.4.4 — Review retry persistence
+
+- Kept each Review Gate retry's edited scene prompt, seed, and length bound to
+  the same submitted scene while the server request is in flight.
+- Made the server return the accepted prompt and synchronized it into the Plan
+  and any open prompt companion editor, preventing stale UI state from
+  replacing the retry prompt.
+
 ## v0.4.3 — Per-scene continuation modes
 
 - Added per-scene `continuation_mode` overrides in Plan JSON, the compact Plan
