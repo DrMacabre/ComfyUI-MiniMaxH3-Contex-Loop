@@ -4,6 +4,13 @@ Newest first. This file keeps release history out of the onboarding README.
 
 ## Unreleased — Masked AV target-prefix continuation
 
+- Added per-scene `continuation_mode` overrides in Plan JSON, the compact Plan
+  editor advanced controls, and Plan Studio. The Plan node setting remains the
+  inherited default, so one chain can use flexible `guide` transitions for new
+  shots and exact `masked_av` transitions for continued shots.
+- Fixed ComfyUI Stop/Cancel while execution is waiting indefinitely at Review
+  Gate; the gate heartbeat now observes the processing-interrupted flag and
+  resolves its browser controls before propagating the normal interruption.
 - Added experimental Plan `continuation_mode=masked_av`. Chain Context
   VAE-encodes the preceding scene's decoded tail into the next target video
   latent, copies the matching sampled audio-latent tail, and emits nested

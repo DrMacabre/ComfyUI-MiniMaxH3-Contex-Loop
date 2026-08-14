@@ -14,6 +14,7 @@ import {
     promptValueToText,
     randomSceneSeed,
     safeShotId,
+    sceneContinuationMode,
     setSharedPrompt,
     setShotLengthMode,
     sharedPrompt,
@@ -106,7 +107,7 @@ function injectStyles() {
         .h3studio-scene-head { margin-bottom:7px; }
         .h3studio-scene-label { color:var(--hs-muted); }
         .h3studio-form { align-items:end; display:grid;
-            grid-template-columns:minmax(230px,2fr) minmax(220px,1.5fr) minmax(90px,.7fr) minmax(190px,1.5fr); margin-bottom:8px; }
+            grid-template-columns:minmax(150px,1.5fr) minmax(190px,1.4fr) minmax(70px,.55fr) minmax(150px,1.2fr) minmax(145px,1fr); margin-bottom:8px; }
         .h3studio-field { display:flex; min-width:0; flex-direction:column; gap:3px; color:var(--hs-muted); }
         .h3studio-length { display:grid; grid-template-columns:112px minmax(80px,1fr); gap:5px; }
         .h3studio-prompt { min-height:250px; width:100%; font:15px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace !important; }
@@ -323,7 +324,9 @@ function mount(node) {
     function settings() {
         return {
             contextLength:widget(state.planNode, "context_length")?.value ?? 22,
+            encodeMode:widget(state.planNode, "encode_mode")?.value ?? "video",
             anchorMode:widget(state.planNode, "anchor_mode")?.value ?? "head",
+            continuationMode:widget(state.planNode, "continuation_mode")?.value ?? "guide",
             defaultDurationSeconds:widget(state.planNode, "default_duration_seconds")?.value ?? 15,
             defaultSteps:widget(state.planNode, "default_steps")?.value ?? 20,
         };
@@ -332,7 +335,9 @@ function mount(node) {
     function settingsSignature(planNode = state.planNode) {
         return JSON.stringify([
             widget(planNode, "context_length")?.value ?? 22,
+            widget(planNode, "encode_mode")?.value ?? "video",
             widget(planNode, "anchor_mode")?.value ?? "head",
+            widget(planNode, "continuation_mode")?.value ?? "guide",
             widget(planNode, "default_duration_seconds")?.value ?? 15,
             widget(planNode, "default_steps")?.value ?? 20,
         ]);
@@ -742,8 +747,34 @@ function mount(node) {
         const seedWrap = element("span", "h3studio-length");
         const reroll = button("↻", "Store a new random seed for this scene", () => { seed.value = randomSceneSeed(); shot.seed = seed.value; writePlan(); });
         seedWrap.append(seed, reroll);
+        const continuation = element("select");
+        for (const [value, label] of [
+            ["", `Plan default · ${settings().continuationMode}`],
+            ["guide", "Guide · new shot"],
+            ["masked_av", "Masked AV · same shot"],
+        ]) {
+            const option = element("option", "", label);
+            option.value = value;
+            continuation.append(option);
+        }
+        continuation.value = Object.hasOwn(shot, "continuation_mode")
+            ? shot.continuation_mode : "";
+        continuation.title = state.active === 0
+            ? "Continuation into this scene. Scene 1 uses it only with Existing Video Context."
+            : "Guide allows a new shot with continuity; Masked AV preserves an exact prefix for continuing the same shot.";
+        continuation.addEventListener("change", () => {
+            if (continuation.value) shot.continuation_mode = continuation.value;
+            else delete shot.continuation_mode;
+            sceneContinuationMode(shot, settings().continuationMode);
+            writePlan();
+            renderStatus();
+        });
         const form = element("div", "h3studio-form");
-        form.append(field("Scene ID", id), field("Length", lengthControl), field("Steps", steps), field("Seed", seedWrap));
+        form.append(
+            field("Scene ID", id), field("Length", lengthControl),
+            field("Steps", steps), field("Seed", seedWrap),
+            field("Continuation", continuation),
+        );
 
         if (state.promptEditors.length) {
             const delegated = element("div", "h3studio-prompt-delegated");

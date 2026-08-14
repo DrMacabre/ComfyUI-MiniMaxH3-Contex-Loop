@@ -167,6 +167,8 @@ def _editor_plan(archive: dict[str, Any]) -> dict[str, Any]:
             value["steps"] = int(shot["steps"])
         if shot.get("seed") is not None:
             value["seed"] = str(shot["seed"])
+        if shot.get("continuation_mode") in ("guide", "masked_av"):
+            value["continuation_mode"] = shot["continuation_mode"]
         shots.append(value)
     return {
         "prompt_prefix": archive.get("prompt_prefix", ""),

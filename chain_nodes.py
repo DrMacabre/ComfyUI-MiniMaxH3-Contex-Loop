@@ -1012,7 +1012,7 @@ def _derived_seed(base_seed: int, index: int, shot_id: str) -> int:
 def _history_contract(plan: dict[str, Any], through_index: int) -> dict[str, Any]:
     shots = []
     for shot in plan["shots"][:int(through_index)]:
-        shots.append({
+        contract = {
             "id": shot["id"],
             "prompt_hash": shot["prompt_hash"],
             "seed": shot["seed"],
@@ -1020,7 +1020,13 @@ def _history_contract(plan: dict[str, Any], through_index: int) -> dict[str, Any
             "raw_frames": shot["raw_frames"],
             "delivered_frames": shot["delivered_frames"],
             "generation_start_frame": shot["generation_start_frame"],
-        })
+        }
+        # Keep legacy/default-guide history hashes stable. An explicit scene
+        # override is generation-significant and must invalidate only that
+        # scene and the continuation history after it.
+        if "continuation_mode" in shot:
+            contract["continuation_mode"] = shot["continuation_mode"]
+        shots.append(contract)
     return {
         "version": PLAN_VERSION,
         "compatibility": plan["compatibility"],
@@ -1540,19 +1546,6 @@ def _normalize_plan(
     if continuation_mode not in CONTINUATION_MODES:
         raise ValueError(
             "Unknown H3 continuation mode %r." % continuation_mode)
-    if continuation_mode == "masked_av":
-        if context_length < 5:
-            raise ValueError(
-                "H3 masked AV continuation requires context_length of at "
-                "least 5 frames.")
-        if encode_mode != "video":
-            raise ValueError(
-                "H3 masked AV continuation requires encode_mode=video.")
-        if anchor_mode != "head":
-            raise ValueError(
-                "H3 masked AV continuation requires anchor_mode=head because "
-                "it preserves a real target-latent prefix that Loop Trim must "
-                "remove.")
     if crop not in ("disabled", "center"):
         raise ValueError("Unknown H3 context crop mode %r." % crop)
     if audio_mode not in AUDIO_MODES:
@@ -1585,6 +1578,7 @@ def _normalize_plan(
     )
     seen_ids: set[str] = set()
     shots: list[dict[str, Any]] = []
+    resolved_continuation_modes: list[str] = []
     stitched_frames = 0
     for offset, item in enumerate(raw_shots):
         index = offset + 1
@@ -1592,6 +1586,28 @@ def _normalize_plan(
             item = {"prompt": item}
         if not isinstance(item, dict):
             raise ValueError("Shot %d must be an object or prompt string." % index)
+
+        shot_continuation_mode = item.get(
+            "continuation_mode", continuation_mode)
+        if shot_continuation_mode not in CONTINUATION_MODES:
+            raise ValueError(
+                "Shot %d has unknown H3 continuation mode %r." %
+                (index, shot_continuation_mode))
+        if shot_continuation_mode == "masked_av":
+            if context_length < 5:
+                raise ValueError(
+                    "H3 masked AV continuation requires context_length of at "
+                    "least 5 frames (shot %d)." % index)
+            if encode_mode != "video":
+                raise ValueError(
+                    "H3 masked AV continuation requires encode_mode=video "
+                    "(shot %d)." % index)
+            if anchor_mode != "head":
+                raise ValueError(
+                    "H3 masked AV continuation requires anchor_mode=head "
+                    "because it preserves a real target-latent prefix that "
+                    "Loop Trim must remove (shot %d)." % index)
+        resolved_continuation_modes.append(shot_continuation_mode)
 
         shot_id = _safe_name(item.get("id", "clip_%04d" % index),
                              "clip_%04d" % index)
@@ -1662,6 +1678,10 @@ def _normalize_plan(
             "audio_start_seconds": generation_start_frame / float(FPS),
             "audio_duration_seconds": raw_frames / float(FPS),
         }
+        # Absence means inherit the Plan node default. Omitting inherited
+        # values preserves old guide plan and checkpoint hashes exactly.
+        if "continuation_mode" in item:
+            shot["continuation_mode"] = shot_continuation_mode
         shots.append(shot)
         stitched_frames += delivered_frames
 
@@ -1711,12 +1731,16 @@ def _normalize_plan(
                    if k not in ("prompt", "scene_prompt")}
                   for shot in shots],
     })
+    continuation_summary = (
+        resolved_continuation_modes[0]
+        if len(set(resolved_continuation_modes)) == 1 else "mixed"
+    )
     plan["summary"] = (
         "%d clips; %d delivered frames (%.3fs) at %dx%d; context=%d/%s; "
         "blend=%d; audio=%s; run=%s" %
         (len(shots), stitched_frames, stitched_frames / float(FPS), width,
-         height, context_length, continuation_mode, video_blend_frames, audio_mode,
-         plan["run_name"]))
+         height, context_length, continuation_summary, video_blend_frames,
+         audio_mode, plan["run_name"]))
     return plan
 
 
@@ -1968,7 +1992,7 @@ def _effective_editor_plan(plan: dict[str, Any]) -> dict[str, Any]:
     """Return an exact, editable plan source for this execution revision."""
     return {
         "prompt_prefix": str(plan.get("prompt_prefix") or ""),
-        "shots": [{
+        "shots": [dict({
             "id": shot["id"],
             "prompt": shot.get("scene_prompt", ""),
             "length": int(shot["raw_frames"]),
@@ -1976,7 +2000,9 @@ def _effective_editor_plan(plan: dict[str, Any]) -> dict[str, Any]:
             # A decimal string remains exact when the workflow passes through
             # JavaScript, including uint64 values above Number.MAX_SAFE_INTEGER.
             "seed": str(int(shot["seed"])),
-        } for shot in plan["shots"]],
+        }, **({"continuation_mode": shot["continuation_mode"]}
+               if "continuation_mode" in shot else {}))
+            for shot in plan["shots"]],
     }
 
 
@@ -3559,7 +3585,9 @@ class MiniMaxH3ChainExternalVideo:
                 int(_source_waveform.shape[1]),
                 "H3 existing-video source audio")
             configured_audio_frames = int(cfg["audio_context_length"])
-            if cfg.get("continuation_mode", "guide") == "masked_av":
+            first_continuation_mode = plan["shots"][0].get(
+                "continuation_mode", cfg.get("continuation_mode", "guide"))
+            if first_continuation_mode == "masked_av":
                 # A clean target AV prefix is one physical interval. Unlike
                 # guide mode, masked continuation cannot use an independently
                 # sized audio-reference window.
@@ -3828,7 +3856,9 @@ class MiniMaxH3ChainPlan:
                                "delivered duration remain unchanged."}),
                 "continuation_mode": (list(CONTINUATION_MODES), {
                     "default": "guide",
-                    "tooltip": "guide keeps the established Motion Context "
+                    "tooltip": "Inherited default for scenes without a "
+                               "per-scene continuation override. guide keeps "
+                               "the established Motion Context "
                                "path: previous AV is supplied as fixed guide "
                                "rows while the overlap is regenerated. "
                                "masked_av (experimental) VAE-encodes the "
@@ -4489,23 +4519,30 @@ class MiniMaxH3ChainContext:
     )
     FUNCTION = "apply"
     CATEGORY = "conditioning/minimax/contex_loop"
-    DESCRIPTION = ("Apply the Plan's selected guide or masked AV continuation "
-                   "to every later scene, including scene 1 when Existing "
-                   "Video Context is connected.")
+    DESCRIPTION = ("Apply each scene's inherited or overridden guide/masked "
+                   "AV continuation, including scene 1 when Existing Video "
+                   "Context is connected.")
 
     def apply(self, state, conditioning, vae, latent, audio_vae=None):
         index = int(state["index"])
         plan = state["plan"]
         cfg = plan["compatibility"]
-        continuation_mode = cfg.get("continuation_mode", "guide")
+        shot = plan["shots"][index - 1]
+        continuation_mode = shot.get(
+            "continuation_mode", cfg.get("continuation_mode", "guide"))
         external_first = index == 1 and bool(state.get("external_context"))
         if index == 1 and not external_first:
-            if continuation_mode == "masked_av":
+            if any(
+                    candidate.get(
+                        "continuation_mode",
+                        cfg.get("continuation_mode", "guide")) == "masked_av"
+                    for candidate in plan["shots"]):
                 # Fail before spending minutes on scene 1 if this ComfyUI
-                # cannot run the masked continuation required by scene 2.
+                # cannot run a masked continuation required by a later scene.
                 from .masked_context import _require_h3_mask_support
 
                 _require_h3_mask_support()
+            if continuation_mode == "masked_av":
                 prepared_conditioning = conditioning
             else:
                 prepared_conditioning = _prepare_native_guide_conditioning(
@@ -4902,6 +4939,18 @@ def _review_timeout_seconds(minutes: Any) -> float:
     return min(1440.0, value) * 60.0
 
 
+def _throw_if_review_interrupted() -> None:
+    """Honor ComfyUI Stop/Cancel while an async Review Gate is waiting."""
+    try:
+        import comfy.model_management as model_management
+    except ImportError:
+        return
+    check = getattr(
+        model_management, "throw_exception_if_processing_interrupted", None)
+    if callable(check):
+        check()
+
+
 async def _await_review_decision(future: asyncio.Future,
                                  timeout_seconds: float) -> dict[str, Any]:
     """Wait with a heartbeat so cross-thread HTTP decisions always wake up.
@@ -4909,11 +4958,13 @@ async def _await_review_decision(future: asyncio.Future,
     ComfyUI executes prompts on a worker thread and serves HTTP on another
     asyncio loop. Some loop/selector combinations queue call_soon_threadsafe
     callbacks without waking an otherwise idle selector. A short shielded wait
-    keeps the execution loop responsive without cancelling its decision future.
+    keeps the execution loop responsive without cancelling its decision future,
+    and polls ComfyUI's interrupt flag so Stop/Cancel can end an indefinite gate.
     """
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout_seconds if timeout_seconds > 0 else None
     while True:
+        _throw_if_review_interrupted()
         if future.done():
             return future.result()
         wait_seconds = 0.25
@@ -5111,7 +5162,25 @@ class MiniMaxH3ChainReview:
                 _LOG.warning("H3 Chain Review could not unload models: %s", exc)
 
         try:
-            decision = await _await_review_decision(future, timeout_seconds)
+            try:
+                decision = await _await_review_decision(
+                    future, timeout_seconds)
+            except BaseException:
+                # ComfyUI's InterruptProcessingException intentionally derives
+                # from BaseException. Resolve the browser gate before letting
+                # the executor emit its normal execution_interrupted event.
+                status = "review interrupted for clip %d" % index
+                try:
+                    PromptServer.instance.send_sync(
+                        "minimax_h3_context_loop_review_resolved",
+                        {"token": token, "node_id": payload["node_id"],
+                         "action": "interrupted", "status": status},
+                        PromptServer.instance.client_id)
+                except Exception as exc:
+                    _LOG.warning(
+                        "H3 Chain Review could not publish interruption: %s",
+                        exc)
+                raise
         finally:
             _PENDING_REVIEWS.pop(token, None)
             if not future.done():

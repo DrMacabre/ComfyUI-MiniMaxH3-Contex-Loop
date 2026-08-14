@@ -214,7 +214,8 @@ Shot = string | {
   "length"?: integer,
   "frames"?: integer,             // alias of length
   "steps"?: integer,
-  "seed"?: integer | digit string
+  "seed"?: integer | digit string,
+  "continuation_mode"?: "guide" | "masked_av"
 }
 ```
 
@@ -472,6 +473,16 @@ base_seed + scene index + scene id
 The same plan and `base_seed` produce the same derived seeds. Changing a scene
 ID or moving it to another position changes its derived seed.
 
+`continuation_mode` describes the transition from the preceding clip into this
+scene. Omit it to inherit the Plan node setting. Use `guide` when this is a new
+shot that should retain motion/appearance context while allowing a different
+camera, action, or environment. Use `masked_av` when it directly continues the
+same shot and should preserve the preceding AV prefix exactly. Scene 1 uses the
+field only when Existing Video Context supplies a predecessor.
+
+The compact Plan editor places this selector beside Steps under **Show
+advanced**; Plan Studio keeps it in the existing scene-properties row.
+
 ## H3 Chain Plan node settings
 
 | Setting | Accepted values | Recommended use |
@@ -479,7 +490,7 @@ ID or moving it to another position changes its derived seed.
 | `run_name` | Filename-safe text; normalized to at most 96 characters | Give each independent render a unique name. Keep it unchanged only when resuming. |
 | `generation_fingerprint` | Any stable version string | Include model, VAE, LoRA, global-reference, CFG, sampler, and scheduler versions. Change it when any external generation dependency changes. |
 | `width`, `height` | Positive multiples of 32, UI range 32–4096 | `960 × 544` is the supplied long-form workflow setting. |
-| `continuation_mode` | `guide` or `masked_av` | `guide` is the stable default. `masked_av` writes a preserved AV prefix into the target latent and requires Chain Context's latent output to feed the sampler. |
+| `continuation_mode` | `guide` or `masked_av` | Inherited default for scenes without `shots[n].continuation_mode`. `guide` suits new shots; `masked_av` writes a preserved AV prefix for same-shot continuation and requires Chain Context's latent output to feed the sampler. |
 | `context_length` | `1`, then native runs `5`, `22`, `39`, ... `243` | Use `22` for guide mode. Use `39` for masked AV so 24 fps video and 40 Hz audio meet on an exact 65-step boundary. Masked AV requires at least 5. |
 | `encode_mode` | `video` or `frames` | Use `video`. It preserves motion inside the VAE latent and is more efficient. |
 | `anchor_mode` | `head` or `before` | Use `head`; wire `trim_frames` into MiniMax H3 Contex Loop Trim. |

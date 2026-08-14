@@ -113,7 +113,7 @@ instead of overwriting an MP4 with the same requested name.
 | Setting | Good starting point | Meaning |
 |---|---:|---|
 | `width × height` | `960 × 544` | Multiples of 32 |
-| `continuation_mode` | `guide` | Stable fixed-guide path; `masked_av` is the experimental clean-prefix path |
+| `continuation_mode` | `guide` | Default for scenes without an override; `guide` suits a new shot and `masked_av` an exact same-shot continuation |
 | `context_length` | `22` guide / `39` masked | Repeated motion history carried into continuations |
 | `encode_mode` | `video` | Preserves motion in the VAE latent |
 | `anchor_mode` | `head` | Regenerates then trims the repeated opening context |
@@ -132,6 +132,13 @@ dependencies change so incompatible checkpoints cannot be resumed silently.
 fixed conditioning rows. H3 regenerates the repeated head, and Loop Trim
 removes it. This remains the default.
 
+Continuation mode can be overridden per scene in **Show advanced** without
+adding another scene-card row. The choice describes the transition **into that
+scene**: use `guide` for a new shot that should remember the preceding clip,
+and `masked_av` when the same shot should continue seamlessly. Scene 1 uses
+its choice only when Existing Video Context supplies a predecessor. In Plan
+JSON, set `shots[n].continuation_mode`; omitting it inherits the Plan node.
+
 `masked_av` writes the previous scene's decoded video tail into the beginning
 of the current target video latent, copies the matching tail from the previous
 sampled audio latent, and protects both streams with `0 = preserve`,
@@ -143,8 +150,10 @@ Masked continuation requires `encode_mode=video`, `anchor_mode=head`, and at
 least 5 context frames, on a ComfyUI build with native PR #15439 guide/MultiRef
 support. Use **39 frames** for comparisons: at 24 fps it is
 exactly 1.625 seconds and exactly 65 audio-latent steps at H3's 40 Hz audio
-grid. Changing continuation mode or its context settings changes the Plan
-compatibility hash, so old guide checkpoints cannot be resumed as masked AV.
+grid. A per-scene override participates in the Plan/history hashes from that
+scene onward, so a checkpoint cannot silently resume under the wrong method.
+When modes are mixed, use settings compatible with masked AV for the whole
+Plan—normally `context_length=39`, `encode_mode=video`, and `anchor_mode=head`.
 
 ## Audio at a glance
 

@@ -23,6 +23,12 @@ H3 audio VAE must both be connected.
 Prefer a 39-frame masked prefix. It maps exactly to 65 audio steps; 22 frames
 maps to 36.666... steps and therefore requires rounding at the AV boundary.
 
+The Plan node mode is an inherited default and each scene may override it. The
+override controls the transition into that scene: `guide` for a new shot with
+interpretive continuity, `masked_av` for exact same-shot continuation. Mixed
+plans must still use global context/encode/anchor settings compatible with
+every masked scene.
+
 ## Source-track wiring
 
 Connect the same full ComfyUI AUDIO value to:

@@ -5,6 +5,7 @@ export const FPS = 24;
 export const MAX_SHOTS = 128;
 export const MAX_H3_FRAMES = 3592;
 export const MAX_SEED = 18446744073709551615n;
+export const CONTINUATION_MODES = Object.freeze(["guide", "masked_av"]);
 export const AUTO_SCENE_COLORS = Object.freeze([
     "#6ea8fe", "#ffb86b", "#63d69f", "#c493ff",
     "#ff7fa6", "#55d6e8", "#e6cb65", "#ff7878",
@@ -392,6 +393,18 @@ export function setShotLengthMode(shot, mode, fallbackSeconds = 15) {
     return shot;
 }
 
+export function sceneContinuationMode(shot, planDefault = "guide") {
+    const fallback = String(planDefault ?? "guide");
+    if (!CONTINUATION_MODES.includes(fallback)) {
+        throw new Error(`Unknown Plan continuation mode “${fallback}”.`);
+    }
+    const mode = shot?.continuation_mode ?? fallback;
+    if (!CONTINUATION_MODES.includes(mode)) {
+        throw new Error(`Unknown scene continuation mode “${String(mode)}”.`);
+    }
+    return mode;
+}
+
 export function validateH3Length(value) {
     const length = Number(value);
     if (!Number.isInteger(length) || length < 5 || length > MAX_H3_FRAMES || length % 17 !== 5) {
@@ -430,7 +443,9 @@ export function calculatePlanTiming(plan, settings = {}) {
     const errors = [];
     const rows = [];
     const contextLength = Number(settings.contextLength ?? 22);
+    const encodeMode = settings.encodeMode ?? "video";
     const anchorMode = settings.anchorMode ?? "head";
+    const planContinuationMode = settings.continuationMode ?? "guide";
     const nodeDefaultDuration = Number(settings.defaultDurationSeconds ?? 15);
     const planDefaultDuration = Number(plan?.defaults?.duration_seconds ?? nodeDefaultDuration);
     const defaultSteps = Number(plan?.defaults?.steps ?? settings.defaultSteps ?? 20);
@@ -471,6 +486,28 @@ export function calculatePlanTiming(plan, settings = {}) {
             rowErrors.push(error.message);
         }
 
+        let continuationMode = "guide";
+        try {
+            continuationMode = sceneContinuationMode(
+                shot, planContinuationMode,
+            );
+            if (continuationMode === "masked_av") {
+                if (contextLength < 5) {
+                    rowErrors.push(
+                        "Masked AV requires a context length of at least 5 frames.",
+                    );
+                }
+                if (encodeMode !== "video") {
+                    rowErrors.push("Masked AV requires video encode mode.");
+                }
+                if (anchorMode !== "head") {
+                    rowErrors.push("Masked AV requires head anchor mode.");
+                }
+            }
+        } catch (error) {
+            rowErrors.push(error.message);
+        }
+
         let rawFrames = 0;
         try {
             rawFrames = sceneRawFrames(shot, planDefaultDuration);
@@ -498,6 +535,7 @@ export function calculatePlanTiming(plan, settings = {}) {
             deliveredFrames,
             deliveredSeconds: deliveredFrames / FPS,
             generationStartFrame,
+            continuationMode,
             errors: rowErrors,
         });
         stitchedFrames += deliveredFrames;

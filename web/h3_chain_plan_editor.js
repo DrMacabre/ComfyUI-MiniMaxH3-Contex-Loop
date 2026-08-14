@@ -15,6 +15,7 @@ import {
     promptValueToText,
     randomSceneSeed,
     safeShotId,
+    sceneContinuationMode,
     setShotLengthMode,
     setSharedPrompt,
     shotLengthMode,
@@ -167,7 +168,7 @@ function injectStyles() {
             align-items:center; gap:6px; }
         .h3c-seed-status { grid-column:1 / -1; color:var(--h3c-muted);
             overflow-wrap:anywhere; }
-        .h3c-advanced-fields { display: none; grid-template-columns:minmax(220px, 1fr); gap: 7px; margin-top: 8px; }
+        .h3c-advanced-fields { display: none; grid-template-columns:repeat(2, minmax(220px, 1fr)); gap: 7px; margin-top: 8px; }
         .h3c-editor.h3c-show-advanced .h3c-advanced-fields { display: grid; }
         .h3c-errors { display: none; margin: 7px 0; padding: 7px; border-radius: 5px; color: #ffb4b8; background: #5d202866; white-space: pre-wrap; }
         .h3c-errors.h3c-open { display: block; }
@@ -463,7 +464,9 @@ function mountEditor(node) {
     function currentSettings() {
         return {
             contextLength: widgetValue(node, "context_length", 22),
+            encodeMode: widgetValue(node, "encode_mode", "video"),
             anchorMode: widgetValue(node, "anchor_mode", "head"),
+            continuationMode: widgetValue(node, "continuation_mode", "guide"),
             defaultDurationSeconds: widgetValue(node, "default_duration_seconds", 15),
             defaultSteps: widgetValue(node, "default_steps", 20),
         };
@@ -826,7 +829,39 @@ function mountEditor(node) {
             else delete shot.steps;
             syncPlan();
         });
-        advanced.append(field("Steps (blank = default)", steps));
+        const continuation = element("select", "h3c-continuation");
+        const planContinuationMode = widgetValue(
+            node, "continuation_mode", "guide",
+        );
+        for (const [value, label] of [
+            ["", `Plan default · ${planContinuationMode}`],
+            ["guide", "Guide · new shot"],
+            ["masked_av", "Masked AV · same shot"],
+        ]) {
+            const option = element("option", "", label);
+            option.value = value;
+            continuation.append(option);
+        }
+        continuation.value = Object.hasOwn(shot, "continuation_mode")
+            ? shot.continuation_mode : "";
+        continuation.title = index === 0
+            ? "Continuation into this scene. Scene 1 uses it only when Existing Video Context supplies a predecessor. Guide allows a new shot; Masked AV preserves the same shot exactly."
+            : "Continuation from the preceding scene into this one. Guide is flexible for a new shot; Masked AV preserves an exact prefix for the same shot.";
+        continuation.addEventListener("change", () => {
+            if (continuation.value) {
+                shot.continuation_mode = continuation.value;
+            } else {
+                delete shot.continuation_mode;
+            }
+            // Resolve once here so malformed externally supplied values cannot
+            // be introduced through the compact editor control.
+            sceneContinuationMode(shot, planContinuationMode);
+            syncPlan();
+        });
+        advanced.append(
+            field("Steps (blank = default)", steps),
+            field("Continuation into scene", continuation),
+        );
         card.append(
             head,
             lengthRow,
@@ -1084,8 +1119,8 @@ function mountEditor(node) {
     };
 
     for (const name of [
-        "context_length", "anchor_mode", "default_duration_seconds",
-        "default_steps", "base_seed",
+        "context_length", "encode_mode", "anchor_mode", "continuation_mode",
+        "default_duration_seconds", "default_steps", "base_seed",
     ]) {
         const widget = node.widgets?.find((item) => item.name === name);
         if (!widget || widget._h3TimingWrapped) continue;
@@ -1097,6 +1132,9 @@ function mountEditor(node) {
                 setTimeout(() => {
                     for (const refresh of state.seedRefreshers) void refresh();
                 }, 0);
+            }
+            if (name === "continuation_mode") {
+                setTimeout(() => render(), 0);
             }
             return result;
         };

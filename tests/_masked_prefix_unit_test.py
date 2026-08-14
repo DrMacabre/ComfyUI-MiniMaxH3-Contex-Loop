@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """CPU regression for recursive H3 masked AV target-prefix construction."""
 
+import asyncio
 import importlib.util
 import json
 import os
@@ -190,6 +191,33 @@ def main():
         "streams cloned, prefix preserved, future generated, refs retained")
 
     chain = _load("chain_nodes")
+
+    class ReviewInterrupted(BaseException):
+        pass
+
+    async def assert_review_interrupt_poll():
+        future = asyncio.get_running_loop().create_future()
+        original_check = chain._throw_if_review_interrupted
+
+        def interrupt():
+            raise ReviewInterrupted()
+
+        chain._throw_if_review_interrupted = interrupt
+        try:
+            try:
+                await chain._await_review_decision(future, 0)
+            except ReviewInterrupted:
+                pass
+            else:
+                raise AssertionError(
+                    "Review Gate ignored the ComfyUI interruption check")
+            assert not future.cancelled()
+        finally:
+            chain._throw_if_review_interrupted = original_check
+            future.cancel()
+
+    asyncio.run(assert_review_interrupt_poll())
+    print("review gate: indefinite wait honors ComfyUI Stop/Cancel")
     plan = chain._normalize_plan(
         json.dumps({"shots": [
             {"id": "one", "prompt": "first", "length": 192},
@@ -214,6 +242,52 @@ def main():
         "guide",
     )
     assert "continuation_mode" not in guide_plan["compatibility"]
+    mixed_plan = chain._normalize_plan(
+        json.dumps({"shots": [
+            {"id": "new_shot", "prompt": "first", "length": 192},
+            {"id": "same_shot", "prompt": "second", "length": 192,
+             "continuation_mode": "masked_av"},
+        ]}),
+        "mixed_test", 64, 32, 39, "video", "head", "disabled",
+        "generated_audio", 22, 8.0, 8, 1, 18, "model-stack-v1", 5,
+        "guide",
+    )
+    assert "continuation_mode" not in mixed_plan["compatibility"]
+    assert "continuation_mode" not in mixed_plan["shots"][0]
+    assert mixed_plan["shots"][1]["continuation_mode"] == "masked_av"
+    assert "context=39/mixed" in mixed_plan["summary"]
+    assert "continuation_mode" not in chain._history_contract(
+        mixed_plan, 1)["shots"][0]
+    assert chain._history_contract(mixed_plan, 2)["shots"][1][
+        "continuation_mode"] == "masked_av"
+    assert chain._effective_editor_plan(mixed_plan)["shots"][1][
+        "continuation_mode"] == "masked_av"
+    mixed_state = {
+        "plan": mixed_plan,
+        "index": 2,
+        "previous_frames": frames,
+        "previous_latent": previous,
+    }
+    mixed_result = chain.MiniMaxH3ChainContext().apply(
+        mixed_state, conditioning, VideoVAE(), target)
+    assert mixed_result[1:3] == (39, True)
+    assert "noise_mask" in mixed_result[3]
+
+    preflight_calls = []
+    original_require = masked._require_h3_mask_support
+    original_prepare = chain._prepare_native_guide_conditioning
+    masked._require_h3_mask_support = lambda: preflight_calls.append("masked")
+    chain._prepare_native_guide_conditioning = lambda value: (
+        preflight_calls.append("guide") or value)
+    try:
+        mixed_first_result = chain.MiniMaxH3ChainContext().apply(
+            {"plan": mixed_plan, "index": 1, "external_context": False},
+            conditioning, VideoVAE(), target)
+    finally:
+        masked._require_h3_mask_support = original_require
+        chain._prepare_native_guide_conditioning = original_prepare
+    assert mixed_first_result[:3] == (conditioning, 0, False)
+    assert preflight_calls == ["masked", "guide"]
     imported_audio = {
         "waveform": torch.zeros((1, 2, 6400), dtype=torch.float32),
         "sample_rate": 2400,
@@ -222,6 +296,11 @@ def main():
         plan, frames, 24.0, False, imported_audio)
     assert int(external_context["context_frames"].shape[0]) == 39
     assert int(external_context["context_audio"]["waveform"].shape[-1]) == 3900
+    mixed_external_context, _status = (
+        chain.MiniMaxH3ChainExternalVideo().prepare(
+            mixed_plan, frames, 24.0, False, imported_audio))
+    assert int(mixed_external_context[
+        "context_audio"]["waveform"].shape[-1]) == 2200
     first_state = {
         "plan": plan,
         "index": 1,
@@ -252,6 +331,21 @@ def main():
         else:
             raise AssertionError(
                 "masked plan accepted invalid %s/%s/%s" % invalid_args)
+    try:
+        chain._normalize_plan(
+            json.dumps({"shots": [
+                {"id": "one", "prompt": "first", "length": 192},
+                {"id": "two", "prompt": "second", "length": 192,
+                 "continuation_mode": "masked_av"},
+            ]}),
+            "invalid_scene_masked_test", 64, 32, 1, "video", "head",
+            "disabled", "generated_audio", 1, 8.0, 8, 1, 18,
+            "model-stack-v1", 0, "guide",
+        )
+    except ValueError as exc:
+        assert "shot 2" in str(exc).lower(), str(exc)
+    else:
+        raise AssertionError("per-scene masked mode accepted context_length=1")
     print(
         "masked plan: mode participates in compatibility/history and rejects "
         "non-video, non-head, or sub-5-frame configurations")

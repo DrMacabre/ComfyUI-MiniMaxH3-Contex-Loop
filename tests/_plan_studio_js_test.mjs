@@ -66,5 +66,8 @@ assert.match(source, /publishCompanionScene/);
 assert.match(source, /Append a new scene and select it/);
 assert.match(source, /state\.plan\.shots\.push\(makeShot\(state\.plan\.shots\)\)/);
 assert.match(source, /state\.active = state\.plan\.shots\.length - 1/);
+assert.match(source, /field\("Continuation", continuation\)/);
+assert.match(source, /Guide · new shot/);
+assert.match(source, /Masked AV · same shot/);
 
 console.log("H3 Plan Studio: separate timeline editor contract passes");
