@@ -2,7 +2,9 @@ import {app} from "/scripts/app.js";
 import {api} from "/scripts/api.js";
 import {parsePlanJson, planToJson} from "./h3_chain_plan_core.mjs";
 import {
+    applyCheckpointRevisionSet,
     applyReviewEdit,
+    checkpointRevisionChain,
     checkpointResumeOptions,
     reviewCountdown,
     reviewDuration,
@@ -120,6 +122,16 @@ function injectStyles() {
         .h3r-resume-select { flex:1; min-width:0; padding:6px; border:1px solid #56637e;
             border-radius:5px; background:#101218; color:#eef1f7; }
         .h3r-resume-status { color:#8f98aa; white-space:pre-wrap; }
+        .h3r-revisions { display:flex; flex-direction:column; gap:6px; padding-top:4px;
+            border-top:1px solid #343b4b; }
+        .h3r-revisions-title { font-weight:650; color:#c3cad8; }
+        .h3r-revision-rows { display:flex; flex-direction:column; gap:6px; }
+        .h3r-revision-row { display:grid; grid-template-columns:auto minmax(0,1fr) auto;
+            gap:6px; align-items:center; }
+        .h3r-revision-label { min-width:54px; color:#aeb5c5; }
+        .h3r-revision-select { min-width:0; padding:6px; border:1px solid #56637e;
+            border-radius:5px; background:#101218; color:#eef1f7; }
+        .h3r-delete { border-color:#8a6171; background:#3b252d; }
         .h3r-root.h3r-busy .h3r-actions .h3r-button { opacity:.45; pointer-events:none; }
     `;
     document.head.appendChild(style);
@@ -213,6 +225,41 @@ function updatePlan(reviewNode, index, prompt, seed, length) {
     planNode._h3ChainEditorRefresh?.();
     planNode.graph?.setDirtyCanvas?.(true, true);
     return true;
+}
+
+function updatePlanFromCheckpointRevisions(reviewNode, revisions) {
+    const planNode = upstreamPlanNode(reviewNode);
+    const widget = planNode?.widgets?.find((item) => item.name === "plan_json");
+    if (!widget) return false;
+    const plan = applyCheckpointRevisionSet(
+        parsePlanJson(String(widget.value ?? "")), revisions,
+    );
+    const value = planToJson(plan);
+    widget.value = value;
+    widget.callback?.(value);
+    planNode._h3ChainEditorRefresh?.();
+    planNode.graph?.setDirtyCanvas?.(true, true);
+    return true;
+}
+
+function formatBytes(value) {
+    let size = Math.max(0, Number(value) || 0);
+    const units = ["B", "KB", "MB", "GB", "TB"];
+    let unit = 0;
+    while (size >= 1024 && unit < units.length - 1) {
+        size /= 1024;
+        unit += 1;
+    }
+    const digits = unit === 0 || size >= 100 ? 0 : size >= 10 ? 1 : 2;
+    return `${size.toFixed(digits)} ${units[unit]}`;
+}
+
+function checkpointRevisionLabel(revision) {
+    const active = revision.active ? "Active · " : "";
+    const date = revision.createdAt
+        ? new Date(revision.createdAt).toLocaleString() : "unknown time";
+    const seed = revision.seed ? ` · seed ${revision.seed}` : "";
+    return `${active}${date} · ${revision.revision.slice(0, 8)}${seed} · ${formatBytes(revision.sizeBytes)}`;
 }
 
 function prepareResume(reviewNode, nextIndex) {
@@ -566,25 +613,155 @@ function mount(node) {
     const resumeStatus = document.createElement("div");
     resumeStatus.className = "h3r-resume-status";
     resumeStatus.textContent = "Refresh to discover saved scenes for this run.";
+    const revisionsPanel = document.createElement("div");
+    revisionsPanel.className = "h3r-revisions";
+    revisionsPanel.hidden = true;
+    const revisionsTitle = document.createElement("div");
+    revisionsTitle.className = "h3r-revisions-title";
+    revisionsTitle.textContent = "Checkpoint revisions";
+    const revisionsHint = document.createElement("div");
+    revisionsHint.className = "h3r-resume-status";
+    revisionsHint.textContent = "Choose the saved version of each predecessor scene.";
+    const revisionsRows = document.createElement("div");
+    revisionsRows.className = "h3r-revision-rows";
+    revisionsPanel.append(revisionsTitle, revisionsHint, revisionsRows);
     resumeRow.append(resumeSelect, refreshResume, loadResume);
-    resume.append(resumeTitle, resumeRow, resumeStatus);
+    resume.append(resumeTitle, resumeRow, resumeStatus, revisionsPanel);
 
     root.append(head, videoPanel, prefix, promptLabel, seedRow, actions, status, resume);
 
     let current = null;
     let countdownTimer = null;
     let resumeChoices = [];
+    let checkpointRevisions = [];
+    let revisionChain = [];
+    let planClipCount = 0;
 
     function setActionsEnabled(enabled) {
         for (const button of actionButtons) button.disabled = !enabled;
     }
 
+    function selectedRevisionChain() {
+        return revisionChain.map((group) => {
+            const select = revisionsRows.querySelector(
+                `select[data-scene="${group.scene}"]`,
+            );
+            const revision = group.revisions.find(
+                (item) => item.revision === select?.value,
+            );
+            return revision ?? group.revisions[0];
+        });
+    }
+
+    function showRevisionPreview(revision) {
+        if (!revision?.video) return;
+        video.src = videoUrl(revision.video);
+        video.load();
+        badge.textContent = `saved scene ${revision.scene} · revision ${revision.revision.slice(0, 8)}`;
+    }
+
+    async function deleteRevision(revision) {
+        if (!revision || revision.active) return;
+        const confirmed = window.confirm(
+            `Permanently delete scene ${revision.scene} revision ` +
+            `${revision.revision.slice(0, 8)} and its segment, checkpoint, ` +
+            `audio, prompt, and preview files (${formatBytes(revision.sizeBytes)})? ` +
+            "This cannot be undone.",
+        );
+        if (!confirmed) return;
+        try {
+            const context = planResumeContext(node);
+            const response = await api.fetchApi(
+                "/minimax_h3_context_loop/checkpoint-revisions/delete", {
+                    method: "POST",
+                    headers: {"Content-Type": "application/json"},
+                    body: JSON.stringify({
+                        run_name: context.runName,
+                        scene: revision.scene,
+                        revision: revision.revision,
+                    }),
+                },
+            );
+            const body = await response.json();
+            if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
+            await refreshResumeOptions();
+            resumeStatus.textContent = `${body.message} Reclaimed ${formatBytes(body.reclaimed_bytes)}.`;
+        } catch (error) {
+            resumeStatus.textContent = error.message;
+        }
+    }
+
+    function renderRevisionChoices() {
+        revisionsRows.replaceChildren();
+        const selectedResumeScene = Number(resumeSelect.value);
+        const resumeScene = Number.isInteger(selectedResumeScene)
+                && selectedResumeScene >= 2
+            ? selectedResumeScene : planClipCount + 1;
+        revisionChain = checkpointRevisionChain(
+            checkpointRevisions, resumeScene,
+        );
+        const hasAlternatives = revisionChain.some(
+            (group) => group.revisions.length > 1,
+        );
+        revisionsPanel.hidden = !hasAlternatives;
+        if (!hasAlternatives) {
+            loadResume.textContent = "Load checkpoint";
+            return;
+        }
+        for (const group of revisionChain) {
+            const row = document.createElement("div");
+            row.className = "h3r-revision-row";
+            const label = document.createElement("span");
+            label.className = "h3r-revision-label";
+            label.textContent = `Scene ${group.scene}`;
+            const select = document.createElement("select");
+            select.className = "h3r-revision-select";
+            select.dataset.scene = String(group.scene);
+            for (const revision of group.revisions) {
+                const option = document.createElement("option");
+                option.value = revision.revision;
+                option.textContent = checkpointRevisionLabel(revision);
+                select.append(option);
+            }
+            const remove = document.createElement("button");
+            remove.type = "button";
+            remove.className = "h3r-button h3r-delete";
+            remove.textContent = "Delete";
+            remove.title = "Permanently delete the selected inactive revision and only its owned files.";
+            const update = () => {
+                const revision = group.revisions.find(
+                    (item) => item.revision === select.value,
+                );
+                remove.disabled = !revision || revision.active;
+                loadResume.textContent = selectedRevisionChain().some(
+                    (item) => !item.active,
+                ) ? "Restore & load" : "Load checkpoint";
+                showRevisionPreview(revision);
+            };
+            select.addEventListener("change", update);
+            remove.addEventListener("click", () => {
+                const revision = group.revisions.find(
+                    (item) => item.revision === select.value,
+                );
+                void deleteRevision(revision);
+            });
+            row.append(label, select, remove);
+            revisionsRows.append(row);
+            update();
+        }
+    }
+
     async function refreshResumeOptions() {
         resumeSelect.replaceChildren();
         resumeChoices = [];
+        checkpointRevisions = [];
+        revisionChain = [];
+        revisionsRows.replaceChildren();
+        revisionsPanel.hidden = true;
         loadResume.disabled = true;
         try {
             const context = planResumeContext(node);
+            planClipCount = context.clipCount;
             const query = new URLSearchParams({run_name: context.runName});
             const response = await api.fetchApi(
                 `/minimax_h3_context_loop/checkpoints?${query.toString()}`,
@@ -593,12 +770,14 @@ function mount(node) {
             if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
             resumeChoices = checkpointResumeOptions(
                 body.checkpoints, context.clipCount);
+            checkpointRevisions = body.revisions ?? [];
             for (const option of resumeChoices) {
                 const element = document.createElement("option");
                 element.value = String(option.resumeScene);
                 element.textContent = `Resume scene ${option.resumeScene} — checkpoint ${option.savedScene} · ${option.sceneId}`;
                 resumeSelect.append(element);
             }
+            renderRevisionChoices();
             loadResume.disabled = resumeChoices.length === 0;
             const complete = (body.checkpoints ?? []).filter((item) => item.ready).length;
             resumeStatus.textContent = resumeChoices.length
@@ -612,24 +791,75 @@ function mount(node) {
     }
 
     refreshResume.addEventListener("click", refreshResumeOptions);
+    resumeSelect.addEventListener("change", renderRevisionChoices);
     node._h3RefreshResume = refreshResumeOptions;
-    loadResume.addEventListener("click", () => {
+    loadResume.addEventListener("click", async () => {
         const resumeScene = Number(resumeSelect.value);
         if (!Number.isInteger(resumeScene)) return;
-        if (prepareResume(node, resumeScene)) {
+        try {
+            const selections = selectedRevisionChain();
+            const changed = selections.some((item) => !item.active);
+            let restored = [];
+            if (changed) {
+                const changedScenes = selections.filter(
+                    (item) => !item.active,
+                ).map((item) => item.scene).join(", ");
+                const confirmed = window.confirm(
+                    `Restore the selected checkpoint revisions through scene ` +
+                    `${resumeScene - 1} (changed scenes: ${changedScenes})? ` +
+                    "The current revisions will remain available in revision history.",
+                );
+                if (!confirmed) return;
+                const context = planResumeContext(node);
+                const response = await api.fetchApi(
+                    "/minimax_h3_context_loop/checkpoint-revisions/restore", {
+                        method: "POST",
+                        headers: {"Content-Type": "application/json"},
+                        body: JSON.stringify({
+                            run_name: context.runName,
+                            resume_scene: resumeScene,
+                            revisions: selections.map((item) => ({
+                                scene: item.scene,
+                                revision: item.revision,
+                            })),
+                        }),
+                    },
+                );
+                const body = await response.json();
+                if (!response.ok) throw new Error(
+                    body.error || `HTTP ${response.status}`,
+                );
+                restored = body.restored ?? [];
+                if (!updatePlanFromCheckpointRevisions(node, restored)) {
+                    throw new Error(
+                        "Checkpoint files were restored, but the connected Plan editor could not be updated.",
+                    );
+                }
+            }
+            if (!prepareResume(node, resumeScene)) {
+                throw new Error("Could not find the connected H3 Chain Loop Start node.");
+            }
             const choice = resumeChoices.find(
                 (item) => item.resumeScene === resumeScene);
-            const preview = choice?.partialVideo ?? choice?.video;
+            const selectedPredecessor = selections.find(
+                (item) => item.scene === resumeScene - 1,
+            );
+            const preview = selectedPredecessor?.video
+                ?? choice?.partialVideo ?? choice?.video;
             if (preview) {
                 video.src = videoUrl(preview);
                 video.load();
-                badge.textContent = choice?.partialVideo
+                badge.textContent = selectedPredecessor
+                    ? `saved scene ${selectedPredecessor.scene} · revision ${selectedPredecessor.revision.slice(0, 8)}`
+                    : choice?.partialVideo
                     ? `partial through checkpoint ${choice.savedScene}`
                     : `saved scene ${choice.savedScene} · ${choice.sceneId}`;
             }
-            resumeStatus.textContent = `Checkpoint ${resumeScene - 1} loaded for preview. Loop Start is armed for scene ${resumeScene}; queue the workflow to validate and resume.`;
-        } else {
-            resumeStatus.textContent = "Could not find the connected H3 Chain Loop Start node.";
+            const finalStatus = `${restored.length ? `Restored ${restored.length} checkpoint revision${restored.length === 1 ? "" : "s"}. ` : ""}Checkpoint ${resumeScene - 1} loaded for preview. Loop Start is armed for scene ${resumeScene}; queue the workflow to validate and resume.`;
+            if (restored.length) await refreshResumeOptions();
+            resumeStatus.textContent = finalStatus;
+        } catch (error) {
+            resumeStatus.textContent = error.message;
         }
     });
 

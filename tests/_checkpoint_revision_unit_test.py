@@ -1,0 +1,212 @@
+#!/usr/bin/env python3
+"""Standalone Review Gate checkpoint revision recovery and deletion checks."""
+
+import asyncio
+import hashlib
+import importlib.util
+import json
+import pathlib
+import sys
+import tempfile
+import types
+
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+PACKAGE = "h3_checkpoint_revision_unit"
+
+folder_paths = types.ModuleType("folder_paths")
+folder_paths.output_directory = str(ROOT)
+folder_paths.get_output_directory = lambda: folder_paths.output_directory
+folder_paths.get_temp_directory = lambda: folder_paths.output_directory
+folder_paths.get_input_directory = lambda: folder_paths.output_directory
+folder_paths.get_annotated_filepath = lambda value: str(value)
+sys.modules["folder_paths"] = folder_paths
+
+server = types.ModuleType("server")
+server.PromptServer = type("PromptServer", (), {"instance": None})
+sys.modules["server"] = server
+
+package = types.ModuleType(PACKAGE)
+package.__path__ = [str(ROOT)]
+sys.modules[PACKAGE] = package
+
+shared_nodes = types.ModuleType(PACKAGE + ".nodes")
+shared_nodes.MiniMaxH3MotionContext = object
+shared_nodes._claim_inline_patch_ownership = lambda: "test patch owner"
+shared_nodes._prepare_native_guide_conditioning = lambda *args: None
+shared_nodes._resize = lambda *args: None
+shared_nodes._streams_from_latent = lambda *args: None
+sys.modules[shared_nodes.__name__] = shared_nodes
+
+spec = importlib.util.spec_from_file_location(
+    PACKAGE + ".chain_nodes", ROOT / "chain_nodes.py")
+chain = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = chain
+spec.loader.exec_module(chain)
+
+
+class GetRequest:
+    query = {"run_name": "revision_test"}
+
+
+class JsonRequest:
+    def __init__(self, body):
+        self.body = body
+
+    async def json(self):
+        return self.body
+
+
+def digest(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def write_revision(run, scene, token, seed, active=False, predecessor=None):
+    segments = run / "segments"
+    checkpoints = run / "checkpoints"
+    reviews = run / "reviews"
+    for directory in (segments, checkpoints, reviews):
+        directory.mkdir(parents=True, exist_ok=True)
+    stem = "clip_%04d.%s" % (scene, token)
+    segment_path = segments / (stem + ".mp4")
+    prompt_path = segments / (stem + ".prompt.txt")
+    checkpoint_path = checkpoints / (stem + ".safetensors")
+    metadata_path = checkpoints / (stem + ".json")
+    segment_path.write_bytes(("video-%d-%s" % (scene, token)).encode())
+    prompt_path.write_text("prompt %d %s" % (scene, seed), encoding="utf-8")
+    checkpoint_path.write_bytes(("latent-%d-%s" % (scene, token)).encode())
+    segment = {
+        "index": scene,
+        "id": "scene_%d" % scene,
+        "revision": token,
+        "segment": str(segment_path.relative_to(folder_paths.output_directory)),
+        "checkpoint": str(
+            checkpoint_path.relative_to(folder_paths.output_directory)),
+        "metadata": str((checkpoints / ("clip_%04d.json" % scene)).relative_to(
+            folder_paths.output_directory)),
+        "revision_metadata": str(
+            metadata_path.relative_to(folder_paths.output_directory)),
+        "prompt_file": str(prompt_path.relative_to(folder_paths.output_directory)),
+        "raw_frames": 362,
+        "delivered_frames": 340 if scene > 1 else 362,
+        "prompt_prefix": "shared",
+        "scene_prompt": "prompt %d %s" % (scene, seed),
+        "prompt": "shared\nprompt %d %s" % (scene, seed),
+        "prompt_hash": hashlib.sha256(
+            ("shared\nprompt %d %s" % (scene, seed)).encode()).hexdigest(),
+        "seed": str(seed),
+        "steps": 8,
+        "segment_sha256": digest(segment_path),
+        "checkpoint_sha256": digest(checkpoint_path),
+        "prompt_file_sha256": digest(prompt_path),
+    }
+    if predecessor is not None:
+        previous = predecessor["segment"]
+        segment["predecessor_revision"] = previous["revision"]
+        segment["predecessor_checkpoint_sha256"] = previous[
+            "checkpoint_sha256"]
+    metadata = {
+        "format": "h3_chain_segment_v3",
+        "run_name": "revision_test",
+        "compatibility": {"context_length": 22, "audio_mode": "source_track"},
+        "segment": segment,
+    }
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+    review = reviews / (
+        "clip_%04d.%s.audio.review.mp4" %
+        (scene, segment["segment_sha256"][:12]))
+    review.write_bytes(b"preview")
+    if active:
+        (checkpoints / ("clip_%04d.json" % scene)).write_text(
+            json.dumps(metadata), encoding="utf-8")
+    return metadata, {segment_path, prompt_path, checkpoint_path, metadata_path, review}
+
+
+async def check():
+    with tempfile.TemporaryDirectory() as temporary:
+        folder_paths.output_directory = temporary
+        run = pathlib.Path(temporary) / "h3_chains" / "revision_test"
+        old_one = "1" * 32
+        new_one = "2" * 32
+        old_two = "3" * 32
+        new_two = "4" * 32
+        old_one_meta, _ = write_revision(run, 1, old_one, 101)
+        new_one_meta, new_one_files = write_revision(
+            run, 1, new_one, 201, active=True)
+        old_two_meta, _ = write_revision(
+            run, 2, old_two, 102, predecessor=old_one_meta)
+        write_revision(
+            run, 2, new_two, 202, active=True, predecessor=new_one_meta)
+
+        response = await chain._list_saved_checkpoints(GetRequest())
+        payload = json.loads(response.text)
+        assert [item["revision"] for item in payload["checkpoints"]] == [
+            new_one, new_two]
+        assert len(payload["revisions"]) == 4
+        assert sorted(item["revision"] for item in payload["revisions"]
+                      if item["active"]) == [new_one, new_two]
+        assert all(item["size_bytes"] > 0 for item in payload["revisions"])
+        assert all(item.get("preview_video") for item in payload["revisions"])
+
+        mismatched = await chain._restore_checkpoint_revisions(JsonRequest({
+            "run_name": "revision_test",
+            "resume_scene": 3,
+            "revisions": [
+                {"scene": 1, "revision": old_one},
+                {"scene": 2, "revision": new_two},
+            ],
+        }))
+        assert mismatched.status == 400
+        assert "different scene 1 revision" in json.loads(
+            mismatched.text)["error"]
+
+        restore = await chain._restore_checkpoint_revisions(JsonRequest({
+            "run_name": "revision_test",
+            "resume_scene": 3,
+            "revisions": [
+                {"scene": 1, "revision": old_one},
+                {"scene": 2, "revision": old_two},
+            ],
+        }))
+        assert restore.status == 200
+        restored = json.loads(restore.text)
+        assert [item["seed"] for item in restored["restored"]] == ["101", "102"]
+        active_one = json.loads((run / "checkpoints" / "clip_0001.json").read_text())
+        active_two = json.loads((run / "checkpoints" / "clip_0002.json").read_text())
+        assert active_one["segment"]["revision"] == old_one
+        assert active_two["segment"]["revision"] == old_two
+        assert (run / "checkpoints" / ("clip_0001.%s.json" % new_one)).is_file()
+
+        active_delete = await chain._delete_checkpoint_revision(JsonRequest({
+            "run_name": "revision_test", "scene": 1, "revision": old_one,
+        }))
+        assert active_delete.status == 409
+        assert "active" in json.loads(active_delete.text)["error"]
+
+        delete = await chain._delete_checkpoint_revision(JsonRequest({
+            "run_name": "revision_test", "scene": 1, "revision": new_one,
+        }))
+        assert delete.status == 200
+        deleted = json.loads(delete.text)
+        assert deleted["reclaimed_bytes"] > 0
+        assert deleted["deleted_files"] == len(new_one_files)
+        assert not any(path.exists() for path in new_one_files)
+        assert (run / "checkpoints" / "clip_0001.json").is_file()
+        assert json.loads((run / "checkpoints" / "clip_0001.json").read_text())[
+            "segment"]["revision"] == old_one
+
+        # A failed prefix selection must not alter either canonical pointer.
+        bad = await chain._restore_checkpoint_revisions(JsonRequest({
+            "run_name": "revision_test",
+            "resume_scene": 3,
+            "revisions": [{"scene": 2, "revision": old_two}],
+        }))
+        assert bad.status == 400
+        assert "exactly scenes 1 through 2" in json.loads(bad.text)["error"]
+        assert json.loads((run / "checkpoints" / "clip_0001.json").read_text())[
+            "segment"]["revision"] == old_one
+
+
+if __name__ == "__main__":
+    asyncio.run(check())
+    print("H3 checkpoint revisions: discovery, prefix restore, and guarded deletion pass")

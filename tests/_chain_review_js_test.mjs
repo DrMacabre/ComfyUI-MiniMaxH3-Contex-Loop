@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import {
+    applyCheckpointRevisionSet,
     applyReviewEdit,
+    checkpointRevisionChain,
     checkpointResumeOptions,
     reviewCountdown,
     reviewDuration,
@@ -61,6 +63,54 @@ assert.deepEqual(checkpointResumeOptions([
         video: {filename: "second.mp4"}, partialVideo: null},
 ]);
 
+const revisionA = "a".repeat(32);
+const revisionB = "b".repeat(32);
+const revisionC = "c".repeat(32);
+assert.deepEqual(checkpointRevisionChain([
+    {scene: 1, revision: revisionA, active: false, ready: true,
+        created_at: "2026-08-14T09:00:00", seed: "11", size_bytes: 1024},
+    {scene: 1, revision: revisionB, active: true, ready: true,
+        created_at: "2026-08-14T10:00:00", seed: "12", size_bytes: 2048},
+    {scene: 2, revision: revisionC, active: true, ready: true,
+        created_at: "2026-08-14T11:00:00", seed: "13", size_bytes: 4096},
+    {scene: 2, revision: "invalid", active: false, ready: true},
+], 3), [
+    {scene: 1, revisions: [
+        {scene: 1, sceneId: "clip_0001", revision: revisionB, active: true,
+            createdAt: "2026-08-14T10:00:00", seed: "12", sizeBytes: 2048,
+            promptPreview: "", video: null},
+        {scene: 1, sceneId: "clip_0001", revision: revisionA, active: false,
+            createdAt: "2026-08-14T09:00:00", seed: "11", sizeBytes: 1024,
+            promptPreview: "", video: null},
+    ]},
+    {scene: 2, revisions: [
+        {scene: 2, sceneId: "clip_0002", revision: revisionC, active: true,
+            createdAt: "2026-08-14T11:00:00", seed: "13", sizeBytes: 4096,
+            promptPreview: "", video: null},
+    ]},
+]);
+assert.deepEqual(checkpointRevisionChain([
+    {scene: 2, revision: revisionC, active: true, ready: true},
+], 3), [], "a recoverable chain must include every predecessor scene");
+
+const recoveredPlan = applyCheckpointRevisionSet({
+    prompt_prefix: ["new prefix"],
+    shots: [
+        {id: "one", prompt: ["new one"], length: 362, steps: 8, seed: "1"},
+        {id: "two", prompt: ["new two"], length: 362, steps: 8, seed: "2"},
+    ],
+}, [
+    {scene: 1, scene_id: "old_one", scene_prompt: "old one", seed: "101",
+        raw_frames: 345, steps: 6, prompt_prefix: "old prefix"},
+    {scene: 2, scene_id: "old_two", scene_prompt: "old two", seed: "102",
+        raw_frames: 328, steps: 7, prompt_prefix: "old prefix"},
+]);
+assert.deepEqual(recoveredPlan.prompt_prefix, ["old prefix"]);
+assert.deepEqual(recoveredPlan.shots, [
+    {id: "old_one", prompt: ["old one"], length: 345, steps: 6, seed: "101"},
+    {id: "old_two", prompt: ["old two"], length: 328, steps: 7, seed: "102"},
+]);
+
 const reviewSource = fs.readFileSync(
     new URL("../web/h3_chain_review_final.js", import.meta.url),
     "utf8",
@@ -93,6 +143,10 @@ assert.match(reviewSource, /Duration \(s\)/);
 assert.match(reviewSource, /body\.length/);
 assert.match(reviewSource, /reviewDurationText\(data\.raw_frames\)/);
 assert.match(reviewSource, /h3r-video-panel/);
+assert.match(reviewSource, /checkpoint-revisions\/restore/);
+assert.match(reviewSource, /checkpoint-revisions\/delete/);
+assert.match(reviewSource, /Permanently delete scene/);
+assert.match(reviewSource, /Restore & load/);
 assert.match(reviewSource, /h3r-video-grip/);
 assert.match(reviewSource, /h3_chain_review_video_height/);
 assert.match(reviewSource, /h3_chain_review_prompt_height/);

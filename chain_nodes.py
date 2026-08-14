@@ -2121,7 +2121,8 @@ def _public_segment(value: dict[str, Any]) -> dict[str, Any]:
         "raw_frames", "delivered_frames", "history_hash",
         "prompt_prefix", "scene_prompt", "prompt", "prompt_hash", "archives",
         "seed", "steps", "sample_rate", "segment_sha256",
-        "checkpoint_sha256", "prompt_file_sha256") if key in value}
+        "checkpoint_sha256", "prompt_file_sha256", "predecessor_revision",
+        "predecessor_checkpoint_sha256") if key in value}
 
 
 def _verify_segment_artifacts(segment: dict[str, Any], index: int) -> None:
@@ -4684,6 +4685,17 @@ class MiniMaxH3ChainSegmentSave:
                     "generated_audio": _relative_output_path(published_audio),
                     "generated_audio_sha256": _file_sha256(published_audio),
                 })
+            predecessors = state.get("segments")
+            if index > 1 and isinstance(predecessors, list) and predecessors:
+                predecessor = predecessors[-1]
+                predecessor_revision = str(
+                    predecessor.get("revision") or "")
+                predecessor_hash = str(
+                    predecessor.get("checkpoint_sha256") or "")
+                if predecessor_revision:
+                    segment["predecessor_revision"] = predecessor_revision
+                if predecessor_hash:
+                    segment["predecessor_checkpoint_sha256"] = predecessor_hash
             if previous_revision is not None:
                 segment["supersedes"] = previous_revision
             metadata = {
@@ -6682,6 +6694,355 @@ async def _list_pending_reviews(_request):
     return web.json_response({"reviews": reviews})
 
 
+def _checkpoint_review_preview(
+        index: int, segment: dict[str, Any], review_dir: str,
+        review_filenames: list[str]) -> str | None:
+    video_hash = str(segment.get("segment_sha256") or "")[:12]
+    if not video_hash or not review_filenames:
+        return None
+    review_prefix = "clip_%04d.%s." % (int(index), video_hash)
+    previews = []
+    for candidate in review_filenames:
+        if (not candidate.startswith(review_prefix) or
+                not candidate.endswith(".review.mp4")):
+            continue
+        preview_path = os.path.join(review_dir, candidate)
+        try:
+            previews.append((os.path.getmtime(preview_path), preview_path))
+        except OSError:
+            # Review replacement is atomic, but an old revision may disappear
+            # while the browser is refreshing.
+            continue
+    return max(previews, key=lambda item: item[0])[1] if previews else None
+
+
+def _checkpoint_revision_owned_paths(
+        metadata_path: str, segment: dict[str, Any],
+        review_dir: str) -> list[str]:
+    """Return only immutable files owned by one checkpoint revision."""
+    paths = {os.path.abspath(metadata_path)}
+    for key in ("segment", "checkpoint", "prompt_file", "generated_audio",
+                "blend_segment", "revision_metadata"):
+        value = segment.get(key)
+        if isinstance(value, str) and value:
+            paths.add(_absolute_output_path(value))
+    index = int(segment.get("index", 0))
+    video_hash = str(segment.get("segment_sha256") or "")[:12]
+    if index > 0 and video_hash and os.path.isdir(review_dir):
+        prefix = "clip_%04d.%s." % (index, video_hash)
+        for candidate in os.listdir(review_dir):
+            if candidate.startswith(prefix) and candidate.endswith(".review.mp4"):
+                paths.add(os.path.abspath(os.path.join(review_dir, candidate)))
+    return sorted(paths)
+
+
+def _checkpoint_revision_size(
+        metadata_path: str, segment: dict[str, Any], review_dir: str) -> int:
+    total = 0
+    for path in _checkpoint_revision_owned_paths(
+            metadata_path, segment, review_dir):
+        try:
+            total += os.path.getsize(path)
+        except OSError:
+            continue
+    return total
+
+
+def _checkpoint_review_is_shared(
+        checkpoint_dir: str, metadata_path: str,
+        segment: dict[str, Any]) -> bool:
+    selected_hash = str(segment.get("segment_sha256") or "")
+    if not selected_hash or not os.path.isdir(checkpoint_dir):
+        return False
+    selected_metadata = os.path.abspath(metadata_path)
+    for candidate in os.listdir(checkpoint_dir):
+        if re.fullmatch(r"clip_\d{4}\.[0-9a-f]{32}\.json", candidate) is None:
+            continue
+        path = os.path.abspath(os.path.join(checkpoint_dir, candidate))
+        if path == selected_metadata:
+            continue
+        try:
+            other = _read_json(path).get("segment")
+            if (isinstance(other, dict) and
+                    str(other.get("segment_sha256") or "") == selected_hash):
+                return True
+        except (OSError, TypeError, ValueError, json.JSONDecodeError,
+                AttributeError):
+            continue
+    return False
+
+
+def _load_checkpoint_revision(
+        run_name: str, scene: Any, revision: Any
+) -> tuple[dict[str, Any], str]:
+    index = int(scene)
+    token = str(revision or "").strip().lower()
+    if index < 1 or index > MAX_SHOTS:
+        raise ValueError("Checkpoint scene must be between 1 and %d." % MAX_SHOTS)
+    if re.fullmatch(r"[0-9a-f]{32}", token) is None:
+        raise ValueError("Checkpoint revision must be a 32-character revision id.")
+    checkpoint_dir = os.path.join(
+        _output_root(), "h3_chains", run_name, "checkpoints")
+    metadata_path = os.path.join(
+        checkpoint_dir, "clip_%04d.%s.json" % (index, token))
+    if not os.path.isfile(metadata_path):
+        raise FileNotFoundError(
+            "Scene %d revision %s is no longer available." % (index, token[:8]))
+    metadata = _read_json(metadata_path)
+    if not isinstance(metadata, dict):
+        raise ValueError("Checkpoint revision metadata is not a JSON object.")
+    stored_run = str(metadata.get("run_name") or run_name)
+    if _safe_name(stored_run, "") != run_name:
+        raise ValueError("Checkpoint revision belongs to a different run.")
+    segment = metadata.get("segment")
+    if not isinstance(segment, dict):
+        raise ValueError("Checkpoint revision has no segment record.")
+    if int(segment.get("index", -1)) != index:
+        raise ValueError("Checkpoint revision belongs to a different scene.")
+    if str(segment.get("revision") or "").lower() != token:
+        raise ValueError("Checkpoint revision id does not match its metadata.")
+    _verify_segment_artifacts(segment, index)
+    return metadata, metadata_path
+
+
+def _active_checkpoint_revision(run_name: str, scene: int) -> str:
+    canonical = os.path.join(
+        _output_root(), "h3_chains", run_name, "checkpoints",
+        "clip_%04d.json" % int(scene))
+    if not os.path.isfile(canonical):
+        return ""
+    try:
+        metadata = _read_json(canonical)
+        segment = metadata.get("segment")
+        return str(segment.get("revision") or "").lower()
+    except (OSError, TypeError, ValueError, json.JSONDecodeError, AttributeError):
+        return ""
+
+
+def _checkpoint_plan_revision(segment: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "scene": int(segment["index"]),
+        "scene_id": str(segment.get("id") or ""),
+        "revision": str(segment.get("revision") or ""),
+        "prompt_prefix": str(segment.get("prompt_prefix") or ""),
+        "scene_prompt": str(segment.get("scene_prompt") or ""),
+        "seed": str(segment.get("seed") or "0"),
+        "steps": int(segment.get("steps", 0)),
+        "raw_frames": int(segment.get("raw_frames", 0)),
+        "video": _video_output_item(_absolute_output_path(segment["segment"])),
+    }
+
+
+async def _restore_checkpoint_revisions(request):
+    try:
+        body = await request.json()
+    except (json.JSONDecodeError, TypeError):
+        return web.json_response(
+            {"error": "Checkpoint recovery requires a JSON request."},
+            status=400)
+    try:
+        run_name = _safe_name(body.get("run_name", ""), "")
+        if not run_name:
+            raise ValueError("A non-empty H3 chain run_name is required.")
+        resume_scene = int(body.get("resume_scene", 0))
+        if resume_scene < 2 or resume_scene > MAX_SHOTS:
+            raise ValueError("Resume scene must be between 2 and %d." % MAX_SHOTS)
+        selections = body.get("revisions")
+        if not isinstance(selections, list):
+            raise ValueError("Checkpoint recovery requires a revision list.")
+        by_scene = {}
+        for selection in selections:
+            if not isinstance(selection, dict):
+                raise ValueError("Each checkpoint selection must be an object.")
+            scene = int(selection.get("scene", 0))
+            if scene in by_scene:
+                raise ValueError("Checkpoint scene %d was selected twice." % scene)
+            by_scene[scene] = str(selection.get("revision") or "")
+        expected = set(range(1, resume_scene))
+        if set(by_scene) != expected:
+            raise ValueError(
+                "Select exactly scenes 1 through %d before restoring this "
+                "resume chain." % (resume_scene - 1))
+
+        loaded = []
+        compatibility = None
+        prompt_prefix = None
+        for scene in range(1, resume_scene):
+            metadata, metadata_path = _load_checkpoint_revision(
+                run_name, scene, by_scene[scene])
+            current_compatibility = metadata.get("compatibility")
+            if compatibility is None:
+                compatibility = current_compatibility
+            elif _canonical_json(current_compatibility) != _canonical_json(
+                    compatibility):
+                raise ValueError(
+                    "Selected checkpoint revisions use different Plan "
+                    "compatibility settings.")
+            segment = metadata["segment"]
+            current_prefix = str(segment.get("prompt_prefix") or "")
+            if prompt_prefix is None:
+                prompt_prefix = current_prefix
+            elif current_prefix != prompt_prefix:
+                raise ValueError(
+                    "Selected checkpoint revisions use different shared prompts.")
+            if loaded:
+                predecessor = loaded[-1][1]["segment"]
+                expected_revision = str(
+                    segment.get("predecessor_revision") or "")
+                expected_hash = str(
+                    segment.get("predecessor_checkpoint_sha256") or "")
+                if (expected_revision and expected_revision != str(
+                        predecessor.get("revision") or "")):
+                    raise ValueError(
+                        "Scene %d revision was generated from a different "
+                        "scene %d revision." % (scene, scene - 1))
+                if (expected_hash and expected_hash != str(
+                        predecessor.get("checkpoint_sha256") or "")):
+                    raise ValueError(
+                        "Scene %d revision was generated from a different "
+                        "scene %d checkpoint." % (scene, scene - 1))
+            loaded.append((scene, metadata, metadata_path))
+
+        checkpoint_dir = os.path.join(
+            _output_root(), "h3_chains", run_name, "checkpoints")
+        originals = {}
+        committed = []
+        try:
+            for scene, metadata, _metadata_path in loaded:
+                canonical = os.path.join(
+                    checkpoint_dir, "clip_%04d.json" % scene)
+                originals[canonical] = (_read_json(canonical)
+                                        if os.path.isfile(canonical) else None)
+                _atomic_json(canonical, metadata)
+                committed.append(canonical)
+        except Exception:
+            for canonical in reversed(committed):
+                original = originals.get(canonical)
+                try:
+                    if original is None:
+                        _safe_unlink(canonical)
+                    else:
+                        _atomic_json(canonical, original)
+                except Exception:
+                    _LOG.exception(
+                        "Could not roll back checkpoint pointer %s", canonical)
+            raise
+
+        restored = [
+            _checkpoint_plan_revision(metadata["segment"])
+            for _scene, metadata, _metadata_path in loaded
+        ]
+        return web.json_response({
+            "ok": True,
+            "run_name": run_name,
+            "resume_scene": resume_scene,
+            "restored": restored,
+            "message": "Restored scenes 1 through %d; resume scene %d is ready."
+                       % (resume_scene - 1, resume_scene),
+        })
+    except FileNotFoundError as exc:
+        return web.json_response({"error": str(exc)}, status=404)
+    except (OSError, TypeError, ValueError, json.JSONDecodeError, KeyError) as exc:
+        return web.json_response({"error": str(exc)}, status=400)
+
+
+async def _delete_checkpoint_revision(request):
+    try:
+        body = await request.json()
+    except (json.JSONDecodeError, TypeError):
+        return web.json_response(
+            {"error": "Checkpoint revision deletion requires JSON."},
+            status=400)
+    try:
+        run_name = _safe_name(body.get("run_name", ""), "")
+        if not run_name:
+            raise ValueError("A non-empty H3 chain run_name is required.")
+        scene = int(body.get("scene", 0))
+        revision = str(body.get("revision") or "").strip().lower()
+        if _active_checkpoint_revision(run_name, scene) == revision:
+            return web.json_response(
+                {"error": "The active checkpoint revision cannot be deleted. "
+                          "Restore a different revision first."}, status=409)
+        metadata, metadata_path = _load_checkpoint_revision(
+            run_name, scene, revision)
+        run_dir = os.path.join(_output_root(), "h3_chains", run_name)
+        review_dir = os.path.join(run_dir, "reviews")
+        owned = _checkpoint_revision_owned_paths(
+            metadata_path, metadata["segment"], review_dir)
+        checkpoint_dir = os.path.join(run_dir, "checkpoints")
+        if _checkpoint_review_is_shared(
+                checkpoint_dir, metadata_path, metadata["segment"]):
+            absolute_review_dir = os.path.abspath(review_dir)
+            owned = [path for path in owned if os.path.commonpath(
+                [absolute_review_dir, path]) != absolute_review_dir]
+        canonical = os.path.abspath(os.path.join(
+            run_dir, "checkpoints", "clip_%04d.json" % scene))
+        allowed_roots = [os.path.abspath(os.path.join(run_dir, name)) for name in (
+            "segments", "checkpoints", "generated_audio", "blend_segments",
+            "reviews")]
+        expected_prefix = "clip_%04d.%s" % (scene, revision)
+        absolute_review_dir = os.path.abspath(review_dir)
+        for path in owned:
+            if path == canonical:
+                raise ValueError("Refusing to delete an active checkpoint pointer.")
+            if not any(os.path.commonpath([root, path]) == root
+                       for root in allowed_roots):
+                raise ValueError("Checkpoint revision owns an unexpected path.")
+            if (os.path.commonpath([absolute_review_dir, path]) !=
+                    absolute_review_dir and
+                    not os.path.basename(path).startswith(expected_prefix)):
+                raise ValueError(
+                    "Checkpoint revision references a file owned by another "
+                    "revision.")
+
+        existing = [path for path in owned if os.path.isfile(path)]
+        owned_sizes = {path: os.path.getsize(path) for path in existing}
+        transaction = uuid.uuid4().hex
+        staged = []
+        try:
+            for path in existing:
+                temporary = "%s.delete.%s.tmp" % (path, transaction)
+                os.replace(path, temporary)
+                staged.append((path, temporary))
+        except Exception:
+            for original, temporary in reversed(staged):
+                try:
+                    os.replace(temporary, original)
+                except Exception:
+                    _LOG.exception(
+                        "Could not roll back staged checkpoint deletion %s",
+                        original)
+            raise
+        failed = []
+        for _original, temporary in staged:
+            try:
+                os.unlink(temporary)
+            except OSError:
+                failed.append(temporary)
+        if failed:
+            _LOG.warning(
+                "Checkpoint revision deletion left %d staged files: %s",
+                len(failed), ", ".join(failed))
+        failed_set = set(failed)
+        reclaimed = sum(
+            owned_sizes[original] for original, temporary in staged
+            if temporary not in failed_set)
+        return web.json_response({
+            "ok": True,
+            "run_name": run_name,
+            "scene": scene,
+            "revision": revision,
+            "deleted_files": len(existing) - len(failed),
+            "reclaimed_bytes": reclaimed,
+            "message": "Deleted scene %d revision %s." % (
+                scene, revision[:8]),
+        })
+    except FileNotFoundError as exc:
+        return web.json_response({"error": str(exc)}, status=404)
+    except (OSError, TypeError, ValueError, json.JSONDecodeError, KeyError) as exc:
+        return web.json_response({"error": str(exc)}, status=400)
+
+
 async def _list_saved_checkpoints(request):
     run_name = _safe_name(request.query.get("run_name", ""), "")
     if not run_name:
@@ -6696,6 +7057,7 @@ async def _list_saved_checkpoints(request):
     except OSError:
         review_filenames = []
     checkpoints = []
+    revisions_by_key: dict[tuple[int, str], dict[str, Any]] = {}
     if os.path.isdir(checkpoint_dir):
         for filename in sorted(os.listdir(checkpoint_dir)):
             match = re.fullmatch(r"clip_(\d{4})\.json", filename)
@@ -6716,6 +7078,7 @@ async def _list_saved_checkpoints(request):
                 item = {
                     "scene": index,
                     "scene_id": str(segment.get("id") or "clip_%04d" % index),
+                    "revision": str(segment.get("revision") or ""),
                     "resume_scene": index + 1,
                     "ready": ready,
                     "raw_frames": int(segment.get("raw_frames", 0)),
@@ -6723,25 +7086,10 @@ async def _list_saved_checkpoints(request):
                 }
                 if os.path.isfile(segment_path):
                     item["video"] = _video_output_item(segment_path)
-                    video_hash = str(segment.get("segment_sha256") or "")[:12]
-                    review_prefix = "clip_%04d.%s." % (index, video_hash)
-                    if video_hash and review_filenames:
-                        previews = []
-                        for candidate in review_filenames:
-                            if (not candidate.startswith(review_prefix) or
-                                    not candidate.endswith(".review.mp4")):
-                                continue
-                            preview_path = os.path.join(review_dir, candidate)
-                            try:
-                                previews.append(
-                                    (os.path.getmtime(preview_path), preview_path))
-                            except OSError:
-                                # Review replacement is atomic, but its old
-                                # revision can disappear during this read.
-                                continue
-                        if previews:
-                            newest = max(previews, key=lambda item: item[0])[1]
-                            item["preview_video"] = _video_output_item(newest)
+                    preview = _checkpoint_review_preview(
+                        index, segment, review_dir, review_filenames)
+                    if preview is not None:
+                        item["preview_video"] = _video_output_item(preview)
                 partial_path = os.path.join(
                     _output_root(), "h3_chains", run_name, "final",
                     "partial_through_clip_%04d.mp4" % index)
@@ -6751,9 +7099,74 @@ async def _list_saved_checkpoints(request):
             except (OSError, TypeError, ValueError, json.JSONDecodeError,
                     KeyError):
                 continue
+        active_revisions = {
+            int(item["scene"]): str(item.get("revision") or "")
+            for item in checkpoints
+        }
+        for filename in sorted(os.listdir(checkpoint_dir)):
+            match = re.fullmatch(
+                r"clip_(\d{4})\.([0-9a-f]{32})\.json", filename)
+            if match is None:
+                continue
+            try:
+                metadata_path = os.path.join(checkpoint_dir, filename)
+                metadata = _read_json(metadata_path)
+                segment = metadata.get("segment")
+                if not isinstance(segment, dict):
+                    continue
+                index = int(segment.get("index", int(match.group(1))))
+                revision = str(segment.get("revision") or match.group(2))
+                if (index != int(match.group(1)) or
+                        revision != match.group(2)):
+                    continue
+                segment_path = _absolute_output_path(segment["segment"])
+                checkpoint_path = _absolute_output_path(segment["checkpoint"])
+                ready = (os.path.isfile(segment_path) and
+                         os.path.isfile(checkpoint_path))
+                size_bytes = _checkpoint_revision_size(
+                    metadata_path, segment, review_dir)
+                item = {
+                    "scene": index,
+                    "scene_id": str(
+                        segment.get("id") or "clip_%04d" % index),
+                    "revision": revision,
+                    "active": active_revisions.get(index) == revision,
+                    "ready": ready,
+                    "raw_frames": int(segment.get("raw_frames", 0)),
+                    "delivered_frames": int(
+                        segment.get("delivered_frames", 0)),
+                    "seed": str(segment.get("seed") or ""),
+                    "steps": int(segment.get("steps", 0)),
+                    "predecessor_revision": str(
+                        segment.get("predecessor_revision") or ""),
+                    "predecessor_checkpoint_sha256": str(
+                        segment.get("predecessor_checkpoint_sha256") or ""),
+                    "created_at": datetime.fromtimestamp(
+                        os.path.getmtime(metadata_path)).isoformat(
+                            timespec="seconds"),
+                    "size_bytes": size_bytes,
+                }
+                prompt = str(segment.get("scene_prompt") or "").strip()
+                if prompt:
+                    item["prompt_preview"] = re.sub(
+                        r"\s+", " ", prompt)[:180]
+                if os.path.isfile(segment_path):
+                    item["video"] = _video_output_item(segment_path)
+                    preview = _checkpoint_review_preview(
+                        index, segment, review_dir, review_filenames)
+                    if preview is not None:
+                        item["preview_video"] = _video_output_item(preview)
+                revisions_by_key[(index, revision)] = item
+            except (OSError, TypeError, ValueError, json.JSONDecodeError,
+                    KeyError):
+                continue
     return web.json_response({
         "run_name": run_name,
         "checkpoints": checkpoints,
+        "revisions": sorted(
+            revisions_by_key.values(),
+            key=lambda item: (int(item["scene"]), item["created_at"],
+                              item["revision"])),
     })
 
 
@@ -6899,6 +7312,12 @@ if (PromptServer is not None and web is not None and
         "/minimax_h3_context_loop/reviews")(_list_pending_reviews)
     PromptServer.instance.routes.get(
         "/minimax_h3_context_loop/checkpoints")(_list_saved_checkpoints)
+    PromptServer.instance.routes.post(
+        "/minimax_h3_context_loop/checkpoint-revisions/restore")(
+            _restore_checkpoint_revisions)
+    PromptServer.instance.routes.post(
+        "/minimax_h3_context_loop/checkpoint-revisions/delete")(
+            _delete_checkpoint_revision)
     PromptServer.instance.routes.post(
         "/minimax_h3_context_loop/open-run-folder")(_open_run_folder)
     PromptServer.instance.routes.get(

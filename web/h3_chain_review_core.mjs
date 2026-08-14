@@ -114,3 +114,84 @@ export function checkpointResumeOptions(checkpoints, clipCount) {
     return [...byResumeScene.values()].sort((left, right) =>
         left.resumeScene - right.resumeScene);
 }
+
+export function checkpointRevisionChain(revisions, resumeScene) {
+    const nextScene = Number(resumeScene);
+    if (!Number.isInteger(nextScene) || nextScene < 2) return [];
+    const grouped = new Map();
+    for (const item of revisions ?? []) {
+        const scene = Number(item?.scene);
+        const revision = String(item?.revision ?? "");
+        if (!item?.ready || !Number.isInteger(scene) || scene < 1
+                || scene >= nextScene || !/^[0-9a-f]{32}$/.test(revision)) {
+            continue;
+        }
+        const normalized = {
+            scene,
+            sceneId: String(item.scene_id ?? `clip_${String(scene).padStart(4, "0")}`),
+            revision,
+            active: Boolean(item.active),
+            createdAt: String(item.created_at ?? ""),
+            seed: String(item.seed ?? ""),
+            sizeBytes: Math.max(0, Number(item.size_bytes) || 0),
+            promptPreview: String(item.prompt_preview ?? ""),
+            video: item.preview_video ?? item.video ?? null,
+        };
+        const entries = grouped.get(scene) ?? [];
+        entries.push(normalized);
+        grouped.set(scene, entries);
+    }
+    const chain = [];
+    for (let scene = 1; scene < nextScene; scene += 1) {
+        const entries = grouped.get(scene) ?? [];
+        entries.sort((left, right) => {
+            if (left.active !== right.active) return left.active ? -1 : 1;
+            return right.createdAt.localeCompare(left.createdAt)
+                || right.revision.localeCompare(left.revision);
+        });
+        if (!entries.length) return [];
+        chain.push({scene, revisions: entries});
+    }
+    return chain;
+}
+
+export function applyCheckpointRevisionSet(plan, revisions) {
+    if (!plan || !Array.isArray(plan.shots)) {
+        throw new Error("The active Plan has no scenes.");
+    }
+    let shared = null;
+    for (const revision of revisions ?? []) {
+        const scene = Number(revision?.scene);
+        const index = scene - 1;
+        if (!Number.isInteger(scene) || index < 0 || index >= plan.shots.length) {
+            throw new Error("A restored checkpoint scene is outside the active Plan.");
+        }
+        const length = Number(revision.raw_frames);
+        if (!Number.isInteger(length) || length < 5 || length > MAX_H3_FRAMES
+                || length % 17 !== 5) {
+            throw new Error(`Restored scene ${scene} has an invalid H3 frame length.`);
+        }
+        const steps = Number(revision.steps);
+        if (!Number.isInteger(steps) || steps < 1) {
+            throw new Error(`Restored scene ${scene} has an invalid step count.`);
+        }
+        const prefix = String(revision.prompt_prefix ?? "");
+        if (shared === null) shared = prefix;
+        if (prefix !== shared) {
+            throw new Error("Restored checkpoint revisions use different shared prompts.");
+        }
+        const shot = plan.shots[index];
+        if (revision.scene_id) shot.id = String(revision.scene_id);
+        shot.prompt = promptTextToLines(revision.scene_prompt ?? "");
+        shot.seed = reviewSeed(revision.seed);
+        shot.length = length;
+        shot.steps = steps;
+        delete shot.frames;
+        delete shot.duration_seconds;
+    }
+    if (shared !== null) {
+        const current = sharedPrompt(plan);
+        plan[current.key] = promptTextToLines(shared);
+    }
+    return plan;
+}

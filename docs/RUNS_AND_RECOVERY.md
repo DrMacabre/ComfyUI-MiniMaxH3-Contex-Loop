@@ -42,6 +42,31 @@ seed, timing, source waveform, Plan compatibility setting, or
 Review Gate's checkpoint browser can set up this resume and preview the joined
 partial through the selected predecessor.
 
+### Restore an earlier scene revision
+
+**Refresh** in Review Gate discovers the active checkpoint and every immutable
+revision retained for that scene. Choose the scene to resume, then select the
+desired version of each predecessor under **Checkpoint revisions**. Clicking
+**Restore & load** validates the selected MP4, safetensors checkpoint, hashes,
+shared prompt, and compatibility contract before atomically promoting the
+selected prefix. The corresponding prompts, seeds, lengths, steps, and scene
+identifiers are restored into the connected Plan, and Loop Start is armed for
+the next scene.
+
+The active versions are selected by default. Restoring an earlier version does
+not delete the current one, so another revision can be promoted later. Exact
+continuation requires the revision's checkpoint metadata and safetensors file;
+an MP4 copied from `segments/` or `reviews/` alone cannot recreate the saved AV
+latent. When only video survives, use Existing Video Context as a re-encoded
+continuation instead.
+
+Inactive revisions can be deleted from the same panel to reclaim space. The
+confirmation names the exact scene, short revision id, owned artifact types,
+and estimated size. Active revisions cannot be deleted. Cleanup is limited to
+that revision's segment, safetensors checkpoint, prompt/audio/blend sidecars,
+preview, and versioned metadata; Plan archives, assets, and other revisions are
+never included.
+
 ## Run Manager
 
 Connect the active Plan output to **MiniMax H3 Run Manager**. It discovers runs

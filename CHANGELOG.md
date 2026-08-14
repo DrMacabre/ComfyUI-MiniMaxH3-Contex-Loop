@@ -2,6 +2,17 @@
 
 Newest first. This file keeps release history out of the onboarding README.
 
+## v0.4.2 — Checkpoint revision recovery
+
+- Extended the existing Review Gate checkpoint browser to discover every
+  retained scene revision, preview it, and restore a selected predecessor
+  chain before resuming the next scene.
+- Restoring revisions updates the editable Plan's scene prompts, seeds,
+  lengths, steps, identifiers, and shared prompt before Loop Start is armed.
+- Added guarded cleanup for inactive revisions. Review Gate shows each
+  revision's estimated storage and requires an explicit permanent-delete
+  confirmation; active pointers and unrelated run files cannot be removed.
+
 ## v0.4.1 — Tagged source audio and UI fixes
 
 - Added `source_timeline` playback to Tagged Audio Ref. It fingerprints the full
