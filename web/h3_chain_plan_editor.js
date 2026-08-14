@@ -274,7 +274,17 @@ function collapseWidget(widget) {
     for (const item of elements) {
         if (!item?.style) continue;
         item.style.setProperty("display", "none", "important");
+        item.style.setProperty("pointer-events", "none", "important");
         item.setAttribute?.("aria-hidden", "true");
+    }
+
+    // Current ComfyUI places DOM widgets in a separate Vue-owned wrapper.
+    // Its widget object is markRaw, so changing `hidden` can leave that empty
+    // wrapper pointer-active until a later renderer transition. Unregister
+    // only the DOM surface: this widget deliberately remains in node.widgets
+    // with its value and callback intact for workflow serialization.
+    if (widget.element && widget.id && typeof widget.onRemove === "function") {
+        widget.onRemove();
     }
 }
 
@@ -1134,6 +1144,15 @@ app.registerExtension({
         const onGraphConfigured = nodeType.prototype.onGraphConfigured;
         nodeType.prototype.onGraphConfigured = function () {
             const result = onGraphConfigured?.apply(this, arguments);
+            setTimeout(() => this._h3ChainEditorRefresh?.(), 0);
+            return result;
+        };
+
+        const onAdded = nodeType.prototype.onAdded;
+        nodeType.prototype.onAdded = function () {
+            const result = onAdded?.apply(this, arguments);
+            // ComfyUI registers DOM widgets again when an existing node is
+            // removed and re-added. Retire the hidden plan_json surface again.
             setTimeout(() => this._h3ChainEditorRefresh?.(), 0);
             return result;
         };

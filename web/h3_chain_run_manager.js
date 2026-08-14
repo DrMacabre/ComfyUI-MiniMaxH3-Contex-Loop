@@ -123,7 +123,11 @@ function collapseWidget(widget) {
     for (const item of new Set([widget.inputEl, widget.element])) {
         if (!item?.style) continue;
         item.style.setProperty("display", "none", "important");
+        item.style.setProperty("pointer-events", "none", "important");
         item.setAttribute?.("aria-hidden", "true");
+    }
+    if (widget.element && widget.id && typeof widget.onRemove === "function") {
+        widget.onRemove();
     }
 }
 

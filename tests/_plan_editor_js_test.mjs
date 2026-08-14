@@ -183,6 +183,9 @@ const editorSource = fs.readFileSync(
 );
 assert.match(editorSource, /collapseWidget\(planWidget\)/);
 assert.match(editorSource, /display[^\n]+none[^\n]+important/);
+assert.match(editorSource, /pointer-events[^\n]+none[^\n]+important/);
+assert.match(editorSource, /widget\.onRemove\(\)/);
+assert.match(editorSource, /const onAdded = nodeType\.prototype\.onAdded/);
 assert.match(editorSource, /onGraphConfigured/);
 assert.match(editorSource, /scheduleResponsiveSize\(\)/);
 assert.doesNotMatch(editorSource, /height: \$\{EDITOR_HEIGHT\}px/);
