@@ -391,20 +391,54 @@ function insertDialogue(textarea) {
 }
 
 function editorPlainText(editor) {
-    function read(current) {
+    function read(current, root) {
         if (current.nodeType === Node.TEXT_NODE) return current.textContent ?? "";
+        if (current.nodeType === Node.DOCUMENT_FRAGMENT_NODE) {
+            let text = "";
+            for (const child of current.childNodes) text += read(child, root);
+            return text;
+        }
         if (current.nodeType !== Node.ELEMENT_NODE) return "";
         if (current.classList?.contains("h3sp-token")) {
             return current.dataset.token ?? current.textContent ?? "";
         }
         if (current.tagName === "BR") return "\n";
         let text = "";
-        for (const child of current.childNodes) text += read(child);
+        for (const child of current.childNodes) text += read(child, root);
         if (["DIV", "P"].includes(current.tagName)
-                && current !== editor && !text.endsWith("\n")) text += "\n";
+                && current !== root && !text.endsWith("\n")) text += "\n";
         return text;
     }
-    return read(editor).replace(/\n$/, "");
+    return read(editor, editor).replace(/\n$/, "");
+}
+
+function selectedEditorPlainText(editor) {
+    const selection = globalThis.getSelection?.();
+    if (!selection?.rangeCount || selection.isCollapsed) return null;
+    const inside = (current) => current === editor || editor.contains(current);
+    if (!inside(selection.anchorNode) || !inside(selection.focusNode)) return null;
+    const fragment = selection.getRangeAt(0).cloneContents();
+    return editorPlainText(fragment);
+}
+
+function copyEditorSelection(editor, event, cut = false) {
+    const text = selectedEditorPlainText(editor);
+    if (text == null || !event.clipboardData) return false;
+    // A decorated tag contains icons/thumbnails as well as its visible label.
+    // Copy its canonical data-token value so another prompt editor receives
+    // exactly the original prompt markup rather than browser-generated HTML.
+    event.clipboardData.setData("text/plain", text);
+    event.preventDefault();
+    if (cut) {
+        const selection = globalThis.getSelection?.();
+        const range = selection.getRangeAt(0);
+        range.deleteContents();
+        range.collapse(true);
+        selection.removeAllRanges();
+        selection.addRange(range);
+        editor.dispatchEvent(new Event("input", {bubbles: true}));
+    }
+    return true;
 }
 
 function selectionTextOffset(editor) {
@@ -1831,6 +1865,8 @@ function mount(node) {
             event.preventDefault();
             insertPlainText(richEditor, event.clipboardData?.getData("text/plain") ?? "");
         });
+        richEditor.addEventListener("copy", (event) => copyEditorSelection(richEditor, event));
+        richEditor.addEventListener("cut", (event) => copyEditorSelection(richEditor, event, true));
         richEditor.addEventListener("keydown", (event) => {
             if (event.altKey && event.key === "ArrowLeft") {
                 event.preventDefault();

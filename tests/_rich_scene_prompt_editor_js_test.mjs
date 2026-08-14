@@ -30,6 +30,16 @@ assert.deepEqual(
         ["reference", "unknown", "@missing", true],
     ],
 );
+const punctuated = tokenizeRichPrompt(
+    "Keep @hero. Then use @voice, without absorbing punctuation.",
+    records,
+);
+assert.deepEqual(
+    punctuated.filter((item) => item.type !== "text").map((item) => item.text),
+    ["@hero", "@voice"],
+);
+assert.equal(punctuated.map((item) => item.text).join(""),
+    "Keep @hero. Then use @voice, without absorbing punctuation.");
 assert.equal(richGenerationMode("scheduled"), "Ref2VA");
 assert.equal(richGenerationMode("tagged"), "Ref2VA");
 assert.equal(richGenerationMode("native_keyframes"), "I2VA/FL2VA");
@@ -58,6 +68,11 @@ assert.match(source, /edits only the selected scene prompt/i);
 assert.match(source, /contentEditable = "true"/);
 assert.match(source, /"keydown", "keyup", "keypress", "copy", "cut", "paste"/);
 assert.match(source, /stopPropagation deliberately preserves the browser's default/);
+assert.match(source, /selectedEditorPlainText/);
+assert.match(source, /data-token value/);
+assert.match(source, /setData\("text\/plain", text\)/);
+assert.match(source, /editor\.addEventListener\("copy"/);
+assert.match(source, /editor\.addEventListener\("cut"/);
 assert.match(source, /Keep the browser's live DOM and undo transaction intact/);
 assert.match(source, /tokenizeRichPrompt/);
 assert.match(source, /h3rp-token-picture/);

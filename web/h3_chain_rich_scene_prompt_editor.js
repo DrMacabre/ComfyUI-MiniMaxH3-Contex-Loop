@@ -310,17 +310,51 @@ function clamp(value, minimum, maximum, fallback) {
 }
 
 function editorPlainText(editor) {
-    function read(node) {
+    function read(node, root) {
         if (node.nodeType === Node.TEXT_NODE) return node.textContent ?? "";
+        if (node.nodeType === Node.DOCUMENT_FRAGMENT_NODE) {
+            let text = "";
+            for (const child of node.childNodes) text += read(child, root);
+            return text;
+        }
         if (node.nodeType !== Node.ELEMENT_NODE) return "";
         if (node.classList?.contains("h3rp-token")) return node.dataset.token ?? node.textContent ?? "";
         if (node.tagName === "BR") return "\n";
         let text = "";
-        for (const child of node.childNodes) text += read(child);
-        if (["DIV", "P"].includes(node.tagName) && node !== editor && !text.endsWith("\n")) text += "\n";
+        for (const child of node.childNodes) text += read(child, root);
+        if (["DIV", "P"].includes(node.tagName) && node !== root && !text.endsWith("\n")) text += "\n";
         return text;
     }
-    return read(editor).replace(/\n$/, "");
+    return read(editor, editor).replace(/\n$/, "");
+}
+
+function selectedEditorPlainText(editor) {
+    const selection = globalThis.getSelection?.();
+    if (!selection?.rangeCount || selection.isCollapsed) return null;
+    const inside = (node) => node === editor || editor.contains(node);
+    if (!inside(selection.anchorNode) || !inside(selection.focusNode)) return null;
+    const fragment = selection.getRangeAt(0).cloneContents();
+    return editorPlainText(fragment);
+}
+
+function copyEditorSelection(editor, event, cut = false) {
+    const text = selectedEditorPlainText(editor);
+    if (text == null || !event.clipboardData) return false;
+    // A decorated tag contains icons/thumbnails as well as its visible label.
+    // Copy its canonical data-token value so another prompt editor receives
+    // exactly the original prompt markup rather than browser-generated HTML.
+    event.clipboardData.setData("text/plain", text);
+    event.preventDefault();
+    if (cut) {
+        const selection = globalThis.getSelection?.();
+        const range = selection.getRangeAt(0);
+        range.deleteContents();
+        range.collapse(true);
+        selection.removeAllRanges();
+        selection.addRange(range);
+        editor.dispatchEvent(new Event("input", {bubbles:true}));
+    }
+    return true;
 }
 
 function selectionTextOffset(editor) {
@@ -1239,6 +1273,8 @@ function mount(node) {
         editor.addEventListener("paste", (event) => {
             event.preventDefault(); insertPlainText(editor, event.clipboardData?.getData("text/plain") ?? "");
         });
+        editor.addEventListener("copy", (event) => copyEditorSelection(editor, event));
+        editor.addEventListener("cut", (event) => copyEditorSelection(editor, event, true));
         editor.addEventListener("keydown", (event) => {
             if (event.altKey && event.key === "ArrowLeft") event.preventDefault(), navigate(-1);
             else if (event.altKey && event.key === "ArrowRight") event.preventDefault(), navigate(1);

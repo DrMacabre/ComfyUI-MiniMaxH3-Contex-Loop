@@ -64,7 +64,10 @@ export function referenceRecordMap(records) {
     return map;
 }
 
-const RICH_TOKEN_PATTERN = /(@[A-Za-z0-9_.-]+|<(?:Picture|Video|Audio|Subject)\s+\d+>|<\/?d>)/gi;
+// Keep this alias grammar aligned with chain_nodes.py's reference compiler.
+// In particular, sentence punctuation such as the period in "Use @hero."
+// belongs to the surrounding prompt, not to the decorated reference token.
+const RICH_TOKEN_PATTERN = /((?<![A-Za-z0-9_])@[A-Za-z][A-Za-z0-9_-]{0,63}(?![A-Za-z0-9_-])|<(?:Picture|Video|Audio|Subject)\s+\d+>|<\/?d>)/gi;
 
 export function tokenizeRichPrompt(text, records = []) {
     const source = String(text ?? "");
