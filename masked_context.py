@@ -1,10 +1,10 @@
 """Masked target-prefix continuation for recursive MiniMax H3 chains.
 
-The previous scene's decoded video tail is VAE-encoded into the beginning of
-the next scene's real target latent.  The matching audio tail is copied from
-the previous sampled H3 latent (or encoded from imported audio for scene 1).
-A nested AV denoise mask then protects that prefix while the sampler generates
-only the future portion.
+Generated scenes continue directly from the previous sampled H3 video/audio
+latent tails, avoiding a lossy video decode/re-encode round trip.  Imported
+scene-1 video and audio still use their respective VAEs because no sampled H3
+latent exists yet.  A nested AV denoise mask protects the copied prefix while
+the sampler generates only the future portion.
 
 The mask design follows ComfyUI PR #15375 and seitanism's GPL-3.0
 ComfyUI-H3-Motion-Context-MultiRef masked-extension work.  Runtime support is
@@ -89,6 +89,94 @@ def _validate_target_streams(latent, strict_audio_grid=True):
             raise RuntimeError(message)
         _LOG.warning("%s The target audio length is authoritative.", message)
     return video, audio, target_frames
+
+
+def _generated_video_tail(previous_latent, frames, target_video):
+    """Copy a phase-aligned video prefix from a generated H3 AV latent."""
+    parts = _streams_from_latent(previous_latent)
+    if len(parts) < 2:
+        raise ValueError(
+            "h3_masked_prefix: previous sampled latent has no audio stream. "
+            "Wire the joint H3 AV sampler output, not a video-only latent."
+        )
+    source_video, source_audio = parts[:2]
+    if source_video.ndim == 4:
+        source_video = source_video.unsqueeze(0)
+    if source_audio.ndim == 3:
+        source_audio = source_audio.unsqueeze(0)
+    if source_video.ndim != 5:
+        raise ValueError(
+            "h3_masked_prefix: previous video latent must be [B,C,T,H,W], "
+            "got %s." % (tuple(source_video.shape),)
+        )
+    if source_audio.ndim != 4:
+        raise ValueError(
+            "h3_masked_prefix: previous audio latent must be [B,C,2,T], got "
+            "%s." % (tuple(source_audio.shape),)
+        )
+    if int(source_video.shape[0]) != 1 or int(source_audio.shape[0]) != 1:
+        raise ValueError(
+            "h3_masked_prefix: generated-latent continuation supports H3 "
+            "batch size 1."
+        )
+
+    # Valid H3 prefix runs 5/22/39/... map to 2/7/12/... latent steps. Full
+    # H3 clips and these prefixes are both 2 mod 5 latent steps, so slicing the
+    # source tail and placing it at target step zero preserves temporal phase.
+    video_steps = 2 + 5 * ((int(frames) - 5) // 17)
+    if _pixel_frames(video_steps) != int(frames):
+        raise RuntimeError(
+            "h3_masked_prefix: internal H3 context mapping failed for %d "
+            "frames." % int(frames)
+        )
+    if int(source_video.shape[2]) < video_steps:
+        raise ValueError(
+            "h3_masked_prefix: previous sampled latent has too few video "
+            "steps for the %d-frame context." % int(frames)
+        )
+    if tuple(source_video.shape[1:2] + source_video.shape[3:]) != tuple(
+            target_video.shape[1:2] + target_video.shape[3:]):
+        raise ValueError(
+            "h3_masked_prefix: previous/target video latent geometry differs: "
+            "%s vs %s. Keep chained clips at the same H3 resolution." %
+            (tuple(source_video.shape), tuple(target_video.shape))
+        )
+    return source_video[:1, :, -video_steps:].clone(), video_steps
+
+
+def _encoded_video_tail(vae, previous_frames, frames, target_video, crop):
+    """Encode an imported decoded-video tail when no H3 source latent exists."""
+    if getattr(previous_frames, "ndim", 0) != 4:
+        raise ValueError(
+            "h3_masked_prefix: imported previous frames must be IMAGE "
+            "[N,H,W,C]."
+        )
+    available = int(previous_frames.shape[0])
+    if available < int(frames):
+        raise ValueError(
+            "h3_masked_prefix: imported video has %d frames but the resolved "
+            "prefix needs %d." % (available, int(frames))
+        )
+    width = int(target_video.shape[4]) * 16
+    height = int(target_video.shape[3]) * 16
+    video_tail = _resize(
+        previous_frames[available - int(frames):], width, height, crop)
+    video_prefix = vae.encode(video_tail)
+    if getattr(video_prefix, "ndim", 0) != 5:
+        raise ValueError(
+            "h3_masked_prefix: video VAE returned %s; expected "
+            "[B,C,T,H,W]." %
+            (tuple(getattr(video_prefix, "shape", ())),)
+        )
+    video_steps = int(video_prefix.shape[2])
+    covered = _pixel_frames(video_steps)
+    if covered != int(frames):
+        raise RuntimeError(
+            "h3_masked_prefix: %d imported context frames encoded to %d "
+            "video steps covering %d frames; refusing a phase-shifted seam." %
+            (int(frames), video_steps, covered)
+        )
+    return video_prefix, video_steps
 
 
 def _encode_imported_audio(audio_vae, audio, frames):
@@ -225,31 +313,36 @@ def apply_masked_prefix(
     """Return conditioning, masked target latent, and repeated trim length."""
     _require_h3_mask_support()
     target_video, target_audio, target_frames = _validate_target_streams(latent)
-
-    if getattr(previous_frames, "ndim", 0) != 4:
-        raise ValueError(
-            "h3_masked_prefix: previous frames must be IMAGE [N,H,W,C]."
-        )
-    available = int(previous_frames.shape[0])
-    frames = _snap_prefix_length(context_length, available, target_frames)
     width = int(target_video.shape[4]) * 16
     height = int(target_video.shape[3]) * 16
-    video_tail = _resize(
-        previous_frames[available - frames:], width, height, crop)
-    video_prefix = vae.encode(video_tail)
-    if getattr(video_prefix, "ndim", 0) != 5:
-        raise ValueError(
-            "h3_masked_prefix: video VAE returned %s; expected [B,C,T,H,W]." %
-            (tuple(getattr(video_prefix, "shape", ())),)
-        )
-    video_steps = int(video_prefix.shape[2])
-    covered = _pixel_frames(video_steps)
-    if covered != frames:
-        raise RuntimeError(
-            "h3_masked_prefix: %d context frames encoded to %d video steps "
-            "covering %d frames; refusing a phase-shifted seam." %
-            (frames, video_steps, covered)
-        )
+
+    if previous_latent is not None:
+        source_video = _streams_from_latent(previous_latent)[0]
+        if source_video.ndim == 4:
+            source_video = source_video.unsqueeze(0)
+        if source_video.ndim != 5:
+            raise ValueError(
+                "h3_masked_prefix: previous video latent must be "
+                "[B,C,T,H,W], got %s." % (tuple(source_video.shape),)
+            )
+        available = _pixel_frames(int(source_video.shape[2]))
+        frames = _snap_prefix_length(
+            context_length, available, target_frames)
+        video_prefix, video_steps = _generated_video_tail(
+            previous_latent, frames, target_video)
+        video_source = "previous sampled latent"
+    else:
+        if getattr(previous_frames, "ndim", 0) != 4:
+            raise ValueError(
+                "h3_masked_prefix: imported previous frames must be IMAGE "
+                "[N,H,W,C]."
+            )
+        available = int(previous_frames.shape[0])
+        frames = _snap_prefix_length(
+            context_length, available, target_frames)
+        video_prefix, video_steps = _encoded_video_tail(
+            vae, previous_frames, frames, target_video, crop)
+        video_source = "imported decoded frames via video VAE"
     if video_steps >= int(target_video.shape[2]):
         raise ValueError(
             "h3_masked_prefix: video prefix consumes the whole target latent."
@@ -315,8 +408,9 @@ def apply_masked_prefix(
 
     _LOG.info(
         "h3_masked_prefix: preserved %d target frames = %d video steps / %d "
-        "audio steps (%.3fs, audio from %s); target %d frames at %dx%d; trim %d",
-        frames, video_steps, audio_steps, frames / float(FPS), audio_source,
-        target_frames, width, height, frames,
+        "audio steps (%.3fs, video from %s, audio from %s); target %d frames "
+        "at %dx%d; trim %d",
+        frames, video_steps, audio_steps, frames / float(FPS), video_source,
+        audio_source, target_frames, width, height, frames,
     )
     return out_conditioning, out_latent, frames

@@ -131,18 +131,20 @@ def main():
     previous_audio = torch.arange(
         1 * 32 * 2 * target_audio_steps, dtype=torch.float32).reshape(
             1, 32, 2, target_audio_steps)
+    previous_video = torch.arange(
+        target_video_steps, dtype=torch.float32).reshape(
+            1, 1, target_video_steps, 1, 1).expand_as(target_video).clone()
     previous = {"samples": NestedTensor((
-        torch.zeros_like(target_video), previous_audio,
+        previous_video, previous_audio,
     ))}
     frames = torch.zeros((64, 32, 48, 3), dtype=torch.float32)
     for index in range(int(frames.shape[0])):
         frames[index].fill_(float(index))
 
-    class VideoVAE:
-        def encode(self, images):
-            steps = max(1, (int(images.shape[0]) - 5) // 17 * 5 + 2)
-            value = float(images[-1, 0, 0, 0])
-            return torch.full((1, 16, steps, 2, 3), value)
+    class UnexpectedVideoVAE:
+        def encode(self, _images):
+            raise AssertionError(
+                "generated continuation must not re-encode decoded frames")
 
     refs = [{"kind": "image", "latent_h": 2, "latent_w": 3}]
     conditioning = [["embedding", {
@@ -154,7 +156,7 @@ def main():
     }]]
     out_conditioning, out, trim = masked.apply_masked_prefix(
         conditioning=conditioning,
-        vae=VideoVAE(),
+        vae=UnexpectedVideoVAE(),
         latent=target,
         previous_frames=frames,
         context_length=39,
@@ -168,7 +170,10 @@ def main():
     prefix_video_steps = 12
     prefix_audio_steps = 65
     assert nodes._pixel_frames(prefix_video_steps) == 39
-    assert torch.all(video[:, :, :prefix_video_steps] == 63.0)
+    assert torch.equal(
+        video[:, :, :prefix_video_steps],
+        previous_video[:, :, -prefix_video_steps:],
+    )
     assert not torch.count_nonzero(video[:, :, prefix_video_steps:])
     assert torch.equal(
         audio[..., :prefix_audio_steps],
@@ -188,7 +193,49 @@ def main():
     assert not torch.count_nonzero(target_audio)
     print(
         "masked prefix: 39 frames -> 12 video / 65 audio steps; target "
-        "streams cloned, prefix preserved, future generated, refs retained")
+        "streams cloned, generated AV latent tails copied directly, future "
+        "generated, refs retained")
+
+    class VideoVAE:
+        def __init__(self):
+            self.calls = 0
+
+        def encode(self, images):
+            self.calls += 1
+            steps = max(1, (int(images.shape[0]) - 5) // 17 * 5 + 2)
+            value = float(images[-1, 0, 0, 0])
+            return torch.full((1, 16, steps, 2, 3), value)
+
+    class ImportedAudioVAE:
+        audio_sample_rate = 32000
+
+        def encode(self, _waveform):
+            return torch.full((1, 32, 2, prefix_audio_steps), 17.0)
+
+    imported_video_vae = VideoVAE()
+    imported_target = {"samples": NestedTensor((
+        torch.zeros_like(target_video), torch.zeros_like(target_audio),
+    ))}
+    _, imported_out, imported_trim = masked.apply_masked_prefix(
+        conditioning=conditioning,
+        vae=imported_video_vae,
+        latent=imported_target,
+        previous_frames=frames,
+        context_length=39,
+        crop="disabled",
+        previous_latent=None,
+        audio_vae=ImportedAudioVAE(),
+        previous_audio={
+            "waveform": torch.zeros((1, 2, 60000)),
+            "sample_rate": 32000,
+        },
+    )
+    imported_video, imported_audio = imported_out["samples"].unbind()
+    assert imported_trim == 39
+    assert imported_video_vae.calls == 1
+    assert torch.all(imported_video[:, :, :prefix_video_steps] == 63.0)
+    assert torch.all(imported_audio[..., :prefix_audio_steps] == 17.0)
+    print("masked prefix: imported video/audio retain the VAE fallback path")
 
     chain = _load("chain_nodes")
 
