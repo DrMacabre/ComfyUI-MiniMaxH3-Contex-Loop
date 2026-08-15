@@ -55,6 +55,8 @@ Checks:
      sees the matching patch through SolAttn and stands down.
  12. The CUDA PR117 checkout's path-valued wrapper identity composes in both
      load orders, but only with the same audited ``original_init`` closure.
+ 13. Renamed/path-loaded copies of the read-only SolAttn observer are
+     recognised structurally, including a nested observer stack.
 """
 
 import importlib
@@ -226,6 +228,32 @@ def load_patch_named(mm, name):
     sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def install_structural_solattn(mm, module_name):
+    """Install the upstream observer shape under an arbitrary module name."""
+    namespace = {"_SPANS": {}}
+    exec(compile(
+        '''def _video_span(layout):
+    return next(((a, b) for a, b, kind in layout.segments
+                 if kind == "video"), None)
+
+def install(layout_cls, module_name):
+    original_init = layout_cls.__init__
+
+    def __init__(self, *args, **kwargs):
+        original_init(self, *args, **kwargs)
+        span = _video_span(self)
+        bounds = next(((a, b) for a, b, kind in self.segments
+                       if kind == "video"), None)
+        if getattr(self, "position_ids", None) is not None and bounds is not None:
+            _SPANS[id(self.position_ids)] = (self, bounds, span)
+
+    __init__.__module__ = module_name
+    layout_cls.__init__ = __init__
+''', "<structural-solattn-observer>", "exec"), namespace)
+    namespace["install"](mm.PackedLayout, module_name)
+    return namespace
 
 
 TEXT_LEN, LATENT_T, LH, LW, AUDIO_T = 7, 7, 22, 38, 16
@@ -585,7 +613,31 @@ def main():
     print("12. CUDA PR117's exact path-valued SolAttn observer composes in "
           "both load orders while malformed lookalikes remain refused")
 
-    # 13. The explicit workflow node may promote the current pack over an
+    # 13. The same audited observer is often copied to a helper folder whose
+    # name is chosen by the user.  Recognise its behavior, not that name, and
+    # look through multiple read-only copies rather than rejecting the stack.
+    mm_struct = make_mm()
+    observer_a = install_structural_solattn(
+        mm_struct,
+        r"C:\Comfy\custom_nodes\sol_attn_minimax_v2",
+    )
+    observer_b = install_structural_solattn(
+        mm_struct,
+        "/workspace/custom_nodes/my-renamed-sol-attn-helper",
+    )
+    ours_struct = load_patch(mm_struct)
+    assert ours_struct._already_patched() == "solattn", \
+        ours_struct._already_patched()
+    assert ours_struct.apply_patch()
+    lay_struct = mm_struct.PackedLayout(
+        TEXT_LEN, LATENT_T, LH, LW, AUDIO_T,
+        keyframes=run, refs=[dict(marked)], frame_count=FC)
+    assert id(lay_struct.position_ids) in observer_a["_SPANS"]
+    assert id(lay_struct.position_ids) in observer_b["_SPANS"]
+    print("13. arbitrary renamed SolAttn helpers and nested read-only "
+          "observer copies compose without a folder-name allowlist")
+
+    # 14. The explicit workflow node may promote the current pack over an
     # older compatible vendor. Unlike the same-name reload cases above, real
     # custom-node packages have distinct module names, so the active wrapper's
     # module remains addressable and exposes the stock constructor it captured.
@@ -636,7 +688,7 @@ def main():
         TEXT_LEN, LATENT_T, LH, LW, AUDIO_T,
         keyframes=run, refs=[dict(marked)], frame_count=FC)
     assert observed14[id(lay14.position_ids)] is lay14
-    print("13. explicit priority claims layout ownership from an older copy "
+    print("14. explicit priority claims layout ownership from an older copy "
           "and preserves SolAttn when it wraps that owner")
 
     print("all checks passed")

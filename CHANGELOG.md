@@ -2,6 +2,14 @@
 
 Newest first. This file keeps release history out of the onboarding README.
 
+## v0.4.8 — Renamed Sol-Attn observer compatibility
+
+- Made Sol-Attn H3 layout-observer compatibility independent of the custom
+  node's install-folder name. Renamed PR helpers such as
+  `sol_attn_minimax_v2`, lazy installation between scene 1 and scene 2, and
+  nested read-only observer copies now preserve native Add Guide detection;
+  unrelated layout-mutating wrappers remain refused.
+
 ## v0.4.7 — Review/editor synchronization and compatibility
 
 - Synchronized Review Gate with prompt editors bound to the same Plan. A new

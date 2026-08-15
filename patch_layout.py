@@ -77,6 +77,15 @@ SOLATTN_LAYOUT_MODULE_SUFFIX = "._morton_h3"
 # to compose only after the same ``original_init`` closure check used for the
 # upstream Kijai wrapper succeeds.
 SOLATTN_CUDA_PR117_LAYOUT_MODULE = "ComfyUI-SolAttn-CUDA-PR117"
+# Folder names are not an ABI.  ComfyUI loads package roots under their full
+# install path, and PR test helpers are commonly copied to names such as
+# ``sol_attn_minimax_v2``.  Recognise those copies by the upstream observer's
+# read-only span-registration fingerprint instead of growing a folder-name
+# allowlist forever.  A future upstream marker is accepted as the clean ABI.
+SOLATTN_LAYOUT_OBSERVER_MARKER = "_sol_attn_h3_layout_observer"
+SOLATTN_LAYOUT_OBSERVER_NAMES = frozenset({
+    "_video_span", "_SPANS", "position_ids", "segments",
+})
 
 
 REF_SEGMENT_KINDS = ("ref_img", "ref_audio")
@@ -489,16 +498,47 @@ def _is_supported_solattn_layout_module(init):
             or tail.endswith("." + SOLATTN_CUDA_PR117_LAYOUT_MODULE))
 
 
+def _is_structural_solattn_layout_observer(init):
+    """Recognise Kijai's observer independently of its install folder.
+
+    The observer calls the constructor captured as ``original_init``, derives
+    the target video span through ``_video_span``, and records the layout in
+    the module's ``_SPANS`` dictionary by ``position_ids`` identity.  These
+    names and globals describe its read-only job; an arbitrary wrapper merely
+    accepting ``*args``/``**kwargs`` is deliberately insufficient.
+    """
+    if bool(getattr(init, SOLATTN_LAYOUT_OBSERVER_MARKER, False)):
+        return True
+    code = getattr(init, "__code__", None)
+    namespace = getattr(init, "__globals__", None)
+    if code is None or code.co_name != "__init__" or not isinstance(
+            namespace, dict):
+        return False
+    names = set(code.co_names)
+    return bool(
+        SOLATTN_LAYOUT_OBSERVER_NAMES.issubset(names)
+        and callable(namespace.get("_video_span"))
+        and isinstance(namespace.get("_SPANS"), dict)
+    )
+
+
+def _is_supported_solattn_layout_observer(init):
+    return bool(
+        _is_supported_solattn_layout_module(init)
+        or _is_structural_solattn_layout_observer(init)
+    )
+
+
 def _solattn_wrapped_init(init):
     """Return the constructor captured by Kijai's H3 Morton wrapper.
 
     The upstream wrapper is a nested ``__init__`` in ``_patch_packed_layout``
     and captures the previous constructor in a closure named
-    ``original_init``. Checking both the module and that exact closure name is
-    intentionally stricter than accepting any wrapper from a similarly named
-    module.
+    ``original_init``. Checking that exact closure together with either an
+    audited module identity or the read-only span-registration fingerprint is
+    intentionally stricter than accepting an arbitrary renamed wrapper.
     """
-    if not _is_supported_solattn_layout_module(init):
+    if not _is_supported_solattn_layout_observer(init):
         return None
     closure = getattr(init, "__closure__", None) or ()
     freevars = getattr(getattr(init, "__code__", None), "co_freevars", ())
@@ -509,26 +549,69 @@ def _solattn_wrapped_init(init):
             original = cell.cell_contents
         except ValueError:
             return None
-        return original if callable(original) else None
+        return original if callable(original) and original is not init else None
+    wrapped = getattr(init, "__wrapped__", None)
+    if bool(getattr(init, SOLATTN_LAYOUT_OBSERVER_MARKER, False)):
+        return wrapped if callable(wrapped) and wrapped is not init else None
     return None
 
 
+def _unwrap_solattn_layout_observers(init):
+    """Return the constructor beneath every audited observer in ``init``.
+
+    Multiple renamed copies can be installed in one process.  They are all
+    read-only, so unwrapping the full chain is safe; cycles and excessive
+    wrapper depth are treated as unknown rather than guessed through.
+    """
+    current = init
+    wrappers = []
+    seen = set()
+    for _depth in range(16):
+        if id(current) in seen:
+            return None, tuple(wrappers)
+        seen.add(id(current))
+        original = _solattn_wrapped_init(current)
+        if original is None:
+            return current, tuple(wrappers)
+        wrappers.append(current)
+        current = original
+    return None, tuple(wrappers)
+
+
 def _replace_solattn_wrapped_init(init, replacement):
-    """Replace only SolAttn's explicitly identified captured constructor."""
-    if not _is_supported_solattn_layout_module(init):
-        return False
-    closure = getattr(init, "__closure__", None) or ()
-    freevars = getattr(getattr(init, "__code__", None), "co_freevars", ())
-    for name, cell in zip(freevars, closure):
-        if name == "original_init":
+    """Replace the constructor captured by the innermost audited observer."""
+    current = init
+    seen = set()
+    for _depth in range(16):
+        if id(current) in seen or not _is_supported_solattn_layout_observer(
+                current):
+            return False
+        seen.add(id(current))
+        closure = getattr(current, "__closure__", None) or ()
+        freevars = getattr(
+            getattr(current, "__code__", None), "co_freevars", ())
+        for name, cell in zip(freevars, closure):
+            if name != "original_init":
+                continue
+            try:
+                original = cell.cell_contents
+            except ValueError:
+                return False
+            if _solattn_wrapped_init(original) is not None:
+                current = original
+                break
             cell.cell_contents = replacement
             return True
+        else:
+            return False
     return False
 
 
 def _uses_native_guide_api(init):
     """Whether a constructor exposes PR #15439's frame_count-free API."""
-    original = _solattn_wrapped_init(init) or init
+    original, _wrappers = _unwrap_solattn_layout_observers(init)
+    if original is None:
+        return False
     if getattr(original, NATIVE_GUIDES_MARKER, False):
         return True
     try:
@@ -550,7 +633,9 @@ def native_guides_available():
     init = getattr(cls, "__init__", None) if cls is not None else None
     if init is None:
         return False
-    original = _solattn_wrapped_init(init) or init
+    original, _wrappers = _unwrap_solattn_layout_observers(init)
+    if original is None:
+        return False
     if (getattr(original, NATIVE_GUIDES_MARKER, False)
             or getattr(original, "__name__", "") == "_patched_init_native"):
         return True
@@ -612,8 +697,10 @@ def _already_patched():
     if getattr(init, "__name__", "") in (
             "_patched_init", "_patched_init_native"):
         return "other"
-    solattn_original = _solattn_wrapped_init(init)
-    if solattn_original is not None:
+    solattn_original, solattn_wrappers = _unwrap_solattn_layout_observers(init)
+    if solattn_wrappers:
+        if solattn_original is None:
+            return "foreign"
         if getattr(solattn_original, PATCH_MARKER, False):
             return "same"
         if getattr(solattn_original, "__name__", "") in (
@@ -740,8 +827,10 @@ def claim_patch_ownership():
             "layout owner is unknown; only another H3 Motion Context copy "
             "can be safely replaced")
 
-    solattn_inner = _solattn_wrapped_init(current)
-    family_wrapper = solattn_inner or current
+    family_wrapper, solattn_wrappers = _unwrap_solattn_layout_observers(
+        current)
+    if family_wrapper is None:
+        return False, "SolAttn observer chain is cyclic or unexpectedly deep"
     owner_module = sys.modules.get(str(getattr(
         family_wrapper, "__module__", "")))
     original = getattr(owner_module, "_orig_init", None)
@@ -750,7 +839,9 @@ def claim_patch_ownership():
             "the existing H3 Motion Context layout wrapper does not expose "
             "its captured constructor; restart with only one copy enabled")
 
-    stock = _solattn_wrapped_init(original) or original
+    stock, _original_observers = _unwrap_solattn_layout_observers(original)
+    if stock is None:
+        return False, "captured SolAttn observer chain is invalid"
     home = str(getattr(cls, "__module__", "") or "")
     where = str(getattr(stock, "__module__", "") or "")
     if (hasattr(stock, "__wrapped__") or (home and where != home)
@@ -768,7 +859,7 @@ def claim_patch_ownership():
         return False, "replacement layout self-test failed: %s" % exc
 
     replacement = _patched_init
-    if solattn_inner is not None:
+    if solattn_wrappers:
         if not _replace_solattn_wrapped_init(current, replacement):
             _orig_init = previous_original
             return False, "could not preserve SolAttn's layout observer"

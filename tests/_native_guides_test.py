@@ -19,7 +19,10 @@ import numpy as np
 _TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 _PKG_DIR = os.path.dirname(_TESTS_DIR)
 sys.path.insert(0, _TESTS_DIR)
-from _mock_harness import make_torch  # noqa: E402
+from _mock_harness import (  # noqa: E402
+    install_structural_solattn,
+    make_torch,
+)
 
 
 FRAME_RESCALE = 5.0 / 3.0
@@ -433,9 +436,56 @@ def main():
     assert len(ref_payload["cond_video_latents"]) == 2
     assert len(ref_payload["cond_audio_latents"]) == 2
 
+    # Reproduce the real two-run lifecycle: scene 1 establishes that native
+    # guides are available, then a PR Kitchen/SolAttn helper lazily installs a
+    # process-global observer under an arbitrary custom_nodes folder name.
+    # Scene 2 must still see core's constructor through that observer.  A
+    # second renamed observer represents duplicate helper checkouts.
+    assert layout_patch.native_guides_available()
+    observer_a = install_structural_solattn(
+        mm,
+        r"C:\Comfy\ComfyUI\custom_nodes\sol_attn_minimax_v2",
+    )
+    first_observer = mm.PackedLayout.__init__
+    assert first_observer is not stock_layout_init
+    assert layout_patch.native_guides_available()
+    assert nodes._activate_inline_patches() == "native"
+    observer_b = install_structural_solattn(
+        mm,
+        "/workspace/custom_nodes/a-user-renamed-sol-attn-copy",
+    )
+    assert layout_patch.native_guides_available()
+    assert layout_patch._already_patched() == "solattn"
+    observed_layout = mm.PackedLayout(
+        7, latent_t, height, width, audio_t,
+        keyframes=scene_one_keyframes, refs=refs)
+    assert id(observed_layout.position_ids) in observer_a["_SPANS"]
+    assert id(observed_layout.position_ids) in observer_b["_SPANS"]
+
+    # The structural rule is not "has an original_init closure".  A foreign
+    # wrapper without the audited span-registration fingerprint still fails
+    # closed, even when it captures the recognized observer chain.
+    recognized_observer = mm.PackedLayout.__init__
+
+    def install_unknown_wrapper():
+        original_init = recognized_observer
+
+        def __init__(self, *args, **kwargs):
+            original_init(self, *args, **kwargs)
+
+        __init__.__module__ = "/custom_nodes/unrelated_h3_layout_patch"
+        mm.PackedLayout.__init__ = __init__
+
+    install_unknown_wrapper()
+    assert not layout_patch.native_guides_available()
+    assert layout_patch._already_patched() == "foreign"
+    mm.PackedLayout.__init__ = recognized_observer
+    assert layout_patch.native_guides_available()
+
     print("native guides: core-owned PackedLayout, sentinel-free scene 1, AV "
           "continuation, retained last_frame and chained Add Guide alignment "
-          "after Ref2VA; legacy layout/payload patches skipped")
+          "after Ref2VA; lazy renamed/nested SolAttn observers accepted while "
+          "unknown wrappers remain refused; legacy patches skipped")
 
 
 if __name__ == "__main__":
