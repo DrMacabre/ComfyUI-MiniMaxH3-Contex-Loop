@@ -34,9 +34,9 @@ giant cumulative image tensor.
 
 In the default `guide` mode, updated ComfyUI core owns guide placement and
 reference-payload merging; this pack does not patch H3. The experimental
-`masked_av` mode additionally needs per-stream H3 video/audio noise masks from
-PR #15375. It prefers native support and lazily enables its vendored runtime
-compatibility only when that mode actually executes.
+`masked_av` and `feathered_av` modes additionally need per-stream H3
+video/audio noise masks from PR #15375. They prefer native support and lazily
+enable the vendored runtime compatibility only when an AV mask mode executes.
 
 ## Install
 
@@ -125,8 +125,8 @@ instead of overwriting an MP4 with the same requested name.
 | Setting | Good starting point | Meaning |
 |---|---:|---|
 | `width × height` | `960 × 544` | Multiples of 32 |
-| `continuation_mode` | `guide` | Default for scenes without an override; `guide` suits a new shot and `masked_av` an exact same-shot continuation |
-| `context_length` | `22` guide / `39` masked | Repeated motion history carried into continuations |
+| `continuation_mode` | `guide` | Inherited default: `guide` for a new shot, `masked_av` for an exact continuation, or `feathered_av` for a softer AV handoff |
+| `context_length` | `22` guide / `39` AV mask | Repeated motion history carried into continuations |
 | `encode_mode` | `video` | Preserves motion in the VAE latent |
 | `anchor_mode` | `head` | Regenerates then trims the repeated opening context |
 | `crop` | `disabled` | Best when source and target framing already agree |
@@ -138,7 +138,7 @@ Use `generation_fingerprint` to record model, VAE, LoRA, references, CFG,
 sampler, and scheduler choices that live outside the Plan. Change it when those
 dependencies change so incompatible checkpoints cannot be resumed silently.
 
-### Guide versus masked AV continuation
+### Guide, masked AV, and feathered AV continuation
 
 `guide` leaves the target latent noisy and supplies the previous scene as
 fixed conditioning rows. H3 regenerates the repeated head, and Loop Trim
@@ -147,7 +147,8 @@ removes it. This remains the default.
 Continuation mode can be overridden per scene in **Show advanced** without
 adding another scene-card row. The choice describes the transition **into that
 scene**: use `guide` for a new shot that should remember the preceding clip,
-and `masked_av` when the same shot should continue seamlessly. Scene 1 uses
+`masked_av` when the same shot should continue with a hard protected prefix,
+or `feathered_av` when that prefix needs a softer denoise handoff. Scene 1 uses
 its choice only when Existing Video Context supplies a predecessor. In Plan
 JSON, set `shots[n].continuation_mode`; omitting it inherits the Plan node.
 
@@ -158,8 +159,8 @@ dialogue, ambience, or music into that new shot. Explicit audio `0` carries no
 preceding generated sound. For scene 1, these control Existing Video Context;
 a zero-video-context imported original can still be prepended during assembly.
 Independent audio context applies to guide mode with generated-audio continuity.
-Masked AV always keeps its audio and video prefix lengths synchronized, while
-`source_track` continues to use its exact timeline slice.
+Both AV mask modes always keep their audio and video prefix lengths
+synchronized, while `source_track` continues to use its exact timeline slice.
 
 `masked_av` writes the previous scene's decoded video tail into the beginning
 of the current target video latent, copies the matching tail from the previous
@@ -168,9 +169,15 @@ sampled audio latent, and protects both streams with `0 = preserve`,
 the sampler's `latent_image`; the output passes the original target through on
 scene 1 and in `guide` mode, so that one wire supports both modes.
 
-Masked continuation requires `encode_mode=video`, `anchor_mode=head`, and at
-least 5 context frames, on a ComfyUI build with native PR #15439 guide/MultiRef
-support. Use **39 frames** for comparisons: at 24 fps it is
+`feathered_av` uses the same target content and trim interval, but gradually
+raises the mask over the end of the protected prefix. With 39 frames, 8 of 12
+video latent steps and 42 of 65 audio steps remain exact; the final 4 video and
+23 audio prefix steps ramp toward generation. This reduces a hard boundary,
+but does not add the persistent conditioning rows supplied by `guide`.
+
+Both AV mask continuations require `encode_mode=video`, `anchor_mode=head`,
+and at least 5 context frames, on a ComfyUI build with native PR #15439
+guide/MultiRef support. Use **39 frames** for comparisons: at 24 fps it is
 exactly 1.625 seconds and exactly 65 audio-latent steps at H3's 40 Hz audio
 grid. A per-scene override participates in the Plan/history hashes from that
 scene onward, so a checkpoint cannot silently resume under the wrong method.
@@ -187,8 +194,8 @@ VAE encodes to the stock H3 joint target; it does not independently concatenate
 LTX video/audio latents. Loop Mask Slice broadcasts a single mask or selects
 the matching frames from a complete tracked-mask timeline, including the same
 continuation overlap. Existing masks are intersected, so a spatial edit can
-compose with the exact prefix created by chain `masked_av` while preservation
-remains authoritative.
+compose with the prefix created by either AV mask continuation while
+preservation remains authoritative.
 
 The bundled inpaint workflow uses distinct `MiniMaxH3Contex…` node IDs and can
 coexist with the earlier standalone PerRowMasking pack. It needs no MODEL patch

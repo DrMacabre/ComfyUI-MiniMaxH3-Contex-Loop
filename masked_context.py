@@ -273,6 +273,46 @@ def _existing_mask_streams(latent, video, audio):
     return video_mask.float(), audio_mask.float()
 
 
+def _feather_preserved_prefix(video_mask, audio_mask, video_steps, audio_steps):
+    """Apply a short, time-aligned denoise ramp at a protected AV tail."""
+    video_steps = int(video_steps)
+    audio_steps = int(audio_steps)
+    video_feather = min(4, max(0, video_steps - 1))
+    if video_feather < 1:
+        video_mask[:, :, :video_steps] = 0.0
+        audio_mask[..., :audio_steps] = 0.0
+        return 0, 0
+    # H3 advances by five video-latent steps per seventeen picture frames.
+    # Converting that duration to the 40 Hz audio grid gives roughly 17/3
+    # audio steps for each video step.
+    audio_feather = min(
+        max(0, audio_steps - 1),
+        max(1, int(round(video_feather * 17.0 / 3.0))),
+    )
+    video_ramp = torch.linspace(
+        0.0, 1.0, video_feather + 2,
+        device=video_mask.device, dtype=video_mask.dtype,
+    )[1:-1]
+    video_hard_steps = video_steps - video_feather
+    video_mask[:, :, :video_hard_steps] = 0.0
+    video_mask[:, :, video_hard_steps:video_steps] = torch.minimum(
+        video_mask[:, :, video_hard_steps:video_steps],
+        video_ramp.view(1, 1, video_feather, 1, 1),
+    )
+    if audio_feather:
+        audio_ramp = torch.linspace(
+            0.0, 1.0, audio_feather + 2,
+            device=audio_mask.device, dtype=audio_mask.dtype,
+        )[1:-1]
+        audio_hard_steps = audio_steps - audio_feather
+        audio_mask[..., :audio_hard_steps] = 0.0
+        audio_mask[..., audio_hard_steps:audio_steps] = torch.minimum(
+            audio_mask[..., audio_hard_steps:audio_steps],
+            audio_ramp.view(1, 1, 1, audio_feather),
+        )
+    return video_feather, audio_feather
+
+
 def _drop_prefix_guides(conditioning, prefix_frames):
     """Remove target guides that conflict with the preserved latent prefix."""
     out = []
@@ -309,6 +349,7 @@ def apply_masked_prefix(
     previous_latent=None,
     audio_vae=None,
     previous_audio=None,
+    temporal_feather=False,
 ):
     """Return conditioning, masked target latent, and repeated trim length."""
     _require_h3_mask_support()
@@ -394,8 +435,13 @@ def apply_masked_prefix(
 
     video_mask, audio_mask = _existing_mask_streams(
         latent, out_video, out_audio)
-    video_mask[:, :, :video_steps] = 0.0
-    audio_mask[..., :audio_steps] = 0.0
+    video_feather_steps = audio_feather_steps = 0
+    if bool(temporal_feather):
+        video_feather_steps, audio_feather_steps = _feather_preserved_prefix(
+            video_mask, audio_mask, video_steps, audio_steps)
+    else:
+        video_mask[:, :, :video_steps] = 0.0
+        audio_mask[..., :audio_steps] = 0.0
 
     import comfy.nested_tensor
 
@@ -408,9 +454,13 @@ def apply_masked_prefix(
 
     _LOG.info(
         "h3_masked_prefix: preserved %d target frames = %d video steps / %d "
-        "audio steps (%.3fs, video from %s, audio from %s); target %d frames "
-        "at %dx%d; trim %d",
+        "audio steps (%.3fs, video from %s, audio from %s); %s; target %d "
+        "frames at %dx%d; trim %d",
         frames, video_steps, audio_steps, frames / float(FPS), video_source,
-        audio_source, target_frames, width, height, frames,
+        audio_source,
+        ("temporal feather %d video / %d audio steps" %
+         (video_feather_steps, audio_feather_steps)
+         if temporal_feather else "hard prefix mask"),
+        target_frames, width, height, frames,
     )
     return out_conditioning, out_latent, frames

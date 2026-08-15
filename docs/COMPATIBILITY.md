@@ -10,9 +10,10 @@ The two continuation engines and public masking path are capability-gated:
 
 - `guide` prefers native Add Guide / MultiRef behavior from ComfyUI PR #15439
   and uses the existing guarded guide fallback only on older builds;
-- `masked_av` prefers native per-token H3 AV masks from PR #15375 and lazily
-  installs only missing mask-engine, payload, token-aligned inpaint-scale, and
-  legacy sampler-bridge behavior when the masked path executes. It follows
+- `masked_av` and `feathered_av` prefer native per-token H3 AV masks from PR
+  #15375 and lazily install only missing mask-engine, payload, token-aligned
+  inpaint-scale, and legacy sampler-bridge behavior when the masked path
+  executes. It follows
   PR #15375 commit `989e7a9`: pixel masks stay intact for final sampler
   blending while internal H3 timesteps use pooled token-grid values. It still
   requires the native #15439 Add Guide / MultiRef core baseline; masked mode

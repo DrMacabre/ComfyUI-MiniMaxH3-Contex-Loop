@@ -863,7 +863,7 @@ function mountEditor(node) {
         audioContext.placeholder = planAudioContextLength
             ? String(planAudioContextLength)
             : `Follow video · ${planContextLength}`;
-        audioContext.title = "Generated-audio context entering this scene. Blank inherits the Plan audio default (whose 0 follows video context). An explicit 0 carries no prior generated sound. A positive value can continue audio when video context is 0. Masked AV ignores this override and keeps audio synchronized to its video prefix; source_track uses its exact timeline slice instead.";
+        audioContext.title = "Generated-audio context entering this scene. Blank inherits the Plan audio default (whose 0 follows video context). An explicit 0 carries no prior generated sound. A positive value can continue audio when video context is 0. Both AV mask modes ignore this override and keep audio synchronized to the video prefix; source_track uses its exact timeline slice instead.";
         audioContext.addEventListener("input", () => {
             if (audioContext.value === "") delete shot.audio_context_length;
             else shot.audio_context_length = Number(audioContext.value);
@@ -877,6 +877,7 @@ function mountEditor(node) {
             ["", `Plan default · ${planContinuationMode}`],
             ["guide", "Guide · new shot"],
             ["masked_av", "Masked AV · same shot"],
+            ["feathered_av", "Feathered AV · softer handoff"],
         ]) {
             const option = element("option", "", label);
             option.value = value;
@@ -885,8 +886,8 @@ function mountEditor(node) {
         continuation.value = Object.hasOwn(shot, "continuation_mode")
             ? shot.continuation_mode : "";
         continuation.title = index === 0
-            ? "Continuation into this scene. Scene 1 uses it only when Existing Video Context supplies a predecessor. Guide allows a new shot; Masked AV preserves the same shot exactly."
-            : "Continuation from the preceding scene into this one. Guide is flexible for a new shot; Masked AV preserves an exact prefix for the same shot.";
+            ? "Continuation into this scene. Scene 1 uses it only when Existing Video Context supplies a predecessor. Guide allows a new shot; Masked AV protects an exact prefix; Feathered AV gradually denoises its end."
+            : "Continuation from the preceding scene. Guide provides persistent conditioning; Masked AV protects an exact prefix; Feathered AV softens the prefix-to-generation handoff.";
         continuation.addEventListener("change", () => {
             if (continuation.value) {
                 shot.continuation_mode = continuation.value;

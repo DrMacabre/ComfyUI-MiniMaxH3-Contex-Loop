@@ -788,7 +788,7 @@ function mount(node) {
         audioContext.placeholder = planAudioContextLength
             ? String(planAudioContextLength)
             : `Video ${settings().contextLength}`;
-        audioContext.title = "Blank inherits the Plan audio context; an explicit 0 carries no prior generated audio. Positive audio context works with zero video context in guide generated-audio modes. Masked AV remains synchronized to video.";
+        audioContext.title = "Blank inherits the Plan audio context; an explicit 0 carries no prior generated audio. Positive audio context works with zero video context in guide generated-audio modes. Both AV mask modes remain synchronized to video.";
         audioContext.addEventListener("change", () => {
             if (audioContext.value === "") delete shot.audio_context_length;
             else shot.audio_context_length = Number(audioContext.value);
@@ -802,6 +802,7 @@ function mount(node) {
             ["", `Plan default · ${settings().continuationMode}`],
             ["guide", "Guide · new shot"],
             ["masked_av", "Masked AV · same shot"],
+            ["feathered_av", "Feathered AV · softer handoff"],
         ]) {
             const option = element("option", "", label);
             option.value = value;
@@ -811,7 +812,7 @@ function mount(node) {
             ? shot.continuation_mode : "";
         continuation.title = state.active === 0
             ? "Continuation into this scene. Scene 1 uses it only with Existing Video Context."
-            : "Guide allows a new shot with continuity; Masked AV preserves an exact prefix for continuing the same shot.";
+            : "Guide provides persistent conditioning; Masked AV preserves an exact prefix; Feathered AV progressively denoises its end.";
         continuation.addEventListener("change", () => {
             if (continuation.value) shot.continuation_mode = continuation.value;
             else delete shot.continuation_mode;

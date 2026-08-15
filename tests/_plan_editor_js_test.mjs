@@ -27,7 +27,10 @@ import {
 } from "../web/h3_chain_plan_core.mjs";
 
 assert.equal(AUTO_SCENE_COLORS.length, 12);
-assert.deepEqual(CONTINUATION_MODES, ["guide", "masked_av"]);
+assert.deepEqual(
+    CONTINUATION_MODES,
+    ["guide", "masked_av", "feathered_av"],
+);
 assert.equal(H3_CONTEXT_LENGTHS.at(-1), 243);
 assert.equal(new Set(AUTO_SCENE_COLORS).size, AUTO_SCENE_COLORS.length);
 assert.equal(automaticSceneColor(0), AUTO_SCENE_COLORS[0]);
@@ -72,6 +75,10 @@ assert.equal(sceneContinuationMode({}, "guide"), "guide");
 assert.equal(
     sceneContinuationMode({continuation_mode: "masked_av"}, "guide"),
     "masked_av",
+);
+assert.equal(
+    sceneContinuationMode({continuation_mode: "feathered_av"}, "guide"),
+    "feathered_av",
 );
 assert.throws(
     () => sceneContinuationMode({continuation_mode: "unknown"}, "guide"),
@@ -190,7 +197,30 @@ assert.match(calculatePlanTiming(mixedContinuationPlan, {
     anchorMode: "before",
     continuationMode: "guide",
     defaultDurationSeconds: 5,
-}).errors.join("\n"), /Masked AV requires/);
+}).errors.join("\n"), /AV mask continuation requires/);
+
+const featheredContinuationPlan = parsePlanJson(JSON.stringify({
+    shots: [
+        {id: "one", prompt: "Opening."},
+        {id: "two", prompt: "Continue.", continuation_mode: "feathered_av"},
+    ],
+}));
+const featheredContinuationTiming = calculatePlanTiming(
+    featheredContinuationPlan,
+    {
+        contextLength: 39,
+        encodeMode: "video",
+        anchorMode: "head",
+        continuationMode: "guide",
+        defaultDurationSeconds: 5,
+    },
+);
+assert.equal(
+    featheredContinuationTiming.shots[1].continuationMode,
+    "feathered_av",
+);
+assert.equal(featheredContinuationTiming.shots[1].audioContextLength, 39);
+assert.deepEqual(featheredContinuationTiming.errors, []);
 
 const mixedContextTiming = calculatePlanTiming({shots: [
     {id: "one", prompt: "One.", length: 192},
@@ -307,6 +337,7 @@ assert.match(editorSource, /Use derived/);
 assert.match(editorSource, /Continuation into scene/);
 assert.match(editorSource, /Guide · new shot/);
 assert.match(editorSource, /Masked AV · same shot/);
+assert.match(editorSource, /Feathered AV · softer handoff/);
 assert.match(editorSource, /Video context/);
 assert.match(editorSource, /Audio context/);
 assert.match(editorSource, /0 · new visual/);

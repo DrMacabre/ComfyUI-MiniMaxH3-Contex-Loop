@@ -100,7 +100,8 @@ H3_CONTEXT_LENGTHS = (
     141, 158, 175, 192, 209, 226, 243,
 )
 AUDIO_MODES = ("source_track", "generated_audio", "source_plus_timeline")
-CONTINUATION_MODES = ("guide", "masked_av")
+CONTINUATION_MODES = ("guide", "masked_av", "feathered_av")
+MASKED_CONTINUATION_MODES = frozenset(("masked_av", "feathered_av"))
 REFERENCE_AUDIO_TIMELINE_MODES = ("standalone", "source_timeline")
 MOTION_REFERENCE_SHORT_EDGES = ("384", "512", "768", "source")
 
@@ -1849,18 +1850,19 @@ def _normalize_plan(
             raise ValueError(
                 "Shot %d has unknown H3 continuation mode %r." %
                 (index, shot_continuation_mode))
-        if shot_context_length and shot_continuation_mode == "masked_av":
+        if (shot_context_length and
+                shot_continuation_mode in MASKED_CONTINUATION_MODES):
             if shot_context_length < 5:
                 raise ValueError(
-                    "H3 masked AV continuation requires context_length of at "
+                    "H3 AV mask continuation requires context_length of at "
                     "least 5 frames (shot %d)." % index)
             if encode_mode != "video":
                 raise ValueError(
-                    "H3 masked AV continuation requires encode_mode=video "
+                    "H3 AV mask continuation requires encode_mode=video "
                     "(shot %d)." % index)
             if anchor_mode != "head":
                 raise ValueError(
-                    "H3 masked AV continuation requires anchor_mode=head "
+                    "H3 AV mask continuation requires anchor_mode=head "
                     "because it preserves a real target-latent prefix that "
                     "Loop Trim must remove (shot %d)." % index)
         resolved_continuation_modes.append(shot_continuation_mode)
@@ -4091,7 +4093,7 @@ class MiniMaxH3ChainExternalVideo:
                 "H3 existing-video source audio")
             first_continuation_mode = plan["shots"][0].get(
                 "continuation_mode", cfg.get("continuation_mode", "guide"))
-            if first_continuation_mode == "masked_av":
+            if first_continuation_mode in MASKED_CONTINUATION_MODES:
                 # A clean target AV prefix is one physical interval. Unlike
                 # guide mode, masked continuation cannot use an independently
                 # sized audio-reference window.
@@ -4260,7 +4262,8 @@ class MiniMaxH3ChainPlan:
                     "default": 22,
                     "tooltip": "Default previous-scene video frames used to "
                                "continue motion. Use 22 for guide mode and 39 "
-                               "for masked_av so the AV clocks meet exactly. "
+                               "for masked_av/feathered_av so the AV clocks "
+                               "meet exactly. "
                                "A scene's Advanced selector can override this; "
                                "blank inherits it and 0 starts a visually new scene. "
                                "Audio context is controlled separately. With head "
@@ -4319,8 +4322,8 @@ class MiniMaxH3ChainPlan:
                                "explicit value. Only generated_audio and "
                                "source_plus_timeline use it. source_track ignores "
                                "it because each scene receives a fresh exact "
-                               "slice from the external track. masked_av also "
-                               "ignores it and always preserves audio for the "
+                               "slice from the external track. AV mask modes "
+                               "also ignore it and always preserve audio for the "
                                "same duration as context_length. A scene's "
                                "Advanced Audio context can override this default; "
                                "there, explicit 0 means no audio carry."}),
@@ -4377,7 +4380,10 @@ class MiniMaxH3ChainPlan:
                                "previous video tail into the current target "
                                "latent, copies its sampled audio tail, and "
                                "protects both with per-stream denoise masks. "
-                               "masked_av requires video/head, context >= 5, "
+                               "feathered_av uses the same prefix but "
+                               "progressively denoises its final temporal "
+                               "steps for a softer handoff. Both AV modes "
+                               "require video/head, context >= 5, "
                                "the Chain Context latent output wired to the "
                                "sampler, and native or compatible H3 AV-mask "
                                "support."}),
@@ -5003,7 +5009,8 @@ class MiniMaxH3ChainContext:
                     "tooltip": "The CURRENT scene's empty AV latent from the "
                                "stock H3 conditioning node. Chain Context "
                                "passes it through in guide mode or returns a "
-                               "masked preserved-prefix copy in masked_av mode."}),
+                               "masked preserved-prefix copy in either AV "
+                               "mask mode."}),
             },
             "optional": {
                 "audio_vae": ("VAE", {
@@ -5027,15 +5034,16 @@ class MiniMaxH3ChainContext:
         "True when preceding video or generated audio is carried, including "
         "audio-only guide continuation; false for a fully independent scene.",
         "Sampler-ready target latent. In guide mode this is the input latent "
-        "unchanged. In masked_av mode its preserved AV prefix and nested "
+        "unchanged. In either AV mask mode its preserved prefix and nested "
         "denoise mask carry the previous scene into the current target. Wire "
         "this output to the sampler for both modes so Plan can switch safely.",
     )
     FUNCTION = "apply"
     CATEGORY = "conditioning/minimax/contex_loop"
-    DESCRIPTION = ("Apply each scene's inherited or overridden guide/masked "
-                   "AV continuation, including independent guide audio carry "
-                   "and scene 1 Existing Video Context.")
+    DESCRIPTION = ("Apply each scene's inherited or overridden guide, hard "
+                   "masked AV, or feathered AV continuation, including "
+                   "independent guide audio carry and scene 1 Existing Video "
+                   "Context.")
 
     def apply(self, state, conditioning, vae, latent, audio_vae=None):
         index = int(state["index"])
@@ -5059,7 +5067,8 @@ class MiniMaxH3ChainContext:
             if any(
                     candidate.get(
                         "continuation_mode",
-                        cfg.get("continuation_mode", "guide")) == "masked_av"
+                        cfg.get("continuation_mode", "guide"))
+                    in MASKED_CONTINUATION_MODES
                     and _shot_context_length(
                         candidate, int(cfg["context_length"])) > 0
                     for candidate in plan["shots"]):
@@ -5068,7 +5077,7 @@ class MiniMaxH3ChainContext:
                 from .masked_context import _require_h3_mask_support
 
                 _require_h3_mask_support()
-            if continuation_mode == "masked_av":
+            if continuation_mode in MASKED_CONTINUATION_MODES:
                 prepared_conditioning = conditioning
             else:
                 prepared_conditioning = _prepare_native_guide_conditioning(
@@ -5081,7 +5090,7 @@ class MiniMaxH3ChainContext:
             )
         previous_frames = _previous_context_frames(
             state, vae, context_length)
-        if continuation_mode == "masked_av":
+        if continuation_mode in MASKED_CONTINUATION_MODES:
             from .masked_context import apply_masked_prefix
 
             previous_latent = state.get("previous_latent")
@@ -5096,6 +5105,7 @@ class MiniMaxH3ChainContext:
                 audio_vae=audio_vae,
                 previous_audio=(state.get("previous_audio")
                                 if external_first else None),
+                temporal_feather=(continuation_mode == "feathered_av"),
             )
             return (out_conditioning, trim, True, out_latent)
         previous_latent = (state.get("previous_latent")

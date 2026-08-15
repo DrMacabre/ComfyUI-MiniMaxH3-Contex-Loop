@@ -207,6 +207,80 @@ def main():
     assert not torch.count_nonzero(audio_mask[..., :prefix_audio_steps])
     assert torch.all(audio_mask[..., prefix_audio_steps:] == 1.0)
 
+    _, feathered, feathered_trim = masked.apply_masked_prefix(
+        conditioning=conditioning,
+        vae=UnexpectedVideoVAE(),
+        latent=target,
+        previous_frames=frames,
+        context_length=39,
+        crop="disabled",
+        previous_latent=previous,
+        temporal_feather=True,
+    )
+    feathered_video_mask, feathered_audio_mask = (
+        feathered["noise_mask"].unbind())
+    assert feathered_trim == 39
+    assert not torch.count_nonzero(feathered_video_mask[:, :, :8])
+    assert torch.allclose(
+        feathered_video_mask[0, 0, 8:12, 0, 0],
+        torch.tensor([0.2, 0.4, 0.6, 0.8]),
+    )
+    assert torch.all(feathered_video_mask[:, :, 12:] == 1.0)
+    assert not torch.count_nonzero(feathered_audio_mask[..., :42])
+    assert torch.allclose(
+        feathered_audio_mask[0, 0, 0, 42:65],
+        torch.arange(1, 24, dtype=torch.float32) / 24.0,
+    )
+    assert torch.all(feathered_audio_mask[..., 65:] == 1.0)
+    feathered_video, feathered_audio = feathered["samples"].unbind()
+    assert torch.equal(
+        feathered_video[:, :, :prefix_video_steps],
+        previous_video[:, :, -prefix_video_steps:],
+    )
+    assert torch.equal(
+        feathered_audio[..., :prefix_audio_steps],
+        previous_audio[..., -prefix_audio_steps:],
+    )
+
+    existing_video_mask = torch.ones_like(target_video[:, :1])
+    existing_video_mask[:, :, 8:12, 0, 0] = 0.1
+    existing_audio_mask = torch.ones(
+        (1, 1, int(target_audio.shape[2]), target_audio_steps))
+    existing_audio_mask[..., 42:65] = 0.25
+    pre_masked_target = {
+        "samples": target["samples"],
+        "noise_mask": NestedTensor((
+            existing_video_mask, existing_audio_mask,
+        )),
+    }
+    _, composed_feathered, _ = masked.apply_masked_prefix(
+        conditioning=conditioning,
+        vae=UnexpectedVideoVAE(),
+        latent=pre_masked_target,
+        previous_frames=frames,
+        context_length=39,
+        crop="disabled",
+        previous_latent=previous,
+        temporal_feather=True,
+    )
+    composed_video_mask, composed_audio_mask = (
+        composed_feathered["noise_mask"].unbind())
+    assert torch.allclose(
+        composed_video_mask[0, 0, 8:12, 0, 0],
+        torch.tensor([0.1, 0.1, 0.1, 0.1]),
+    )
+    assert torch.allclose(
+        composed_video_mask[0, 0, 8:12, 0, 1],
+        torch.tensor([0.2, 0.4, 0.6, 0.8]),
+    )
+    assert torch.allclose(
+        composed_audio_mask[0, 0, 0, 42:65],
+        torch.minimum(
+            torch.arange(1, 24, dtype=torch.float32) / 24.0,
+            torch.full((23,), 0.25),
+        ),
+    )
+
     metadata = out_conditioning[0][1]
     assert metadata["minimax_refs"] is refs
     assert [item["name"] for item in metadata["minimax_keyframes"]] == [
@@ -217,6 +291,9 @@ def main():
         "masked prefix: 39 frames -> 12 video / 65 audio steps; target "
         "streams cloned, generated AV latent tails copied directly, future "
         "generated, refs retained")
+    print(
+        "feathered AV: first 8 video / 42 audio steps protected, final "
+        "4 video / 23 audio prefix steps ramp smoothly toward generation")
 
     class VideoVAE:
         def __init__(self):
@@ -303,6 +380,18 @@ def main():
         plan, 1)["compatibility"]
     assert chain._legacy_history_contract(plan, 1)["compatibility"][
         "continuation_mode"] == "masked_av"
+    feathered_plan = chain._normalize_plan(
+        json.dumps({"shots": [
+            {"id": "one", "prompt": "first", "length": 192},
+            {"id": "two", "prompt": "second", "length": 192},
+        ]}),
+        "feathered_test", 64, 32, 39, "video", "head", "disabled",
+        "generated_audio", 39, 8.0, 8, 1, 18, "model-stack-v1", 5,
+        "feathered_av",
+    )
+    assert feathered_plan["compatibility"][
+        "continuation_mode"] == "feathered_av"
+    assert "context=39/feathered_av" in feathered_plan["summary"]
     guide_plan = chain._normalize_plan(
         json.dumps({"shots": [
             {"id": "one", "prompt": "first", "length": 192},
@@ -483,6 +572,21 @@ def main():
         mixed_state, conditioning, VideoVAE(), target)
     assert mixed_result[1:3] == (39, True)
     assert "noise_mask" in mixed_result[3]
+    feathered_state = dict(mixed_state)
+    feathered_state["plan"] = feathered_plan
+    feathered_result = chain.MiniMaxH3ChainContext().apply(
+        feathered_state, conditioning, VideoVAE(), target)
+    assert feathered_result[1:3] == (39, True)
+    feathered_chain_video_mask, feathered_chain_audio_mask = (
+        feathered_result[3]["noise_mask"].unbind())
+    assert torch.allclose(
+        feathered_chain_video_mask[0, 0, 8:12, 0, 0],
+        torch.tensor([0.2, 0.4, 0.6, 0.8]),
+    )
+    assert torch.allclose(
+        feathered_chain_audio_mask[0, 0, 0, 42:65],
+        torch.arange(1, 24, dtype=torch.float32) / 24.0,
+    )
 
     preflight_calls = []
     original_require = masked._require_h3_mask_support
@@ -553,27 +657,29 @@ def main():
         first_state, conditioning, VideoVAE(), target)
     assert first_result[:3] == (conditioning, 0, False)
     assert first_result[3] is target
-    for invalid_args, expected in (
-        ((1, "video", "head"), "at least 5"),
-        ((39, "frames", "head"), "encode_mode=video"),
-        ((39, "video", "before"), "anchor_mode=head"),
-    ):
-        context, encode, anchor = invalid_args
-        try:
-            chain._normalize_plan(
-                json.dumps({"shots": [
-                    {"id": "one", "prompt": "first", "length": 192},
-                    {"id": "two", "prompt": "second", "length": 192},
-                ]}),
-                "invalid_masked_test", 64, 32, context, encode, anchor,
-                "disabled", "generated_audio", 39, 8.0, 8, 1, 18,
-                "model-stack-v1", 0, "masked_av",
-            )
-        except ValueError as exc:
-            assert expected in str(exc), str(exc)
-        else:
-            raise AssertionError(
-                "masked plan accepted invalid %s/%s/%s" % invalid_args)
+    for av_mode in ("masked_av", "feathered_av"):
+        for invalid_args, expected in (
+            ((1, "video", "head"), "at least 5"),
+            ((39, "frames", "head"), "encode_mode=video"),
+            ((39, "video", "before"), "anchor_mode=head"),
+        ):
+            context, encode, anchor = invalid_args
+            try:
+                chain._normalize_plan(
+                    json.dumps({"shots": [
+                        {"id": "one", "prompt": "first", "length": 192},
+                        {"id": "two", "prompt": "second", "length": 192},
+                    ]}),
+                    "invalid_masked_test", 64, 32, context, encode, anchor,
+                    "disabled", "generated_audio", 39, 8.0, 8, 1, 18,
+                    "model-stack-v1", 0, av_mode,
+                )
+            except ValueError as exc:
+                assert expected in str(exc), str(exc)
+            else:
+                raise AssertionError(
+                    "%s plan accepted invalid %s/%s/%s" %
+                    (av_mode, *invalid_args))
     try:
         chain._normalize_plan(
             json.dumps({"shots": [

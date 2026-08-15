@@ -2,6 +2,17 @@
 
 Newest first. This file keeps release history out of the onboarding README.
 
+## v0.4.8 — Feathered AV continuation
+
+- Added `feathered_av` as a third continuation mode. It uses the same aligned
+  video/audio target prefix as `masked_av`, but ramps the end of that prefix
+  from preservation toward generation to soften the temporal handoff.
+- For the recommended 39-frame prefix, the first 8 video latent steps and 42
+  audio steps remain fully protected. The final 4 video steps and 23 audio
+  steps use monotonic denoise ramps; all future rows remain fully denoisable.
+- Added the mode to Plan, per-scene overrides, Plan Studio, timing validation,
+  resume provenance, and the native-first PR #15375 compatibility path.
+
 ## v0.4.7 — General masked targets
 
 - Updated the vendored PR #15375 fallback through upstream commit `989e7a9`.

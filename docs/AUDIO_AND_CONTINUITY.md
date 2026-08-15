@@ -13,21 +13,27 @@ exact, use `source_track`. For a short voice/timbre reference where H3 should
 generate new words, use `generated_audio` and schedule that short clip as an
 ordinary audio reference.
 
-These descriptions are for the default `guide` continuation mode. In
-experimental `masked_av`, Chain Context always preserves a matching video and
-audio prefix inside the target latent, including when final assembly uses
-`source_track`. For recursive scenes it copies the previous sampler's audio
-latent directly. For scene 1 after Existing Video Context, source audio and the
-H3 audio VAE must both be connected.
+These descriptions are for the default `guide` continuation mode. In the
+experimental `masked_av` and `feathered_av` modes, Chain Context places a
+matching video and audio prefix inside the target latent, including when final
+assembly uses `source_track`. `masked_av` protects the complete prefix;
+`feathered_av` progressively denoises its final latent steps. For recursive
+scenes it copies the previous sampler's audio latent directly. For scene 1
+after Existing Video Context, source audio and the H3 audio VAE must both be
+connected.
 
-Prefer a 39-frame masked prefix. It maps exactly to 65 audio steps; 22 frames
-maps to 36.666... steps and therefore requires rounding at the AV boundary.
+Prefer a 39-frame AV prefix. It maps exactly to 12 video latent steps and 65
+audio steps; 22 frames maps to 36.666... audio steps and therefore requires
+rounding at the AV boundary. At 39 frames, `feathered_av` fully protects the
+first 8 video / 42 audio steps and ramps the final 4 video / 23 audio prefix
+steps.
 
 The Plan node mode is an inherited default and each scene may override it. The
 override controls the transition into that scene: `guide` for a new shot with
-interpretive continuity, `masked_av` for exact same-shot continuation. Mixed
-plans must still use global context/encode/anchor settings compatible with
-every masked scene.
+interpretive continuity, `masked_av` for exact same-shot continuation, or
+`feathered_av` for the same target-latent continuation with a softer boundary.
+Mixed plans must still use global context/encode/anchor settings compatible
+with every AV mask scene.
 
 ## Source-track wiring
 
@@ -123,10 +129,10 @@ the decoded audio tail to the exact delivered-frame duration.
 the repeated context for external stitchers. It does not alter the normal clean
 images output or audio.
 
-Both continuation modes return the prefix length as `trim_frames`. In masked
-mode those leading frames are decoded from preserved target-latent rows rather
-than regenerated guide-conditioned rows, but they still overlap the preceding
-scene and must be removed from delivered duration.
+All continuation modes return the prefix length as `trim_frames`. In AV mask
+modes those leading frames come from target-latent rows rather than persistent
+guide-conditioning rows. They still overlap the preceding scene and must be
+removed from delivered duration, including the feathered portion.
 
 ## Measure a join
 
