@@ -33,6 +33,20 @@ shorter than the stock H3 audio target. This node adds only the encoder-grid
 lookahead needed to fill that target and trims back to its exact step count.
 Do not put `LTXVConcatAVLatent` or `LTXVSeparateAVLatent` in this path.
 
+### Masking · Loop Mask Slice
+
+**MiniMax H3 Masking · Loop Mask Slice** accepts either one static mask or a
+complete tracked MASK batch. A single frame is explicitly broadcast across the
+current scene. A multi-frame batch is treated as a source-timeline mask and
+sliced with the current shot's `generation_start_frame` and `raw_frames`.
+
+Set `source_fps` to the rate represented by the tracked mask batch. For a
+24-fps source/mask pair, the bundled two-scene workflow selects mask frames
+0..174 for scene 1 and 136..310 for scene 2. The repeated 136..174 interval is
+therefore identical to the source AV continuation overlap. Connect
+`scene_mask` to Grid Preview; its existing spatial snapping then operates only
+on the correct current interval.
+
 ### Masking · Trim Source AV
 
 **MiniMax H3 Masking · Trim Source AV** drops only trailing video frames until

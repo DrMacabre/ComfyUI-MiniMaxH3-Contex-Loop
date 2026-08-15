@@ -84,20 +84,22 @@ native-first H3 mask runtime and full Chain Loop. It contains no MODEL patch
 or LTX AV concat/separate node.
 
 1. Copy the bundled source video and mask to `ComfyUI/input/`.
-2. Select or paint a replacement mask; white regenerates and black preserves.
+2. Keep the bundled one-frame mask for a fixed region, or replace it with a
+   tracked MASK batch covering the complete source timeline.
 3. Verify the effective 32×32 H3 cells in Grid Preview.
 4. Edit the scene prompt or Plan, then run the loop normally.
 
 The two-scene demo edits 311 frames from the 313-frame source. Each generation
 is 175 frames; scene 2 repeats and protects a 39-frame edited prefix, so it
-delivers 136 new frames. The workflow preserves source audio, broadcasts its
-static example mask across both scenes, and can accept a tracked mask batch
-instead. **Loop Source AV Target** derives each source interval from Current
-Shot state, then copies the video/audio encodes into the exact stock H3 target
-shapes. This avoids the one-token temporal mismatch possible when independently
-encoded streams are combined by a generic LTX AV node. Chain Context preserves
-the preceding edited overlap before Apply Target Mask intersects the spatial
-mask; Loop Save, review, resume, and Assemble remain active.
+delivers 136 new frames. The workflow preserves source audio. **Loop Mask
+Slice** broadcasts its static example mask, but when supplied a tracked batch
+it selects frames 0..174 and 136..310 for the two scenes. **Loop Source AV
+Target** selects the same source intervals and copies the video/audio encodes
+into the exact stock H3 target shapes. This avoids the one-token temporal
+mismatch possible when independently encoded streams are combined by a generic
+LTX AV node. Chain Context preserves the preceding edited overlap before Apply
+Target Mask intersects the spatial mask; Loop Save, review, resume, and
+Assemble remain active.
 
 Apply Target Mask intersects any existing nested AV mask, which allows this
 manual spatial path to compose with a chain `masked_av` prefix. See

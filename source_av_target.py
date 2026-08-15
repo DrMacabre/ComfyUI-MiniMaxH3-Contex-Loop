@@ -15,6 +15,7 @@ import math
 import torch
 
 from .masked_context import _validate_target_streams
+from .masking_ops import normalize_comfy_mask
 from .nodes import AUDIO_HZ, FPS, _resize
 
 
@@ -263,11 +264,87 @@ class MiniMaxH3ContexLoopSourceAVTarget:
         return output, scene_frames, scene_audio, status
 
 
+class MiniMaxH3ContexLoopMaskSlice:
+    """Select the tracked mask interval matching the current loop scene."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "state": (STATE_TYPE, {
+                    "tooltip": "Current state from H3 Chain Current Shot."}),
+                "mask": ("MASK", {
+                    "tooltip": "One static mask or a complete tracked mask "
+                               "timeline. White means generate."}),
+                "source_fps": ("FLOAT", {
+                    "default": 24.0, "min": 0.001, "max": 1000.0,
+                    "step": 0.001,
+                    "tooltip": "FPS represented by a tracked mask batch. A "
+                               "single mask is broadcast and ignores FPS."}),
+            },
+        }
+
+    RETURN_TYPES = ("MASK", "INT", "STRING")
+    RETURN_NAMES = ("scene_mask", "scene_mask_frames", "status")
+    FUNCTION = "slice"
+    CATEGORY = "conditioning/minimax/contex_loop/masking"
+    DESCRIPTION = (
+        "Broadcast one static mask or slice the exact tracked-mask interval "
+        "for the current Chain Loop scene and its continuation overlap.")
+
+    def slice(self, state, mask, source_fps=24.0):
+        timeline = normalize_comfy_mask(mask)
+        try:
+            index = int(state["index"])
+            shot = state["plan"]["shots"][index - 1]
+            start_frame = int(shot["generation_start_frame"])
+            scene_frames = int(shot["raw_frames"])
+        except (KeyError, IndexError, TypeError, ValueError) as exc:
+            raise ValueError(
+                "h3_loop_mask_slice: invalid Chain Current Shot state.") from exc
+        if start_frame < 0:
+            raise ValueError(
+                "h3_loop_mask_slice: scene %d begins before the mask "
+                "timeline." % index)
+
+        mask_frames = int(timeline.shape[0])
+        if mask_frames == 1:
+            selected = timeline.expand(
+                scene_frames, int(timeline.shape[1]), int(timeline.shape[2])
+            ).clone()
+            mode = "static mask broadcast"
+        else:
+            indices = _canonical_indices(
+                mask_frames, source_fps, timeline.device)
+            end_frame = start_frame + scene_frames
+            if end_frame > int(indices.numel()):
+                raise ValueError(
+                    "h3_loop_mask_slice: scene %d needs canonical mask frames "
+                    "%d..%d, but the tracked mask has only %d frames at 24 "
+                    "fps." %
+                    (index, start_frame, end_frame - 1,
+                     int(indices.numel())))
+            selected = timeline.index_select(
+                0, indices[start_frame:end_frame])
+            mode = "tracked mask slice"
+
+        status = (
+            "H3 loop %s scene %d: source mask batch %d frames -> timeline "
+            "%d..%d (%d scene masks)." %
+            (mode, index, mask_frames, start_frame,
+             start_frame + scene_frames - 1, scene_frames))
+        _LOG.info(status)
+        return selected.contiguous(), scene_frames, status
+
+
 NODE_CLASS_MAPPINGS = {
     "MiniMaxH3ContexLoopSourceAVTarget": MiniMaxH3ContexLoopSourceAVTarget,
+    "MiniMaxH3ContexLoopMaskSlice": MiniMaxH3ContexLoopMaskSlice,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "MiniMaxH3ContexLoopSourceAVTarget": (
         "MiniMax H3 Masking · Loop Source AV Target"),
+    "MiniMaxH3ContexLoopMaskSlice": (
+        "MiniMax H3 Masking · Loop Mask Slice"),
 }

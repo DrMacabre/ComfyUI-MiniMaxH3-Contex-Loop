@@ -1,8 +1,8 @@
 {
   "id": "c0b8422a-84d4-44f8-91ce-31c68a9a119e",
   "revision": 0,
-  "last_node_id": 1956,
-  "last_link_id": 101,
+  "last_node_id": 1957,
+  "last_link_id": 103,
   "nodes": [
     {
       "id": 1,
@@ -476,7 +476,8 @@
             41,
             46,
             77,
-            88
+            88,
+            96
           ]
         },
         {
@@ -1163,7 +1164,7 @@
         {
           "name": "latent_image",
           "type": "LATENT",
-          "link": 99
+          "link": 101
         }
       ],
       "outputs": [
@@ -1948,7 +1949,7 @@
         "Node name for S&R": "Note"
       },
       "widgets_values": [
-        "MASKED VIDEO INPAINT \u2014 CHAIN LOOP\n\nThis is a real Chain Loop workflow, including Current Shot, checkpoint/review, Loop End, resume, and disk assembly. Two 175-frame generations share a 39-frame protected overlap, delivering the largest valid span contained by the bundled 313-frame source: 311 frames. Scene 1 selects source frames 0..174; scene 2 selects 136..310 and retains the preceding edited result in its protected prefix.\n\nThe pack-native Loop Source AV Target selects the current source interval from Chain state, then fits picture and sound to the exact stock H3 joint target. It does not use LTXVConcatAVLatent or LTXVSeparateAVLatent. The source picture and audio therefore share the same frame-derived 24-fps start and duration. Apply Target Mask preserves source audio and every black video cell; only white cells are regenerated."
+        "MASKED VIDEO INPAINT \u2014 CHAIN LOOP\n\nThis is a real Chain Loop workflow, including Current Shot, checkpoint/review, Loop End, resume, and disk assembly. Two 175-frame generations share a 39-frame protected overlap, delivering the largest valid span contained by the bundled 313-frame source: 311 frames. Scene 1 selects source frames 0..174; scene 2 selects 136..310 and retains the preceding edited result in its protected prefix.\n\nThe pack-native Loop Source AV Target selects the current source interval from Chain state, then fits picture and sound to the exact stock H3 joint target. It does not use LTXVConcatAVLatent or LTXVSeparateAVLatent. The source picture and audio therefore share the same frame-derived 24-fps start and duration. Apply Target Mask preserves source audio and every black video cell; only white cells are regenerated. Loop Mask Slice broadcasts the bundled one-frame mask explicitly. Replace its mask input with a tracked MASK batch covering the complete source timeline to follow a moving object; scene 2 automatically receives mask frames 136..310, including the same 39-frame overlap as source AV."
       ],
       "color": "#432f66",
       "bgcolor": "rgba(24,24,27,.9)"
@@ -2100,7 +2101,7 @@
           "name": "scene_frames",
           "type": "IMAGE",
           "links": [
-            97
+            99
           ]
         },
         {
@@ -2112,7 +2113,7 @@
           "name": "status",
           "type": "STRING",
           "links": [
-            101
+            103
           ]
         }
       ],
@@ -2152,7 +2153,7 @@
         {
           "name": "mask",
           "type": "MASK",
-          "link": 98
+          "link": 100
         }
       ],
       "outputs": [
@@ -2160,7 +2161,7 @@
           "name": "masked_target",
           "type": "LATENT",
           "links": [
-            99
+            101
           ]
         },
         {
@@ -2198,7 +2199,7 @@
           "name": "MASK",
           "type": "MASK",
           "links": [
-            96
+            97
           ]
         }
       ],
@@ -2212,7 +2213,7 @@
         "soldier_crabs_inpaint_mask.png",
         "red"
       ],
-      "title": "BUNDLED STATIC INPAINT MASK"
+      "title": "STATIC MASK \u2014 REPLACE WITH TRACKED MASK BATCH"
     },
     {
       "id": 1954,
@@ -2232,12 +2233,12 @@
         {
           "name": "image",
           "type": "IMAGE",
-          "link": 97
+          "link": 99
         },
         {
           "name": "mask",
           "type": "MASK",
-          "link": 96
+          "link": 98
         }
       ],
       "outputs": [
@@ -2245,14 +2246,14 @@
           "name": "snapped_mask",
           "type": "MASK",
           "links": [
-            98
+            100
           ]
         },
         {
           "name": "grid_preview",
           "type": "IMAGE",
           "links": [
-            100
+            102
           ]
         },
         {
@@ -2292,7 +2293,7 @@
         {
           "name": "images",
           "type": "IMAGE",
-          "link": 100
+          "link": 102
         }
       ],
       "outputs": [
@@ -2326,7 +2327,7 @@
         {
           "name": "source",
           "type": "*",
-          "link": 101
+          "link": 103
         }
       ],
       "outputs": [
@@ -2341,6 +2342,63 @@
       },
       "widgets_values": [],
       "title": "SOURCE AV ALIGNMENT STATUS"
+    },
+    {
+      "id": 1957,
+      "type": "MiniMaxH3ContexLoopMaskSlice",
+      "pos": [
+        1056,
+        576
+      ],
+      "size": [
+        416,
+        250
+      ],
+      "flags": {},
+      "order": 32,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "state",
+          "type": "H3_CHAIN_STATE",
+          "link": 96
+        },
+        {
+          "name": "mask",
+          "type": "MASK",
+          "link": 97
+        }
+      ],
+      "outputs": [
+        {
+          "name": "scene_mask",
+          "type": "MASK",
+          "links": [
+            98
+          ]
+        },
+        {
+          "name": "scene_mask_frames",
+          "type": "INT",
+          "links": null
+        },
+        {
+          "name": "status",
+          "type": "STRING",
+          "links": null
+        }
+      ],
+      "title": "SLICE TRACKED MASK TO CURRENT LOOP SCENE",
+      "properties": {
+        "cnr_id": "comfyui-minimaxh3-contex-loop",
+        "Node name for S&R": "MiniMaxH3ContexLoopMaskSlice",
+        "aux_id": "ethanfel/ComfyUI-MiniMaxH3-Contex-Loop"
+      },
+      "widgets_values": [
+        24.0
+      ],
+      "color": "#1f1f48",
+      "bgcolor": "rgba(24,24,27,.9)"
     }
   ],
   "links": [
@@ -2866,14 +2924,30 @@
     ],
     [
       96,
+      1702,
+      0,
+      1957,
+      0,
+      "H3_CHAIN_STATE"
+    ],
+    [
+      97,
       1953,
+      0,
+      1957,
+      1,
+      "MASK"
+    ],
+    [
+      98,
+      1957,
       0,
       1954,
       1,
       "MASK"
     ],
     [
-      97,
+      99,
       1951,
       1,
       1954,
@@ -2881,7 +2955,7 @@
       "IMAGE"
     ],
     [
-      98,
+      100,
       1954,
       0,
       1952,
@@ -2889,7 +2963,7 @@
       "MASK"
     ],
     [
-      99,
+      101,
       1952,
       0,
       124,
@@ -2897,7 +2971,7 @@
       "LATENT"
     ],
     [
-      100,
+      102,
       1954,
       1,
       1955,
@@ -2905,7 +2979,7 @@
       "IMAGE"
     ],
     [
-      101,
+      103,
       1951,
       3,
       1956,

@@ -78,7 +78,8 @@ Start with the maintained v0.4 example for your generation mode:
   remains explicitly experimental.
 - [Masked video inpaint](<example_workflows/MiniMax H3 - Masked Video Inpaint.json>)
   runs through Chain Loop, frame-locks source picture and sound to the stock
-  H3 target, and regenerates only the selected 32px video cells.
+  H3 target, slices static or tracked masks per scene, and regenerates only
+  the selected 32px video cells.
 - [Masked AV extension — single clip](<example_workflows/MiniMax H3 - Masked AV Extension - Single Clip.json>)
   and [looped Ref2VA chain](<example_workflows/MiniMax H3 - Masked AV Extension - Chain + Reference Image.json>)
   continue the bundled modern CC0 soldier-crab footage.
@@ -178,14 +179,16 @@ Plan—normally `context_length=39`, `encode_mode=video`, and `anchor_mode=head`
 
 ### General masked editing
 
-The public **Masking · Loop Source AV Target**, **Masking · Trim Source AV**,
-**Masking · Grid Preview**, and **Masking · Apply Target Mask** nodes expose
-the same per-row H3 machinery for video editing. Loop Source AV Target selects
-the current scene from Chain state and fits both VAE encodes to the stock H3
-joint target; it does not independently concatenate LTX video/audio latents.
-A static or tracked mask then selects spatial and temporal rows to regenerate.
-Existing masks are intersected, so a spatial edit can compose with the exact
-prefix created by chain `masked_av` while preservation remains authoritative.
+The public **Masking · Loop Source AV Target**, **Masking · Loop Mask Slice**,
+**Masking · Trim Source AV**, **Masking · Grid Preview**, and **Masking · Apply
+Target Mask** nodes expose the same per-row H3 machinery for video editing.
+Loop Source AV Target selects the current scene from Chain state and fits both
+VAE encodes to the stock H3 joint target; it does not independently concatenate
+LTX video/audio latents. Loop Mask Slice broadcasts a single mask or selects
+the matching frames from a complete tracked-mask timeline, including the same
+continuation overlap. Existing masks are intersected, so a spatial edit can
+compose with the exact prefix created by chain `masked_av` while preservation
+remains authoritative.
 
 The bundled inpaint workflow uses distinct `MiniMaxH3Contex…` node IDs and can
 coexist with the earlier standalone PerRowMasking pack. It needs no MODEL patch

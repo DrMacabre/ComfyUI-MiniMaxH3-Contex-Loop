@@ -745,6 +745,7 @@ def main():
         "MiniMaxH3ChainLoopStart",
         "MiniMaxH3ChainLoopEnd",
         "MiniMaxH3ContexLoopSourceAVTarget",
+        "MiniMaxH3ContexLoopMaskSlice",
         "MiniMaxH3ContexMaskGridPreview",
         "MiniMaxH3ContexMaskedTarget",
     } <= masked_types
@@ -778,6 +779,13 @@ def main():
     mask_loader = node(masked_inpaint, "LoadImageMask")
     assert mask_loader["widgets_values"][0] == (
         "soldier_crabs_inpaint_mask.png")
+    mask_slice = node(masked_inpaint, "MiniMaxH3ContexLoopMaskSlice")
+    grid_preview = node(masked_inpaint, "MiniMaxH3ContexMaskGridPreview")
+    assert socket(mask_loader["outputs"], "MASK")["links"] == [
+        socket(mask_slice["inputs"], "mask")["link"]]
+    assert socket(mask_slice["outputs"], "scene_mask")["links"] == [
+        socket(grid_preview["inputs"], "mask")["link"]]
+    assert mask_slice["widgets_values"] == [24.0]
     masked_plan_node = node(masked_inpaint, "MiniMaxH3ChainPlan")
     masked_plan = json.loads(masked_plan_node["widgets_values"][0])
     assert [shot["length"] for shot in masked_plan["shots"]] == [175, 175]

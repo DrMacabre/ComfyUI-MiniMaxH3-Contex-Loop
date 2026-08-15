@@ -60,6 +60,17 @@ def _install_stubs():
     context._validate_target_streams = validate_target
     sys.modules[context.__name__] = context
 
+    ops = types.ModuleType("%s.masking_ops" % PACKAGE)
+
+    def normalize_mask(mask):
+        if mask.ndim == 2:
+            mask = mask.unsqueeze(0)
+        assert mask.ndim == 3
+        return mask.float().clamp(0.0, 1.0)
+
+    ops.normalize_comfy_mask = normalize_mask
+    sys.modules[ops.__name__] = ops
+
 
 def _load_node():
     spec = importlib.util.spec_from_file_location(
@@ -130,13 +141,50 @@ def main():
     assert "207 audio steps" in status
     assert not torch.count_nonzero(target_video)
     assert not torch.count_nonzero(target_audio)
+    static_mask = torch.ones((1, 32, 64))
+    static_scene, static_count, static_status = (
+        module.MiniMaxH3ContexLoopMaskSlice().slice(
+            state, static_mask, 24.0))
+    assert static_scene.shape == (124, 32, 64)
+    assert static_count == 124
+    assert "static mask broadcast" in static_status
+
+    tracked_mask = torch.arange(200, dtype=torch.float32).reshape(
+        200, 1, 1).expand(200, 32, 64) / 199.0
+    tracked_scene, tracked_count, tracked_status = (
+        module.MiniMaxH3ContexLoopMaskSlice().slice(
+            state, tracked_mask, 24.0))
+    assert tracked_scene.shape == (124, 32, 64)
+    assert tracked_count == 124
+    assert torch.allclose(tracked_scene[0], tracked_mask[17])
+    assert torch.allclose(tracked_scene[-1], tracked_mask[140])
+    assert "tracked mask slice" in tracked_status
+
+    overlap_state = {
+        "index": 2,
+        "plan": {"shots": [state["plan"]["shots"][0], {
+            "generation_start_frame": 136,
+            "raw_frames": 175,
+        }]},
+    }
+    full_mask = torch.arange(311, dtype=torch.float32).reshape(
+        311, 1, 1).expand(311, 2, 2) / 310.0
+    overlap, overlap_count, _ = (
+        module.MiniMaxH3ContexLoopMaskSlice().slice(
+            overlap_state, full_mask, 24.0))
+    assert overlap_count == 175
+    assert torch.allclose(overlap[0], full_mask[136])
+    assert torch.allclose(overlap[-1], full_mask[310])
+
     assert set(module.NODE_CLASS_MAPPINGS) == {
-        "MiniMaxH3ContexLoopSourceAVTarget"}
+        "MiniMaxH3ContexLoopSourceAVTarget",
+        "MiniMaxH3ContexLoopMaskSlice",
+    }
 
     print(
         "loop source AV target: 124 picture frames use the stock 207-step "
-        "audio grid; frame-derived source slicing replaces misaligned LTX "
-        "AV concat/separate")
+        "audio grid; tracked masks slice exact scene/overlap frames while a "
+        "single mask broadcasts explicitly")
 
 
 if __name__ == "__main__":

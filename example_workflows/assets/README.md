@@ -51,7 +51,9 @@ resize it to their 960×544 H3 canvas.
 Static 960×544 black-and-white demonstration mask for the looped inpaint
 workflow. White selects the lower-central beach region for regeneration;
 black protects the source video. Grid Preview displays the exact effective H3
-32px cells before sampling.
+32px cells before sampling. Loop Mask Slice explicitly broadcasts this single
+frame. Replace its input with a tracked MASK batch to follow a moving object;
+the node slices matching frames for every loop scene and overlap.
 
 SHA-256:
 `95cf18228cd3559ad980339fe9d8fccdcef25799368719b8e044cd61c6691fe4`

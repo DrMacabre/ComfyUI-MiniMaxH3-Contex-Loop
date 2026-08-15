@@ -178,6 +178,7 @@ def main():
         "MiniMaxH3ContexMaskedTarget",
         "MiniMaxH3ContexMaskGridPreview",
         "MiniMaxH3ContexLoopSourceAVTarget",
+        "MiniMaxH3ContexLoopMaskSlice",
         "MiniMaxH3ChainLoopStart",
         "MiniMaxH3ChainLoopEnd",
     } <= workflow_types
