@@ -250,8 +250,11 @@ media remains `<Video N>`, but its `@tag` compiles to a separate reusable
 `<Subject N>` sourced from that Video. The compiler adds the motion-Subject
 definition and explicitly transfers only its visible performance to the chosen
 target Subject, excluding source identity, wardrobe, setting, lighting, and
-composition. The full clip is still a native Ref2VA video block, so this is an
-H3 semantic separation rather than a pose extractor or ControlNet.
+composition. By default it also reduces the motion video's short edge to 384
+pixels before native Ref2VA encoding, lowering its spatial token pressure while
+retaining coarse pose and timing; select `source` for a full-resolution A/B
+baseline. The clip is still a native Ref2VA video block, so this is an H3
+semantic/low-bandwidth separation rather than a pose extractor or ControlNet.
 
 For a song or other full source track, set Tagged Audio Ref to
 `source_timeline`, keep the full loader AUDIO connected to that node, and wire

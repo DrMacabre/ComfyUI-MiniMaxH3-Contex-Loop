@@ -483,29 +483,38 @@ assert float(tagged_audio_slice["waveform"][0, 0, 0]) == 2210
 assert tagged_detail.endswith("(origin scene 2)")
 
 tagged_motion_role = chain.MiniMaxH3TaggedMotionReference().add(
-    sequential_video, "performance", "<Subject 1>",
-    "the source performer's pose sequence and action timing", "",
+    sequential_video, "performance", "<Subject 1> and <Subject 2>",
+    "the source performer's pose sequence and action timing", "384", "",
     "restart_each_scene")[0]
 motion_role_prompt = (
     "subject_definitions:\n"
-    "<Subject 1> is the target character.\n\n"
+    "<Subject 1> is the target character.\n"
+    "<Subject 2> is the target partner.\n\n"
     "detailed_description:\n"
     "[Shot 1] <Subject 1> performs @performance.")
 motion_role_compiled, motion_role_summary, motion_role_bindings = (
     chain._compile_tagged_reference_prompt(
         tagged_motion_role, 1, 1, motion_role_prompt))
-assert "<Subject 2> is the reusable pose, action, and motion from " \
+assert "<Subject 3> is the reusable pose, action, and motion from " \
        "<Video 1>" in motion_role_compiled
-assert "<Subject 1> performs <Subject 2>." in motion_role_compiled
+assert "<Subject 1> performs <Subject 3>." in motion_role_compiled
 assert "without importing the source identity, wardrobe, setting, lighting, " \
        "or composition" in motion_role_compiled
-assert motion_role_bindings["aliases"]["performance"] == "<Subject 2>"
-assert "@performance -> <Subject 2> motion from <Video 1>" in \
+assert motion_role_bindings["aliases"]["performance"] == "<Subject 3>"
+assert "@performance -> <Subject 3> motion from <Video 1>" in \
        motion_role_summary
 motion_role_contract = chain._reference_entry_contract(
     tagged_motion_role["entries"][0])
 assert motion_role_contract["semantic_role"] == "motion"
-assert motion_role_contract["motion_target"] == "<Subject 1>"
+assert motion_role_contract["motion_target"] == "<Subject 1> and <Subject 2>"
+assert motion_role_contract["motion_short_edge"] == "384"
+
+large_motion_video = chain.torch.zeros((5, 512, 640, 3))
+compact_motion = chain.MiniMaxH3TaggedMotionReference().add(
+    large_motion_video, "compact_motion", "<Subject 1>",
+    "coarse full-body motion", "384", "", "restart_each_scene")[0]
+assert tuple(compact_motion["entries"][0]["value"].shape) == (
+    5, 384, 480, 3)
 
 assert "references" in chain.MiniMaxH3TaggedReferenceToVideo.INPUT_TYPES()[
     "required"]

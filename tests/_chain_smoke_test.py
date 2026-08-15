@@ -854,12 +854,13 @@ def main():
     assert "origin scene 2" in tagged_motion_expanded["result"][3]
 
     tagged_motion_role = chain.MiniMaxH3TaggedMotionReference().add(
-        sequential_video, "performance", "<Subject 1>",
-        "the source performer's pose sequence and action timing", "",
+        sequential_video, "performance", "<Subject 1> and <Subject 2>",
+        "the source performer's pose sequence and action timing", "384", "",
         "restart_each_scene")[0]
     motion_role_prompt = (
         "subject_definitions:\n"
-        "<Subject 1> is the target character.\n\n"
+        "<Subject 1> is the target character.\n"
+        "<Subject 2> is the target partner.\n\n"
         "detailed_description:\n"
         "[Shot 1] <Subject 1> performs @performance.")
     motion_role_compiled, motion_role_summary, motion_role_bindings = (
@@ -867,11 +868,11 @@ def main():
             tagged_motion_role, 1, 1, motion_role_prompt))
     assert "<Subject 2> is the reusable pose, action, and motion from " \
            "<Video 1>" in motion_role_compiled
-    assert "<Subject 1> performs <Subject 2>." in motion_role_compiled
+    assert "<Subject 1> performs <Subject 3>." in motion_role_compiled
     assert "without importing the source identity, wardrobe, setting, " \
            "lighting, or composition" in motion_role_compiled
-    assert motion_role_bindings["aliases"]["performance"] == "<Subject 2>"
-    assert "@performance -> <Subject 2> motion from <Video 1>" in \
+    assert motion_role_bindings["aliases"]["performance"] == "<Subject 3>"
+    assert "@performance -> <Subject 3> motion from <Video 1>" in \
            motion_role_summary
     motion_role_expanded = chain.MiniMaxH3TaggedReferenceToVideo().apply(
         "clip", "video-vae", "audio-vae", tagged_motion_role, 1, 1,

@@ -102,6 +102,7 @@ H3_CONTEXT_LENGTHS = (
 AUDIO_MODES = ("source_track", "generated_audio", "source_plus_timeline")
 CONTINUATION_MODES = ("guide", "masked_av")
 REFERENCE_AUDIO_TIMELINE_MODES = ("standalone", "source_timeline")
+MOTION_REFERENCE_SHORT_EDGES = ("384", "512", "768", "source")
 
 # These Plan-wide controls describe how the next scene consumes an immutable
 # predecessor. Their effective values are still recorded on generated scenes,
@@ -464,7 +465,7 @@ def _reference_entry_contract(entry: dict[str, Any]) -> dict[str, Any]:
     keys = (
         "kind", "tag", "scenes", "content_hash", "audio_tag",
         "audio_hash", "semantic_role", "motion_target",
-        "motion_description",
+        "motion_description", "motion_short_edge",
     )
     contract = {key: entry[key] for key in keys if key in entry}
     # Keep old schedules bit-identical. Timeline metadata enters the resume
@@ -3466,6 +3467,13 @@ class MiniMaxH3TaggedMotionReference:
                     "tooltip": "Only the transferable performance evidence. "
                                "Do not describe source identity, wardrobe, "
                                "setting, lighting, or composition."}),
+                "reference_short_edge": (list(MOTION_REFERENCE_SHORT_EDGES), {
+                    "default": "384",
+                    "tooltip": "Spatial bandwidth of the native motion-video "
+                               "block. 384 keeps coarse pose and temporal "
+                               "movement while reducing source appearance "
+                               "tokens. source preserves the input resolution "
+                               "for an exact baseline."}),
                 "audio_tag": ("STRING", {
                     "default": "",
                     "tooltip": "Alias for optional synchronized audio. Blank "
@@ -3494,11 +3502,12 @@ class MiniMaxH3TaggedMotionReference:
         "Register a video as H3 motion/action evidence. The native video "
         "remains <Video N>, while @tag compiles to a distinct reusable "
         "<Subject N> whose performance is transferred to target_subject. "
-        "This prevents the prompt from treating the clip as a whole-video "
-        "appearance or continuation reference."
+        "The default compact video block reduces source appearance pressure; "
+        "this is still semantic motion transfer, not a pose extractor."
     )
 
-    def add(self, video, tag, target_subject, motion_description, audio_tag,
+    def add(self, video, tag, target_subject, motion_description,
+            reference_short_edge="384", audio_tag="",
             timeline_mode="restart_each_scene", audio=None, previous=None,
             dynprompt=None, unique_id=None):
         mode = _downstream_reference_compliance(dynprompt, unique_id)
@@ -3509,28 +3518,55 @@ class MiniMaxH3TaggedMotionReference:
                     "Tagged H3 motion reference must be an IMAGE batch "
                     "containing at least 5 frames.")
             target = " ".join(str(target_subject or "").split())
-            if not re.fullmatch(r"<Subject\s+[1-9]\d*>", target,
-                                flags=re.IGNORECASE):
+            subject_labels = re.findall(
+                r"<Subject\s+[1-9]\d*>", target, flags=re.IGNORECASE)
+            target_remainder = re.sub(
+                r"<Subject\s+[1-9]\d*>", "", target,
+                flags=re.IGNORECASE)
+            target_remainder = re.sub(
+                r"(?:\band\b|,|&|\s)+", "", target_remainder,
+                flags=re.IGNORECASE)
+            if not subject_labels or target_remainder:
                 raise ValueError(
-                    "Tagged H3 motion target_subject must be an existing "
-                    "native label such as <Subject 1>.")
+                    "Tagged H3 motion target_subject must contain only "
+                    "existing native labels, such as <Subject 1> or "
+                    "<Subject 1> and <Subject 2>.")
             description = " ".join(str(motion_description or "").split())
             if not description:
                 raise ValueError(
                     "Tagged H3 motion_description cannot be blank.")
+            short_edge = str(reference_short_edge or "384").strip().lower()
+            if short_edge not in MOTION_REFERENCE_SHORT_EDGES:
+                raise ValueError(
+                    "Tagged H3 motion reference_short_edge must be one of %s." %
+                    (MOTION_REFERENCE_SHORT_EDGES,))
+            prepared_video = video
+            if short_edge != "source":
+                source_h, source_w = int(video.shape[1]), int(video.shape[2])
+                source_short = min(source_h, source_w)
+                target_short = int(short_edge)
+                if source_short > target_short:
+                    scale = target_short / float(source_short)
+                    target_h = max(32, round(source_h * scale / 32) * 32)
+                    target_w = max(32, round(source_w * scale / 32) * 32)
+                    prepared_video = torch.nn.functional.interpolate(
+                        video[..., :3].movedim(-1, 1),
+                        size=(target_h, target_w), mode="bilinear",
+                        align_corners=False, antialias=True).movedim(1, -1)
             paired_hash = ""
             if audio is not None:
                 _validate_audio(audio, "Tagged H3 motion-reference audio")
                 paired_hash = _audio_fingerprint(audio)
             references = _append_tagged_reference(
-                previous, kind="video", tag=tag, value=video,
-                content_hash=_tensor_fingerprint(video), audio=audio,
+                previous, kind="video", tag=tag, value=prepared_video,
+                content_hash=_tensor_fingerprint(prepared_video), audio=audio,
                 audio_tag=audio_tag, audio_hash=paired_hash,
                 compliance_mode=mode, timeline_mode=timeline_mode)
             entries = references["entries"]
             entries[-1]["semantic_role"] = "motion"
             entries[-1]["motion_target"] = target
             entries[-1]["motion_description"] = description.rstrip(". ")
+            entries[-1]["motion_short_edge"] = short_edge
             references = _make_tagged_references(entries)
         except (TypeError, ValueError) as exc:
             if mode == "disabled":
@@ -3540,10 +3576,12 @@ class MiniMaxH3TaggedMotionReference:
         entry = references["entries"][-1]
         paired = " + @%s" % entry["audio_tag"] if entry.get("audio_tag") else ""
         status = (
-            "@%s%s motion -> %s; reusable Subject from native Video; %s; "
+            "@%s%s motion -> %s; reusable Subject from native Video; %s px "
+            "short edge; %s; "
             "%d sources; %s" % (
                 entry["tag"], paired, entry["motion_target"],
-                entry["timeline_mode"], len(references["entries"]),
+                entry["motion_short_edge"], entry["timeline_mode"],
+                len(references["entries"]),
                 references["fingerprint"][:12]))
         return references, references["fingerprint"], status
 
