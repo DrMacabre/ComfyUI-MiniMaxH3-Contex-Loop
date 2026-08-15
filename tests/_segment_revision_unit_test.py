@@ -106,9 +106,10 @@ def main():
             assert "images_with_overlap" in str(exc)
         else:
             raise AssertionError("enabled blending accepted no overlap input")
-        first = saver.save(
+        first_result = saver.save(
             state, FakeImages(), object(), generated_audio,
-            FakeBlendImages())["result"][0]
+            FakeBlendImages())
+        first = first_result["result"][0]
         first_paths = {
             key: pathlib.Path(chain._absolute_output_path(first[key]))
             for key in ("segment", "checkpoint", "prompt_file",
@@ -116,6 +117,8 @@ def main():
                         "blend_segment")
         }
         assert all(path.is_file() for path in first_paths.values())
+        assert first_result["ui"]["videos"] == [
+            chain._video_output_item(str(first_paths["segment"]))]
         assert first["generated_audio_sha256"] == chain._file_sha256(
             str(first_paths["generated_audio"]))
         with wave.open(str(first_paths["generated_audio"]), "rb") as audio_file:
@@ -129,15 +132,18 @@ def main():
             "prompt_hash": "replacement-hash",
             "seed": 2,
         })
-        second = saver.save(
+        second_result = saver.save(
             state, FakeImages(), object(), generated_audio,
-            FakeBlendImages())["result"][0]
+            FakeBlendImages())
+        second = second_result["result"][0]
         assert second["revision"] != first["revision"]
         assert second["supersedes"] == first["revision_metadata"]
         assert second["generated_audio"] != first["generated_audio"]
         assert second["blend_segment"] != first["blend_segment"]
         assert second["blend_frames"] == 2
         assert all(path.is_file() for path in first_paths.values())
+        assert second_result["ui"]["videos"] == [chain._video_output_item(
+            chain._absolute_output_path(second["segment"]))]
 
         current = json.loads(pathlib.Path(
             chain._absolute_output_path(second["metadata"])

@@ -2,14 +2,20 @@
 
 Newest first. This file keeps release history out of the onboarding README.
 
-## v0.4.5 — Scene context and checkpoint Plan recovery
+## v0.4.6 — Asset publishing and media fallbacks
 
+- Scene Segment Save and Final Assemble now publish their MP4 paths through
+  ComfyUI's standard output descriptor contract, so newly produced scene clips
+  and final videos appear promptly in the global Assets sidebar when enabled.
 - FFmpeg executables found on `PATH` are now launch-tested once before use. A
   broken Windows build (including `0xC0000139` DLL entry-point failures) is
   treated as unavailable so review muxing and final assembly use PyAV instead.
 - Versioned every production `.mjs` import with the package release and added
   a consistency regression check, preventing stale browser helper modules from
   disabling the Plan DOM editor after an update.
+
+## v0.4.5 — Scene context and checkpoint Plan recovery
+
 - Added per-scene context-length overrides to the Plan's existing Advanced
   controls and Plan Studio. Blank inherits the Plan default; `0` creates a
   visually independent scene.

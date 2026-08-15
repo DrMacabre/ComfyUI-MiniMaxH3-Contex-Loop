@@ -5001,7 +5001,13 @@ class MiniMaxH3ChainSegmentSave:
                   (index, len(plan["shots"]), transaction, published_segment,
                    published_checkpoint, audio_status, blend_status, retained))
         _LOG.info("H3 Chain %s", status)
-        return {"ui": {"text": [status]}, "result": (segment, status)}
+        return {
+            "ui": {
+                "text": [status],
+                "videos": [_video_output_item(published_segment)],
+            },
+            "result": (segment, status),
+        }
 
 
 def _review_video(plan: dict[str, Any], segment: dict[str, Any],
@@ -6893,7 +6899,13 @@ class MiniMaxH3ChainAssemble:
             backend, blend_status, final_path, sidecar_status)
         _LOG.info("H3 Chain %s", status)
         _publish_final_review_preview(manifest, final_path, status)
-        return {"ui": {"text": [status]}, "result": (final_path,)}
+        return {
+            "ui": {
+                "text": [status],
+                "videos": [_video_output_item(final_path)],
+            },
+            "result": (final_path,),
+        }
 
 
 def _assemble_review_partial(
