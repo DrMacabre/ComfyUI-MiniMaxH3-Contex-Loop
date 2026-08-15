@@ -463,7 +463,8 @@ def _reference_is_active(entry: dict[str, Any], scene: int) -> bool:
 def _reference_entry_contract(entry: dict[str, Any]) -> dict[str, Any]:
     keys = (
         "kind", "tag", "scenes", "content_hash", "audio_tag",
-        "audio_hash",
+        "audio_hash", "semantic_role", "motion_target",
+        "motion_description",
     )
     contract = {key: entry[key] for key in keys if key in entry}
     # Keep old schedules bit-identical. Timeline metadata enters the resume
@@ -1035,16 +1036,70 @@ def _compile_tagged_reference_prompt(
         }
 
     aliases = bindings["aliases"]
+    motion_definitions: list[str] = []
+    used_subject_numbers = {
+        int(number) for number in re.findall(
+            r"<Subject\s+(\d+)>", normalized_prompt, flags=re.IGNORECASE)
+    }
+    next_subject_number = max(used_subject_numbers, default=0) + 1
+    for entry in bindings["videos"]:
+        if (entry.get("semantic_role") != "motion" or
+                entry["tag"] not in prompt_tags):
+            continue
+        subject_label = "<Subject %d>" % next_subject_number
+        next_subject_number += 1
+        video_item = next(
+            item for item in bindings["presentation"]
+            if item["entry"] is entry and item["role"] == "video")
+        video_label = video_item["label"]
+        aliases[entry["tag"]] = subject_label
+        video_item["label"] = subject_label
+        video_item["source_label"] = video_label
+        video_item["role"] = "motion"
+        description = " ".join(str(
+            entry.get("motion_description") or
+            "the supplied pose sequence, action, and motion timing"
+        ).split()).rstrip(". ")
+        target = str(entry.get("motion_target") or "").strip()
+        transfer = (
+            " Transfer %s's visible performance to %s." %
+            (subject_label, target)
+            if target else "")
+        motion_definitions.append(
+            "%s is the reusable pose, action, and motion from %s: %s.%s "
+            "Transfer only that visible performance without importing the "
+            "source identity, wardrobe, setting, lighting, or composition." %
+            (subject_label, video_label, description, transfer))
 
     def replace_registered(match: re.Match[str]) -> str:
         return aliases.get(match.group(1), match.group(0))
 
     compiled = (_REFERENCE_ALIAS_RE.sub(replace_registered, normalized_prompt)
                 if mode != "disabled" else normalized_prompt)
-    mapping_lines = [
-        "@%s -> %s" % (item["tag"], item["label"])
-        for item in bindings["presentation"]
-    ]
+    if motion_definitions and mode != "disabled":
+        block = "\n".join(motion_definitions)
+        subject_header = re.search(
+            r"(?im)^subject_definitions:\s*$", compiled)
+        if subject_header:
+            next_section = re.search(
+                r"(?im)^(?:summary|retention_analysis|detailed_description|"
+                r"overall_soundscape|non_diegetic_music):\s*$",
+                compiled[subject_header.end():])
+            if next_section:
+                insert_at = subject_header.end() + next_section.start()
+                compiled = (
+                    compiled[:insert_at].rstrip() + "\n" + block + "\n\n" +
+                    compiled[insert_at:].lstrip())
+            else:
+                compiled = compiled.rstrip() + "\n" + block
+        else:
+            compiled = "subject_definitions:\n%s\n\n%s" % (block, compiled)
+    mapping_lines = []
+    for item in bindings["presentation"]:
+        mapping = "@%s -> %s" % (item["tag"], item["label"])
+        if item.get("source_label"):
+            mapping += " motion from %s" % item["source_label"]
+        mapping_lines.append(mapping)
     summary = "scene %d/%d: %s" % (
         int(scene), int(scene_count),
         "; ".join(mapping_lines) if mapping_lines
@@ -3382,6 +3437,114 @@ class MiniMaxH3TaggedVideoReference:
         status = "@%s%s video; prompt activated; %s; %d sources; %s" % (
             entry["tag"], paired, entry["timeline_mode"],
             len(references["entries"]), references["fingerprint"][:12])
+        return references, references["fingerprint"], status
+
+
+class MiniMaxH3TaggedMotionReference:
+    """Register video media while exposing its action as a reusable Subject."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "video": ("IMAGE", {
+                    "tooltip": "Motion-reference frames at 24 fps. Use "
+                               "Reference Video Prep for other frame rates."}),
+                "tag": ("STRING", {
+                    "default": "motion",
+                    "tooltip": "Stable @tag for the reusable action Subject. "
+                               "The compiler keeps the physical clip as "
+                               "<Video N> but replaces this tag with a separate "
+                               "<Subject N> motion role."}),
+                "target_subject": ("STRING", {
+                    "default": "<Subject 1>",
+                    "tooltip": "Existing H3 subject that must perform the "
+                               "referenced action, for example <Subject 1>."}),
+                "motion_description": ("STRING", {
+                    "default": "the supplied pose sequence, action, and motion timing",
+                    "multiline": True,
+                    "tooltip": "Only the transferable performance evidence. "
+                               "Do not describe source identity, wardrobe, "
+                               "setting, lighting, or composition."}),
+                "audio_tag": ("STRING", {
+                    "default": "",
+                    "tooltip": "Alias for optional synchronized audio. Blank "
+                               "derives @<motion_tag>_audio."}),
+                "timeline_mode": (list(REFERENCE_VIDEO_TIMELINE_MODES), {
+                    "default": "restart_each_scene",
+                    "tooltip": "restart_each_scene starts at frame 0. "
+                               "sequential follows the Plan timeline from the "
+                               "first scene that activates this reference."}),
+            },
+            "optional": {
+                "audio": ("AUDIO", {
+                    "tooltip": "Optional soundtrack synchronized to the "
+                               "motion-reference video."}),
+                "previous": (TAGGED_REFERENCE_TYPE, {
+                    "tooltip": "Optional preceding Tagged Ref chain."}),
+            },
+            "hidden": {"dynprompt": "DYNPROMPT", "unique_id": "UNIQUE_ID"},
+        }
+
+    RETURN_TYPES = (TAGGED_REFERENCE_TYPE, "STRING", "STRING")
+    RETURN_NAMES = ("references", "reference_fingerprint", "status")
+    FUNCTION = "add"
+    CATEGORY = "conditioning/minimax/contex_loop/references/prompt_driven"
+    DESCRIPTION = (
+        "Register a video as H3 motion/action evidence. The native video "
+        "remains <Video N>, while @tag compiles to a distinct reusable "
+        "<Subject N> whose performance is transferred to target_subject. "
+        "This prevents the prompt from treating the clip as a whole-video "
+        "appearance or continuation reference."
+    )
+
+    def add(self, video, tag, target_subject, motion_description, audio_tag,
+            timeline_mode="restart_each_scene", audio=None, previous=None,
+            dynprompt=None, unique_id=None):
+        mode = _downstream_reference_compliance(dynprompt, unique_id)
+        try:
+            if (torch is None or not torch.is_tensor(video) or video.ndim != 4 or
+                    int(video.shape[0]) < 5 or int(video.shape[-1]) < 3):
+                raise ValueError(
+                    "Tagged H3 motion reference must be an IMAGE batch "
+                    "containing at least 5 frames.")
+            target = " ".join(str(target_subject or "").split())
+            if not re.fullmatch(r"<Subject\s+[1-9]\d*>", target,
+                                flags=re.IGNORECASE):
+                raise ValueError(
+                    "Tagged H3 motion target_subject must be an existing "
+                    "native label such as <Subject 1>.")
+            description = " ".join(str(motion_description or "").split())
+            if not description:
+                raise ValueError(
+                    "Tagged H3 motion_description cannot be blank.")
+            paired_hash = ""
+            if audio is not None:
+                _validate_audio(audio, "Tagged H3 motion-reference audio")
+                paired_hash = _audio_fingerprint(audio)
+            references = _append_tagged_reference(
+                previous, kind="video", tag=tag, value=video,
+                content_hash=_tensor_fingerprint(video), audio=audio,
+                audio_tag=audio_tag, audio_hash=paired_hash,
+                compliance_mode=mode, timeline_mode=timeline_mode)
+            entries = references["entries"]
+            entries[-1]["semantic_role"] = "motion"
+            entries[-1]["motion_target"] = target
+            entries[-1]["motion_description"] = description.rstrip(". ")
+            references = _make_tagged_references(entries)
+        except (TypeError, ValueError) as exc:
+            if mode == "disabled":
+                return _skipped_tagged_reference_result(
+                    previous, "Tagged motion reference", exc)
+            raise
+        entry = references["entries"][-1]
+        paired = " + @%s" % entry["audio_tag"] if entry.get("audio_tag") else ""
+        status = (
+            "@%s%s motion -> %s; reusable Subject from native Video; %s; "
+            "%d sources; %s" % (
+                entry["tag"], paired, entry["motion_target"],
+                entry["timeline_mode"], len(references["entries"]),
+                references["fingerprint"][:12]))
         return references, references["fingerprint"], status
 
 
@@ -7957,6 +8120,7 @@ CHAIN_NODE_CLASS_MAPPINGS = {
     "MiniMaxH3ScheduledReferenceToVideo": MiniMaxH3ScheduledReferenceToVideo,
     "MiniMaxH3TaggedPictureReference": MiniMaxH3TaggedPictureReference,
     "MiniMaxH3TaggedVideoReference": MiniMaxH3TaggedVideoReference,
+    "MiniMaxH3TaggedMotionReference": MiniMaxH3TaggedMotionReference,
     "MiniMaxH3TaggedAudioReference": MiniMaxH3TaggedAudioReference,
     "MiniMaxH3TaggedReferenceToVideo": MiniMaxH3TaggedReferenceToVideo,
     "MiniMaxH3ChainExternalVideo": MiniMaxH3ChainExternalVideo,
@@ -7988,6 +8152,7 @@ CHAIN_NODE_DISPLAY_NAME_MAPPINGS = {
     "MiniMaxH3ScheduledReferenceToVideo": "MiniMax H3 Scheduled Ref2VA",
     "MiniMaxH3TaggedPictureReference": "MiniMax H3 Tagged Picture Ref",
     "MiniMaxH3TaggedVideoReference": "MiniMax H3 Tagged Video Ref",
+    "MiniMaxH3TaggedMotionReference": "MiniMax H3 Tagged Motion Ref",
     "MiniMaxH3TaggedAudioReference": "MiniMax H3 Tagged Audio Ref",
     "MiniMaxH3TaggedReferenceToVideo": "MiniMax H3 Tagged Ref2VA",
     "MiniMaxH3ChainExternalVideo": "MiniMax H3 Existing Video Context",

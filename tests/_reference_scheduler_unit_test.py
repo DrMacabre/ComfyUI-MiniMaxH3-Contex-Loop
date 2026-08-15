@@ -481,6 +481,32 @@ tagged_video_slice, tagged_audio_slice, tagged_detail = (
 assert float(tagged_video_slice[0, 0, 0, 0]) == 221
 assert float(tagged_audio_slice["waveform"][0, 0, 0]) == 2210
 assert tagged_detail.endswith("(origin scene 2)")
+
+tagged_motion_role = chain.MiniMaxH3TaggedMotionReference().add(
+    sequential_video, "performance", "<Subject 1>",
+    "the source performer's pose sequence and action timing", "",
+    "restart_each_scene")[0]
+motion_role_prompt = (
+    "subject_definitions:\n"
+    "<Subject 1> is the target character.\n\n"
+    "detailed_description:\n"
+    "[Shot 1] <Subject 1> performs @performance.")
+motion_role_compiled, motion_role_summary, motion_role_bindings = (
+    chain._compile_tagged_reference_prompt(
+        tagged_motion_role, 1, 1, motion_role_prompt))
+assert "<Subject 2> is the reusable pose, action, and motion from " \
+       "<Video 1>" in motion_role_compiled
+assert "<Subject 1> performs <Subject 2>." in motion_role_compiled
+assert "without importing the source identity, wardrobe, setting, lighting, " \
+       "or composition" in motion_role_compiled
+assert motion_role_bindings["aliases"]["performance"] == "<Subject 2>"
+assert "@performance -> <Subject 2> motion from <Video 1>" in \
+       motion_role_summary
+motion_role_contract = chain._reference_entry_contract(
+    tagged_motion_role["entries"][0])
+assert motion_role_contract["semantic_role"] == "motion"
+assert motion_role_contract["motion_target"] == "<Subject 1>"
+
 assert "references" in chain.MiniMaxH3TaggedReferenceToVideo.INPUT_TYPES()[
     "required"]
 assert "reference_schedule" not in (

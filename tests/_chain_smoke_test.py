@@ -852,6 +852,35 @@ def main():
     assert float(tagged_motion_inputs[
         "ref_video_audios.ref_video_audio_0"]["waveform"][0, 0, 0]) == 2210
     assert "origin scene 2" in tagged_motion_expanded["result"][3]
+
+    tagged_motion_role = chain.MiniMaxH3TaggedMotionReference().add(
+        sequential_video, "performance", "<Subject 1>",
+        "the source performer's pose sequence and action timing", "",
+        "restart_each_scene")[0]
+    motion_role_prompt = (
+        "subject_definitions:\n"
+        "<Subject 1> is the target character.\n\n"
+        "detailed_description:\n"
+        "[Shot 1] <Subject 1> performs @performance.")
+    motion_role_compiled, motion_role_summary, motion_role_bindings = (
+        chain._compile_tagged_reference_prompt(
+            tagged_motion_role, 1, 1, motion_role_prompt))
+    assert "<Subject 2> is the reusable pose, action, and motion from " \
+           "<Video 1>" in motion_role_compiled
+    assert "<Subject 1> performs <Subject 2>." in motion_role_compiled
+    assert "without importing the source identity, wardrobe, setting, " \
+           "lighting, or composition" in motion_role_compiled
+    assert motion_role_bindings["aliases"]["performance"] == "<Subject 2>"
+    assert "@performance -> <Subject 2> motion from <Video 1>" in \
+           motion_role_summary
+    motion_role_expanded = chain.MiniMaxH3TaggedReferenceToVideo().apply(
+        "clip", "video-vae", "audio-vae", tagged_motion_role, 1, 1,
+        motion_role_prompt, 960, 544, 243, "match")
+    motion_role_inputs = next(iter(
+        motion_role_expanded["expand"].values()))["inputs"]
+    assert motion_role_inputs["ref_videos.ref_video_0"] is sequential_video
+    assert motion_role_inputs["prompt"] == motion_role_compiled
+
     no_tag_compiled, no_tag_summary, no_tag_bindings = (
         chain._compile_tagged_reference_prompt(
             tagged, 1, 4, "A scene without registered aliases; keep @S1."))

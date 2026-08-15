@@ -244,7 +244,10 @@ the sampler on the unprepared conditioner latent.
   final audio-reference fingerprint returns to Plan without a graph cycle.
 - [`EXPERIMENTAL MiniMax H3 Ref2V - Sequential Motion.json`](<EXPERIMENTAL MiniMax H3 Ref2V - Sequential Motion.json>)
   adds one long video with embedded audio as `@motion` + `@motion_audio` and
-  sets its Tagged Video timeline to `sequential`. Current Shot `state` is mandatory:
+  predates the dedicated Tagged Motion Ref. For new motion-transfer workflows,
+  replace its generic Tagged Video node with Tagged Motion Ref so `@motion`
+  compiles as a reusable action Subject instead of the whole `<Video N>`.
+  Its timeline remains `sequential`. Current Shot `state` is mandatory:
   scene 1 receives source frames `0:243` and scene 2 receives `221:464`, so the
   source repeats the same 22-frame interval as Motion Context instead of
   replaying frame zero. The included Patch Priority pass-through is inert on
@@ -252,8 +255,9 @@ the sampler on the unprepared conditioner latent.
   path when this experimental workflow is opened on an older build.
 
 The tagged wrapper activates only registered aliases found in the resolved
-prompt and compiles them to native H3 labels. It does not insert subject
-definitions or other prompt text. Every scene therefore
+prompt and compiles them to native H3 labels. Generic reference nodes do not
+insert subject definitions; Tagged Motion Ref deliberately inserts its one
+compiler-owned action Subject definition. Every scene therefore
 contains the complete user-editable Ref2VA structure in this order:
 `subject_definitions`, `summary`, `retention_analysis`,
 `detailed_description`, `overall_soundscape`, and `non_diegetic_music`.

@@ -231,6 +231,7 @@ WAV preservation, timing behavior, and the Seam Probe.
 ```text
 Load Image ─→ Tagged Picture Ref ─┐
 24 fps IMAGE (+ paired AUDIO) ─→ Tagged Video Ref ─┐
+24 fps motion IMAGE ─→ Tagged Motion Ref ──────────┤
 Standalone AUDIO ─→ Tagged Audio Ref ──────────────┴→ Tagged Ref2VA
 
 Current Shot prompt / scene / dimensions / length ───────────────────↗
@@ -240,8 +241,17 @@ Current Shot state ────────────────────�
 Register stable aliases such as `@hero`, `@performance`, and `@voice`, then
 mention only the media needed by each scene. Tagged Ref2VA activates those
 sources and compiles their aliases to compact native `<Picture N>`, `<Video N>`,
-and `<Audio N>` labels. It does not insert subject definitions or other prompt
-text; the user remains responsible for the complete H3 prompt.
+and `<Audio N>` labels. Generic Picture, Video, and Audio refs do not insert
+semantic prompt text; the user remains responsible for their definitions.
+
+Use **Tagged Motion Ref**, rather than generic Tagged Video Ref, when a clip
+supplies action instead of appearance or whole-video structure. Its native
+media remains `<Video N>`, but its `@tag` compiles to a separate reusable
+`<Subject N>` sourced from that Video. The compiler adds the motion-Subject
+definition and explicitly transfers only its visible performance to the chosen
+target Subject, excluding source identity, wardrobe, setting, lighting, and
+composition. The full clip is still a native Ref2VA video block, so this is an
+H3 semantic separation rather than a pose extractor or ControlNet.
 
 For a song or other full source track, set Tagged Audio Ref to
 `source_timeline`, keep the full loader AUDIO connected to that node, and wire
