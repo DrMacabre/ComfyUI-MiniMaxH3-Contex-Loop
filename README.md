@@ -315,6 +315,13 @@ To resume manually, keep the same `run_name`, set `start_clip` to the desired
 scene, and retain the same dependencies. A bounded `scene_range` accepts one
 scene (`3`) or one continuous range (`3:8`).
 
+Loop Start keeps `verify_resume_history` enabled by default. If you
+deliberately changed the Plan but still want to consume the already-generated
+predecessor, turn it off before resuming. This bypasses Plan/history matching
+only: saved MP4/checkpoint hashes, required tensors, shapes, and internal
+metadata consistency remain mandatory. The saved predecessor does not acquire
+your new settings retroactively.
+
 Run Manager can restore archived prompts and Plan settings and optionally
 archive loader-backed image/audio/video assets under the run folder. See
 [Runs, review, and recovery](docs/RUNS_AND_RECOVERY.md).

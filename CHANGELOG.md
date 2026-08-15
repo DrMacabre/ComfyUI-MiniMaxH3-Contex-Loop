@@ -12,6 +12,10 @@ Newest first. This file keeps release history out of the onboarding README.
   steps use monotonic denoise ramps; all future rows remain fully denoisable.
 - Added the mode to Plan, per-scene overrides, Plan Studio, timing validation,
   resume provenance, and the native-first PR #15375 compatibility path.
+- Added Loop Start `verify_resume_history`, enabled by default. Disabling it
+  explicitly permits reuse of a saved predecessor after intentional Plan
+  changes while retaining file, SHA-256, tensor-shape, and internal metadata
+  integrity checks.
 
 ## v0.4.7 — General masked targets
 

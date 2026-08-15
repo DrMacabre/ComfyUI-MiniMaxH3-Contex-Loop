@@ -46,6 +46,14 @@ predecessors. Editing scene N or later is safe; changing an earlier prompt,
 seed, timing, source waveform, Plan compatibility setting, or
 `generation_fingerprint` invalidates the dependent resume.
 
+Loop Start's `verify_resume_history` switch is enabled by default. Disable it
+only when you intentionally want scene N to consume the existing saved scene
+N−1 despite a changed Plan. The override skips Plan/history matching; it does
+not skip missing-file checks, SHA-256 artifact validation, checkpoint tensor
+validation, or metadata's own recorded-history consistency. Consequently, any
+new settings that describe the saved predecessor are not retroactively present
+in its pixels or AV latent.
+
 Plan-wide continuation mode and context length are the exceptions: they choose
 how the next scene consumes its saved predecessor. Changing either does not
 alter completed frames or their saved AV latent, so it does not invalidate the

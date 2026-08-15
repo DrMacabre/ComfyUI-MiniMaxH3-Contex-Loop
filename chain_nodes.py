@@ -1274,6 +1274,16 @@ def _accepted_resume_history_hash(
     return None
 
 
+def _selected_resume_history_hash(
+        plan: dict[str, Any], through_index: int,
+        metadata: dict[str, Any], verify_history: bool = True) -> str | None:
+    """Select the current-plan match or the checkpoint's recorded history."""
+    if bool(verify_history):
+        return _accepted_resume_history_hash(plan, through_index, metadata)
+    recorded = str(metadata.get("history_hash") or "")
+    return recorded or None
+
+
 def _audio_fingerprint(audio: Any) -> str:
     if torch is None:
         raise RuntimeError("Source-audio checkpoint validation requires torch.")
@@ -2608,12 +2618,22 @@ def _verify_segment_artifacts(segment: dict[str, Any], index: int) -> None:
                 "check." % index)
 
 
-def _load_resume_state(plan: dict[str, Any], start_clip: int) -> dict[str, Any]:
+def _load_resume_state(
+        plan: dict[str, Any], start_clip: int,
+        verify_history: bool = True) -> dict[str, Any]:
     if _st_load is None:
         raise RuntimeError("safetensors is required to resume H3 chains.")
     previous_index = start_clip - 1
     segments = []
     previous_meta = None
+    if not bool(verify_history):
+        _LOG.warning(
+            "H3 Chain Loop Start: predecessor history verification is "
+            "DISABLED for resume at clip %d. Saved artifact integrity will "
+            "still be checked, but the current Plan may not describe the "
+            "content stored in clips 1..%d.",
+            int(start_clip), int(previous_index),
+        )
     for index in range(1, previous_index + 1):
         paths = _artifact_paths(plan, index)
         if not os.path.isfile(paths["metadata"]):
@@ -2621,11 +2641,18 @@ def _load_resume_state(plan: dict[str, Any], start_clip: int) -> dict[str, Any]:
                 "Cannot resume clip %d: metadata for predecessor clip %d is "
                 "missing: %s" % (start_clip, index, paths["metadata"]))
         metadata = _read_json(paths["metadata"])
-        accepted = _accepted_resume_history_hash(plan, index, metadata)
+        accepted = _selected_resume_history_hash(
+            plan, index, metadata, verify_history)
         if accepted is None:
+            if bool(verify_history):
+                raise ValueError(
+                    "Cannot resume clip %d: clip %d was generated from "
+                    "different settings, prompts, seeds, or durations. To "
+                    "deliberately reuse it anyway, disable Loop Start's "
+                    "verify_resume_history switch." % (start_clip, index))
             raise ValueError(
-                "Cannot resume clip %d: clip %d was generated from different "
-                "settings, prompts, seeds, or durations." % (start_clip, index))
+                "Cannot resume clip %d without history verification: clip %d "
+                "metadata has no recorded history hash." % (start_clip, index))
         segment = metadata.get("segment")
         if not isinstance(segment, dict):
             raise ValueError("Checkpoint metadata for clip %d has no segment." % index)
@@ -2665,12 +2692,14 @@ def _load_resume_state(plan: dict[str, Any], start_clip: int) -> dict[str, Any]:
         "previous_latent": {"samples": [tensors["video"], tensors["audio"]]},
         "segments": segments,
         "resumed_from": previous_index,
+        "resume_history_verification_disabled": not bool(verify_history),
     }
 
 
 def _initial_state(plan: dict[str, Any], start_clip: int,
                    end_clip: int | None = None,
-                   external_context: dict[str, Any] | None = None) -> dict[str, Any]:
+                   external_context: dict[str, Any] | None = None,
+                   verify_resume_history: bool = True) -> dict[str, Any]:
     total = len(plan["shots"])
     start_clip = int(start_clip)
     if start_clip < 1 or start_clip > total:
@@ -2681,7 +2710,8 @@ def _initial_state(plan: dict[str, Any], start_clip: int,
             "end_clip must be between start_clip %d and %d." %
             (start_clip, total))
     if start_clip > 1:
-        state = _load_resume_state(plan, start_clip)
+        state = _load_resume_state(
+            plan, start_clip, verify_history=verify_resume_history)
     else:
         state = {
             "plan": plan,
@@ -4753,6 +4783,18 @@ class MiniMaxH3ChainLoopStart:
                                "3 through 8. A start above 1 requires the "
                                "preceding checkpoint. Disjoint comma selections "
                                "are rejected because they break continuity."}),
+                "verify_resume_history": ("BOOLEAN", {
+                    "default": True,
+                    "tooltip": "Recommended ON: require every completed "
+                               "predecessor to match the current Plan's "
+                               "prompts, seeds, timing, source audio, model, "
+                               "and reference fingerprint. Turn OFF only to "
+                               "deliberately reuse the saved predecessor after "
+                               "changing the current Plan. Missing files, "
+                               "SHA-256 artifact integrity, checkpoint tensor "
+                               "shape, and internal metadata consistency are "
+                               "still verified. Changes to the predecessor "
+                               "itself are not applied retroactively."}),
                 "source_audio": ("AUDIO", {
                     "tooltip": "Full external soundtrack. Required by "
                                "source_track and source_plus_timeline. Current "
@@ -4780,15 +4822,17 @@ class MiniMaxH3ChainLoopStart:
     FUNCTION = "start"
     CATEGORY = "conditioning/minimax/contex_loop"
     DESCRIPTION = ("Start or resume a contiguous range of a sequential H3 "
-                   "chain. Ranges beginning above 1 load and validate the "
-                   "preceding segment checkpoint.")
+                   "chain. Ranges beginning above 1 load the preceding "
+                   "checkpoint with safe Plan-history verification enabled "
+                   "by default and an explicit override when required.")
 
     @classmethod
     def IS_CHANGED(cls, *args, **kwargs):
         return float("NaN")
 
     def start(self, plan, start_clip, source_audio=None, scene_range="",
-              external_context=None, initial_state=None):
+              verify_resume_history=True, external_context=None,
+              initial_state=None):
         if initial_state is None:
             prepared_plan = _plan_with_external_context(plan, external_context)
             prepared_plan = _plan_with_source_audio(prepared_plan, source_audio)
@@ -4796,7 +4840,8 @@ class MiniMaxH3ChainLoopStart:
                 scene_range, len(prepared_plan["shots"]), start_clip)
             state = _initial_state(
                 prepared_plan, range_start, range_end,
-                external_context=external_context if range_start == 1 else None)
+                external_context=external_context if range_start == 1 else None,
+                verify_resume_history=verify_resume_history)
         else:
             state = dict(initial_state)
             prepared_plan = state["plan"]
@@ -4809,6 +4854,8 @@ class MiniMaxH3ChainLoopStart:
             int(state.get("range_start", state["index"])), end_clip)
         if state.get("resumed_from"):
             status += "; resumed from clip %d" % state["resumed_from"]
+        if state.get("resume_history_verification_disabled"):
+            status += "; WARNING: predecessor history verification disabled"
         if prepared_plan["compatibility"].get("source_audio_silent_padding"):
             status += "; silent source audio will be padded to the plan duration"
         if prepared_plan["compatibility"].get("external_context_hash"):

@@ -481,6 +481,38 @@ def main():
         "history_hash": legacy_masked_hash,
         "compatibility": dict(plan["compatibility"]),
     }) is None
+    incompatible_metadata = {
+        "history_hash": legacy_masked_hash,
+        "compatibility": dict(plan["compatibility"]),
+    }
+    assert chain._selected_resume_history_hash(
+        changed_prompt_plan, 1, incompatible_metadata, True) is None
+    assert chain._selected_resume_history_hash(
+        changed_prompt_plan, 1, incompatible_metadata, False,
+    ) == legacy_masked_hash
+    loop_start_inputs = chain.MiniMaxH3ChainLoopStart.INPUT_TYPES()
+    assert loop_start_inputs["optional"]["verify_resume_history"][1][
+        "default"] is True
+    resume_calls = []
+    original_resume_loader = chain._load_resume_state
+
+    def fake_resume_loader(requested_plan, start_clip, verify_history=True):
+        resume_calls.append((start_clip, verify_history))
+        return {
+            "plan": requested_plan,
+            "index": start_clip,
+            "segments": [],
+            "resumed_from": start_clip - 1,
+        }
+
+    chain._load_resume_state = fake_resume_loader
+    try:
+        unsafe_initial = chain._initial_state(
+            changed_prompt_plan, 2, verify_resume_history=False)
+    finally:
+        chain._load_resume_state = original_resume_loader
+    assert unsafe_initial["index"] == 2
+    assert resume_calls == [(2, False)]
     mixed_plan = chain._normalize_plan(
         json.dumps({"shots": [
             {"id": "new_shot", "prompt": "first", "length": 192},

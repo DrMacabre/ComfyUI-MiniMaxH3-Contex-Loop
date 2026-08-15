@@ -2112,6 +2112,15 @@ def main():
             else:
                 raise AssertionError("resume accepted a changed predecessor")
             print("resume guard: changed predecessor rejected")
+            unsafe_state = chain._initial_state(
+                chain._plan_with_source_audio(changed_plan, source), 2,
+                verify_resume_history=False)
+            assert unsafe_state["resumed_from"] == 1
+            assert unsafe_state["resume_history_verification_disabled"]
+            assert unsafe_state["segments"][0]["prompt"] == "first"
+            print(
+                "resume override: incompatible Plan history reused the intact "
+                "saved predecessor explicitly")
 
             changed_generation_plan = chain._normalize_plan(
                 json.dumps({"shots": [
