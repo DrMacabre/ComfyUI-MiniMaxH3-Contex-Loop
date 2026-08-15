@@ -77,8 +77,13 @@ Start with the maintained v0.4 example for your generation mode:
 - [Sequential motion reference](<example_workflows/EXPERIMENTAL MiniMax H3 Ref2V - Sequential Motion.json>)
   remains explicitly experimental.
 - [Masked video inpaint](<example_workflows/MiniMax H3 - Masked Video Inpaint.json>)
-  encodes a real source AV target, previews H3's 32px mask cells, and preserves
-  source audio while regenerating only the selected video region.
+  runs through Chain Loop, frame-locks source picture and sound to the stock
+  H3 target, and regenerates only the selected 32px video cells.
+- [Masked AV extension — single clip](<example_workflows/MiniMax H3 - Masked AV Extension - Single Clip.json>)
+  and [looped Ref2VA chain](<example_workflows/MiniMax H3 - Masked AV Extension - Chain + Reference Image.json>)
+  continue the bundled modern CC0 soldier-crab footage.
+- [Two-clip masked AV bridge](<example_workflows/MiniMax H3 - Masked AV Bridge - Two Clips.json>)
+  protects both source endpoints and generates only the missing interval.
 
 Normal workflows use the stable Plan and Scene Prompt Editor. Studio workflows
 add the optional timeline-oriented Plan Studio and Rich Scene Prompt Editor.
@@ -173,18 +178,20 @@ Plan—normally `context_length=39`, `encode_mode=video`, and `anchor_mode=head`
 
 ### General masked editing
 
-The public **Masking · Trim Source AV**, **Masking · Grid Preview**, and
-**Masking · Apply Target Mask** nodes expose the same per-row H3 machinery for
-manual video editing. A source AV latent supplies the clean content; a static
-or tracked mask selects spatial and temporal rows to regenerate. Existing
-masks are intersected, so a spatial edit can compose with the exact prefix
-created by chain `masked_av` while preservation remains authoritative.
+The public **Masking · Loop Source AV Target**, **Masking · Trim Source AV**,
+**Masking · Grid Preview**, and **Masking · Apply Target Mask** nodes expose
+the same per-row H3 machinery for video editing. Loop Source AV Target selects
+the current scene from Chain state and fits both VAE encodes to the stock H3
+joint target; it does not independently concatenate LTX video/audio latents.
+A static or tracked mask then selects spatial and temporal rows to regenerate.
+Existing masks are intersected, so a spatial edit can compose with the exact
+prefix created by chain `masked_av` while preservation remains authoritative.
 
 The bundled inpaint workflow uses distinct `MiniMaxH3Contex…` node IDs and can
 coexist with the earlier standalone PerRowMasking pack. It needs no MODEL patch
 node: mask compatibility activates lazily when Apply Target Mask executes.
 See [Masked editing](docs/MASKED_EDITING.md) for audio modes, grid behavior,
-outpainting preparation, and the two-ended target needed for clip bridging.
+outpainting preparation, and two-ended clip bridging.
 
 For timeline-driven FL2VA, **Masking · Master Audio + Video Prefix** inserts
 the exact current interval from a prerecorded audio timeline into the target
@@ -192,6 +199,13 @@ audio latent and protects the complete audio stream. The source can be music,
 dialogue, narration, or effects. Clip 1 generates all picture rows; later
 clips also protect the preceding decoded-video tail while future picture rows
 remain denoisable.
+
+**Masking · Two-Clip AV Bridge** is the complementary two-ended operation. It
+places a source tail and destination head into an empty joint AV target,
+protects both windows, and denoises only the middle. A 39-frame endpoint is an
+exact 65-step video/audio boundary. The bundled CC0 bridge workflow splits one
+modern crab clip around a known 114-frame gap so the result can be compared
+against the original source timeline.
 
 ## Audio at a glance
 

@@ -24,6 +24,15 @@ I2V_ASSET_SHA256 = (
 FL2V_LAST_ASSET_SHA256 = (
     "e07862c0d5160f06f015b8849dc4b7d2db0524de5ba490fd26c3dff33e196b34"
 )
+CRAB_VIDEO_SHA256 = (
+    "aacef1ac138445311eb61734f8ca92f8dc438b8d9ca3210fd8893aa5e925ee47"
+)
+CRAB_IMAGE_SHA256 = (
+    "432dc2c9b0b9d0c33ed33217247fefcbe551d240959f6eefb7c04dfc99378047"
+)
+CRAB_MASK_SHA256 = (
+    "95cf18228cd3559ad980339fe9d8fccdcef25799368719b8e044cd61c6691fe4"
+)
 
 
 def load(path):
@@ -84,6 +93,87 @@ def validate_links(workflow):
         for output in item.get("outputs") or []:
             for link_id in output.get("links") or []:
                 assert link_id in links
+
+
+def validate_crab_extension(path, expected_shots, tagged):
+    workflow = load(path)
+    validate_links(workflow)
+    loader = node(workflow, "VHS_LoadVideo")
+    assert loader["widgets_values"]["video"] == (
+        "soldier_crabs_bribie_island_cc0.webm")
+    assert loader["widgets_values"]["force_rate"] == 24
+    assert (loader["widgets_values"]["custom_width"],
+            loader["widgets_values"]["custom_height"]) == (960, 544)
+    external = node(workflow, "MiniMaxH3ChainExternalVideo")
+    assert socket(external["inputs"], "source_frames")["link"] is not None
+    assert socket(external["inputs"], "source_audio")["link"] is not None
+    start = node(workflow, "MiniMaxH3ChainLoopStart")
+    assert socket(start["inputs"], "external_context")["link"] == (
+        socket(external["outputs"], "external_context")["links"][0])
+    context = node(workflow, "MiniMaxH3ChainContext")
+    assert socket(context["inputs"], "audio_vae")["link"] is not None
+    sampler = node(workflow, "SamplerCustomAdvanced")
+    assert socket(context["outputs"], "latent")["links"] == [
+        socket(sampler["inputs"], "latent_image")["link"]]
+
+    plan_node = node(workflow, "MiniMaxH3ChainPlan")
+    plan = json.loads(plan_node["widgets_values"][0])
+    assert len(plan["shots"]) == expected_shots
+    assert [shot["length"] for shot in plan["shots"]] == [192] * expected_shots
+    assert plan_node["widgets_values"][3:6] == [960, 544, 39]
+    assert plan_node["widgets_values"][9:11] == ["generated_audio", 39]
+    assert plan_node["widgets_values"][16] == "masked_av"
+    for shot in plan["shots"]:
+        prompt = prompt_text(shot["prompt"])
+        if tagged:
+            positions = [prompt.index(section) for section in (
+                "subject_definitions:", "summary:", "retention_analysis:",
+                "detailed_description:", "overall_soundscape:",
+                "non_diegetic_music:")]
+            assert positions == sorted(positions) and positions[0] == 0
+            assert "@crabs" in prompt
+        else:
+            positions = [prompt.index(section) for section in (
+                "integrated_multimodal_description:",
+                "overall_soundscape:", "non_diegetic_music:")]
+            assert positions == sorted(positions) and positions[0] == 0
+    if tagged:
+        image = node(workflow, "LoadImage")
+        assert image["widgets_values"][0] == "soldier_crabs_reference_cc0.png"
+        reference = node(workflow, "MiniMaxH3TaggedPictureReference")
+        assert reference["widgets_values"] == ["crabs"]
+        assert socket(reference["outputs"], "references")["links"] == [
+            socket(node(workflow, "MiniMaxH3TaggedReferenceToVideo")["inputs"],
+                   "references")["link"]]
+    return workflow
+
+
+def validate_crab_bridge(path):
+    workflow = load(path)
+    validate_links(workflow)
+    loaders = [item for item in workflow["nodes"]
+               if item["type"] == "VHS_LoadVideo"]
+    assert len(loaders) == 2
+    values = [item["widgets_values"] for item in loaders]
+    assert [item["video"] for item in values] == [
+        "soldier_crabs_bribie_island_cc0.webm"] * 2
+    assert [(item["skip_first_frames"], item["frame_load_cap"])
+            for item in values] == [(0, 99), (213, 100)]
+    bridge = node(workflow, "MiniMaxH3ContexMaskedAVBridge")
+    assert bridge["widgets_values"] == [24.0, 24.0, 39, "center"]
+    assert all(socket(bridge["inputs"], name)["link"] is not None for name in (
+        "latent", "vae", "audio_vae", "start_frames", "start_audio",
+        "end_frames", "end_audio"))
+    conditioner = node(workflow, "MiniMaxH3ImageToVideo")
+    assert conditioner["widgets_values"][1:4] == [960, 544, 192]
+    prompt = conditioner["widgets_values"][0]
+    assert prompt.startswith("integrated_multimodal_description:")
+    assert "overall_soundscape:" in prompt
+    assert prompt.endswith("non_diegetic_music:\nN/A")
+    sampler = node(workflow, "SamplerCustomAdvanced")
+    assert socket(bridge["outputs"], "latent")["links"] == [
+        socket(sampler["inputs"], "latent_image")["link"]]
+    return workflow
 
 
 def validate_t2v(path, editor_type, expected_blend):
@@ -591,6 +681,13 @@ def main():
         EXAMPLES / "EXPERIMENTAL MiniMax H3 Ref2V - Sequential Motion.json")
     masked_inpaint_path = (
         EXAMPLES / "MiniMax H3 - Masked Video Inpaint.json")
+    masked_single_extension_path = (
+        EXAMPLES / "MiniMax H3 - Masked AV Extension - Single Clip.json")
+    masked_chain_extension_path = (
+        EXAMPLES /
+        "MiniMax H3 - Masked AV Extension - Chain + Reference Image.json")
+    masked_bridge_path = (
+        EXAMPLES / "MiniMax H3 - Masked AV Bridge - Two Clips.json")
     assert set(path.name for path in EXAMPLES.glob("*.json")) == {
         t2v_normal_path.name, t2v_studio_path.name,
         i2v_normal_path.name, i2v_studio_path.name,
@@ -599,10 +696,13 @@ def main():
         ref2v_source_audio_path.name,
         sequential_path.name,
         masked_inpaint_path.name,
+        masked_single_extension_path.name,
+        masked_chain_extension_path.name,
+        masked_bridge_path.name,
     }
     for path in EXAMPLES.glob("*.json"):
         workflow = load(path)
-        if path == masked_inpaint_path:
+        if path in (masked_inpaint_path, masked_bridge_path):
             validate_links(workflow)
             continue
         context = node(workflow, "MiniMaxH3ChainContext")
@@ -642,15 +742,52 @@ def main():
     masked_inpaint = load(masked_inpaint_path)
     masked_types = {item["type"] for item in masked_inpaint["nodes"]}
     assert {
-        "MiniMaxH3ContexTrimSourceAV",
+        "MiniMaxH3ChainLoopStart",
+        "MiniMaxH3ChainLoopEnd",
+        "MiniMaxH3ContexLoopSourceAVTarget",
         "MiniMaxH3ContexMaskGridPreview",
         "MiniMaxH3ContexMaskedTarget",
     } <= masked_types
+    assert not masked_types.intersection({
+        "LTXVConcatAVLatent", "LTXVSeparateAVLatent"})
     assert "MiniMaxH3PerRowMaskPatch" not in masked_types
+    source_loader = node(masked_inpaint, "VHS_LoadVideo")
+    assert source_loader["widgets_values"]["video"] == (
+        "soldier_crabs_bribie_island_cc0.webm")
+    assert source_loader["widgets_values"]["force_rate"] == 24
+    source_target = node(
+        masked_inpaint, "MiniMaxH3ContexLoopSourceAVTarget")
+    chain_context = node(masked_inpaint, "MiniMaxH3ChainContext")
+    conditioner = node(masked_inpaint, "MiniMaxH3ImageToVideo")
+    assert socket(source_target["inputs"], "latent")["link"] == (
+        socket(conditioner["outputs"], "LATENT")["links"][0])
+    assert socket(source_target["inputs"], "source_frames")["link"] == (
+        socket(source_loader["outputs"], "IMAGE")["links"][0])
+    assert socket(source_target["inputs"], "source_audio")["link"] == (
+        socket(source_loader["outputs"], "audio")["links"][0])
     masked_target = node(masked_inpaint, "MiniMaxH3ContexMaskedTarget")
+    assert socket(source_target["outputs"], "source_target")["links"] == [
+        socket(chain_context["inputs"], "latent")["link"]]
+    assert socket(chain_context["outputs"], "latent")["links"] == [
+        socket(masked_target["inputs"], "target_latent")["link"]]
+    assert masked_target["widgets_values"] == [
+        "white = generate", "preserve source audio"]
     masked_sampler = node(masked_inpaint, "SamplerCustomAdvanced")
     assert socket(masked_target["outputs"], "masked_target")["links"] == [
         socket(masked_sampler["inputs"], "latent_image")["link"]]
+    mask_loader = node(masked_inpaint, "LoadImageMask")
+    assert mask_loader["widgets_values"][0] == (
+        "soldier_crabs_inpaint_mask.png")
+    masked_plan_node = node(masked_inpaint, "MiniMaxH3ChainPlan")
+    masked_plan = json.loads(masked_plan_node["widgets_values"][0])
+    assert [shot["length"] for shot in masked_plan["shots"]] == [175, 175]
+    assert masked_plan_node["widgets_values"][5] == 39
+    assert masked_plan_node["widgets_values"][16] == "masked_av"
+    masked_single_extension = validate_crab_extension(
+        masked_single_extension_path, 1, False)
+    masked_chain_extension = validate_crab_extension(
+        masked_chain_extension_path, 3, True)
+    masked_bridge = validate_crab_bridge(masked_bridge_path)
 
     def generation_types(workflow):
         return collections.Counter(
@@ -671,9 +808,10 @@ def main():
         for workflow in (
             t2v_normal, t2v_studio, i2v_normal, i2v_studio, fl2v_normal,
             ref2v_basic, ref2v_tagged, ref2v_studio, ref2v_source_audio,
-            sequential)
+            sequential, masked_inpaint, masked_single_extension,
+            masked_chain_extension, masked_bridge)
     }
-    assert len(uuids) == 10
+    assert len(uuids) == 14
 
     asset = EXAMPLES / "assets" / "jigen_market_garden_doom_opening.png"
     assert asset.is_file()
@@ -682,9 +820,23 @@ def main():
     assert last_asset.is_file()
     assert hashlib.sha256(last_asset.read_bytes()).hexdigest() == (
         FL2V_LAST_ASSET_SHA256)
+    crab_video = (
+        EXAMPLES / "assets" / "soldier_crabs_bribie_island_cc0.webm")
+    assert crab_video.is_file()
+    assert hashlib.sha256(crab_video.read_bytes()).hexdigest() == (
+        CRAB_VIDEO_SHA256)
+    crab_image = EXAMPLES / "assets" / "soldier_crabs_reference_cc0.png"
+    assert crab_image.is_file()
+    assert hashlib.sha256(crab_image.read_bytes()).hexdigest() == (
+        CRAB_IMAGE_SHA256)
+    crab_mask = EXAMPLES / "assets" / "soldier_crabs_inpaint_mask.png"
+    assert crab_mask.is_file()
+    assert hashlib.sha256(crab_mask.read_bytes()).hexdigest() == (
+        CRAB_MASK_SHA256)
     print("H3 workflow catalog: T2VA, I2VA, indexed A-B-A FL2VA, Basic / "
           "Tagged / Studio Tagged / source-timeline audio Ref2VA, "
-          "experimental sequential-motion Ref2VA, and masked video inpaint; "
+          "experimental sequential-motion Ref2VA, masked video inpaint, "
+          "looped masked AV extension, and two-ended masked AV bridge; "
           "valid links, bundled "
           "assets, timeline wiring, six-section prompts, restoration, and "
           "attribution pass")

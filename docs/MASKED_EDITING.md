@@ -14,8 +14,24 @@ arbitrary static or tracked spatial masks.
 
 Start with
 [`MiniMax H3 - Masked Video Inpaint.json`](<../example_workflows/MiniMax H3 - Masked Video Inpaint.json>).
+For temporal continuation and bridging, use the three
+[masked AV examples](../example_workflows/README.md#masked-av-extension-and-bridge).
 
 ## Nodes
+
+### Masking · Loop Source AV Target
+
+**MiniMax H3 Masking · Loop Source AV Target** is the preferred source-video
+path inside Chain Loop. Connect Current Shot `state`, Chain Context `latent`,
+both H3 VAEs, and the complete synchronized source frames/audio. The node uses
+`generation_start_frame` and the stock H3 joint target to select and encode the
+exact current interval.
+
+The stock target's video and audio lengths are authoritative. At fractional
+24-fps/40-Hz boundaries, exact picture-duration audio can encode one token
+shorter than the stock H3 audio target. This node adds only the encoder-grid
+lookahead needed to fill that target and trims back to its exact step count.
+Do not put `LTXVConcatAVLatent` or `LTXVSeparateAVLatent` in this path.
 
 ### Masking · Trim Source AV
 
@@ -51,9 +67,9 @@ complete static or tracked mask batch.
 ### Masking · Apply Target Mask
 
 **MiniMax H3 Masking · Apply Target Mask** expects the source media as the
-sampler's real joint video/audio target latent. Encode source frames and audio
-with their H3 VAEs, combine the two latent streams, apply the mask, and connect
-`masked_target` to `SamplerCustomAdvanced.latent_image`.
+sampler's real joint video/audio target latent. In a loop, produce it with
+**Loop Source AV Target**, apply the mask, and connect `masked_target` to
+`SamplerCustomAdvanced.latent_image`.
 
 Do not also add the same source as `<Video>` merely to make masking work. A
 reference influences generation; it does not provide the clean latent values
@@ -129,12 +145,15 @@ supports the other operations once their source target is prepared:
   describe only the intended replacement while asking H3 to retain the rest.
 - **Temporal repair:** use a mask batch that is black on retained frames and
   white during the interval to regenerate.
-- **Two-clip bridge:** construct a target containing the end of clip A and the
-  beginning of clip B, protect both ends, and generate the middle interval.
+- **Two-clip bridge:** **Masking · Two-Clip AV Bridge** encodes the end of clip
+  A and beginning of clip B into opposite ends of an empty joint H3 target,
+  protects both AV windows, and generates only the middle interval. Use exact
+  H3 endpoint runs; 39 frames is recommended because it maps to exactly 65
+  audio steps.
 
-This first integration supplies the general mask and inpaint workflow. It does
-not yet bundle the expanded-canvas or two-ended latent compositors; those can
-be added without changing the H3 mask/runtime layer.
+This integration bundles the arbitrary mask/inpaint workflow and the two-ended
+AV bridge. Expanded-canvas outpaint preparation remains external to the pack;
+it can be added without changing the H3 mask/runtime layer.
 
 ## Runtime compatibility
 

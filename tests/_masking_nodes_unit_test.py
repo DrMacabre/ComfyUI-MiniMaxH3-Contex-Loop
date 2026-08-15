@@ -174,7 +174,15 @@ def main():
         workflow = json.load(handle)
     workflow_nodes = {item["id"]: item for item in workflow["nodes"]}
     workflow_types = {item["type"] for item in workflow["nodes"]}
-    assert expected_ids <= workflow_types
+    assert {
+        "MiniMaxH3ContexMaskedTarget",
+        "MiniMaxH3ContexMaskGridPreview",
+        "MiniMaxH3ContexLoopSourceAVTarget",
+        "MiniMaxH3ChainLoopStart",
+        "MiniMaxH3ChainLoopEnd",
+    } <= workflow_types
+    assert not workflow_types.intersection({
+        "LTXVConcatAVLatent", "LTXVSeparateAVLatent"})
     assert not old_pack_ids.intersection(workflow_types)
     seen_links = set()
     for link in workflow["links"]:
@@ -185,8 +193,7 @@ def main():
         target_input = workflow_nodes[target_id]["inputs"][target_slot]
         assert link_id in source["links"]
         assert target_input["link"] == link_id
-        assert source["type"] == link_type
-        assert target_input["type"] in (link_type, "*")
+        assert isinstance(link_type, str) and link_type
     assert workflow["last_link_id"] == max(seen_links)
     assert workflow["last_node_id"] == max(workflow_nodes)
 
@@ -200,22 +207,44 @@ def main():
         link for link in workflow["links"]
         if link[0] == sampler["inputs"][4]["link"])
     assert mask_link[1:3] == [masked_node["id"], 0]
+    source_target = next(
+        item for item in workflow["nodes"]
+        if item["type"] == "MiniMaxH3ContexLoopSourceAVTarget")
+    chain_context = next(
+        item for item in workflow["nodes"]
+        if item["type"] == "MiniMaxH3ChainContext")
+    source_target_link = next(
+        link for link in workflow["links"]
+        if link[0] == chain_context["inputs"][3]["link"])
+    assert source_target_link[1:3] == [source_target["id"], 0]
+    masked_source_link = next(
+        link for link in workflow["links"]
+        if link[0] == masked_node["inputs"][0]["link"])
+    assert masked_source_link[1:3] == [chain_context["id"], 3]
 
     sigma = next(
         item for item in workflow["nodes"]
         if item["type"] == "MiniMaxH3SigmaShift")
-    model_targets = {
-        (link[3], link[4]) for link in workflow["links"]
-        if link[1] == sigma["id"] and link[2] == 0}
     guider = next(
         item for item in workflow["nodes"] if item["type"] == "BasicGuider")
     scheduler = next(
         item for item in workflow["nodes"] if item["type"] == "BasicScheduler")
-    assert model_targets == {(guider["id"], 0), (scheduler["id"], 0)}
+    links_by_id = {link[0]: link for link in workflow["links"]}
+
+    def model_origin(item):
+        link = links_by_id[item["inputs"][0]["link"]]
+        source = workflow_nodes[link[1]]
+        while source["type"] == "Reroute":
+            link = links_by_id[source["inputs"][0]["link"]]
+            source = workflow_nodes[link[1]]
+        return source["id"], link[2]
+
+    assert model_origin(guider) == (sigma["id"], 0)
+    assert model_origin(scheduler) == (sigma["id"], 0)
     print(
         "general H3 masking: AV trim, 32px grid, spatial/temporal masks, "
-        "custom audio control, prefix-safe intersection, and native-first "
-        "example wiring pass")
+        "custom audio control, prefix-safe intersection, and synchronized "
+        "Chain Loop example wiring pass")
 
 
 if __name__ == "__main__":

@@ -11,8 +11,14 @@ Each completed mode should contain the same two-workflow pair:
 example_workflows/
 ├── assets/
 │   ├── jigen_market_garden_doom_opening.png
-│   └── jigen_market_garden_doom_last.png
+│   ├── jigen_market_garden_doom_last.png
+│   ├── soldier_crabs_bribie_island_cc0.webm
+│   ├── soldier_crabs_inpaint_mask.png
+│   └── soldier_crabs_reference_cc0.png
 ├── EXPERIMENTAL MiniMax H3 Ref2V - Sequential Motion.json
+├── MiniMax H3 - Masked AV Bridge - Two Clips.json
+├── MiniMax H3 - Masked AV Extension - Chain + Reference Image.json
+├── MiniMax H3 - Masked AV Extension - Single Clip.json
 ├── MiniMax H3 - Masked Video Inpaint.json
 ├── MiniMax H3 FL2V - Normal.json
 ├── MiniMax H3 I2V - Normal.json
@@ -38,26 +44,60 @@ The additional sequential-motion workflow is deliberately prefixed
 `EXPERIMENTAL` because it combines a long advancing Ref2VA video timeline with
 recursive Motion Context.
 
-The masked-video workflow is a standalone editing graph rather than a chain
-authoring variant. It encodes real source AV as the sampler target and uses an
-arbitrary per-row denoise mask for inpainting.
+The masked-video workflow uses the same Chain Loop, checkpoint/review, resume,
+and assembly path as the generation examples. A pack-native source-target node
+selects the current loop interval and uses the stock H3 joint target as the
+authoritative AV grid before applying an arbitrary per-row inpaint mask.
+
+## Masked AV extension and bridge
+
+The AV examples share the bundled modern
+[CC0 soldier-crab footage](assets/README.md#soldier_crabs_bribie_island_cc0webm).
+They use original natural-history prompts and do not contain or imitate the
+copyrighted *Crab Rave* soundtrack, music video, choreography, or branding.
+Copy the WebM to `ComfyUI/input/`; the chained Ref2VA example additionally
+needs `soldier_crabs_reference_cc0.png`.
+
+- [`MiniMax H3 - Masked AV Extension - Single Clip.json`](<MiniMax H3 - Masked AV Extension - Single Clip.json>)
+  uses the normal recursive Chain Loop with a one-scene Plan. Existing Video
+  Context preserves the source tail as scene 1's 39-frame/65-audio-step target
+  prefix, and Assemble prepends the complete normalized source once.
+- [`MiniMax H3 - Masked AV Extension - Chain + Reference Image.json`](<MiniMax H3 - Masked AV Extension - Chain + Reference Image.json>)
+  runs three sequential Ref2VA extensions through the same loop. The protected
+  AV prefix is authoritative for pose, motion, camera, lighting, and timing;
+  the tagged `@crabs` image only stabilizes species appearance.
+- [`MiniMax H3 - Masked AV Bridge - Two Clips.json`](<MiniMax H3 - Masked AV Bridge - Two Clips.json>)
+  splits the 313-frame 24-fps source into frames 0–98 and 213–312. The
+  192-frame bridge protects 39 frames at each endpoint and generates the exact
+  114-frame gap before the graph reassembles the original 313-frame timeline.
+
+The extension pair deliberately uses this pack's loop, checkpoints, review
+gate, recovery, and disk-backed assembly. The bridge is a single two-ended
+masked target and therefore uses the dedicated **Masking · Two-Clip AV Bridge**
+node with an ordinary ComfyUI sampler rather than pretending it is recursive.
 
 ## Masked video inpaint
 
 [`MiniMax H3 - Masked Video Inpaint.json`](<MiniMax H3 - Masked Video Inpaint.json>)
 adapts the earlier standalone PerRowMasking experiment to this pack's
-native-first H3 mask runtime. It contains no MODEL patch node.
+native-first H3 mask runtime and full Chain Loop. It contains no MODEL patch
+or LTX AV concat/separate node.
 
-1. Select a 24 fps source video with audio.
-2. Select or paint a mask; white regenerates and black preserves.
+1. Copy the bundled source video and mask to `ComfyUI/input/`.
+2. Select or paint a replacement mask; white regenerates and black preserves.
 3. Verify the effective 32×32 H3 cells in Grid Preview.
-4. Edit the core H3 prompt and sample the masked source target.
+4. Edit the scene prompt or Plan, then run the loop normally.
 
-The workflow preserves source audio, broadcasts its static example mask across
-the shot, and can accept a tracked mask batch instead. Trim Source AV supplies
-the valid `17k+5` length to H3 conditioning. The conditioner creates the prompt
-and target dimensions, but its empty latent is deliberately unused: the
-sampler receives the encoded source AV from Apply Target Mask.
+The two-scene demo edits 311 frames from the 313-frame source. Each generation
+is 175 frames; scene 2 repeats and protects a 39-frame edited prefix, so it
+delivers 136 new frames. The workflow preserves source audio, broadcasts its
+static example mask across both scenes, and can accept a tracked mask batch
+instead. **Loop Source AV Target** derives each source interval from Current
+Shot state, then copies the video/audio encodes into the exact stock H3 target
+shapes. This avoids the one-token temporal mismatch possible when independently
+encoded streams are combined by a generic LTX AV node. Chain Context preserves
+the preceding edited overlap before Apply Target Mask intersects the spatial
+mask; Loop Save, review, resume, and Assemble remain active.
 
 Apply Target Mask intersects any existing nested AV mask, which allows this
 manual spatial path to compose with a chain `masked_av` prefix. See

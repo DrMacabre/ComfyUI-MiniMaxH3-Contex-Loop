@@ -59,6 +59,8 @@ Adapted source files and integration:
   MultiRef existing-video implementation.
 - `master_audio_context.py` — exact master-audio target replacement and
   optional protected video-prefix construction adapted from MultiRef Update 4.
+- `masked_bridge.py` — two-ended protected AV target construction adapted
+  from MultiRef Update 5's masked bridge.
 
 The referenced MultiRef revision is `4b484a3` (2026-08-14), GPL-3.0.
 Its mask-engine and mask-payload compatibility marker names are retained as a
@@ -68,6 +70,9 @@ PR #15375 wrappers.
 The master-audio node adapts MultiRef Update 4 at merged revision `9118251`
 (2026-08-14) and its Update 5 target-audio-grid boundary correction at merged
 revision `31e6cb7` (2026-08-15).
+
+The two-ended masked bridge adapts MultiRef Update 5 at merged revision
+`31e6cb7` (2026-08-15).
 
 ## ComfyUI MiniMax H3 per-token AV masks
 
