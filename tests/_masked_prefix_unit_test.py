@@ -260,6 +260,63 @@ def main():
         "history_hash": legacy_guide_hash,
         "compatibility": dict(guide_plan["compatibility"]),
     }) == legacy_guide_hash
+    short_context_plan = chain._normalize_plan(
+        json.dumps({"shots": [
+            {"id": "one", "prompt": "first", "length": 192},
+            {"id": "two", "prompt": "second", "length": 192},
+        ]}),
+        "short_context_test", 64, 32, 22, "video", "head", "disabled",
+        "generated_audio", 39, 8.0, 8, 1, 18, "model-stack-v1", 5,
+        "guide",
+    )
+    assert chain._history_hash(short_context_plan, 1) == chain._history_hash(
+        guide_plan, 1)
+    assert chain._history_hash(short_context_plan, 2) != chain._history_hash(
+        guide_plan, 2)
+    legacy_short_context_hash = chain._fingerprint(
+        chain._legacy_history_contract(short_context_plan, 1))
+    legacy_short_context_metadata = {
+        "history_hash": legacy_short_context_hash,
+        "compatibility": dict(short_context_plan["compatibility"]),
+    }
+    assert chain._accepted_resume_history_hash(
+        guide_plan, 1, legacy_short_context_metadata,
+    ) == legacy_short_context_hash
+    intermediate_plan = json.loads(json.dumps(short_context_plan))
+    intermediate_plan["compatibility"]["continuation_mode"] = "masked_av"
+    intermediate_contract = chain._legacy_history_contract(
+        intermediate_plan, 1)
+    intermediate_contract["compatibility"] = dict(
+        intermediate_contract["compatibility"])
+    intermediate_contract["compatibility"].pop("continuation_mode")
+    intermediate_hash = chain._fingerprint(intermediate_contract)
+    assert chain._accepted_resume_history_hash(guide_plan, 1, {
+        "history_hash": intermediate_hash,
+        "compatibility": dict(intermediate_plan["compatibility"]),
+    }) == intermediate_hash
+    legacy_short_context_metadata["history_hash"] = chain._fingerprint(
+        chain._legacy_history_contract(short_context_plan, 2))
+    assert chain._accepted_resume_history_hash(
+        guide_plan, 2, legacy_short_context_metadata,
+    ) is None
+
+    class ContextDecodeVAE:
+        def decode(self, _latent):
+            decoded = torch.zeros((192, 32, 48, 3), dtype=torch.float32)
+            for frame_index in range(192):
+                decoded[frame_index].fill_(float(frame_index))
+            return decoded
+
+    recovered = chain._previous_context_frames({
+        "previous_frames": frames[-22:],
+        "previous_latent": previous,
+        "segments": [{
+            "index": 1, "raw_frames": 192, "delivered_frames": 192,
+        }],
+    }, ContextDecodeVAE(), 39)
+    assert tuple(recovered.shape) == (39, 32, 48, 3)
+    assert float(recovered[0, 0, 0, 0]) == 153.0
+    assert float(recovered[-1, 0, 0, 0]) == 191.0
     changed_prompt_plan = json.loads(json.dumps(guide_plan))
     changed_prompt_plan["shots"][0]["prompt_hash"] = "different-prompt"
     assert chain._accepted_resume_history_hash(changed_prompt_plan, 1, {
@@ -464,8 +521,9 @@ def main():
     else:
         raise AssertionError("per-scene masked mode accepted context_length=1")
     print(
-        "masked plan: global mode is resume-neutral, explicit scene mode is "
-        "history-significant, and invalid configurations are rejected")
+        "masked plan: global mode/context are next-scene controls, explicit "
+        "scene settings are history-significant, and invalid configurations "
+        "are rejected")
 
     # Native PR #15375-equivalent hooks must remain authoritative: neither
     # compatibility module may wrap or replace them.

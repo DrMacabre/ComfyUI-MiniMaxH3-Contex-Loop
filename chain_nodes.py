@@ -103,6 +103,15 @@ AUDIO_MODES = ("source_track", "generated_audio", "source_plus_timeline")
 CONTINUATION_MODES = ("guide", "masked_av")
 REFERENCE_AUDIO_TIMELINE_MODES = ("standalone", "source_timeline")
 
+# These Plan-wide controls describe how the next scene consumes an immutable
+# predecessor. Their effective values are still recorded on generated scenes,
+# but changing them must not by itself rewrite the predecessor's identity.
+_NEXT_SCENE_COMPATIBILITY_KEYS = frozenset((
+    "continuation_mode",
+    "context_length",
+    "context_storage_length",
+))
+
 PLAN_TYPE = "H3_CHAIN_PLAN"
 STATE_TYPE = "H3_CHAIN_STATE"
 FLOW_TYPE = "H3_CHAIN_FLOW"
@@ -1146,17 +1155,18 @@ def _legacy_history_contract(
 def _history_contract(plan: dict[str, Any], through_index: int) -> dict[str, Any]:
     """Contract for immutable predecessors and their reusable AV state.
 
-    The Plan-level continuation mode controls the scene being generated; it
-    does not alter the decoded frames or sampled AV latent already stored in a
-    predecessor checkpoint.  Excluding that inherited default lets a user
-    choose guide or masked AV for the next scene without regenerating the
-    completed prefix.  Explicit per-scene overrides remain in each shot's
-    contract because they are stable scene declarations rather than a mutable
-    next-run default.
+    Plan-level continuation mode and context length control the scene being
+    generated; they do not alter the decoded frames or sampled AV latent
+    already stored in a predecessor checkpoint. Excluding those inherited
+    defaults lets a user choose how the next scene consumes the completed
+    prefix. Explicit per-scene overrides remain in each shot's contract
+    because they are stable scene declarations rather than mutable next-run
+    defaults.
     """
     contract = _legacy_history_contract(plan, through_index)
     compatibility = dict(contract["compatibility"])
-    compatibility.pop("continuation_mode", None)
+    for key in _NEXT_SCENE_COMPATIBILITY_KEYS:
+        compatibility.pop(key, None)
     contract["compatibility"] = compatibility
     return contract
 
@@ -1170,8 +1180,8 @@ def _accepted_resume_history_hash(
         metadata: dict[str, Any]) -> str | None:
     """Return the matching current or legacy hash for one saved predecessor.
 
-    Older global-masked checkpoints included the inherited mode in their
-    history hash.  Rebuild only that legacy spelling from the mode recorded in
+    Older checkpoints included inherited next-scene controls in their history
+    hash. Rebuild only those legacy spellings from the values recorded in
     their metadata; every other current setting and shot field still comes
     from the requested Plan, so prompts, seeds, timing, references, audio, and
     model fingerprints cannot be hidden by the migration fallback.
@@ -1183,17 +1193,28 @@ def _accepted_resume_history_hash(
     saved_compatibility = metadata.get("compatibility")
     if not isinstance(saved_compatibility, dict):
         return None
-    legacy_plan = dict(plan)
-    compatibility = dict(plan["compatibility"])
-    if "continuation_mode" in saved_compatibility:
-        compatibility["continuation_mode"] = saved_compatibility[
-            "continuation_mode"]
-    else:
-        compatibility.pop("continuation_mode", None)
-    legacy_plan["compatibility"] = compatibility
-    legacy = _fingerprint(_legacy_history_contract(
-        legacy_plan, through_index))
-    return legacy if recorded == legacy else None
+    # v0.4's first resume-neutral revision removed continuation_mode while
+    # context_length was still hashed. Check that released intermediate
+    # spelling before the original contract that included every available
+    # global control.
+    candidate_key_sets = (
+        frozenset(("context_length", "context_storage_length")),
+        _NEXT_SCENE_COMPATIBILITY_KEYS,
+    )
+    for restored_keys in candidate_key_sets:
+        legacy_plan = dict(plan)
+        compatibility = dict(plan["compatibility"])
+        for key in _NEXT_SCENE_COMPATIBILITY_KEYS:
+            compatibility.pop(key, None)
+        for key in restored_keys:
+            if key in saved_compatibility:
+                compatibility[key] = saved_compatibility[key]
+        legacy_plan["compatibility"] = compatibility
+        candidate = _fingerprint(_legacy_history_contract(
+            legacy_plan, through_index))
+        if recorded == candidate:
+            return candidate
+    return None
 
 
 def _audio_fingerprint(audio: Any) -> str:
@@ -2363,6 +2384,75 @@ def _compact_latent(latent: dict[str, Any]) -> dict[str, Any]:
                         _tensor_cpu_clone(parts[1])]}
 
 
+def _previous_context_frames(state: dict[str, Any], vae: Any,
+                             requested: int) -> Any:
+    """Return the requested predecessor tail, recovering it from AV latent.
+
+    Checkpoints historically retained only the context length configured when
+    their scene was saved. If a later resume asks for a longer next-scene
+    context, the complete predecessor video latent is still present. Decode it
+    and remove that predecessor's own repeated leading overlap instead of
+    forcing an otherwise pointless regeneration.
+    """
+    frames = state.get("previous_frames")
+    if frames is None or getattr(frames, "ndim", 0) != 4:
+        raise ValueError(
+            "H3 chain continuation has no valid previous frame checkpoint.")
+    requested = int(requested)
+    if requested <= 0 or int(frames.shape[0]) >= requested:
+        return frames
+
+    segments = state.get("segments")
+    segment = segments[-1] if isinstance(segments, list) and segments else None
+    if not isinstance(segment, dict):
+        raise ValueError(
+            "H3 chain cannot recover a longer context tail because its "
+            "predecessor segment metadata is unavailable.")
+    previous_latent = state.get("previous_latent")
+    streams = (_streams_from_latent(previous_latent)
+               if previous_latent is not None else [])
+    if not streams:
+        raise ValueError(
+            "H3 chain cannot recover a longer context tail because its "
+            "predecessor video latent is unavailable.")
+
+    decoded = vae.decode(streams[0])
+    if not torch.is_tensor(decoded):
+        raise ValueError(
+            "H3 chain predecessor VAE returned %r instead of image frames."
+            % type(decoded))
+    if decoded.ndim == 5:
+        decoded = decoded.reshape(
+            -1, decoded.shape[-3], decoded.shape[-2], decoded.shape[-1])
+    if decoded.ndim != 4:
+        raise ValueError(
+            "H3 chain predecessor VAE returned image shape %s; expected "
+            "[frames,height,width,channels]." % (tuple(decoded.shape),))
+
+    raw_frames = int(segment.get("raw_frames", 0))
+    delivered_frames = int(segment.get("delivered_frames", 0))
+    trim_frames = raw_frames - delivered_frames
+    if (raw_frames <= 0 or delivered_frames <= 0 or trim_frames < 0
+            or int(decoded.shape[0]) != raw_frames):
+        raise ValueError(
+            "H3 chain cannot recover predecessor context: its latent decoded "
+            "to %d frames but segment metadata declares %d raw / %d "
+            "delivered frames." %
+            (int(decoded.shape[0]), raw_frames, delivered_frames))
+    delivered = decoded[trim_frames:trim_frames + delivered_frames]
+    if requested > int(delivered.shape[0]):
+        raise ValueError(
+            "H3 chain next scene requests %d context frames, but predecessor "
+            "clip %d delivers only %d." %
+            (requested, int(segment.get("index", 0)),
+             int(delivered.shape[0])))
+    _LOG.info(
+        "H3 Chain re-decoded clip %d's saved video latent to expand the next "
+        "scene context from %d to %d frames; no scene was regenerated.",
+        int(segment.get("index", 0)), int(frames.shape[0]), requested)
+    return _tensor_cpu_clone(delivered[-requested:])
+
+
 def _public_segment(value: dict[str, Any]) -> dict[str, Any]:
     return {key: value[key] for key in (
         "index", "id", "segment", "checkpoint", "metadata",
@@ -2500,18 +2590,20 @@ def _load_resume_state(plan: dict[str, Any], start_clip: int) -> dict[str, Any]:
     missing = sorted(required - set(tensors))
     if missing:
         raise ValueError("H3 chain checkpoint is missing tensors: %s" % missing)
-    expected_context = min(
-        _plan_context_storage_length(plan),
-        int(plan["shots"][previous_index - 1]["delivered_frames"]))
-    if int(tensors["context_frames"].shape[0]) != expected_context:
+    context_frames = tensors["context_frames"]
+    previous_delivered = int(
+        previous_meta["segment"].get("delivered_frames", 0))
+    if (getattr(context_frames, "ndim", 0) != 4
+            or int(context_frames.shape[0]) > previous_delivered):
         raise ValueError(
-            "H3 chain predecessor checkpoint contains %d context frames; "
-            "expected %d." %
-            (int(tensors["context_frames"].shape[0]), expected_context))
+            "H3 chain predecessor checkpoint contains an invalid context "
+            "tensor shape %s for a %d-frame delivered clip." %
+            (tuple(getattr(context_frames, "shape", ())),
+             previous_delivered))
     return {
         "plan": plan,
         "index": start_clip,
-        "previous_frames": tensors["context_frames"],
+        "previous_frames": context_frames,
         "previous_latent": {"samples": [tensors["video"], tensors["audio"]]},
         "segments": segments,
         "resumed_from": previous_index,
@@ -4786,9 +4878,8 @@ class MiniMaxH3ChainContext:
                 False,
                 latent,
             )
-        previous_frames = state.get("previous_frames")
-        if previous_frames is None:
-            raise ValueError("H3 chain continuation has no previous frame checkpoint.")
+        previous_frames = _previous_context_frames(
+            state, vae, context_length)
         if continuation_mode == "masked_av":
             from .masked_context import apply_masked_prefix
 
@@ -4893,6 +4984,12 @@ class MiniMaxH3ChainSegmentSave:
         plan = state["plan"]
         index = int(state["index"])
         shot = plan["shots"][index - 1]
+        compatibility = plan["compatibility"]
+        effective_context_length = _shot_context_length(
+            shot, int(compatibility.get("context_length", 0)))
+        effective_audio_context_length = _shot_audio_context_length(
+            shot, int(compatibility.get("audio_context_length", 0)),
+            effective_context_length)
         actual_frames = int(images.shape[0])
         expected_frames = int(shot["delivered_frames"])
         if actual_frames != expected_frames:
@@ -5031,16 +5128,13 @@ class MiniMaxH3ChainSegmentSave:
                 "continuation_mode": shot.get(
                     "continuation_mode",
                     plan["compatibility"].get("continuation_mode", "guide")),
+                "context_length": effective_context_length,
+                "audio_context_length": effective_audio_context_length,
                 "sample_rate": sample_rate,
                 "segment_sha256": _file_sha256(published_segment),
                 "checkpoint_sha256": _file_sha256(published_checkpoint),
                 "prompt_file_sha256": _file_sha256(published_prompt),
             }
-            if "context_length" in shot:
-                segment["context_length"] = shot["context_length"]
-            if "audio_context_length" in shot:
-                segment["audio_context_length"] = shot[
-                    "audio_context_length"]
             if published_blend is not None:
                 segment.update({
                     "blend_segment": _relative_output_path(published_blend),
