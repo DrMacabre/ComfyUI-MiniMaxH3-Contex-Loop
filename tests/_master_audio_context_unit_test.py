@@ -81,6 +81,31 @@ def main():
     assert int(clip_audio["waveform"].shape[-1]) == round(
         target_frames / 24 * 32_000)
 
+    # Chain Context may already own the protected visual prefix. Replacing
+    # the audio target must retain that video mask while making the complete
+    # current master-audio stream protected.
+    existing_video_mask = torch.ones((1, 1, video_steps, 2, 4))
+    existing_video_mask[:, :, :7] = 0.0
+    existing_audio_mask = torch.ones((1, 1, 2, audio_steps))
+    chained_latent = {
+        "samples": harness.NestedTensor((target_video, target_audio)),
+        "noise_mask": harness.NestedTensor((
+            existing_video_mask, existing_audio_mask)),
+    }
+    chained, chained_prefix, _ = (
+        audio_context.MiniMaxH3ContexMasterAudioMaskedAV().prepare(
+            chained_latent,
+            AudioVAE(),
+            master_audio,
+            clip_start_seconds=3.25,
+            context_length=0,
+        ))
+    chained_video_mask, chained_audio_mask = chained["noise_mask"].unbind()
+    assert chained_prefix == 0
+    assert not torch.count_nonzero(chained_video_mask[:, :, :7])
+    assert torch.all(chained_video_mask[:, :, 7:] == 1.0)
+    assert not torch.count_nonzero(chained_audio_mask)
+
     first, first_prefix, _ = (
         audio_context.MiniMaxH3ContexMasterAudioMaskedAV().prepare(
             latent,

@@ -19,7 +19,11 @@ import math
 
 import torch
 
-from .masked_context import _snap_prefix_length, _validate_target_streams
+from .masked_context import (
+    _existing_mask_streams,
+    _snap_prefix_length,
+    _validate_target_streams,
+)
 from .masking_support import require_h3_mask_support
 from .nodes import AUDIO_HZ, FPS, _pixel_frames, _resize
 
@@ -329,10 +333,13 @@ class MiniMaxH3ContexMasterAudioMaskedAV:
                 )
             out_video[:, :, :video_steps] = prefix
 
-        video_mask = torch.ones(
-            (1, 1, int(out_video.shape[2]), int(out_video.shape[3]),
-             int(out_video.shape[4])),
-            device=out_video.device, dtype=torch.float32)
+        # Compose with an upstream masked target instead of replacing it. This
+        # is what lets Chain Context own the protected continuation-video
+        # prefix while this node replaces and protects the complete current
+        # master-audio interval. It also keeps the standalone source_frames
+        # path composable with any future spatial/video mask.
+        video_mask, _ = _existing_mask_streams(
+            latent, out_video, out_audio)
         if video_steps:
             video_mask[:, :, :video_steps] = 0.0
         audio_mask = torch.zeros(
