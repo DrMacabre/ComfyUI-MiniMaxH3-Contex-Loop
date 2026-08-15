@@ -23,6 +23,7 @@ const H3_NODE_TYPES = new Set([
     "MiniMaxH3ScheduledReferenceToVideo",
     "MiniMaxH3TaggedPictureReference",
     "MiniMaxH3TaggedVideoReference",
+    "MiniMaxH3TaggedMotionReference",
     "MiniMaxH3TaggedAudioReference",
     "MiniMaxH3TaggedReferenceToVideo",
     "MiniMaxH3ChainExternalVideo",
