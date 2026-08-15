@@ -48,7 +48,7 @@ Restart ComfyUI and reload the browser. Release-versioned web-module imports
 prevent older cached helpers from disabling the Plan editor after an update,
 so clearing all browser data should not be necessary. An `ffmpeg` executable
 on `PATH` is preferred, but review and final assembly can fall back to
-ComfyUI's bundled PyAV.
+ComfyUI's bundled PyAV when FFmpeg is missing or cannot launch.
 
 Version 0.4 expects a ComfyUI build containing the native **Add Guide for
 MiniMax H3** implementation from

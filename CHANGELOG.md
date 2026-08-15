@@ -4,6 +4,9 @@ Newest first. This file keeps release history out of the onboarding README.
 
 ## v0.4.5 — Scene context and checkpoint Plan recovery
 
+- FFmpeg executables found on `PATH` are now launch-tested once before use. A
+  broken Windows build (including `0xC0000139` DLL entry-point failures) is
+  treated as unavailable so review muxing and final assembly use PyAV instead.
 - Versioned every production `.mjs` import with the package release and added
   a consistency regression check, preventing stale browser helper modules from
   disabling the Plan DOM editor after an update.

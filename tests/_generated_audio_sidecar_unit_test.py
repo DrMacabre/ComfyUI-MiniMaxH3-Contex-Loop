@@ -79,12 +79,17 @@ def main():
         chain._validate_source_audio_hash = lambda *_args: None
         chain._manifest_media_metadata = lambda _value: {}
         original_which = chain.shutil.which
+        original_run_ffmpeg = chain._run_ffmpeg
+        original_pyav_concat = chain._pyav_concat_video
+        original_pyav_mux = chain._pyav_mux_audio
         chain.shutil.which = lambda executable: (
             "/fake/ffmpeg" if executable == "ffmpeg"
             else original_which(executable))
 
         def fake_ffmpeg(command, timeout_seconds=None):
             del timeout_seconds
+            if command[-1] == "-version":
+                return
             output = pathlib.Path(command[-1])
             if output.name == ".final.tmp.mp4":
                 with wave.open(command[5], "rb") as selected_audio:
@@ -96,8 +101,30 @@ def main():
         try:
             result = chain.MiniMaxH3ChainAssemble().assemble(
                 manifest, "source", "source_final", 96, source)
+
+            chain.shutil.which = lambda executable: (
+                "/broken/ffmpeg" if executable == "ffmpeg"
+                else original_which(executable))
+
+            def unusable_ffmpeg(*_args, **_kwargs):
+                raise RuntimeError(
+                    "ffmpeg failed (3221225785 / 0xC0000139)")
+
+            chain._run_ffmpeg = unusable_ffmpeg
+            chain._pyav_concat_video = (
+                lambda _sources, _frames, path, _metadata:
+                pathlib.Path(path).write_bytes(b"PyAV joined video"))
+            chain._pyav_mux_audio = (
+                lambda _video, _audio, path, _bitrate, _frames:
+                pathlib.Path(path).write_bytes(b"PyAV video with audio"))
+            fallback = chain.MiniMaxH3ChainAssemble().assemble(
+                manifest, "source", "broken_ffmpeg_fallback", 96, source)
         finally:
             chain.shutil.which = original_which
+            chain._run_ffmpeg = original_run_ffmpeg
+            chain._pyav_concat_video = original_pyav_concat
+            chain._pyav_mux_audio = original_pyav_mux
+            chain._FFMPEG_PROBE_CACHE.clear()
 
         final_path = pathlib.Path(result["result"][0])
         sidecar_path = final_path.with_suffix(".generated.wav")
@@ -110,8 +137,11 @@ def main():
             assert generated_audio.getnframes() == round(5 / chain.FPS * 8000)
             assert any(generated_audio.readframes(generated_audio.getnframes()))
         assert "generated audio ->" in result["ui"]["text"][0]
+        assert pathlib.Path(fallback["result"][0]).is_file()
+        assert "PyAV fallback" in fallback["ui"]["text"][0]
 
-    print("H3 generated audio sidecar: source mux remains unchanged and H3 WAV is preserved")
+    print("H3 generated audio sidecar: source mux remains unchanged and H3 "
+          "WAV is preserved")
 
 
 if __name__ == "__main__":

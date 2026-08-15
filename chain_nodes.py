@@ -117,6 +117,7 @@ _PENDING_REVIEWS: dict[str, dict[str, Any]] = {}
 _PENDING_FINAL_REVIEW_PREVIEWS: dict[
     tuple[str, str], dict[str, Any]
 ] = {}
+_FFMPEG_PROBE_CACHE: dict[str, bool] = {}
 
 
 def _canonical_json(value: Any) -> str:
@@ -5028,7 +5029,7 @@ def _review_video(plan: dict[str, Any], segment: dict[str, Any],
     review_path = os.path.join(review_dir, name)
 
     if not os.path.isfile(review_path):
-        ffmpeg = shutil.which("ffmpeg")
+        ffmpeg = _usable_ffmpeg()
         transaction = uuid.uuid4().hex
         wav_tmp = os.path.join(review_dir, ".review.%s.wav" % transaction)
         video_tmp = os.path.join(review_dir, ".review.%s.mp4" % transaction)
@@ -5044,7 +5045,8 @@ def _review_video(plan: dict[str, Any], segment: dict[str, Any],
                 ], timeout_seconds=60.0)
             else:
                 _LOG.warning(
-                    "H3 Chain ffmpeg executable not found; preparing review "
+                    "H3 Chain usable ffmpeg executable unavailable; "
+                    "preparing review "
                     "audio with the built-in PyAV fallback")
                 _pyav_mux_audio(
                     source, audio_value, video_tmp, 192, expected_frames)
@@ -5901,9 +5903,47 @@ def _run_ffmpeg(command: list[str], timeout_seconds: float | None = None) -> Non
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError(
             "ffmpeg timed out after %.1f seconds" % float(timeout_seconds)) from exc
+    except OSError as exc:
+        executable = str(command[0]) if command else "ffmpeg"
+        raise RuntimeError(
+            "ffmpeg could not start (%s): %s" % (executable, exc)) from exc
     if result.returncode:
         tail = "\n".join(result.stderr.splitlines()[-20:])
-        raise RuntimeError("ffmpeg failed (%d):\n%s" % (result.returncode, tail))
+        returncode = int(result.returncode)
+        unsigned = returncode & 0xFFFFFFFF
+        status = str(returncode)
+        if returncode > 255 or (os.name == "nt" and returncode < 0):
+            status += " / 0x%08X" % unsigned
+        if not tail:
+            if unsigned == 0xC0000139:
+                tail = (
+                    "Windows could not start ffmpeg because an expected DLL "
+                    "entry point was not found. Replace the incompatible "
+                    "ffmpeg build or repair its DLL dependencies.")
+            else:
+                tail = "ffmpeg produced no error diagnostics."
+        raise RuntimeError("ffmpeg failed (%s):\n%s" % (status, tail))
+
+
+def _usable_ffmpeg() -> str | None:
+    """Return a runnable ffmpeg path, or None so callers select PyAV."""
+    executable = shutil.which("ffmpeg")
+    if not executable:
+        return None
+    cache_key = os.path.normcase(os.path.realpath(executable))
+    if cache_key in _FFMPEG_PROBE_CACHE:
+        return executable if _FFMPEG_PROBE_CACHE[cache_key] else None
+    try:
+        _run_ffmpeg([executable, "-version"], timeout_seconds=10.0)
+    except RuntimeError as exc:
+        _FFMPEG_PROBE_CACHE[cache_key] = False
+        _LOG.warning(
+            "H3 Chain found ffmpeg at %s, but it is unusable; treating it as "
+            "unavailable and using the built-in PyAV fallback: %s",
+            executable, exc)
+        return None
+    _FFMPEG_PROBE_CACHE[cache_key] = True
+    return executable
 
 
 def _pyav_video_signature(stream: Any) -> tuple[Any, ...]:
@@ -5938,7 +5978,8 @@ def _pyav_concat_video(segment_paths: list[str], delivered_frames: list[int],
     """Stream-copy compatible H.264 segments without an ffmpeg executable."""
     if av is None:
         raise RuntimeError(
-            "H3 Chain Assemble found neither an ffmpeg executable nor PyAV.")
+            "H3 Chain Assemble found neither a usable ffmpeg executable nor "
+            "PyAV.")
     if len(segment_paths) != len(delivered_frames) or not segment_paths:
         raise ValueError("PyAV H3 assembly requires one duration per segment.")
 
@@ -6746,10 +6787,10 @@ class MiniMaxH3ChainAssemble:
             delivered_frames.append(int(item["delivered_frames"]))
         blend_records = _blend_video_records(manifest, segments, prelude)
         blend_enabled = bool(blend_records)
-        ffmpeg = shutil.which("ffmpeg")
+        ffmpeg = _usable_ffmpeg()
         if not ffmpeg and av is None:
             raise RuntimeError(
-                "H3 Chain Assemble found neither an ffmpeg executable nor "
+                "H3 Chain Assemble found neither a usable ffmpeg executable nor "
                 "PyAV. Install ffmpeg or restore ComfyUI's av package.")
 
         for temporary in (video_tmp, final_tmp, wav_tmp, metadata_tmp):
@@ -6784,7 +6825,8 @@ class MiniMaxH3ChainAssemble:
                 else:
                     backend = "PyAV cumulative linear blend fallback"
                     _LOG.warning(
-                        "H3 Chain ffmpeg executable not found; blending with "
+                        "H3 Chain usable ffmpeg executable unavailable; "
+                        "blending with "
                         "the built-in PyAV fallback")
                     _pyav_blend_video(
                         blend_records, video_tmp, media_metadata,
@@ -6807,7 +6849,8 @@ class MiniMaxH3ChainAssemble:
             else:
                 backend = "PyAV fallback"
                 _LOG.warning(
-                    "H3 Chain ffmpeg executable not found; assembling with "
+                    "H3 Chain usable ffmpeg executable unavailable; "
+                    "assembling with "
                     "the built-in PyAV stream-copy fallback")
                 _pyav_concat_video(
                     segment_paths, delivered_frames, video_tmp, media_metadata)
