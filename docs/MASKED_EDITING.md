@@ -173,8 +173,11 @@ it can be added without changing the H3 mask/runtime layer.
 
 The masking nodes prefer native ComfyUI support equivalent to PR #15375. On a
 supported post-PR-#15439 H3 baseline, they lazily install only the missing mask
-engine, payload extraction, preprocessing, or inpaint scaling. No MODEL patch
-node is needed, and importing the pack does not modify stock H3 behavior.
+engine, payload extraction, token-aligned inpaint scaling, or legacy sampler
+bridge. The original pixel mask remains authoritative for final sampler
+blending; only H3's internal timestep labels are pooled to the video/audio
+token grids. No MODEL patch node is needed, and importing the pack does not
+modify stock H3 behavior.
 
 A partially updated native implementation is rejected rather than combined
 with the compatibility snapshot. Restart ComfyUI fully after updating core or

@@ -11,10 +11,12 @@ The two continuation engines and public masking path are capability-gated:
 - `guide` prefers native Add Guide / MultiRef behavior from ComfyUI PR #15439
   and uses the existing guarded guide fallback only on older builds;
 - `masked_av` prefers native per-token H3 AV masks from PR #15375 and lazily
-  installs only missing mask-engine, payload, preprocessing, and inpaint-scale
-  behavior when the masked path executes. It still requires the native #15439
-  Add Guide / MultiRef core baseline; masked mode is not enabled on the older
-  guide-fallback architecture.
+  installs only missing mask-engine, payload, token-aligned inpaint-scale, and
+  legacy sampler-bridge behavior when the masked path executes. It follows
+  PR #15375 commit `989e7a9`: pixel masks stay intact for final sampler
+  blending while internal H3 timesteps use pooled token-grid values. It still
+  requires the native #15439 Add Guide / MultiRef core baseline; masked mode
+  is not enabled on the older guide-fallback architecture.
 - `MiniMaxH3ContexMaskedTarget` uses the same native-first per-token AV mask
   layer for arbitrary manual targets. It activates compatibility only when the
   node executes and does not require a separate MODEL patch node.

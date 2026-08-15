@@ -2,8 +2,13 @@
 
 Newest first. This file keeps release history out of the onboarding README.
 
-## Unreleased — General masked targets
+## v0.4.7 — General masked targets
 
+- Updated the vendored PR #15375 fallback through upstream commit `989e7a9`.
+  Arbitrary masks now retain their original per-pixel sampler blend while H3
+  pools only its internal video/audio timestep labels to the token grid. Older
+  ComfyUI builds receive a scoped per-step sampler bridge; post-PR builds keep
+  their native implementation untouched.
 - Made Plan-wide continuation mode and context length next-scene choices for
   resume validation. Switching either after a completed scene now reuses that
   verified predecessor instead of demanding a pointless regeneration. When a

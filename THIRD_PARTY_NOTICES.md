@@ -53,7 +53,8 @@ and both target prefixes receive `0 = preserve`, `1 = generate` masks.
 
 Adapted source files and integration:
 
-- `h3_mask_compat.py` — model-level PR #15375 capability detection/fallback;
+- `h3_mask_compat.py` — PR #15375 model/sampler capability detection and
+  fallback;
 - `h3_mask_payload_compat.py` — native-first AV mask payload extraction;
 - `masked_context.py` — recursive target-prefix construction derived from the
   MultiRef existing-video implementation.
@@ -63,9 +64,9 @@ Adapted source files and integration:
   from MultiRef Update 5's masked bridge.
 
 The referenced MultiRef revision is `4b484a3` (2026-08-14), GPL-3.0.
-Its mask-engine and mask-payload compatibility marker names are retained as a
-shared runtime ABI, so installing both packs does not stack equivalent
-PR #15375 wrappers.
+Its v2 mask-engine marker is recognized for safe migration. This pack uses a
+v3 model, sampler, and payload ABI for PR #15375 commit `989e7a9`, replacing
+only recognized older blend/payload wrappers whose semantics changed.
 
 The master-audio node adapts MultiRef Update 4 at merged revision `9118251`
 (2026-08-14) and its Update 5 target-audio-grid boundary correction at merged
@@ -81,7 +82,9 @@ implementation are from
 [ComfyUI PR #15375](https://github.com/Comfy-Org/ComfyUI/pull/15375), authored
 by **drozbay**. The vendored fallback is scoped to masked target-latent
 operations, prefers native equivalent behavior automatically, and is not
-activated by ordinary guide-mode chains.
+activated by ordinary guide-mode chains. It tracks the post-review mask-blend
+design through upstream commit `989e7a9bb79a370d20f63674b54dead993f6f4a1`
+(2026-08-15).
 
 ## ComfyUI-MiniMaxH3-PerRowMasking
 

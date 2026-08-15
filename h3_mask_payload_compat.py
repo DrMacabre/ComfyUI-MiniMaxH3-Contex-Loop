@@ -25,7 +25,8 @@ import comfy.utils as utils
 _LOG = logging.getLogger("minimax_h3_context_loop.masked_prefix")
 # Shared with seitanism's source pack. Ownership remains path-specific through
 # `_is_ours`, while `_is_compatible_wrapper` lets a sibling copy stand down.
-_MARKER = "_h3_existing_video_av_mask_payload_compat_v2"
+_MARKER = "_h3_existing_video_av_mask_payload_compat_v3"
+_LEGACY_MARKER = "_h3_existing_video_av_mask_payload_compat_v2"
 
 
 def _walk_wrapped(fn):
@@ -50,6 +51,15 @@ def _is_compatible_wrapper(fn):
     code = getattr(fn, "__code__", None)
     return bool(
         getattr(fn, _MARKER, False)
+        and code is not None
+        and code.co_name == "wrapper"
+    )
+
+
+def _is_legacy_wrapper(fn):
+    code = getattr(fn, "__code__", None)
+    return bool(
+        getattr(fn, _LEGACY_MARKER, False)
         and code is not None
         and code.co_name == "wrapper"
     )
@@ -96,13 +106,12 @@ def _native_h3_mask_hooks(cls):
     if cls is None:
         return False
     process_step = cls.__dict__.get("process_timestep")
-    process_mask = cls.__dict__.get("process_denoise_mask")
     scale = cls.__dict__.get("scale_latent_inpaint")
     return bool(
         callable(process_step)
         and _signature_has(process_step, "denoise_mask", "audio_denoise_mask")
-        and callable(process_mask)
         and callable(scale)
+        and _signature_has(scale, "x", "denoise_mask")
     )
 
 
@@ -135,25 +144,24 @@ def capability_status():
 def _add_av_mask_conditions(out, kwargs):
     if not isinstance(out, dict):
         return
-    have_video = "denoise_mask" in out
-    have_audio = "audio_denoise_mask" in out
-    if have_video and have_audio:
-        return
-
     denoise_mask = kwargs.get("denoise_mask")
     latent_shapes = kwargs.get("latent_shapes")
     if denoise_mask is None or latent_shapes is None or len(latent_shapes) < 2:
         return
 
+    # Match PR #15375: constrain row labels to 1/256, retain the original
+    # user mask for sampler blending, and collapse audio channels only for the
+    # H3 token-timestep condition.
+    denoise_mask = torch.round(denoise_mask * 256.0) / 256.0
     masks = utils.unpack_latents(denoise_mask, latent_shapes)
     if len(masks) < 2:
         return
-    if not have_video and torch.amin(masks[0]).item() < 1.0 - 1e-3:
+    if torch.amin(masks[0]).item() < 1.0 - 1e-3:
         out["denoise_mask"] = comfy.conds.CONDRegular(
-            masks[0][:, :1].clone())
-    if not have_audio and torch.amin(masks[1]).item() < 1.0 - 1e-3:
+            masks[0][:1, :1].clone())
+    if torch.amin(masks[1]).item() < 1.0 - 1e-3:
         out["audio_denoise_mask"] = comfy.conds.CONDRegular(
-            masks[1][:, :1].clone())
+            masks[1][:1].amax(dim=1, keepdim=True))
 
 
 def _make_wrapper(base):
@@ -177,7 +185,14 @@ def ensure_av_mask_payload_compat():
         return True
     if any(_is_compatible_wrapper(item) for item in _walk_wrapped(current)):
         return True
-    cls.extra_conds = _make_wrapper(current)
+    # A v2 wrapper would populate both keys first and prevent the corrected
+    # v3 post-processing from replacing them. Strip only recognized legacy
+    # wrappers; unknown third-party wrappers remain in the chain.
+    base = current
+    while _is_legacy_wrapper(base) and callable(
+            getattr(base, "__wrapped__", None)):
+        base = base.__wrapped__
+    cls.extra_conds = _make_wrapper(base)
     _LOG.info(
         "h3_masked_prefix: PR #15375 AV-mask payload compatibility enabled")
     return True
