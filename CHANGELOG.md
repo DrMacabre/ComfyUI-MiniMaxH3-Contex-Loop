@@ -4,6 +4,11 @@ Newest first. This file keeps release history out of the onboarding README.
 
 ## Unreleased — General masked targets
 
+- Made the Plan-wide `guide` / `masked_av` selector a next-scene choice for
+  resume validation. Switching it after a completed scene now reuses that
+  verified predecessor instead of demanding a pointless regeneration;
+  explicit per-scene overrides remain generation-significant, and new segment
+  records retain the effective mode for provenance.
 - Fixed master-audio encoding when H3's rounded 40 Hz target requires one
   latent step beyond a floor-style VAE encode of the exact picture duration.
   The node uses real timeline-audio lookahead, crops to the authoritative

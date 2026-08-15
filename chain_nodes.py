@@ -1112,7 +1112,9 @@ def _plan_context_storage_length(plan: dict[str, Any]) -> int:
     return int(cfg.get("context_storage_length", cfg["context_length"]))
 
 
-def _history_contract(plan: dict[str, Any], through_index: int) -> dict[str, Any]:
+def _legacy_history_contract(
+        plan: dict[str, Any], through_index: int) -> dict[str, Any]:
+    """Pre-mode-neutral checkpoint contract retained for resume migration."""
     shots = []
     for shot in plan["shots"][:int(through_index)]:
         contract = {
@@ -1141,8 +1143,57 @@ def _history_contract(plan: dict[str, Any], through_index: int) -> dict[str, Any
     }
 
 
+def _history_contract(plan: dict[str, Any], through_index: int) -> dict[str, Any]:
+    """Contract for immutable predecessors and their reusable AV state.
+
+    The Plan-level continuation mode controls the scene being generated; it
+    does not alter the decoded frames or sampled AV latent already stored in a
+    predecessor checkpoint.  Excluding that inherited default lets a user
+    choose guide or masked AV for the next scene without regenerating the
+    completed prefix.  Explicit per-scene overrides remain in each shot's
+    contract because they are stable scene declarations rather than a mutable
+    next-run default.
+    """
+    contract = _legacy_history_contract(plan, through_index)
+    compatibility = dict(contract["compatibility"])
+    compatibility.pop("continuation_mode", None)
+    contract["compatibility"] = compatibility
+    return contract
+
+
 def _history_hash(plan: dict[str, Any], through_index: int) -> str:
     return _fingerprint(_history_contract(plan, through_index))
+
+
+def _accepted_resume_history_hash(
+        plan: dict[str, Any], through_index: int,
+        metadata: dict[str, Any]) -> str | None:
+    """Return the matching current or legacy hash for one saved predecessor.
+
+    Older global-masked checkpoints included the inherited mode in their
+    history hash.  Rebuild only that legacy spelling from the mode recorded in
+    their metadata; every other current setting and shot field still comes
+    from the requested Plan, so prompts, seeds, timing, references, audio, and
+    model fingerprints cannot be hidden by the migration fallback.
+    """
+    recorded = str(metadata.get("history_hash") or "")
+    expected = _history_hash(plan, through_index)
+    if recorded == expected:
+        return expected
+    saved_compatibility = metadata.get("compatibility")
+    if not isinstance(saved_compatibility, dict):
+        return None
+    legacy_plan = dict(plan)
+    compatibility = dict(plan["compatibility"])
+    if "continuation_mode" in saved_compatibility:
+        compatibility["continuation_mode"] = saved_compatibility[
+            "continuation_mode"]
+    else:
+        compatibility.pop("continuation_mode", None)
+    legacy_plan["compatibility"] = compatibility
+    legacy = _fingerprint(_legacy_history_contract(
+        legacy_plan, through_index))
+    return legacy if recorded == legacy else None
 
 
 def _audio_fingerprint(audio: Any) -> str:
@@ -2320,7 +2371,8 @@ def _public_segment(value: dict[str, Any]) -> dict[str, Any]:
         "generated_audio", "generated_audio_sha256",
         "raw_frames", "delivered_frames", "history_hash",
         "prompt_prefix", "scene_prompt", "prompt", "prompt_hash", "archives",
-        "seed", "steps", "context_length", "audio_context_length",
+        "seed", "steps", "continuation_mode", "context_length",
+        "audio_context_length",
         "sample_rate", "segment_sha256",
         "checkpoint_sha256", "prompt_file_sha256", "predecessor_revision",
         "predecessor_checkpoint_sha256") if key in value}
@@ -2421,15 +2473,15 @@ def _load_resume_state(plan: dict[str, Any], start_clip: int) -> dict[str, Any]:
                 "Cannot resume clip %d: metadata for predecessor clip %d is "
                 "missing: %s" % (start_clip, index, paths["metadata"]))
         metadata = _read_json(paths["metadata"])
-        expected = _history_hash(plan, index)
-        if metadata.get("history_hash") != expected:
+        accepted = _accepted_resume_history_hash(plan, index, metadata)
+        if accepted is None:
             raise ValueError(
                 "Cannot resume clip %d: clip %d was generated from different "
                 "settings, prompts, seeds, or durations." % (start_clip, index))
         segment = metadata.get("segment")
         if not isinstance(segment, dict):
             raise ValueError("Checkpoint metadata for clip %d has no segment." % index)
-        if segment.get("history_hash") != expected:
+        if segment.get("history_hash") != accepted:
             raise ValueError(
                 "Checkpoint segment record for clip %d has a mismatched history."
                 % index)
@@ -4976,6 +5028,9 @@ class MiniMaxH3ChainSegmentSave:
                 "archives": archives,
                 "seed": shot["seed"],
                 "steps": shot["steps"],
+                "continuation_mode": shot.get(
+                    "continuation_mode",
+                    plan["compatibility"].get("continuation_mode", "guide")),
                 "sample_rate": sample_rate,
                 "segment_sha256": _file_sha256(published_segment),
                 "checkpoint_sha256": _file_sha256(published_checkpoint),

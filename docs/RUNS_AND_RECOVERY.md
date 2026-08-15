@@ -46,6 +46,13 @@ predecessors. Editing scene N or later is safe; changing an earlier prompt,
 seed, timing, source waveform, Plan compatibility setting, or
 `generation_fingerprint` invalidates the dependent resume.
 
+The Plan-wide continuation selector is the exception: it chooses whether the
+next scene consumes its saved predecessor through `guide` or `masked_av`.
+Changing that selector does not alter completed frames or their saved AV
+latent, so it does not invalidate the prefix. An explicit per-scene
+`continuation_mode` remains part of that scene's history and is validated when
+the scene has already been generated.
+
 Review Gate's checkpoint browser can set up this resume and preview the joined
 partial through the selected predecessor.
 

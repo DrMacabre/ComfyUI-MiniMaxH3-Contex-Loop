@@ -230,7 +230,9 @@ def main():
     assert plan["compatibility"]["continuation_mode"] == "masked_av"
     assert plan["shots"][1]["delivered_frames"] == 153
     assert "context=39/masked_av" in plan["summary"]
-    assert chain._history_contract(plan, 1)["compatibility"][
+    assert "continuation_mode" not in chain._history_contract(
+        plan, 1)["compatibility"]
+    assert chain._legacy_history_contract(plan, 1)["compatibility"][
         "continuation_mode"] == "masked_av"
     guide_plan = chain._normalize_plan(
         json.dumps({"shots": [
@@ -242,6 +244,28 @@ def main():
         "guide",
     )
     assert "continuation_mode" not in guide_plan["compatibility"]
+    # The Plan-wide selector chooses how the next scene consumes an immutable
+    # predecessor. It must not invalidate that predecessor's resume history.
+    assert chain._history_hash(plan, 1) == chain._history_hash(guide_plan, 1)
+    assert chain._history_hash(plan, 2) == chain._history_hash(guide_plan, 2)
+    legacy_masked_hash = chain._fingerprint(
+        chain._legacy_history_contract(plan, 1))
+    assert chain._accepted_resume_history_hash(guide_plan, 1, {
+        "history_hash": legacy_masked_hash,
+        "compatibility": dict(plan["compatibility"]),
+    }) == legacy_masked_hash
+    legacy_guide_hash = chain._fingerprint(
+        chain._legacy_history_contract(guide_plan, 1))
+    assert chain._accepted_resume_history_hash(plan, 1, {
+        "history_hash": legacy_guide_hash,
+        "compatibility": dict(guide_plan["compatibility"]),
+    }) == legacy_guide_hash
+    changed_prompt_plan = json.loads(json.dumps(guide_plan))
+    changed_prompt_plan["shots"][0]["prompt_hash"] = "different-prompt"
+    assert chain._accepted_resume_history_hash(changed_prompt_plan, 1, {
+        "history_hash": legacy_masked_hash,
+        "compatibility": dict(plan["compatibility"]),
+    }) is None
     mixed_plan = chain._normalize_plan(
         json.dumps({"shots": [
             {"id": "new_shot", "prompt": "first", "length": 192},
@@ -260,6 +284,10 @@ def main():
         mixed_plan, 1)["shots"][0]
     assert chain._history_contract(mixed_plan, 2)["shots"][1][
         "continuation_mode"] == "masked_av"
+    changed_scene_mode_plan = json.loads(json.dumps(mixed_plan))
+    changed_scene_mode_plan["shots"][1]["continuation_mode"] = "guide"
+    assert chain._history_hash(mixed_plan, 2) != chain._history_hash(
+        changed_scene_mode_plan, 2)
     assert chain._effective_editor_plan(mixed_plan)["shots"][1][
         "continuation_mode"] == "masked_av"
     per_scene_context_plan = chain._normalize_plan(
@@ -436,8 +464,8 @@ def main():
     else:
         raise AssertionError("per-scene masked mode accepted context_length=1")
     print(
-        "masked plan: mode participates in compatibility/history and rejects "
-        "non-video, non-head, or sub-5-frame configurations")
+        "masked plan: global mode is resume-neutral, explicit scene mode is "
+        "history-significant, and invalid configurations are rejected")
 
     # Native PR #15375-equivalent hooks must remain authoritative: neither
     # compatibility module may wrap or replace them.
