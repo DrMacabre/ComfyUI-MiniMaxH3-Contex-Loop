@@ -73,17 +73,6 @@ With core Ref2VA, the tray previews media and inserts native labels. With core
 Image to Video it exposes first and last frames as `<Picture N>` according to
 the active keyframes.
 
-## Convert a core Ref2VA node
-
-Right-click **MiniMax H3 Reference to Video** and select **Convert to MiniMax H3
-Scheduled Ref2VA**. The graph conversion preserves conditioning inputs,
-dimensions, media, paired soundtracks, and downstream outputs. It creates one
-schedule entry per connected source and connects Current Shot scene data when
-the loop can be identified.
-
-The stock node itself is not modified; the replacement invokes core Ref2VA
-internally for each scene.
-
 ## Resume fingerprints
 
 For static loaders, connect `schedule_fingerprint` to Plan's

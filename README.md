@@ -237,8 +237,7 @@ The compliance control has three levels:
 | `disabled` | Pass prompt text unchanged and make scheduler-owned checks non-blocking. |
 
 See [Scheduled references](docs/SCHEDULED_REFERENCES.md) for selectors, native
-numbering, hover previews, conversion from core Ref2VA, fingerprints, and patch
-priority.
+numbering, hover previews, fingerprints, and patch priority.
 
 ## Review, resume, and restore
 
@@ -262,7 +261,7 @@ archive loader-backed image/audio/video assets under the run folder. See
 - [Scene authoring](docs/SCENE_AUTHORING.md) — Plan editor, Prompt Editor,
   revisions, seeds, and bounded ranges.
 - [Scheduled references](docs/SCHEDULED_REFERENCES.md) — tags, selectors,
-  numbering, previews, compliance, and conversion.
+  numbering, previews, compliance, and fingerprints.
 - [Audio and continuity](docs/AUDIO_AND_CONTINUITY.md) — audio modes, 15.070 s
   reference alignment, generated WAVs, trimming, and seam diagnostics.
 - [Runs, review, and recovery](docs/RUNS_AND_RECOVERY.md) — Review Gate,

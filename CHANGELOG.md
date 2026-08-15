@@ -4,6 +4,9 @@ Newest first. This file keeps release history out of the onboarding README.
 
 ## v0.4.6 — Asset publishing and media fallbacks
 
+- Removed the core Ref2VA right-click conversion into Scheduled Ref2VA and its
+  graph-rewriting implementation. Scheduled and Tagged Ref2VA remain available
+  as explicit nodes.
 - Scene Segment Save and Final Assemble now publish their MP4 paths through
   ComfyUI's standard output descriptor contract, so newly produced scene clips
   and final videos appear promptly in the global Assets sidebar when enabled.
