@@ -509,6 +509,53 @@ assert motion_role_contract["semantic_role"] == "motion"
 assert motion_role_contract["motion_target"] == "<Subject 1> and <Subject 2>"
 assert motion_role_contract["motion_short_edge"] == "384"
 
+sequential_motion_role = chain.MiniMaxH3TaggedMotionReference().add(
+    sequential_video, "performance", "<Subject 1>",
+    "the source performer's pose sequence and action timing", "source",
+    "performance_audio", "sequential", audio=sequential_audio)[0]
+masked_motion_state = {
+    "index": 2,
+    "plan": {
+        "compatibility": {"continuation_mode": "masked_av"},
+        "shots": [
+            {"raw_frames": 243, "delivered_frames": 243,
+             "generation_start_frame": 0,
+             "prompt": "Begin @performance."},
+            {"raw_frames": 243, "delivered_frames": 221,
+             "generation_start_frame": 221,
+             "prompt": "Continue @performance."},
+        ],
+    },
+}
+masked_motion_video, masked_motion_audio, masked_motion_detail = (
+    chain._scheduled_video_reference_slice(
+        sequential_motion_role["entries"][0], masked_motion_state,
+        2, 2, 243))
+assert tuple(masked_motion_video.shape) == (221, 2, 2, 3)
+assert float(masked_motion_video[0, 0, 0, 0]) == 243
+assert float(masked_motion_video[-1, 0, 0, 0]) == 463
+assert tuple(masked_motion_audio["waveform"].shape) == (1, 1, 2210)
+assert float(masked_motion_audio["waveform"][0, 0, 0]) == 2430
+assert masked_motion_detail == (
+    "@performance sequential delivered frames 243:464 (origin scene 1)")
+
+guide_motion_state = {
+    **masked_motion_state,
+    "plan": {
+        **masked_motion_state["plan"],
+        "compatibility": {"continuation_mode": "guide"},
+    },
+}
+guide_motion_video, guide_motion_audio, guide_motion_detail = (
+    chain._scheduled_video_reference_slice(
+        sequential_motion_role["entries"][0], guide_motion_state,
+        2, 2, 243))
+assert tuple(guide_motion_video.shape) == (243, 2, 2, 3)
+assert float(guide_motion_video[0, 0, 0, 0]) == 221
+assert float(guide_motion_audio["waveform"][0, 0, 0]) == 2210
+assert guide_motion_detail == (
+    "@performance sequential frames 221:464 (origin scene 1)")
+
 large_motion_video = chain.torch.zeros((5, 512, 640, 3))
 compact_motion = chain.MiniMaxH3TaggedMotionReference().add(
     large_motion_video, "compact_motion", "<Subject 1>",

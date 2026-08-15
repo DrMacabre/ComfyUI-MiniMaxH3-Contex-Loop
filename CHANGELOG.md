@@ -16,6 +16,10 @@ Newest first. This file keeps release history out of the onboarding README.
   explicitly permits reuse of a saved predecessor after intentional Plan
   changes while retaining file, SHA-256, tensor-shape, and internal metadata
   integrity checks.
+- Corrected sequential Tagged Motion Ref timing under masked AV continuation.
+  Scene 2+ now excludes the repeated prefix from the unpositioned native video
+  bank and applies the identical delivered-frame window to paired audio,
+  removing the context-length motion delay without changing generic video refs.
 
 ## v0.4.7 — General masked targets
 

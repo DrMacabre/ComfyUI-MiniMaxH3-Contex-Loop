@@ -696,7 +696,41 @@ def _scheduled_video_reference_slice(
     origin_start = int(shots[origin_scene - 1]["generation_start_frame"])
     current_start = int(current["generation_start_frame"])
     source_start = current_start - origin_start
-    source_end = source_start + int(length)
+    source_length = int(length)
+    detail_mode = ""
+    compatibility = state["plan"].get("compatibility")
+    if not isinstance(compatibility, dict):
+        compatibility = {}
+    continuation_mode = current.get(
+        "continuation_mode", compatibility.get("continuation_mode", "guide"))
+    if (entry.get("semantic_role") == "motion"
+            and continuation_mode in MASKED_CONTINUATION_MODES):
+        # Native Ref2VA video banks carry no target-frame coordinates. A
+        # masked continuation already owns the repeated prefix, so including
+        # those reference frames makes H3 replay them once the denoisable tail
+        # begins (one context span late). Advance motion on the delivered
+        # timeline and apply the identical window to paired audio.
+        delivered = current.get("delivered_frames")
+        if delivered is None:
+            raise ValueError(
+                "Sequential motion reference @%s requires delivered-frame "
+                "timing from Current Shot state." % entry.get("tag", "video"))
+        preceding = shots[origin_scene - 1:int(scene) - 1]
+        if any(shot.get("delivered_frames") is None for shot in preceding):
+            raise ValueError(
+                "Sequential motion reference @%s requires delivered-frame "
+                "timing for every scene since its first activation." %
+                entry.get("tag", "video"))
+        source_start = sum(int(shot["delivered_frames"])
+                           for shot in preceding)
+        source_length = int(delivered)
+        if source_length < 1:
+            raise ValueError(
+                "Sequential motion reference @%s resolved an empty delivered "
+                "window for scene %d." %
+                (entry.get("tag", "video"), int(scene)))
+        detail_mode = " delivered"
+    source_end = source_start + source_length
     if source_start < 0:
         raise ValueError(
             "Sequential scheduled video @%s resolved a negative source "
@@ -731,8 +765,9 @@ def _scheduled_video_reference_slice(
             "waveform": waveform[..., sample_start:sample_end],
             "sample_rate": sample_rate,
         }
-    detail = "@%s sequential frames %d:%d (origin scene %d)" % (
-        entry.get("tag", "video"), source_start, source_end, origin_scene)
+    detail = "@%s sequential%s frames %d:%d (origin scene %d)" % (
+        entry.get("tag", "video"), detail_mode, source_start, source_end,
+        origin_scene)
     return sliced_video, sliced_audio, detail
 
 
@@ -3514,7 +3549,10 @@ class MiniMaxH3TaggedMotionReference:
                     "default": "restart_each_scene",
                     "tooltip": "restart_each_scene starts at frame 0. "
                                "sequential follows the Plan timeline from the "
-                               "first scene that activates this reference."}),
+                               "first scene that activates this reference. "
+                               "For masked AV continuation, motion advances "
+                               "on delivered frames so the repeated prefix is "
+                               "not replayed after the mask boundary."}),
             },
             "optional": {
                 "audio": ("AUDIO", {
@@ -3888,9 +3926,10 @@ class MiniMaxH3TaggedReferenceToVideo:
             "state": (STATE_TYPE, {
                 "tooltip": "Current Shot state. Required by tagged video "
                            "sequential mode and tagged audio source_timeline. "
-                           "It supplies the exact scene and overlap-aware "
-                           "source offsets without routing dynamic media back "
-                           "through the Plan fingerprint."}),
+                           "It supplies exact scene timing; masked sequential "
+                           "motion skips the repeated continuation prefix. "
+                           "Dynamic media does not route back through the "
+                           "Plan fingerprint."}),
             "reference_policy": (list(REFERENCE_COMPLIANCE_MODES), {
                 "default": "strict",
                 "tooltip": "strict validates sources and stock H3 reference "

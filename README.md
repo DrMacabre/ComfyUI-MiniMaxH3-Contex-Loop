@@ -262,6 +262,11 @@ pixels before native Ref2VA encoding, lowering its spatial token pressure while
 retaining coarse pose and timing; select `source` for a full-resolution A/B
 baseline. The clip is still a native Ref2VA video block, so this is an H3
 semantic/low-bandwidth separation rather than a pose extractor or ControlNet.
+In `sequential` mode, masked AV scenes advance motion on the delivered output
+timeline: the repeated continuation prefix is excluded from the native video
+reference and from its paired audio. This prevents H3 from replaying one
+context span of motion after the protected prefix. Generic Tagged Video Ref
+keeps overlap-inclusive target-window slicing.
 
 For a song or other full source track, set Tagged Audio Ref to
 `source_timeline`, keep the full loader AUDIO connected to that node, and wire
