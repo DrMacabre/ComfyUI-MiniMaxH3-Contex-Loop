@@ -70,6 +70,13 @@ _applied = False
 # That makes it safe to compose with this patch in either load order. Keep this
 # recognition deliberately narrow: unknown wrappers still fail closed.
 SOLATTN_LAYOUT_MODULE_SUFFIX = "._morton_h3"
+# The CUDA PR117 development checkout currently installs its H3 observer from
+# the pack root rather than ``_morton_h3`` and assigns the checkout path to the
+# nested wrapper's ``__module__``.  ComfyUI therefore reports the literal path
+# below as PackedLayout.__init__'s owner.  Keep this identity exact: it is safe
+# to compose only after the same ``original_init`` closure check used for the
+# upstream Kijai wrapper succeeds.
+SOLATTN_CUDA_PR117_LAYOUT_MODULE = "ComfyUI-SolAttn-CUDA-PR117"
 
 
 REF_SEGMENT_KINDS = ("ref_img", "ref_audio")
@@ -471,6 +478,17 @@ def _check_move(before, after, refs, idx, label):
 setattr(_patched_init, PATCH_MARKER, True)
 
 
+def _is_supported_solattn_layout_module(init):
+    """Whether ``init`` comes from one of the audited SolAttn observers."""
+    module = str(getattr(init, "__module__", "") or "")
+    if module.endswith(SOLATTN_LAYOUT_MODULE_SUFFIX):
+        return True
+    normalized = module.replace("\\", "/").rstrip("/")
+    tail = normalized.rsplit("/", 1)[-1]
+    return (tail == SOLATTN_CUDA_PR117_LAYOUT_MODULE
+            or tail.endswith("." + SOLATTN_CUDA_PR117_LAYOUT_MODULE))
+
+
 def _solattn_wrapped_init(init):
     """Return the constructor captured by Kijai's H3 Morton wrapper.
 
@@ -480,8 +498,7 @@ def _solattn_wrapped_init(init):
     intentionally stricter than accepting any wrapper from a similarly named
     module.
     """
-    if not getattr(init, "__module__", "").endswith(
-            SOLATTN_LAYOUT_MODULE_SUFFIX):
+    if not _is_supported_solattn_layout_module(init):
         return None
     closure = getattr(init, "__closure__", None) or ()
     freevars = getattr(getattr(init, "__code__", None), "co_freevars", ())
@@ -498,8 +515,7 @@ def _solattn_wrapped_init(init):
 
 def _replace_solattn_wrapped_init(init, replacement):
     """Replace only SolAttn's explicitly identified captured constructor."""
-    if not getattr(init, "__module__", "").endswith(
-            SOLATTN_LAYOUT_MODULE_SUFFIX):
+    if not _is_supported_solattn_layout_module(init):
         return False
     closure = getattr(init, "__closure__", None) or ()
     freevars = getattr(getattr(init, "__code__", None), "co_freevars", ())

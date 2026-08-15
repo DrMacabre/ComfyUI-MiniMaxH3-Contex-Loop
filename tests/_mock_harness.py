@@ -53,6 +53,8 @@ Checks:
  10. SolAttn's H3 Morton layout observer composes when it loads first.
  11. When this patch loads first and SolAttn wraps it, a second vendored copy
      sees the matching patch through SolAttn and stands down.
+ 12. The CUDA PR117 checkout's path-valued wrapper identity composes in both
+     load orders, but only with the same audited ``original_init`` closure.
 """
 
 import importlib
@@ -499,7 +501,91 @@ def main():
     print("11. interior-anchor patch first: SolAttn composes outside it and a "
           "second vendored copy stands down through the known wrapper")
 
-    # 12. The explicit workflow node may promote the current pack over an
+    # 12. The CUDA PR117 checkout loads the same read-only observer from its
+    # pack root, so its nested wrapper receives a path-valued module identity
+    # instead of the upstream ._morton_h3 suffix. Exercise both load orders and
+    # keep the exact original_init closure requirement.
+    cuda_module = "/basedir/custom_nodes/ComfyUI-SolAttn-CUDA-PR117"
+    mm_cuda_first = make_mm()
+    stock_cuda_first = mm_cuda_first.PackedLayout.__init__
+    observed_cuda_first = {}
+
+    def install_cuda_first():
+        original_init = stock_cuda_first
+
+        def __init__(self, *args, **kwargs):
+            original_init(self, *args, **kwargs)
+            observed_cuda_first[id(self.position_ids)] = self
+
+        __init__.__module__ = cuda_module
+        mm_cuda_first.PackedLayout.__init__ = __init__
+
+    install_cuda_first()
+    cuda_wrapper_first = mm_cuda_first.PackedLayout.__init__
+    ours_cuda_first = load_patch(mm_cuda_first)
+    assert ours_cuda_first._already_patched() == "solattn", \
+        ours_cuda_first._already_patched()
+    assert ours_cuda_first.apply_patch()
+    lay_cuda_first = mm_cuda_first.PackedLayout(
+        TEXT_LEN, LATENT_T, LH, LW, AUDIO_T,
+        keyframes=run, refs=[dict(marked)], frame_count=FC)
+    assert observed_cuda_first[id(lay_cuda_first.position_ids)] is lay_cuda_first
+    origin_cuda_first = ours_cuda_first._target_origin(lay_cuda_first)
+    assert np.allclose(
+        _cond_ts(lay_cuda_first),
+        [origin_cuda_first + FRAME_RESCALE * i for i in range(4)])
+    assert mm_cuda_first.PackedLayout.__init__ is not cuda_wrapper_first
+
+    mm_cuda_second = make_mm()
+    first_cuda_second = load_patch(mm_cuda_second)
+    assert first_cuda_second.apply_patch()
+    patched_cuda_second = mm_cuda_second.PackedLayout.__init__
+    observed_cuda_second = {}
+
+    def install_cuda_second():
+        original_init = patched_cuda_second
+
+        def __init__(self, *args, **kwargs):
+            original_init(self, *args, **kwargs)
+            observed_cuda_second[id(self.position_ids)] = self
+
+        __init__.__module__ = cuda_module
+        mm_cuda_second.PackedLayout.__init__ = __init__
+
+    install_cuda_second()
+    cuda_wrapper_second = mm_cuda_second.PackedLayout.__init__
+    sys.modules.pop("patch_layout", None)
+    second_cuda_second = importlib.import_module("patch_layout")
+    assert second_cuda_second._already_patched() == "same", \
+        second_cuda_second._already_patched()
+    assert second_cuda_second.apply_patch()
+    assert mm_cuda_second.PackedLayout.__init__ is cuda_wrapper_second
+    lay_cuda_second = mm_cuda_second.PackedLayout(
+        TEXT_LEN, LATENT_T, LH, LW, AUDIO_T,
+        keyframes=run, refs=[dict(marked)], frame_count=FC)
+    assert observed_cuda_second[id(lay_cuda_second.position_ids)] is lay_cuda_second
+
+    mm_cuda_bad = make_mm()
+    bad_original = mm_cuda_bad.PackedLayout.__init__
+
+    def install_cuda_without_audited_closure():
+        captured_init = bad_original
+
+        def __init__(self, *args, **kwargs):
+            captured_init(self, *args, **kwargs)
+
+        __init__.__module__ = cuda_module
+        mm_cuda_bad.PackedLayout.__init__ = __init__
+
+    install_cuda_without_audited_closure()
+    ours_cuda_bad = load_patch(mm_cuda_bad)
+    assert ours_cuda_bad._already_patched() == "foreign"
+    assert not ours_cuda_bad.apply_patch(), \
+        "trusted CUDA PR117 module identity without original_init closure"
+    print("12. CUDA PR117's exact path-valued SolAttn observer composes in "
+          "both load orders while malformed lookalikes remain refused")
+
+    # 13. The explicit workflow node may promote the current pack over an
     # older compatible vendor. Unlike the same-name reload cases above, real
     # custom-node packages have distinct module names, so the active wrapper's
     # module remains addressable and exposes the stock constructor it captured.
@@ -550,7 +636,7 @@ def main():
         TEXT_LEN, LATENT_T, LH, LW, AUDIO_T,
         keyframes=run, refs=[dict(marked)], frame_count=FC)
     assert observed14[id(lay14.position_ids)] is lay14
-    print("12. explicit priority claims layout ownership from an older copy "
+    print("13. explicit priority claims layout ownership from an older copy "
           "and preserves SolAttn when it wraps that owner")
 
     print("all checks passed")

@@ -47,7 +47,11 @@ anchors to the already constructed continuation guides.
 
 - H3-Multishot's recognized AV-bank payload is reused rather than wrapped a
   second time.
-- Kijai's SolAttn H3 Morton observer composes safely in either activation order.
+- Kijai's SolAttn H3 Morton observer composes safely in either activation order,
+  including the path-valued wrapper installed by the
+  `ComfyUI-SolAttn-CUDA-PR117` development checkout. Both identities must
+  expose the audited `original_init` closure; similarly named wrappers without
+  that structure remain rejected.
 - Ref2VA media remains intact when continuation guides are merged.
 - Changed layout assumptions and unknown wrappers fail loudly.
 
