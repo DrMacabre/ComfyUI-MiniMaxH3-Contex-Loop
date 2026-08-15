@@ -2,7 +2,7 @@
 
 Newest first. This file keeps release history out of the onboarding README.
 
-## v0.4.6 — Asset publishing and media fallbacks
+## v0.4.7 — Review/editor synchronization and compatibility
 
 - Synchronized Review Gate with prompt editors bound to the same Plan. A new
   review activates its scene in the connected editor, live editor changes are
@@ -11,6 +11,14 @@ Newest first. This file keeps release history out of the onboarding README.
 - Removed the core Ref2VA right-click conversion into Scheduled Ref2VA and its
   graph-rewriting implementation. Scheduled and Tagged Ref2VA remain available
   as explicit nodes.
+- Recognized the audited path-valued H3 layout observer installed by the
+  `ComfyUI-SolAttn-CUDA-PR117` development checkout, while continuing to reject
+  unknown wrappers.
+- Rotated every browser helper-module cache token with the release so the new
+  Review Gate/core export contract cannot be mixed with cached v0.4.6 modules.
+
+## v0.4.6 — Asset publishing and media fallbacks
+
 - Scene Segment Save and Final Assemble now publish their MP4 paths through
   ComfyUI's standard output descriptor contract, so newly produced scene clips
   and final videos appear promptly in the global Assets sidebar when enabled.
