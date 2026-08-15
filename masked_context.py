@@ -57,7 +57,7 @@ def _snap_prefix_length(requested, available, target_frames):
     return run
 
 
-def _validate_target_streams(latent):
+def _validate_target_streams(latent, strict_audio_grid=True):
     video, audio = _streams_from_latent(latent)[:2]
     if video.ndim == 4:
         video = video.unsqueeze(0)
@@ -80,11 +80,14 @@ def _validate_target_streams(latent):
     target_frames = _pixel_frames(int(video.shape[2]))
     expected_audio = int(round(target_frames / float(FPS) * AUDIO_HZ))
     if int(audio.shape[-1]) != expected_audio:
-        raise RuntimeError(
+        message = (
             "h3_masked_prefix: target latent has %d audio steps for %d video "
-            "frames; expected %d on H3's 40 Hz grid." %
+            "frames; expected %d on H3's nominal 40 Hz grid." %
             (int(audio.shape[-1]), target_frames, expected_audio)
         )
+        if strict_audio_grid:
+            raise RuntimeError(message)
+        _LOG.warning("%s The target audio length is authoritative.", message)
     return video, audio, target_frames
 
 

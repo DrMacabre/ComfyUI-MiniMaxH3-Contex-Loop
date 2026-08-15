@@ -66,7 +66,8 @@ shared runtime ABI, so installing both packs does not stack equivalent
 PR #15375 wrappers.
 
 The master-audio node adapts MultiRef Update 4 at merged revision `9118251`
-(2026-08-14).
+(2026-08-14) and its Update 5 target-audio-grid boundary correction at merged
+revision `31e6cb7` (2026-08-15).
 
 ## ComfyUI MiniMax H3 per-token AV masks
 

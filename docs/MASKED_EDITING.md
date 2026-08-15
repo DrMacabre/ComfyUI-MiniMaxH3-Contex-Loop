@@ -88,6 +88,12 @@ conditioning, VAE-encodes the exact master-audio interval beginning at
 audio mask `0` for the full raw clip. The master may be music, dialogue,
 narration, or another finished soundtrack.
 
+The H3 target audio grid is authoritative when picture duration falls between
+40 Hz boundaries. The node may encode a few milliseconds of additional real
+timeline audio so a floor-style audio VAE fills every target step, then crops
+the latent to the target length. Its `clip_audio` output remains exactly the
+picture duration; it never invents or repeats a latent token.
+
 When `source_frames` is connected, the node also converts the previous clip to
 24 fps, selects the final native H3 context run, VAE-encodes it into the target
 video prefix, and protects only those video rows. Future video rows remain `1`

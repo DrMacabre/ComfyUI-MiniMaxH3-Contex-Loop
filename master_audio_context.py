@@ -6,14 +6,16 @@ and protected for the complete raw clip. Continuations may additionally
 protect the final native H3 run from the preceding decoded video.
 
 The design is adapted from seitanism's GPL-3.0
-ComfyUI-H3-Motion-Context-MultiRef Update 4 implementation.  This pack keeps a
-distinct public node id and reuses its shared native-first mask capability
-gate so both packs can be installed together.
+ComfyUI-H3-Motion-Context-MultiRef Update 4 implementation, including Update
+5's target-audio-grid boundary correction. This pack keeps a distinct public
+node id and reuses its shared native-first mask capability gate so both packs
+can be installed together.
 """
 
 from __future__ import annotations
 
 import logging
+import math
 
 import torch
 
@@ -168,10 +170,21 @@ class MiniMaxH3ContexMasterAudioMaskedAV:
     ):
         require_h3_mask_support("exact master-audio latent masking")
         target_video, target_audio, target_frames = _validate_target_streams(
-            latent)
+            latent, strict_audio_grid=False)
 
-        expected_audio_steps = int(round(
+        # The stock H3 target owns the audio-grid length. It can round up one
+        # 40 Hz step beyond what a floor-style audio VAE produces from the
+        # exact picture-duration waveform (for example 124 frames -> 207
+        # target steps while a picture-only encode can return 206).
+        expected_audio_steps = int(target_audio.shape[-1])
+        nominal_audio_steps = int(round(
             target_frames / float(FPS) * AUDIO_HZ))
+        if expected_audio_steps != nominal_audio_steps:
+            _LOG.warning(
+                "h3_master_audio_mask: target contains %d audio steps for "
+                "%d frames; nominal 40 Hz calculation gives %d. Using the "
+                "target length.", expected_audio_steps, target_frames,
+                nominal_audio_steps)
         vae_rate = int(getattr(audio_vae, "audio_sample_rate", 32000))
         if not isinstance(master_audio, dict):
             raise ValueError(
@@ -185,30 +198,69 @@ class MiniMaxH3ContexMasterAudioMaskedAV:
             raise ValueError(
                 "h3_master_audio_mask: clip_start_seconds must be >= 0.")
         start_sample = int(round(start_seconds * vae_rate))
-        wanted_samples = int(round(
+        picture_samples = int(round(
             target_frames / float(FPS) * vae_rate))
         audio_slice = _fit_audio_slice(
-            waveform[..., start_sample:start_sample + wanted_samples],
-            wanted_samples,
+            waveform[..., start_sample:start_sample + picture_samples],
+            picture_samples,
         )
-        encoded_audio = audio_vae.encode(audio_slice.movedim(1, -1))
+
+        # Keep clip_audio at exact picture duration, but encode enough real
+        # timeline audio to cover the complete rounded H3 grid. At the end of
+        # the source, _fit_audio_slice supplies only the missing tail silence;
+        # it never fabricates or repeats latent tokens.
+        grid_samples = int(math.ceil(
+            expected_audio_steps / float(AUDIO_HZ) * vae_rate))
+        encode_samples = max(picture_samples, grid_samples)
+        encode_slice = _fit_audio_slice(
+            waveform[..., start_sample:start_sample + encode_samples],
+            encode_samples,
+        )
+        encoded_audio = audio_vae.encode(encode_slice.movedim(1, -1))
         if getattr(encoded_audio, "ndim", 0) != 4:
             raise ValueError(
                 "h3_master_audio_mask: audio VAE returned %s; expected "
                 "[B,C,2,T]." %
                 (tuple(getattr(encoded_audio, "shape", ())),)
             )
-        if int(encoded_audio.shape[-1]) < expected_audio_steps:
-            raise RuntimeError(
-                "h3_master_audio_mask: target requires %d audio steps but the audio "
-                "VAE produced %d." %
-                (expected_audio_steps, int(encoded_audio.shape[-1]))
+        got_audio_steps = int(encoded_audio.shape[-1])
+        if got_audio_steps < expected_audio_steps:
+            missing = expected_audio_steps - got_audio_steps
+            guard_samples = int(math.ceil(
+                (missing + 1) * vae_rate / float(AUDIO_HZ)))
+            retry_samples = encode_samples + guard_samples
+            retry_slice = _fit_audio_slice(
+                waveform[..., start_sample:start_sample + retry_samples],
+                retry_samples,
             )
-        if int(encoded_audio.shape[-1]) > expected_audio_steps:
+            retry_audio = audio_vae.encode(retry_slice.movedim(1, -1))
+            if getattr(retry_audio, "ndim", 0) != 4:
+                raise ValueError(
+                    "h3_master_audio_mask: audio VAE retry returned %s; "
+                    "expected [B,C,2,T]." %
+                    (tuple(getattr(retry_audio, "shape", ())),)
+                )
+            retry_steps = int(retry_audio.shape[-1])
             _LOG.warning(
+                "h3_master_audio_mask: audio VAE initially produced %d/%d "
+                "target steps; retried with %.2f ms of real-audio grid "
+                "lookahead and got %d.", got_audio_steps,
+                expected_audio_steps,
+                guard_samples / float(vae_rate) * 1000.0, retry_steps)
+            encoded_audio = retry_audio
+            got_audio_steps = retry_steps
+
+        if got_audio_steps < expected_audio_steps:
+            raise RuntimeError(
+                "h3_master_audio_mask: target requires %d audio steps but the "
+                "audio VAE produced %d even after grid lookahead." %
+                (expected_audio_steps, got_audio_steps)
+            )
+        if got_audio_steps > expected_audio_steps:
+            _LOG.info(
                 "h3_master_audio_mask: audio VAE produced %d steps for a %d-step "
                 "target; retaining the leading aligned interval.",
-                int(encoded_audio.shape[-1]), expected_audio_steps)
+                got_audio_steps, expected_audio_steps)
             encoded_audio = encoded_audio[..., :expected_audio_steps]
 
         out_video = target_video.clone()

@@ -94,6 +94,76 @@ def main():
     assert torch.all(first_video_mask == 1.0)
     assert not torch.count_nonzero(first_audio_mask)
 
+    class FloorAudioVAE:
+        """Simulate an audio encoder that floors its temporal output."""
+
+        audio_sample_rate = 32_000
+
+        def __init__(self):
+            self.encoded_samples = []
+
+        def encode(self, waveform):
+            samples = int(waveform.shape[1])
+            self.encoded_samples.append(samples)
+            steps = int(samples / self.audio_sample_rate * 40)
+            return torch.full((1, 32, 2, steps), 0.75)
+
+    rounding_frames = 124
+    rounding_video_steps = 37
+    rounding_audio_steps = 207
+    assert nodes._pixel_frames(rounding_video_steps) == rounding_frames
+    rounding_latent = {
+        "samples": harness.NestedTensor((
+            torch.zeros((1, 16, rounding_video_steps, 2, 4)),
+            torch.zeros((1, 32, 2, rounding_audio_steps)),
+        )),
+    }
+    floor_vae = FloorAudioVAE()
+    rounded, rounded_prefix, rounded_clip_audio = (
+        audio_context.MiniMaxH3ContexMasterAudioMaskedAV().prepare(
+            rounding_latent,
+            floor_vae,
+            master_audio,
+            clip_start_seconds=1.0,
+            context_length=0,
+        ))
+    _, rounded_audio = rounded["samples"].unbind()
+    _, rounded_audio_mask = rounded["noise_mask"].unbind()
+    picture_samples = round(rounding_frames / 24 * 32_000)
+    grid_samples = int(rounding_audio_steps / 40 * 32_000)
+    assert floor_vae.encoded_samples == [grid_samples]
+    assert grid_samples > picture_samples
+    assert int(rounded_audio.shape[-1]) == rounding_audio_steps
+    assert torch.allclose(
+        rounded_audio, torch.full_like(rounded_audio, 0.75))
+    assert not torch.count_nonzero(rounded_audio_mask)
+    assert rounded_prefix == 0
+    assert int(rounded_clip_audio["waveform"].shape[-1]) == picture_samples
+
+    class ShortFirstAudioVAE(FloorAudioVAE):
+        def encode(self, waveform):
+            encoded = super().encode(waveform)
+            if len(self.encoded_samples) == 1:
+                return encoded[..., :-1]
+            return encoded
+
+    retry_vae = ShortFirstAudioVAE()
+    retried, _, _ = (
+        audio_context.MiniMaxH3ContexMasterAudioMaskedAV().prepare(
+            rounding_latent,
+            retry_vae,
+            master_audio,
+            clip_start_seconds=1.0,
+            context_length=0,
+        ))
+    _, retried_audio = retried["samples"].unbind()
+    assert len(retry_vae.encoded_samples) == 2
+    assert retry_vae.encoded_samples[0] == grid_samples
+    assert retry_vae.encoded_samples[1] > grid_samples
+    assert int(retried_audio.shape[-1]) == rounding_audio_steps
+    assert torch.allclose(
+        retried_audio, torch.full_like(retried_audio, 0.75))
+
     assert (
         "MiniMaxH3ContexMasterAudioMaskedAV"
         in audio_context.NODE_CLASS_MAPPINGS)
@@ -105,8 +175,8 @@ def main():
         not in audio_context.NODE_CLASS_MAPPINGS)
     print(
         "master-audio masking: exact timeline slice, complete protected audio, "
-        "39-frame protected video continuation, and clip-1 video generation "
-        "pass")
+        "40 Hz target-grid lookahead, 39-frame protected video continuation, "
+        "and clip-1 video generation pass")
 
 
 if __name__ == "__main__":

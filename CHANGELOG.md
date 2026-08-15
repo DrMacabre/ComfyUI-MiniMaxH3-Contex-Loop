@@ -4,6 +4,10 @@ Newest first. This file keeps release history out of the onboarding README.
 
 ## Unreleased — General masked targets
 
+- Fixed master-audio encoding when H3's rounded 40 Hz target requires one
+  latent step beyond a floor-style VAE encode of the exact picture duration.
+  The node uses real timeline-audio lookahead, crops to the authoritative
+  target length, and keeps `clip_audio` at exact picture duration.
 - Added an exact master-audio target composer for timeline-driven FL2VA. It
   VAE-encodes the current interval from music, dialogue, narration, or effects
   into the complete H3 audio target, protects every audio row, and optionally
