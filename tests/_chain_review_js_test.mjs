@@ -9,6 +9,7 @@ import {
     reviewDuration,
     reviewDurationText,
     reviewLocalDeadline,
+    reviewPlanScenePrompt,
     reviewSeed,
 } from "../web/h3_chain_review_core.mjs";
 
@@ -20,6 +21,16 @@ for (const length of [5, 22, 39, 56, 73, 362, 3592]) {
     assert.equal(reviewDuration(reviewDurationText(length)).length, length);
 }
 assert.throws(() => reviewDuration("0"), /positive/);
+
+assert.equal(reviewPlanScenePrompt({shots: [
+    {id: "one", prompt: ["First."]},
+    {id: "two", prompt: ["Second.", "", "CAMERA: Wide."]},
+]}, 2, "two"), "Second.\n\nCAMERA: Wide.");
+assert.equal(reviewPlanScenePrompt({shots: [
+    {id: "two", prompt: ["Moved second."]},
+    {id: "one", prompt: ["Moved first."]},
+]}, 2, "two"), "Moved second.", "scene id wins if the Plan was reordered");
+assert.equal(reviewPlanScenePrompt({shots: []}, 1, "missing"), null);
 
 const plan = {
     prompt_prefix: ["Keep identity."],
@@ -152,7 +163,7 @@ const submitSource = reviewSource.slice(
 );
 assert.match(submitSource, /const submittedToken = submittedReview\.token/);
 assert.match(submitSource, /const submittedIndex = submittedReview\.clip_index/);
-assert.match(submitSource, /const submittedPrompt = prompt\.value/);
+assert.match(submitSource, /promptEditedInGate[\s\S]*planScenePrompt/);
 assert.match(submitSource, /token: submittedToken/);
 assert.match(submitSource, /scene_prompt: submittedPrompt/);
 assert.match(
@@ -160,6 +171,8 @@ assert.match(
     /updatePlan\(\s*node, submittedIndex, acceptedPrompt, body\.seed, body\.length\)/,
 );
 assert.match(reviewSource, /publishCompanionPrompt/);
+assert.match(reviewSource, /publishPlanCompanionScene/);
+assert.match(reviewSource, /_h3PromptCompanionSetScenePrompt/);
 assert.match(reviewSource, /reviewDurationText\(data\.raw_frames\)/);
 assert.match(reviewSource, /h3r-video-panel/);
 assert.match(reviewSource, /checkpoint-revisions\/restore/);

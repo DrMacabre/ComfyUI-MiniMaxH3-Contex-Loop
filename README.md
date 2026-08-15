@@ -244,6 +244,9 @@ numbering, hover previews, fingerprints, and patch priority.
 Review Gate owns retries after a scene has been saved. During sampling, the
 optional floating **Cancel & reroll scene N** action cancels only the active H3
 prompt, writes a new scene seed, and requeues from that checkpoint position.
+During review, a prompt editor bound to the same Plan follows the active scene
+and supplies the live prompt for retry or reroll; the Gate field remains an
+explicit fallback.
 
 To resume manually, keep the same `run_name`, set `start_clip` to the desired
 scene, and retain the same dependencies. A bounded `scene_range` accepts one

@@ -15,6 +15,7 @@ import {
     reviewDuration,
     reviewDurationText,
     reviewLocalDeadline,
+    reviewPlanScenePrompt,
     reviewSeed,
 } from "./h3_chain_review_core.mjs?v=0.4.6";
 
@@ -36,6 +37,10 @@ let pendingPollTimer = null;
 // prompt synchronization becomes a no-op until the module cache refreshes.
 function publishCompanionPrompt(...args) {
     return promptCompanionSync.publishCompanionPrompt?.(...args) ?? 0;
+}
+
+function publishPlanCompanionScene(...args) {
+    return promptCompanionSync.publishPlanCompanionScene?.(...args) ?? 0;
 }
 
 function ensureNotificationAudioContext() {
@@ -244,6 +249,21 @@ function updatePlan(reviewNode, index, prompt, seed, length) {
         promptValueToText(plan.shots[sceneIndex]?.prompt),
     );
     return true;
+}
+
+function planScenePrompt(reviewNode, review) {
+    try {
+        const planNode = upstreamPlanNode(reviewNode);
+        const widget = widgetByName(planNode, "plan_json");
+        if (!widget) return null;
+        return reviewPlanScenePrompt(
+            parsePlanJson(String(widget.value ?? "")),
+            review?.clip_index,
+            review?.shot_id,
+        );
+    } catch (_error) {
+        return null;
+    }
 }
 
 function updatePlanFromCheckpointRevisions(reviewNode, revisions) {
@@ -566,8 +586,10 @@ function mount(node) {
     promptLabel.append("Scene prompt (used when retrying)");
     const prompt = document.createElement("textarea");
     prompt.className = "h3r-prompt";
-    prompt.title = "Edit only the current scene prompt. Retry writes it back into the Scene Plan and regenerates this scene from the same accepted predecessor.";
+    prompt.title = "The connected Prompt Editor and this fallback field share the current Plan scene. Retry regenerates it from the same accepted predecessor.";
     promptLabel.append(prompt);
+    let promptEditedInGate = false;
+    prompt.addEventListener("input", () => { promptEditedInGate = true; });
 
     let promptResizeObserver = null;
     function applySavedLayout() {
@@ -1005,7 +1027,9 @@ function mount(node) {
             const submittedReview = current;
             const submittedToken = submittedReview.token;
             const submittedIndex = submittedReview.clip_index;
-            const submittedPrompt = prompt.value;
+            const submittedPrompt = promptEditedInGate
+                ? prompt.value
+                : (planScenePrompt(node, submittedReview) ?? prompt.value);
             const normalizedSeed = action === "retry" ? reviewSeed(seed.value) : seed.value;
             const normalizedDuration = action === "retry" || action === "reroll"
                 ? reviewDuration(duration.value) : null;
@@ -1040,6 +1064,7 @@ function mount(node) {
                     node, submittedIndex, acceptedPrompt, body.seed, body.length);
                 if (current?.token === submittedToken) {
                     prompt.value = acceptedPrompt;
+                    promptEditedInGate = false;
                     seed.value = body.seed;
                     duration.value = acceptedDuration;
                 }
@@ -1089,6 +1114,7 @@ function mount(node) {
         video.load();
         if (!sameToken) {
             prompt.value = data.scene_prompt ?? "";
+            promptEditedInGate = false;
             seed.value = data.seed ?? "";
             duration.value = reviewDurationText(data.raw_frames);
             prefix.textContent = data.prompt_prefix ?
@@ -1104,6 +1130,21 @@ function mount(node) {
         } else if (!root.classList.contains("h3r-busy")) {
             renderWaitingStatus();
         }
+        const planNode = upstreamPlanNode(node);
+        if (planNode) {
+            publishPlanCompanionScene(node, planNode, Number(data.clip_index) - 1);
+        }
+    };
+
+    node._h3PromptCompanionSetScenePrompt = (planNode, index, text) => {
+        if (root.classList.contains("h3r-busy")
+                || planNode !== upstreamPlanNode(node)
+                || Number(index) !== Number(current?.clip_index) - 1) {
+            return false;
+        }
+        prompt.value = String(text ?? "").replace(/\r\n?/g, "\n");
+        promptEditedInGate = false;
+        return true;
     };
 
     node._h3ReviewResolvedHandler = (data) => {
@@ -1136,6 +1177,7 @@ function mount(node) {
     node.onRemoved = function () {
         stopCountdown();
         promptResizeObserver?.disconnect();
+        delete this._h3PromptCompanionSetScenePrompt;
         mountedReviewNodes.delete(this);
         updatePendingPolling();
         return removed?.apply(this, arguments);

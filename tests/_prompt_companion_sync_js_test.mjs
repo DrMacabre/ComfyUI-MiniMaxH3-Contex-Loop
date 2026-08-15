@@ -86,5 +86,7 @@ const reviewSource = fs.readFileSync(
     new URL("../web/h3_chain_review_final.js", import.meta.url), "utf8");
 assert.match(reviewSource, /import \* as promptCompanionSync/);
 assert.match(reviewSource, /promptCompanionSync\.publishCompanionPrompt\?\./);
+assert.match(reviewSource, /promptCompanionSync\.publishPlanCompanionScene\?\./);
+assert.match(reviewSource, /_h3PromptCompanionSetScenePrompt/);
 
-console.log("H3 prompt companions: adjacency and active-scene synchronization pass");
+console.log("H3 prompt companions: active-scene and review prompt synchronization pass");

@@ -1,5 +1,6 @@
 import {
     MAX_SEED,
+    promptValueToText,
     promptTextToLines,
     sceneAudioContextLength,
     sceneContextLength,
@@ -45,6 +46,17 @@ export function reviewDurationText(rawFrames) {
         throw new Error("The reviewed scene has an invalid H3 frame length.");
     }
     return (length / FPS).toFixed(6).replace(/0+$/, "").replace(/\.$/, "");
+}
+
+export function reviewPlanScenePrompt(plan, oneBasedIndex, shotId = "") {
+    if (!Array.isArray(plan?.shots)) return null;
+    const index = Number(oneBasedIndex) - 1;
+    const wantedId = String(shotId ?? "").trim();
+    const shot = (wantedId
+        ? plan.shots.find((item) => String(item?.id ?? "").trim() === wantedId)
+        : null) ?? (Number.isInteger(index) ? plan.shots[index] : null);
+    if (!shot) return null;
+    return promptValueToText(shot.prompt);
 }
 
 export function applyReviewEdit(plan, oneBasedIndex, scenePrompt, seed, length = null) {

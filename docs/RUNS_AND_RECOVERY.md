@@ -14,6 +14,13 @@ Notification sound, automatic timeout, and model unloading while waiting are
 optional. Drag the bar below the player to resize it; double-click to restore
 the default height.
 
+When a Scene Prompt Editor or Rich Scene Prompt Editor is bound to the same
+Plan, Review Gate selects the scene under review there automatically. Editor
+changes appear in the Gate and **Retry prompt / seed** or **Reroll seed** uses
+the live Plan prompt. The Gate prompt field remains an explicit fallback: if
+you type in it, that text wins for the submitted retry and is synchronized back
+to the Plan and connected editor after the server accepts it.
+
 During sampling, the optional floating **Cancel & reroll scene N** control
 targets only the active H3 prompt. It waits for confirmed interruption, writes a
 new explicit scene seed, moves Loop Start to that scene, preserves a bounded

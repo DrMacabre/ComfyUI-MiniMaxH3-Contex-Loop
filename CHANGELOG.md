@@ -4,6 +4,10 @@ Newest first. This file keeps release history out of the onboarding README.
 
 ## v0.4.6 — Asset publishing and media fallbacks
 
+- Synchronized Review Gate with prompt editors bound to the same Plan. A new
+  review activates its scene in the connected editor, live editor changes are
+  reflected in the Gate, and retry/reroll reads the current Plan prompt unless
+  the Gate field was explicitly edited as a fallback.
 - Removed the core Ref2VA right-click conversion into Scheduled Ref2VA and its
   graph-rewriting implementation. Scheduled and Tagged Ref2VA remain available
   as explicit nodes.
