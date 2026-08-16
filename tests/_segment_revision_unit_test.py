@@ -117,8 +117,9 @@ def main():
                         "blend_segment")
         }
         assert all(path.is_file() for path in first_paths.values())
-        assert first_result["ui"]["videos"] == [
+        assert first_result["ui"]["images"] == [
             chain._video_output_item(str(first_paths["segment"]))]
+        assert first_result["ui"]["animated"] == (True,)
         assert first["generated_audio_sha256"] == chain._file_sha256(
             str(first_paths["generated_audio"]))
         with wave.open(str(first_paths["generated_audio"]), "rb") as audio_file:
@@ -142,8 +143,9 @@ def main():
         assert second["blend_segment"] != first["blend_segment"]
         assert second["blend_frames"] == 2
         assert all(path.is_file() for path in first_paths.values())
-        assert second_result["ui"]["videos"] == [chain._video_output_item(
+        assert second_result["ui"]["images"] == [chain._video_output_item(
             chain._absolute_output_path(second["segment"]))]
+        assert second_result["ui"]["animated"] == (True,)
 
         current = json.loads(pathlib.Path(
             chain._absolute_output_path(second["metadata"])

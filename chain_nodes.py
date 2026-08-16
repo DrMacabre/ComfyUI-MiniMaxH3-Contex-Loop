@@ -5004,7 +5004,12 @@ class MiniMaxH3ChainSegmentSave:
         return {
             "ui": {
                 "text": [status],
-                "videos": [_video_output_item(published_segment)],
+                # Match ComfyUI's native PreviewVideo output.  Its jobs API
+                # recognizes video files under ``images`` with the animated
+                # marker; the non-standard plural ``videos`` key is omitted
+                # from the global Media Assets panel.
+                "images": [_video_output_item(published_segment)],
+                "animated": (True,),
             },
             "result": (segment, status),
         }
@@ -6902,7 +6907,8 @@ class MiniMaxH3ChainAssemble:
         return {
             "ui": {
                 "text": [status],
-                "videos": [_video_output_item(final_path)],
+                "images": [_video_output_item(final_path)],
+                "animated": (True,),
             },
             "result": (final_path,),
         }

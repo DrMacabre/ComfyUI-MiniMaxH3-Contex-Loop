@@ -129,8 +129,9 @@ def main():
         final_path = pathlib.Path(result["result"][0])
         sidecar_path = final_path.with_suffix(".generated.wav")
         assert final_path.is_file()
-        assert result["ui"]["videos"] == [
+        assert result["ui"]["images"] == [
             chain._video_output_item(str(final_path))]
+        assert result["ui"]["animated"] == (True,)
         assert sidecar_path.is_file()
         assert muxed_pcm and not any(muxed_pcm[0])
         with wave.open(str(sidecar_path), "rb") as generated_audio:
@@ -140,8 +141,9 @@ def main():
             assert any(generated_audio.readframes(generated_audio.getnframes()))
         assert "generated audio ->" in result["ui"]["text"][0]
         assert pathlib.Path(fallback["result"][0]).is_file()
-        assert fallback["ui"]["videos"] == [
+        assert fallback["ui"]["images"] == [
             chain._video_output_item(fallback["result"][0])]
+        assert fallback["ui"]["animated"] == (True,)
         assert "PyAV fallback" in fallback["ui"]["text"][0]
 
     print("H3 generated audio sidecar: source mux remains unchanged and H3 "
