@@ -55,6 +55,20 @@ class FileBackedNativeVideo:
         raise AssertionError("lazy native VIDEO route decoded all components")
 
 
+# Some MP4 muxers expose an advisory nb_frames value that disagrees with the
+# stream's PTS duration. The real-world regression reported 9,544 frames at
+# 25 fps (381.76s) for a stream whose timestamps end at 380.0348s. Timeline
+# sizing must follow timestamps or the audio decoder is asked for invented
+# tail samples.
+duration_stream = types.SimpleNamespace(
+    duration=3_800_348, time_base=Fraction(1, 10_000))
+duration_container = types.SimpleNamespace(duration=381_760_000)
+timestamp_duration = chain._stream_duration_seconds(
+    duration_stream, duration_container, 9_544, 25.0)
+assert abs(timestamp_duration - 380.0348) < 1e-9
+assert int(np.ceil(timestamp_duration * 24 - 1e-9)) == 9_121
+
+
 def write_fixture(path, frame_count=12, source_fps=24):
     width = height = 64
     sample_rate = 48000

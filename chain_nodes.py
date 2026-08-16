@@ -473,6 +473,23 @@ def _stream_start_seconds(stream: Any) -> float:
     return float(stream.start_time * stream.time_base)
 
 
+def _stream_duration_seconds(
+        stream: Any, container: Any, fallback_frame_count: int,
+        fallback_fps: float) -> float:
+    """Prefer media timestamps over a container's advisory frame count."""
+    if stream.duration is not None and stream.time_base is not None:
+        duration = float(stream.duration * stream.time_base)
+        if math.isfinite(duration) and duration > 0.0:
+            return duration
+    if container.duration is not None:
+        duration = float(container.duration) / float(av.time_base)
+        if math.isfinite(duration) and duration > 0.0:
+            return duration
+    if int(fallback_frame_count) > 0 and float(fallback_fps) > 0.0:
+        return int(fallback_frame_count) / float(fallback_fps)
+    return 0.0
+
+
 def _probe_lazy_motion_path(
         path: str, use_embedded_audio: bool) -> dict[str, Any]:
     if av is None:
@@ -502,15 +519,8 @@ def _probe_lazy_motion_path(
                 raise ValueError(
                     "Lazy motion reference has invalid video dimensions.")
             source_frame_count = int(video.frames or 0)
-            if source_frame_count > 0:
-                duration_seconds = source_frame_count / source_fps
-            elif video.duration is not None:
-                duration_seconds = float(video.duration * video.time_base)
-            elif container.duration is not None:
-                duration_seconds = float(container.duration) / float(
-                    av.time_base)
-            else:
-                duration_seconds = 0.0
+            duration_seconds = _stream_duration_seconds(
+                video, container, source_frame_count, source_fps)
             frame_count = (int(math.ceil(
                 duration_seconds * FPS - 1e-9))
                 if duration_seconds > 0.0 else 0)
