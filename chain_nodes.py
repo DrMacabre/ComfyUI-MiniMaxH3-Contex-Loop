@@ -6670,10 +6670,13 @@ class MiniMaxH3TransitionPolicy:
             "required": {
                 "preset": (("cut", "guide", "hard_av", "soft_av"), {
                     "default": "guide",
-                    "tooltip": "How the incoming scene consumes its "
-                               "predecessor: independent cut, guide rows, "
-                               "hard protected AV prefix, or temporally "
-                               "feathered AV prefix."}),
+                    "tooltip": "Tested incoming-transition pairs: Cut = "
+                               "Guide + 0 frames; Guide = Guide + 22 frames; "
+                               "Hard AV = Masked AV + 39 frames; Soft AV = "
+                               "Feathered AV + 39 frames. These are Plan "
+                               "defaults; explicit per-scene settings still "
+                               "win. Expert override ignores the selected "
+                               "pair and uses the two expert widgets below."}),
                 "expert_override": ("BOOLEAN", {
                     "default": False,
                     "tooltip": "Off uses the tested preset values. On lets "
@@ -7955,11 +7958,14 @@ class MiniMaxH3ChainLoopStart:
                                "still verified. Changes to the predecessor "
                                "itself are not applied retroactively."}),
                 "source_audio": ("AUDIO", {
-                    "tooltip": "Full external soundtrack. Required when the "
-                               "Audio Policy selects final source audio or "
-                               "Source reference=on. Current Shot slices exact "
-                               "windows only when source reference is on. A "
-                               "short, completely silent placeholder is padded."}),
+                    "tooltip": "Legacy 0.4 full-AUDIO route. Leave this "
+                               "unconnected in a 0.5 workflow when "
+                               "source_timeline is connected; the two inputs "
+                               "are mutually exclusive. Use this socket only "
+                               "for an older workflow whose Audio Policy "
+                               "needs final source audio or Source "
+                               "reference=on. A short, completely silent "
+                               "placeholder is padded."}),
                 "external_context": (EXTERNAL_CONTEXT_TYPE, {
                     "tooltip": "Optional output from MiniMax H3 Existing Video "
                                "Context. When connected, scene 1 continues from "

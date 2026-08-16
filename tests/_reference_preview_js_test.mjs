@@ -204,6 +204,64 @@ assert.deepEqual(
         "performance_audio", "lazy_motion_audio"],
 );
 
+// The 0.5 Source Timeline motion node can be the final link in a tagged chain.
+// Discovery must traverse through it or every earlier picture reference also
+// disappears from both prompt editors.
+const timelineEditor = add(makeNode(70, "MiniMaxH3ChainScenePromptEditor"));
+const timelineRelay = add(makeNode(71, "MiniMaxH3ChainCurrent"));
+const timelineWrapper = add(makeNode(72, "MiniMaxH3TaggedReferenceToVideo"));
+const timelineCharacterImage = add(makeNode(73, "LoadImage", {
+    image: "timeline-character.png",
+}));
+const timelineKeyframeImage = add(makeNode(74, "LoadImage", {
+    image: "timeline-keyframe.png",
+}));
+const timelineCharacter = add(makeNode(
+    75, "MiniMaxH3TaggedPictureReference", {tag: "character"},
+));
+const timelineKeyframe = add(makeNode(
+    76, "MiniMaxH3TaggedPictureReference", {tag: "keyframe"},
+));
+const sourceTimeline = add(makeNode(77, "MiniMaxH3SourceTimeline", {
+    video_path: "/media/source-motion.mp4",
+}));
+const timelineMotion = add(makeNode(
+    78, "MiniMaxH3TaggedMotionReferenceTimeline", {
+        tag: "motion", paired_audio: "embedded", audio_tag: "audio_1",
+    },
+));
+connect(timelineEditor, timelineRelay, "state");
+connect(timelineRelay, timelineWrapper, "prompt");
+connect(timelineCharacterImage, timelineCharacter, "image");
+connect(timelineCharacter, timelineKeyframe, "previous");
+connect(timelineKeyframeImage, timelineKeyframe, "image");
+connect(timelineKeyframe, timelineMotion, "previous");
+connect(sourceTimeline, timelineMotion, "source_timeline");
+connect(timelineMotion, timelineWrapper, "references");
+
+assert.deepEqual(
+    collectTaggedNodes(timelineWrapper),
+    [timelineCharacter, timelineKeyframe, timelineMotion],
+);
+const timelineRecords = taggedReferenceRecords(
+    timelineEditor, "Use @character, @keyframe, @motion, and @audio_1.",
+).records;
+assert.deepEqual(
+    timelineRecords.map(({tag, label, active, source}) => ({
+        tag, label, active, source: source.id,
+    })),
+    [
+        {tag: "character", label: "<Picture 1>", active: true,
+            source: timelineCharacterImage.id},
+        {tag: "keyframe", label: "<Picture 2>", active: true,
+            source: timelineKeyframeImage.id},
+        {tag: "motion", label: "<Subject 1>", active: true,
+            source: sourceTimeline.id},
+        {tag: "audio_1", label: "<Audio 1>", active: true,
+            source: sourceTimeline.id},
+    ],
+);
+
 const coreEditor = add(makeNode(10, "MiniMaxH3ChainScenePromptEditor"));
 const coreRelay = add(makeNode(11, "MiniMaxH3ChainCurrent"));
 const core = add(makeNode(12, "MiniMaxH3ReferenceToVideo"));

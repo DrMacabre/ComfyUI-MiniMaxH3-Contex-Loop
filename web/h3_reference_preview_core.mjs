@@ -12,6 +12,8 @@ export const TAGGED_VIDEO_REF_TYPE = "MiniMaxH3TaggedVideoReference";
 export const TAGGED_MOTION_REF_TYPE = "MiniMaxH3TaggedMotionReference";
 export const TAGGED_MOTION_PATH_REF_TYPE =
     "MiniMaxH3TaggedMotionReferencePath";
+export const TAGGED_MOTION_TIMELINE_REF_TYPE =
+    "MiniMaxH3TaggedMotionReferenceTimeline";
 export const TAGGED_AUDIO_REF_TYPE = "MiniMaxH3TaggedAudioReference";
 
 const SCHEDULE_TYPES = new Set([
@@ -24,6 +26,7 @@ const TAGGED_TYPES = new Set([
     TAGGED_VIDEO_REF_TYPE,
     TAGGED_MOTION_REF_TYPE,
     TAGGED_MOTION_PATH_REF_TYPE,
+    TAGGED_MOTION_TIMELINE_REF_TYPE,
     TAGGED_AUDIO_REF_TYPE,
 ]);
 
@@ -228,21 +231,32 @@ export function taggedReferenceRecords(editorNode, prompt = "") {
             pictures.push(record);
         } else if (type === TAGGED_VIDEO_REF_TYPE ||
                 type === TAGGED_MOTION_REF_TYPE ||
-                type === TAGGED_MOTION_PATH_REF_TYPE) {
+                type === TAGGED_MOTION_PATH_REF_TYPE ||
+                type === TAGGED_MOTION_TIMELINE_REF_TYPE) {
             const pathBacked = type === TAGGED_MOTION_PATH_REF_TYPE;
+            const timelineBacked =
+                type === TAGGED_MOTION_TIMELINE_REF_TYPE;
             const video = baseRecord(
-                node, "video", 1, pathBacked ? "video_path" : "video");
+                node, "video", 1,
+                timelineBacked ? "source_timeline"
+                    : pathBacked ? "video_path" : "video");
             const nativeVideoSource = pathBacked
                 ? inputSource(node, "source_video") : null;
+            const timelineSource = timelineBacked
+                ? inputSource(node, "source_timeline") : null;
             if (pathBacked) video.source = nativeVideoSource || node;
+            if (timelineBacked) video.source = timelineSource || node;
             video.selector = "prompt tag";
             video.semanticRole = (
-                type === TAGGED_MOTION_REF_TYPE || pathBacked)
+                type === TAGGED_MOTION_REF_TYPE || pathBacked || timelineBacked)
                 ? "motion" : "video";
             video.tagActive = used.has(video.tag);
             const audioSource = inputSource(node, "audio");
-            const embeddedAudio = pathBacked && Boolean(
-                widgetValue(node, "use_embedded_audio", true));
+            const embeddedAudio = (
+                pathBacked && Boolean(
+                    widgetValue(node, "use_embedded_audio", true))) || (
+                timelineBacked && String(
+                    widgetValue(node, "paired_audio", "off")) === "embedded");
             const explicit = referenceTag(widgetValue(node, "audio_tag", ""));
             const audioTag = explicit || `${video.tag}_audio`;
             video.active = video.tagActive || Boolean(
@@ -255,7 +269,8 @@ export function taggedReferenceRecords(editorNode, prompt = "") {
                     tag: audioTag,
                     selector: "prompt tag",
                     active: video.active,
-                    source: audioSource || nativeVideoSource || node,
+                    source: audioSource || nativeVideoSource
+                        || timelineSource || node,
                     label: null,
                     pairedWith: video,
                 });
