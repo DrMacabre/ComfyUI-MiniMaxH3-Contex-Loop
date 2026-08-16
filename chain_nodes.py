@@ -86,6 +86,7 @@ from .prompt_history import PromptHistoryStore
 from .prompt_optimizer import optimize_prompt_payload
 from .run_manager import RunArchiveManager
 from .asset_store import MAX_ASSET_BINDINGS, RunAssetStore
+from .contracts_v05 import SOURCE_TIMELINE_VERSION
 
 
 _LOG = logging.getLogger("minimax_h3_context_loop.chain")
@@ -123,6 +124,7 @@ EXTERNAL_CONTEXT_TYPE = "H3_CHAIN_EXTERNAL_CONTEXT"
 REFERENCE_SCHEDULE_TYPE = "H3_REFERENCE_SCHEDULE"
 TAGGED_REFERENCE_TYPE = "H3_TAGGED_REFERENCES"
 LAZY_MOTION_SOURCE_TYPE = "H3_LAZY_MOTION_SOURCE"
+SOURCE_TIMELINE_TYPE = "H3_SOURCE_TIMELINE"
 REFERENCE_SCHEDULE_VERSION = 1
 LAZY_MOTION_SOURCE_VERSION = 3
 
@@ -568,6 +570,47 @@ def _probe_lazy_motion_path(
         raise ValueError(
             "Could not inspect lazy motion-reference video %s: %s" %
             (resolved, exc)) from exc
+
+
+def _probe_audio_path(
+        path: str, label: str = "Source Timeline audio path",
+        required: bool = True) -> dict[str, Any] | None:
+    """Inspect one path-backed audio stream without decoding its samples."""
+    if av is None:
+        raise RuntimeError("H3 Source Timeline audio paths require PyAV.")
+    resolved = _resolved_media_path(path, label)
+    try:
+        with av.open(resolved, mode="r") as container:
+            audios = list(container.streams.audio)
+            if not audios and not bool(required):
+                return None
+            if len(audios) != 1:
+                raise ValueError(
+                    "%s contains %d audio streams; exactly one is required."
+                    % (label, len(audios)))
+            audio = audios[0]
+            sample_rate = int(
+                audio.codec_context.sample_rate or audio.rate or 0)
+            channels = len(audio.codec_context.layout.channels)
+            if sample_rate < 1 or channels not in (1, 2):
+                raise ValueError(
+                    "%s must be mono or stereo with a valid sample rate."
+                    % label)
+            duration_seconds = _stream_duration_seconds(
+                audio, container, 0, float(sample_rate))
+            return {
+                "path": resolved,
+                "stream_index": int(audio.index),
+                "sample_rate": sample_rate,
+                "channels": channels,
+                "start_seconds": _stream_start_seconds(audio),
+                "duration_seconds": duration_seconds,
+            }
+    except ValueError:
+        raise
+    except Exception as exc:
+        raise ValueError(
+            "Could not inspect %s %s: %s" % (label, resolved, exc)) from exc
 
 
 def _lazy_motion_descriptor_with_skip(
@@ -1163,6 +1206,469 @@ def _native_video_from_path(path: str) -> Any:
             "MiniMax H3 Lazy Motion AV Loader requires ComfyUI's native "
             "VIDEO API.") from exc
     return InputImpl.VideoFromFile(path)
+
+
+def _is_source_timeline(value: Any) -> bool:
+    return (
+        isinstance(value, dict)
+        and value.get("version") == SOURCE_TIMELINE_VERSION
+        and value.get("kind") == "source_timeline"
+        and isinstance(value.get("extent"), dict)
+        and isinstance(value.get("audio"), dict)
+        and isinstance(value.get("fingerprints"), dict)
+    )
+
+
+def _validate_source_timeline(
+        timeline: Any, *, require_runtime: bool = False
+        ) -> dict[str, Any]:
+    if not _is_source_timeline(timeline):
+        raise ValueError(
+            "H3 Source Timeline must come from the MiniMax H3 Source "
+            "Timeline node.")
+    video = timeline.get("video")
+    if video is not None and not _is_lazy_motion_descriptor(video):
+        raise ValueError(
+            "H3 Source Timeline video descriptor is invalid or obsolete.")
+    extent = timeline["extent"]
+    frame_count = int(extent.get("frame_count", 0))
+    duration = float(extent.get("duration_seconds", 0.0))
+    if frame_count < 1 or not math.isfinite(duration) or duration <= 0.0:
+        raise ValueError("H3 Source Timeline has no usable 24 fps extent.")
+    audio = timeline["audio"]
+    audio_kind = str(audio.get("kind") or "")
+    if audio_kind not in ("none", "embedded", "external_path",
+                          "deferred_tensor"):
+        raise ValueError(
+            "H3 Source Timeline has unknown audio kind %r." % audio_kind)
+    if audio_kind in ("embedded", "external_path"):
+        if not isinstance(audio.get("path"), str):
+            raise ValueError(
+                "H3 Source Timeline path-backed audio has no path.")
+        if require_runtime:
+            _resolved_media_path(
+                audio["path"], "H3 Source Timeline audio recovery path")
+    elif audio_kind == "deferred_tensor" and require_runtime:
+        _validate_audio(
+            audio.get("value"), "H3 Source Timeline deferred audio")
+    if video is not None and require_runtime:
+        _resolved_media_path(
+            video["path"], "H3 Source Timeline video recovery path")
+    fingerprints = timeline["fingerprints"]
+    for key in ("video", "audio", "timeline"):
+        value = str(fingerprints.get(key) or "")
+        if key == "video" and video is None:
+            if value:
+                raise ValueError(
+                    "Audio-only H3 Source Timeline has a video fingerprint.")
+            continue
+        if key == "audio" and audio_kind == "none":
+            if value:
+                raise ValueError(
+                    "Silent H3 Source Timeline has an audio fingerprint.")
+            continue
+        if len(value) != 64:
+            raise ValueError(
+                "H3 Source Timeline %s fingerprint is invalid." % key)
+    return timeline
+
+
+def _source_timeline_path_hash(
+        path: str, cache: dict[str, str]) -> str:
+    resolved = os.path.realpath(path)
+    if resolved not in cache:
+        cache[resolved] = _file_sha256(resolved)
+    return cache[resolved]
+
+
+def _make_source_timeline(
+        video_path: Any = "", *, source_video: Any = None,
+        audio_path: Any = "", source_audio: Any = None,
+        embedded_audio: str = "auto", skip_first_frames: Any = 0,
+        source_route: str = "") -> dict[str, Any]:
+    """Build one intent-free, file-backed source timeline descriptor."""
+    embedded_mode = str(embedded_audio or "auto").strip().lower()
+    if embedded_mode not in ("auto", "required", "ignore"):
+        raise ValueError(
+            "Source Timeline embedded_audio must be auto, required, or "
+            "ignore.")
+    has_audio_path = bool(str(audio_path or "").strip())
+    if has_audio_path and source_audio is not None:
+        raise ValueError(
+            "Source Timeline accepts one external audio source: connect "
+            "source_audio or provide audio_path, not both.")
+    wants_video = source_video is not None or bool(str(video_path or "").strip())
+    video = None
+    route = str(source_route or "").strip()
+    if wants_video:
+        resolved_video, detected_route = _lazy_motion_media_path(
+            video_path, source_video)
+        route = route or detected_route
+        video = _lazy_motion_descriptor_with_skip(
+            _probe_lazy_motion_path(resolved_video, False),
+            skip_first_frames)
+        video["source_route"] = route
+    elif int(skip_first_frames) != 0:
+        raise ValueError(
+            "Source Timeline skip_first_frames needs a video clock.")
+
+    hashes: dict[str, str] = {}
+    if video is not None:
+        video_file_hash = _source_timeline_path_hash(video["path"], hashes)
+        video["file_sha256"] = video_file_hash
+        video_hash = _fingerprint({
+            "source_timeline": SOURCE_TIMELINE_VERSION,
+            "file_sha256": video_file_hash,
+            "video_stream": 0,
+            "source_rate": [
+                int(video["source_rate_numerator"]),
+                int(video["source_rate_denominator"]),
+            ],
+            "skip_first_frames": int(video["skip_first_frames"]),
+        })
+        origin_fps = float(video["source_fps"])
+        origin_skip = int(video["skip_first_frames"])
+        origin_seconds = float(video["skip_seconds"])
+    else:
+        video_hash = ""
+        origin_fps = float(FPS)
+        origin_skip = 0
+        origin_seconds = 0.0
+
+    audio: dict[str, Any]
+    if source_audio is not None:
+        waveform, sample_rate = _validate_audio(
+            source_audio, "H3 Source Timeline external audio")
+        channels = 1 if waveform.ndim == 1 else int(waveform.shape[-2])
+        if channels not in (1, 2):
+            raise ValueError(
+                "H3 Source Timeline external audio must be mono or stereo.")
+        content_hash = _audio_fingerprint(source_audio)
+        audio = {
+            "kind": "deferred_tensor",
+            "value": source_audio,
+            "sample_rate": sample_rate,
+            "channels": channels,
+            "duration_seconds": (
+                int(waveform.shape[-1]) / float(sample_rate)),
+            "timeline_offset_seconds": 0.0,
+            "content_sha256": content_hash,
+            "aligned_to_timeline_origin": True,
+        }
+        audio_hash = _fingerprint({
+            "source_timeline": SOURCE_TIMELINE_VERSION,
+            "kind": "deferred_tensor",
+            "content_sha256": content_hash,
+            "timeline_offset_seconds": 0.0,
+        })
+    elif has_audio_path:
+        inspected = _probe_audio_path(
+            str(audio_path), "Source Timeline external audio path", True)
+        assert inspected is not None
+        audio_file_hash = _source_timeline_path_hash(
+            inspected["path"], hashes)
+        audio = {
+            "kind": "external_path",
+            **inspected,
+            "file_sha256": audio_file_hash,
+            "timeline_offset_seconds": origin_seconds,
+            "origin_source_fps": origin_fps,
+            "origin_skip_frames": origin_skip,
+        }
+        audio_hash = _fingerprint({
+            "source_timeline": SOURCE_TIMELINE_VERSION,
+            "kind": "external_path",
+            "file_sha256": audio_file_hash,
+            "audio_stream": int(inspected["stream_index"]),
+            "timeline_offset_seconds": origin_seconds,
+        })
+    elif video is not None and embedded_mode != "ignore":
+        inspected = _probe_audio_path(
+            video["path"], "Source Timeline embedded audio",
+            embedded_mode == "required")
+        if inspected is None:
+            audio = {"kind": "none"}
+            audio_hash = ""
+        else:
+            audio_info = {
+                "sample_rate": int(inspected["sample_rate"]),
+                "channels": int(inspected["channels"]),
+                "start_seconds": float(inspected["start_seconds"]),
+            }
+            video["audio"] = audio_info
+            audio = {
+                "kind": "embedded",
+                **inspected,
+                "file_sha256": video["file_sha256"],
+                "timeline_offset_seconds": origin_seconds,
+                "origin_source_fps": origin_fps,
+                "origin_skip_frames": origin_skip,
+            }
+            audio_hash = _fingerprint({
+                "source_timeline": SOURCE_TIMELINE_VERSION,
+                "kind": "embedded",
+                "file_sha256": video["file_sha256"],
+                "audio_stream": int(inspected["stream_index"]),
+                "skip_first_frames": origin_skip,
+            })
+    else:
+        audio = {"kind": "none"}
+        audio_hash = ""
+
+    if video is not None:
+        frame_count = int(video.get("frame_count", 0))
+        duration_seconds = frame_count / float(FPS)
+    elif audio["kind"] != "none":
+        available_duration = max(
+            0.0, float(audio.get("duration_seconds", 0.0)) -
+            float(audio.get("timeline_offset_seconds", 0.0)))
+        frame_count = int(math.floor(available_duration * FPS + 1e-9))
+        duration_seconds = frame_count / float(FPS)
+    else:
+        raise ValueError(
+            "Source Timeline needs a video, an audio path, or source_audio.")
+    if frame_count < 1:
+        raise ValueError(
+            "Source Timeline media has no usable duration after its origin.")
+
+    timeline_hash = _fingerprint({
+        "version": SOURCE_TIMELINE_VERSION,
+        "video": video_hash,
+        "audio": audio_hash,
+        "origin": {
+            "source_fps": origin_fps,
+            "skip_first_frames": origin_skip,
+        },
+        "extent_frames": frame_count,
+    })
+    timeline = {
+        "version": SOURCE_TIMELINE_VERSION,
+        "kind": "source_timeline",
+        "fps": FPS,
+        "origin": {
+            "source_fps": origin_fps,
+            "skip_first_frames": origin_skip,
+            "skip_seconds": origin_seconds,
+        },
+        "extent": {
+            "frame_count": frame_count,
+            "duration_seconds": duration_seconds,
+        },
+        "video": video,
+        "audio": audio,
+        "fingerprints": {
+            "video": video_hash,
+            "audio": audio_hash,
+            "timeline": timeline_hash,
+        },
+        "recovery": {
+            "video_path": video["path"] if video is not None else "",
+            "audio_path": (
+                str(audio.get("path") or "")
+                if audio["kind"] in ("embedded", "external_path") else ""),
+            "deferred_audio_requires_materialization": (
+                audio["kind"] == "deferred_tensor"),
+        },
+    }
+    return _validate_source_timeline(timeline, require_runtime=True)
+
+
+def _source_timeline_recovery_record(timeline: Any) -> dict[str, Any]:
+    """Return a JSON-safe descriptor suitable for run/checkpoint metadata."""
+    source = _validate_source_timeline(timeline)
+    record = {
+        "version": source["version"],
+        "kind": source["kind"],
+        "fps": int(source["fps"]),
+        "origin": dict(source["origin"]),
+        "extent": dict(source["extent"]),
+        "video": dict(source["video"]) if source.get("video") else None,
+        "audio": {
+            key: value for key, value in source["audio"].items()
+            if key != "value"
+        },
+        "fingerprints": dict(source["fingerprints"]),
+        "recovery": dict(source.get("recovery") or {}),
+    }
+    if record["audio"].get("kind") == "deferred_tensor":
+        record["audio"]["requires_materialization"] = True
+    # Fail here, close to persistence, rather than writing an unusable run.
+    _canonical_json(record)
+    return record
+
+
+def _source_timeline_verify_recovery_file(
+        descriptor: dict[str, Any], label: str) -> None:
+    path = str(descriptor.get("path") or "")
+    if not path or not os.path.isfile(path):
+        return
+    expected = str(descriptor.get("file_sha256") or "")
+    if expected and _file_sha256(path) != expected:
+        raise ValueError(
+            "%s exists but its contents do not match the saved Source "
+            "Timeline fingerprint: %s" % (label, path))
+
+
+def _source_timeline_from_recovery(
+        record: Any, *, video_path: Any = "", audio_path: Any = "",
+        deferred_audio: Any = None) -> dict[str, Any]:
+    """Restore or relink a persisted timeline without changing its identity."""
+    try:
+        restored = json.loads(_canonical_json(record))
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "Saved H3 Source Timeline descriptor is not JSON-safe.") from exc
+    _validate_source_timeline(restored)
+    video = restored.get("video")
+    audio = restored["audio"]
+    if str(video_path or "").strip():
+        if video is None:
+            raise ValueError("Cannot relink video on an audio-only timeline.")
+        resolved = _resolved_media_path(
+            video_path, "H3 Source Timeline replacement video")
+        if _file_sha256(resolved) != str(video.get("file_sha256") or ""):
+            raise ValueError(
+                "Replacement video does not match the saved Source Timeline.")
+        video["path"] = resolved
+        restored["recovery"]["video_path"] = resolved
+        if audio.get("kind") == "embedded":
+            audio["path"] = resolved
+            restored["recovery"]["audio_path"] = resolved
+    if str(audio_path or "").strip():
+        if audio.get("kind") != "external_path":
+            raise ValueError(
+                "audio_path relinking is only valid for external-path audio.")
+        resolved = _resolved_media_path(
+            audio_path, "H3 Source Timeline replacement audio")
+        if _file_sha256(resolved) != str(audio.get("file_sha256") or ""):
+            raise ValueError(
+                "Replacement audio does not match the saved Source Timeline.")
+        audio["path"] = resolved
+        restored["recovery"]["audio_path"] = resolved
+    if audio.get("kind") == "deferred_tensor" and deferred_audio is not None:
+        _validate_audio(deferred_audio, "Recovered H3 Source Timeline audio")
+        expected = str(audio.get("content_sha256") or "")
+        if _audio_fingerprint(deferred_audio) != expected:
+            raise ValueError(
+                "Recovered audio tensor does not match the saved Source "
+                "Timeline fingerprint.")
+        audio["value"] = deferred_audio
+    if video is not None:
+        _source_timeline_verify_recovery_file(
+            video, "H3 Source Timeline video recovery path")
+    if audio.get("kind") == "external_path":
+        _source_timeline_verify_recovery_file(
+            audio, "H3 Source Timeline audio recovery path")
+    return _validate_source_timeline(restored)
+
+
+def _source_timeline_audio_descriptor(
+        timeline: dict[str, Any]) -> dict[str, Any] | None:
+    source = _validate_source_timeline(timeline)
+    audio = source["audio"]
+    kind = audio["kind"]
+    if kind == "none" or kind == "deferred_tensor":
+        return None
+    if kind == "embedded":
+        descriptor = dict(source["video"])
+        descriptor["audio"] = {
+            "sample_rate": int(audio["sample_rate"]),
+            "channels": int(audio["channels"]),
+            "start_seconds": float(audio["start_seconds"]),
+        }
+        return descriptor
+    return {
+        "version": LAZY_MOTION_SOURCE_VERSION,
+        "kind": "lazy_motion_path",
+        "path": audio["path"],
+        "fps": FPS,
+        "source_fps": float(audio.get("origin_source_fps", FPS)),
+        "skip_first_frames": int(audio.get("origin_skip_frames", 0)),
+        "video_start_seconds": float(audio.get("start_seconds", 0.0)),
+        "frame_count": int(source["extent"]["frame_count"]),
+        "audio": {
+            "sample_rate": int(audio["sample_rate"]),
+            "channels": int(audio["channels"]),
+            "start_seconds": float(audio.get("start_seconds", 0.0)),
+        },
+    }
+
+
+def _source_timeline_scene_video(
+        timeline: Any, source_start: int, source_end: int) -> Any:
+    source = _validate_source_timeline(timeline, require_runtime=True)
+    if source.get("video") is None:
+        return None
+    start = int(source_start)
+    end = int(source_end)
+    if start < 0 or end > int(source["extent"]["frame_count"]):
+        raise ValueError(
+            "H3 Source Timeline video window %d:%d exceeds 0:%d." %
+            (start, end, int(source["extent"]["frame_count"])))
+    return _decode_lazy_motion_video(source["video"], start, end)
+
+
+def _source_timeline_scene_audio(
+        timeline: Any, source_start: int, source_end: int) -> Any:
+    source = _validate_source_timeline(timeline, require_runtime=True)
+    start = int(source_start)
+    end = int(source_end)
+    if start < 0 or end <= start or end > int(
+            source["extent"]["frame_count"]):
+        raise ValueError(
+            "H3 Source Timeline audio window %d:%d exceeds 0:%d." %
+            (start, end, int(source["extent"]["frame_count"])))
+    audio = source["audio"]
+    if audio["kind"] == "none":
+        return None
+    if audio["kind"] == "deferred_tensor":
+        return _slice_audio(
+            audio["value"], start / float(FPS),
+            (end - start) / float(FPS))
+    descriptor = _source_timeline_audio_descriptor(source)
+    return _decode_lazy_motion_audio(descriptor, start, end)
+
+
+def _source_timeline_source_audio(timeline: Any) -> Any:
+    source = _validate_source_timeline(timeline, require_runtime=True)
+    if source["audio"]["kind"] == "none":
+        return None
+    return _source_timeline_scene_audio(
+        source, 0, int(source["extent"]["frame_count"]))
+
+
+def _source_timeline_to_lazy_motion_descriptor(
+        timeline: Any) -> dict[str, Any] | None:
+    source = _validate_source_timeline(timeline)
+    if source.get("video") is None:
+        return None
+    descriptor = dict(source["video"])
+    if source["audio"]["kind"] != "embedded":
+        descriptor["audio"] = None
+    return descriptor
+
+
+def _source_timeline_from_lazy_motion_descriptor(
+        descriptor: Any, source_audio: Any = None) -> dict[str, Any]:
+    if not _is_lazy_motion_descriptor(descriptor):
+        raise ValueError(
+            "Legacy motion source is not a valid lazy descriptor.")
+    return _make_source_timeline(
+        descriptor["path"], source_audio=source_audio,
+        embedded_audio=(
+            "required" if descriptor.get("audio") is not None else "ignore"),
+        skip_first_frames=int(descriptor.get("skip_first_frames", 0)),
+        source_route=str(descriptor.get("source_route") or "legacy adapter"))
+
+
+def _legacy_media_to_source_timeline(
+        video_path: Any = "", *, source_video: Any = None,
+        source_audio: Any = None, skip_first_frames: Any = 0,
+        use_embedded_audio: bool = True) -> dict[str, Any]:
+    return _make_source_timeline(
+        video_path, source_video=source_video, source_audio=source_audio,
+        embedded_audio="required" if use_embedded_audio else "ignore",
+        skip_first_frames=skip_first_frames, source_route="legacy adapter")
 
 
 def _scheduled_video_reference_slice(
@@ -4203,6 +4709,116 @@ class MiniMaxH3TaggedMotionReference:
                 len(references["entries"]),
                 references["fingerprint"][:12]))
         return references, references["fingerprint"], status
+
+
+class MiniMaxH3SourceTimeline:
+    """Describe source media once; downstream nodes request scene windows."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "video_path": ("STRING", {
+                    "default": "",
+                    "tooltip": "Optional direct video path. Prefer a native "
+                               "file-backed VIDEO connection when the same "
+                               "asset must also be archived."}),
+                "audio_path": ("STRING", {
+                    "default": "",
+                    "tooltip": "Optional external master-audio path. Leave "
+                               "blank to use embedded audio or source_audio."}),
+                "embedded_audio": (("auto", "required", "ignore"), {
+                    "default": "auto",
+                    "tooltip": "auto uses one embedded stream when present; "
+                               "required errors when absent; ignore registers "
+                               "video only. External audio takes precedence."}),
+                "skip_first_frames": ("INT", {
+                    "default": 0, "min": 0, "max": 100000000, "step": 1,
+                    "tooltip": "Set the shared timeline origin in native "
+                               "video frames. Skipped media remains on disk "
+                               "and is never decoded."}),
+            },
+            "optional": {
+                "source_video": ("VIDEO", {
+                    "tooltip": "Native file-backed VIDEO from core Load "
+                               "Video. The full frame tensor is never read."}),
+                "source_audio": ("AUDIO", {
+                    "tooltip": "Optional already-aligned external AUDIO. It "
+                               "is retained as a deferred source until Loop "
+                               "Start materializes its recovery copy."}),
+            },
+        }
+
+    RETURN_TYPES = (SOURCE_TIMELINE_TYPE, "STRING")
+    RETURN_NAMES = ("source_timeline", "status")
+    FUNCTION = "build"
+    CATEGORY = "conditioning/minimax/contex_loop/media"
+    DESCRIPTION = (
+        "0.5 source-media entry point. It records video, audio, native timing, "
+        "origin, content fingerprints, and recovery data behind one typed "
+        "wire. Video and path-backed audio stay lazy; consumers decode only "
+        "the current 24 fps scene window. This node does not choose whether "
+        "audio is final output, a reference, or generated continuity."
+    )
+
+    @classmethod
+    def IS_CHANGED(cls, video_path="", audio_path="", source_video=None,
+                   skip_first_frames=0, **kwargs):
+        try:
+            signatures = []
+            if source_video is not None or str(video_path or "").strip():
+                path, _route = _lazy_motion_media_path(
+                    video_path, source_video)
+                stat = os.stat(path)
+                signatures.append((
+                    path, int(stat.st_size), int(stat.st_mtime_ns)))
+            if str(audio_path or "").strip():
+                path = _resolved_media_path(
+                    audio_path, "Source Timeline audio path")
+                stat = os.stat(path)
+                signatures.append((
+                    path, int(stat.st_size), int(stat.st_mtime_ns)))
+            if not signatures:
+                return float("NaN")
+            return _fingerprint({
+                "files": signatures,
+                "skip_first_frames": int(skip_first_frames),
+            })
+        except (OSError, TypeError, ValueError):
+            return float("NaN")
+
+    def build(self, video_path="", audio_path="", embedded_audio="auto",
+              skip_first_frames=0, source_video=None, source_audio=None):
+        timeline = _make_source_timeline(
+            video_path, source_video=source_video, audio_path=audio_path,
+            source_audio=source_audio, embedded_audio=embedded_audio,
+            skip_first_frames=skip_first_frames)
+        video = timeline.get("video")
+        audio = timeline["audio"]
+        extent = timeline["extent"]
+        if video is None:
+            video_status = "audio-only"
+        else:
+            video_status = (
+                "%.6g fps %dx%d VIDEO -> lazy 24 fps" %
+                (float(video["source_fps"]), int(video["width"]),
+                 int(video["height"])))
+        audio_status = {
+            "none": "no audio",
+            "embedded": "lazy embedded audio",
+            "external_path": "lazy external-path audio",
+            "deferred_tensor": "deferred aligned AUDIO",
+        }[audio["kind"]]
+        status = (
+            "%s; %s; origin skip %d native frames (%.3fs); "
+            "%d frames / %.3fs; timeline %s" %
+            (video_status, audio_status,
+             int(timeline["origin"]["skip_first_frames"]),
+             float(timeline["origin"]["skip_seconds"]),
+             int(extent["frame_count"]),
+             float(extent["duration_seconds"]),
+             timeline["fingerprints"]["timeline"][:12]))
+        return timeline, status
 
 
 class MiniMaxH3LazyMotionAVLoader:
@@ -9129,6 +9745,7 @@ CHAIN_NODE_CLASS_MAPPINGS = {
     "MiniMaxH3TaggedPictureReference": MiniMaxH3TaggedPictureReference,
     "MiniMaxH3TaggedVideoReference": MiniMaxH3TaggedVideoReference,
     "MiniMaxH3TaggedMotionReference": MiniMaxH3TaggedMotionReference,
+    "MiniMaxH3SourceTimeline": MiniMaxH3SourceTimeline,
     "MiniMaxH3LazyMotionAVLoader": MiniMaxH3LazyMotionAVLoader,
     "MiniMaxH3TaggedMotionReferencePath": MiniMaxH3TaggedMotionReferencePath,
     "MiniMaxH3LazyMotionScenePreview": MiniMaxH3LazyMotionScenePreview,
@@ -9164,6 +9781,7 @@ CHAIN_NODE_DISPLAY_NAME_MAPPINGS = {
     "MiniMaxH3TaggedPictureReference": "MiniMax H3 Tagged Picture Ref",
     "MiniMaxH3TaggedVideoReference": "MiniMax H3 Tagged Video Ref",
     "MiniMaxH3TaggedMotionReference": "MiniMax H3 Tagged Motion Ref",
+    "MiniMaxH3SourceTimeline": "MiniMax H3 Source Timeline",
     "MiniMaxH3LazyMotionAVLoader": "MiniMax H3 Lazy Motion AV Loader",
     "MiniMaxH3TaggedMotionReferencePath": (
         "MiniMax H3 Tagged Motion Ref (Lazy VIDEO/Path)"),
