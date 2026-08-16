@@ -24,7 +24,9 @@ Newest first. This file keeps release history out of the onboarding README.
   compressed media on disk and decodes/resizes only the active scene, converts
   that window to 24 fps, and extracts its exact embedded-audio time range. A
   separate Plan-aware scene-counter preview blocks media output when no Plan is
-  connected or the tag is inactive.
+  connected or the tag is inactive. A native-frame start offset seeks near the
+  requested source point and shifts video and audio together without building
+  tensors for the skipped prefix.
 
 ## v0.4.7 — General masked targets
 

@@ -275,7 +275,11 @@ registration time, then Tagged Ref2VA decodes and resizes only the active Plan
 scene. Constant-frame-rate sources such as 25 or 30 fps are resampled to 24 fps
 inside that scene window, so Reference Video Prep and its full-video tensors
 are not required. Optional embedded audio is decoded from the identical time
-window, preserving duration and synchronization. Its
+window, preserving duration and synchronization. `skip_first_frames` moves
+the timeline origin by native source frames (25 means one second on a 25 fps
+file); video and audio receive the same offset. The decoder seeks backward to
+a nearby keyframe, so the skipped prefix is neither tensorized nor normally
+decoded from frame zero. Its
 `preview_source` can feed **Lazy Motion Scene Preview** together with the Plan;
 the integer scene widget selects the exact window to inspect. With no Plan—or
 when the selected scene does not activate the motion tag—the preview emits no

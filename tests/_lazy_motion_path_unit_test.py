@@ -169,6 +169,43 @@ with tempfile.TemporaryDirectory() as temporary:
     assert np.allclose(
         tail_audio["waveform"].numpy()[..., -400:], 0.0)
 
+    skipped_refs, skipped_fingerprint, skipped_status, _ = node.add(
+        str(path_25), "performance_skip", "<Subject 1>",
+        "the exact body movement and action timing", "source", True,
+        "performance_skip_audio", "sequential", skip_first_frames=10)
+    skipped_entry = skipped_refs["entries"][0]
+    skipped_descriptor = skipped_entry["value"]
+    assert skipped_descriptor["skip_first_frames"] == 10
+    assert abs(skipped_descriptor["skip_seconds"] - 0.4) < 1e-9
+    assert skipped_descriptor["frame_count"] == 20
+    assert "skip 10 source frames (0.400s)" in skipped_status
+    assert skipped_fingerprint != refs_25["fingerprint"]
+    skipped_video = chain._decode_lazy_motion_video(
+        skipped_descriptor, 0, 5)
+    skipped_audio = chain._decode_lazy_motion_audio(
+        skipped_descriptor, 0, 5)
+    assert tuple(skipped_video.shape) == (5, 64, 64, 3)
+    assert tuple(skipped_audio["waveform"].shape) == (1, 1, 10000)
+    skipped_waveform = skipped_audio["waveform"].numpy()[0, 0]
+    fixture_samples = round(30 / 25 * 48000)
+    expected_audio_start = -0.75 + 1.5 * 19200 / (fixture_samples - 1)
+    assert abs(float(skipped_waveform[0]) - expected_audio_start) < 1e-5
+    for target_index, source_index in enumerate([10, 11, 12, 13, 14]):
+        expected = source_index * 7 / 255
+        assert abs(
+            float(skipped_video[target_index, 0, 0, 0]) - expected) < 1e-6
+    try:
+        node.add(
+            str(path_25), "too_late", "<Subject 1>",
+            "the exact body movement and action timing", "source", True,
+            "", "sequential", skip_first_frames=30)
+    except ValueError as exc:
+        assert ("consumes all" in str(exc) or
+                "at or beyond" in str(exc))
+    else:
+        raise AssertionError("skip consuming the full source was accepted")
+
 print(
-    "lazy motion path: file fingerprinting, scene-only CFR-to-24 AV decode, "
-    "delivered masked timing, no-Plan blocking, and scene counter preview pass")
+    "lazy motion path: file fingerprinting, native-frame skip/seek, scene-only "
+    "CFR-to-24 AV decode, delivered masked timing, no-Plan blocking, and scene "
+    "counter preview pass")

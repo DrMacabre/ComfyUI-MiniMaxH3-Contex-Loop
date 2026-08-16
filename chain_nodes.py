@@ -124,7 +124,7 @@ REFERENCE_SCHEDULE_TYPE = "H3_REFERENCE_SCHEDULE"
 TAGGED_REFERENCE_TYPE = "H3_TAGGED_REFERENCES"
 LAZY_MOTION_SOURCE_TYPE = "H3_LAZY_MOTION_SOURCE"
 REFERENCE_SCHEDULE_VERSION = 1
-LAZY_MOTION_SOURCE_VERSION = 2
+LAZY_MOTION_SOURCE_VERSION = 3
 
 _PENDING_REVIEWS: dict[str, dict[str, Any]] = {}
 _PENDING_FINAL_REVIEW_PREVIEWS: dict[
@@ -793,96 +793,137 @@ def _decode_lazy_motion_video(
         raise ValueError(
             "Lazy motion reference has invalid source_fps %.6g." %
             source_fps)
+    skip_first_frames = int(descriptor.get("skip_first_frames", 0))
+    if skip_first_frames < 0:
+        raise ValueError(
+            "Lazy motion reference skip_first_frames cannot be negative.")
+    skip_seconds = skip_first_frames / source_fps
     target_w, target_h = _lazy_motion_target_size(descriptor)
     buffer = np.empty(
         (requested, target_h, target_w, 3), dtype=np.uint8)
-    decoded = 0
-    with av.open(path, mode="r") as container:
-        videos = list(container.streams.video)
-        if len(videos) != 1:
-            raise ValueError(
-                "Lazy motion reference changed and now contains %d video "
-                "streams; exactly one is required." % len(videos))
-        video = videos[0]
-        actual_rate = (
-            video.average_rate or video.base_rate or video.guessed_rate)
-        if (actual_rate is None or
-                abs(float(actual_rate) - source_fps) > 1e-3):
-            raise ValueError(
-                "Lazy motion reference changed frame rate after it was "
-                "registered (expected %.6g fps, got %s)." %
-                (source_fps, actual_rate))
-        first_timestamp = None
-        previous_frame = None
-        previous_time = None
-        previous_array = None
-        target_index = source_start
-        tolerance = 1e-7
+    video_start = float(descriptor.get("video_start_seconds", 0.0))
 
-        def frame_array(frame):
-            if (int(frame.width) != target_w or
-                    int(frame.height) != target_h):
-                converted = frame.reformat(
-                    width=target_w, height=target_h, format="rgb24")
-                return converted.to_ndarray()
-            return frame.to_ndarray(format="rgb24")
-
-        def emit_previous():
-            nonlocal decoded, previous_array
-            if previous_frame is None:
+    def decode_window(allow_seek: bool) -> int | None:
+        decoded = 0
+        with av.open(path, mode="r") as container:
+            videos = list(container.streams.video)
+            if len(videos) != 1:
                 raise ValueError(
-                    "Lazy motion reference starts after its first 24 fps "
-                    "target timestamp.")
-            if previous_array is None:
-                previous_array = frame_array(previous_frame)
-            buffer[decoded] = previous_array
-            decoded += 1
+                    "Lazy motion reference changed and now contains %d "
+                    "video streams; exactly one is required." % len(videos))
+            video = videos[0]
+            actual_rate = (
+                video.average_rate or video.base_rate or video.guessed_rate)
+            if (actual_rate is None or
+                    abs(float(actual_rate) - source_fps) > 1e-3):
+                raise ValueError(
+                    "Lazy motion reference changed frame rate after it was "
+                    "registered (expected %.6g fps, got %s)." %
+                    (source_fps, actual_rate))
+            target_start_seconds = (
+                skip_seconds + source_start / float(FPS))
+            seeking = bool(
+                allow_seek and video.time_base is not None and
+                target_start_seconds > 2.0 / source_fps)
+            if seeking:
+                seek_seconds = video_start + max(
+                    0.0, target_start_seconds - 2.0 / source_fps)
+                seek_offset = int(math.floor(
+                    seek_seconds / float(video.time_base)))
+                container.seek(
+                    seek_offset, stream=video, backward=True, any_frame=False)
 
-        for frame_index, frame in enumerate(container.decode(video)):
-            if frame.pts is not None and frame.time_base is not None:
-                timestamp = float(frame.pts * frame.time_base)
-                if first_timestamp is None:
-                    first_timestamp = timestamp
-                timestamp_relative = timestamp - first_timestamp
-                expected = timestamp_relative * source_fps
-                if abs(expected - frame_index) > 0.05:
-                    raise ValueError(
-                        "Lazy motion reference is not constant %.6g fps near "
-                        "decoded frame %d (timestamp maps to %.4f)." %
-                        (source_fps, frame_index, expected))
-            # Once CFR has been verified, use its rational frame index rather
-            # than container PTS for target selection. Coarse time bases (for
-            # example milliseconds) otherwise move boundary frames backward
-            # or forward by one during scene-local conversion.
-            relative_time = frame_index / source_fps
-            while (target_index < source_end and
-                   target_index / float(FPS) <
-                   relative_time - tolerance):
-                if (previous_time is None or
-                        target_index / float(FPS) <
-                        previous_time - tolerance):
-                    raise ValueError(
-                        "Lazy motion reference cannot cover 24 fps target "
-                        "frame %d." % target_index)
-                emit_previous()
-                target_index += 1
-            if target_index >= source_end:
-                break
-            previous_frame = frame
-            previous_time = relative_time
+            previous_frame = None
+            previous_time = None
             previous_array = None
-        if target_index < source_end and previous_frame is not None:
-            display_end = previous_time + 1.0 / source_fps
-            while (target_index < source_end and
-                   target_index / float(FPS) <
-                   display_end - tolerance):
-                emit_previous()
-                target_index += 1
+            target_index = source_start
+            target_tolerance = 1e-7
+
+            def frame_array(frame):
+                if (int(frame.width) != target_w or
+                        int(frame.height) != target_h):
+                    converted = frame.reformat(
+                        width=target_w, height=target_h, format="rgb24")
+                    return converted.to_ndarray()
+                return frame.to_ndarray(format="rgb24")
+
+            def emit_previous():
+                nonlocal decoded, previous_array
+                if previous_frame is None:
+                    raise ValueError(
+                        "Lazy motion reference starts after its first 24 fps "
+                        "target timestamp.")
+                if previous_array is None:
+                    previous_array = frame_array(previous_frame)
+                buffer[decoded] = previous_array
+                decoded += 1
+
+            for local_index, frame in enumerate(container.decode(video)):
+                if frame.pts is not None and frame.time_base is not None:
+                    timestamp = float(frame.pts * frame.time_base)
+                    timestamp_relative = timestamp - video_start
+                    source_position = timestamp_relative * source_fps
+                    frame_index = int(round(source_position))
+                    pts_tolerance = max(
+                        0.05,
+                        abs(float(frame.time_base)) * source_fps * 0.6)
+                    if abs(source_position - frame_index) > pts_tolerance:
+                        raise ValueError(
+                            "Lazy motion reference is not constant %.6g fps "
+                            "near decoded timestamp %.6fs (source position "
+                            "%.4f)." %
+                            (source_fps, timestamp, source_position))
+                elif seeking:
+                    # Exact global indexing is unavailable after a keyframe
+                    # seek. Reopen and decode from frame zero as a safe
+                    # fallback; RAM remains bounded even for this rare case.
+                    return None
+                else:
+                    frame_index = local_index
+                # Once CFR has been verified, use its rational global frame
+                # index rather than coarse container PTS for target selection.
+                relative_time = frame_index / source_fps
+                target_time = (
+                    skip_seconds + target_index / float(FPS))
+                while (target_index < source_end and
+                       target_time < relative_time - target_tolerance):
+                    if (previous_time is None or
+                            target_time < previous_time - target_tolerance):
+                        raise ValueError(
+                            "Lazy motion reference cannot cover 24 fps target "
+                            "frame %d after skipping %d source frames." %
+                            (target_index, skip_first_frames))
+                    emit_previous()
+                    target_index += 1
+                    target_time = (
+                        skip_seconds + target_index / float(FPS))
+                if target_index >= source_end:
+                    break
+                previous_frame = frame
+                previous_time = relative_time
+                previous_array = None
+            if target_index < source_end and previous_frame is not None:
+                display_end = previous_time + 1.0 / source_fps
+                target_time = (
+                    skip_seconds + target_index / float(FPS))
+                while (target_index < source_end and
+                       target_time < display_end - target_tolerance):
+                    emit_previous()
+                    target_index += 1
+                    target_time = (
+                        skip_seconds + target_index / float(FPS))
+        return decoded
+
+    decoded = decode_window(allow_seek=True)
+    if decoded is None:
+        decoded = decode_window(allow_seek=False)
     if decoded != requested:
         raise ValueError(
             "Lazy motion reference %s yielded only %d of %d requested "
-            "frames for 24 fps target window %d:%d." %
-            (path, decoded, requested, source_start, source_end))
+            "frames for 24 fps target window %d:%d after skipping %d source "
+            "frames." %
+            (path, decoded, requested, source_start, source_end,
+             skip_first_frames))
     return torch.from_numpy(buffer).to(dtype=torch.float32).div_(255.0)
 
 
@@ -911,8 +952,13 @@ def _decode_lazy_motion_audio(
     layout = "mono" if channels == 1 else "stereo"
     video_start = float(descriptor.get("video_start_seconds", 0.0))
     audio_start = float(audio_info.get("start_seconds", 0.0))
-    start_seconds = video_start + int(source_start) / float(FPS)
-    end_seconds = video_start + int(source_end) / float(FPS)
+    source_fps = float(descriptor.get("source_fps", FPS))
+    skip_first_frames = int(descriptor.get("skip_first_frames", 0))
+    skip_seconds = skip_first_frames / source_fps
+    start_seconds = (
+        video_start + skip_seconds + int(source_start) / float(FPS))
+    end_seconds = (
+        video_start + skip_seconds + int(source_end) / float(FPS))
     sample_start = int(round((start_seconds - audio_start) * sample_rate))
     sample_end = int(round((end_seconds - audio_start) * sample_rate))
     if sample_start < 0 or sample_end <= sample_start:
@@ -931,6 +977,19 @@ def _decode_lazy_motion_audio(
             raise ValueError(
                 "Lazy motion reference changed and now contains %d audio "
                 "streams; exactly one is required." % len(audios))
+        audio_stream = audios[0]
+        seek_preroll = max(0.25, 2.0 / source_fps)
+        audio_seek = bool(
+            audio_stream.time_base is not None and
+            start_seconds - audio_start > seek_preroll)
+        if audio_seek:
+            seek_seconds = max(
+                audio_start, start_seconds - seek_preroll)
+            seek_offset = int(math.floor(
+                seek_seconds / float(audio_stream.time_base)))
+            container.seek(
+                seek_offset, stream=audio_stream,
+                backward=True, any_frame=False)
         resampler = av.AudioResampler(
             format="fltp", layout=layout, rate=sample_rate)
 
@@ -944,13 +1003,17 @@ def _decode_lazy_motion_audio(
                     "Lazy motion-reference audio decoded to unexpected shape "
                     "%s." % (tuple(array.shape),))
             count = int(array.shape[-1])
-            if (not cursor_initialized and
-                    output_frame.pts is not None and
-                    output_frame.time_base is not None):
-                frame_seconds = float(
-                    output_frame.pts * output_frame.time_base)
-                cursor = int(round(
-                    (frame_seconds - audio_start) * sample_rate))
+            if not cursor_initialized:
+                if (output_frame.pts is not None and
+                        output_frame.time_base is not None):
+                    frame_seconds = float(
+                        output_frame.pts * output_frame.time_base)
+                    cursor = int(round(
+                        (frame_seconds - audio_start) * sample_rate))
+                elif audio_seek:
+                    raise ValueError(
+                        "Lazy motion-reference audio has no timestamps after "
+                        "seeking; exact skip alignment is unavailable.")
             cursor_initialized = True
             copy_start = max(cursor, sample_start)
             copy_end = min(cursor + count, sample_end)
@@ -964,7 +1027,7 @@ def _decode_lazy_motion_audio(
             cursor += count
 
         stop = False
-        for frame in container.decode(audios[0]):
+        for frame in container.decode(audio_stream):
             for output_frame in _resampled_audio_frames(resampler, frame):
                 consume(output_frame)
                 if cursor >= sample_end:
@@ -4085,6 +4148,12 @@ class MiniMaxH3TaggedMotionReferencePath:
                     "tooltip": "sequential follows the Plan timeline and "
                                "uses delivered-frame timing for masked AV. "
                                "restart_each_scene decodes from frame 0."}),
+                "skip_first_frames": ("INT", {
+                    "default": 0, "min": 0, "max": 100000000, "step": 1,
+                    "tooltip": "Ignore this many frames at the source "
+                               "file's native FPS before the Plan timeline "
+                               "begins. The lazy decoder seeks near this "
+                               "point; skipped frames do not become tensors."}),
             },
             "optional": {
                 "previous": (TAGGED_REFERENCE_TYPE, {
@@ -4103,41 +4172,69 @@ class MiniMaxH3TaggedMotionReferencePath:
         "Path-backed Tagged Motion Ref. It stores a file descriptor and "
         "fingerprint instead of a full decoded IMAGE batch. Tagged Ref2VA "
         "later decodes, converts to 24 fps, and resizes only the current Plan "
-        "scene, with optional embedded audio from the identical time window."
+        "scene, with optional embedded audio from the identical time window "
+        "and a seekable native-frame start offset."
     )
 
     @classmethod
-    def IS_CHANGED(cls, video_path="", **kwargs):
+    def IS_CHANGED(cls, video_path="", skip_first_frames=0, **kwargs):
         try:
             path = _resolved_media_path(
                 video_path, "Motion-reference video path")
             stat = os.stat(path)
-            return "%s:%d:%d" % (
-                path, int(stat.st_size), int(stat.st_mtime_ns))
+            return "%s:%d:%d:%d" % (
+                path, int(stat.st_size), int(stat.st_mtime_ns),
+                int(skip_first_frames))
         except (OSError, ValueError):
             return float("NaN")
 
     def add(self, video_path, tag, target_subject, motion_description,
             reference_short_edge="384", use_embedded_audio=True,
-            audio_tag="", timeline_mode="sequential", previous=None,
-            dynprompt=None, unique_id=None):
+            audio_tag="", timeline_mode="sequential", skip_first_frames=0,
+            previous=None, dynprompt=None, unique_id=None):
         mode = _downstream_reference_compliance(dynprompt, unique_id)
         try:
             target, description, short_edge = _motion_reference_fields(
                 target_subject, motion_description, reference_short_edge)
             descriptor = _probe_lazy_motion_path(
                 video_path, bool(use_embedded_audio))
+            skip_first_frames = int(skip_first_frames)
+            if skip_first_frames < 0:
+                raise ValueError(
+                    "Lazy motion skip_first_frames cannot be negative.")
+            source_frames = int(descriptor.get("source_frame_count", 0))
+            if source_frames > 0 and skip_first_frames >= source_frames:
+                raise ValueError(
+                    "Lazy motion skip_first_frames %d consumes all %d source "
+                    "frames." % (skip_first_frames, source_frames))
+            source_fps = float(descriptor["source_fps"])
+            duration_seconds = float(
+                descriptor.get("duration_seconds", 0.0))
+            skip_seconds = skip_first_frames / source_fps
+            if (duration_seconds > 0.0 and
+                    skip_seconds >= duration_seconds):
+                raise ValueError(
+                    "Lazy motion skip_first_frames %d starts at or beyond "
+                    "the %.3fs source duration." %
+                    (skip_first_frames, duration_seconds))
+            descriptor["skip_first_frames"] = skip_first_frames
+            descriptor["skip_seconds"] = skip_seconds
+            if duration_seconds > 0.0:
+                descriptor["frame_count"] = int(math.ceil(
+                    (duration_seconds - skip_seconds) * FPS - 1e-9))
             file_hash = _file_sha256(descriptor["path"])
             descriptor["file_sha256"] = file_hash
             descriptor["motion_short_edge"] = short_edge
             video_hash = _fingerprint({
                 "lazy_motion_file_sha256": file_hash,
                 "video_stream": 0,
+                "skip_first_frames": skip_first_frames,
             })
             audio_value = descriptor if bool(use_embedded_audio) else None
             audio_hash = (_fingerprint({
                 "lazy_motion_file_sha256": file_hash,
                 "audio_stream": 0,
+                "skip_first_frames": skip_first_frames,
             }) if audio_value is not None else "")
             references = _append_tagged_reference(
                 previous, kind="video", tag=tag, value=descriptor,
@@ -4161,11 +4258,15 @@ class MiniMaxH3TaggedMotionReferencePath:
         source_fps = float(descriptor.get("source_fps", FPS))
         rate_status = ("24 fps source" if abs(source_fps - FPS) <= 1e-3
                        else "%.6g -> 24 fps scene-local" % source_fps)
+        skip_status = ("source start" if skip_first_frames == 0 else
+                       "skip %d source frames (%.3fs)" %
+                       (skip_first_frames, descriptor["skip_seconds"]))
         status = (
-            "@%s%s lazy motion -> %s; %s px short edge; %s; %s; %s; %s" %
+            "@%s%s lazy motion -> %s; %s px short edge; %s; %s; %s; %s; %s" %
             (entry["tag"], paired, entry["motion_target"],
              entry["motion_short_edge"], entry["timeline_mode"],
-             rate_status, frame_status, references["fingerprint"][:12]))
+             rate_status, skip_status, frame_status,
+             references["fingerprint"][:12]))
         source = {
             "version": LAZY_MOTION_SOURCE_VERSION,
             "entry": entry,
