@@ -239,7 +239,10 @@ WAV preservation, timing behavior, and the Seam Probe.
 Load Image ─→ Tagged Picture Ref ─┐
 24 fps IMAGE (+ paired AUDIO) ─→ Tagged Video Ref ─┐
 24 fps motion IMAGE ─→ Tagged Motion Ref ──────────┤
-CFR video path ─→ Tagged Motion Ref (Lazy Path) ──┤
+Lazy Motion AV Loader source_video ─┬→ Tagged Motion Ref (Lazy VIDEO/Path) ┤
+                                    └→ Run Manager asset                  │
+Lazy Motion AV Loader source_audio ─┬→ Loop Start / Current Shot / Assemble
+                                    └→ Tagged Audio Ref or tagged passthrough
 Standalone AUDIO ─→ Tagged Audio Ref ──────────────┴→ Tagged Ref2VA
 
 Current Shot prompt / scene / dimensions / length ───────────────────↗
@@ -269,8 +272,22 @@ reference and from its paired audio. This prevents H3 from replaying one
 context span of motion after the protected prefix. Generic Tagged Video Ref
 keeps overlap-inclusive target-window slicing.
 
-For long control videos, **Tagged Motion Ref (Lazy Path)** avoids holding the
-complete decoded float32 IMAGE batch in RAM. It fingerprints the media file at
+For long control videos, **Tagged Motion Ref (Lazy VIDEO/Path)** avoids holding
+the complete decoded float32 IMAGE batch in RAM. Prefer **Lazy Motion AV
+Loader** when the same container supplies a source track. Its `source_video`
+is a native file-backed `VIDEO` that can fan out to the tagged node and Run
+Manager. Its `source_audio` is the complete post-skip track for Loop Start,
+Current Shot, Tagged Audio Ref, and Assemble; only audio is decoded in full.
+Connect the loader's `skip_first_frames` output to the tagged node so both
+streams share one timeline origin. The tagged node passes connected
+`source_audio` through on its own output for convenient fan-out. When using
+the direct-path fallback, it can derive that full output itself whenever
+embedded audio is enabled.
+
+Core **Load Video** remains supported for generated-audio workflows: the
+tagged node reads only its loader disk path—never `get_components()`—and the
+same native `VIDEO` can connect to Run Manager. Its direct `video_path` widget
+also remains a compatibility fallback. The node fingerprints the media file at
 registration time, then Tagged Ref2VA decodes and resizes only the active Plan
 scene. Constant-frame-rate sources such as 25 or 30 fps are resampled to 24 fps
 inside that scene window, so Reference Video Prep and its full-video tensors

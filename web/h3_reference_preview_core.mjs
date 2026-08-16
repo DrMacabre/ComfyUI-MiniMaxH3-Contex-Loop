@@ -232,7 +232,9 @@ export function taggedReferenceRecords(editorNode, prompt = "") {
             const pathBacked = type === TAGGED_MOTION_PATH_REF_TYPE;
             const video = baseRecord(
                 node, "video", 1, pathBacked ? "video_path" : "video");
-            if (pathBacked) video.source = node;
+            const nativeVideoSource = pathBacked
+                ? inputSource(node, "source_video") : null;
+            if (pathBacked) video.source = nativeVideoSource || node;
             video.selector = "prompt tag";
             video.semanticRole = (
                 type === TAGGED_MOTION_REF_TYPE || pathBacked)
@@ -253,7 +255,7 @@ export function taggedReferenceRecords(editorNode, prompt = "") {
                     tag: audioTag,
                     selector: "prompt tag",
                     active: video.active,
-                    source: audioSource || node,
+                    source: audioSource || nativeVideoSource || node,
                     label: null,
                     pairedWith: video,
                 });

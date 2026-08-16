@@ -124,9 +124,12 @@ const taggedMotionVideo = add(makeNode(60, "LoadVideo", {
 const taggedMotion = add(makeNode(61, "MiniMaxH3TaggedMotionReference", {
     tag: "motion", target_subject: "<Subject 1> and <Subject 2>",
 }));
+const taggedLazyLoader = add(makeNode(63, "MiniMaxH3LazyMotionAVLoader", {
+    video_path: "/media/lazy-motion.mkv",
+}));
 const taggedLazyMotion = add(makeNode(
     62, "MiniMaxH3TaggedMotionReferencePath", {
-        video_path: "/media/motion.mkv", tag: "lazy_motion",
+        video_path: "", tag: "lazy_motion",
         target_subject: "<Subject 1>", use_embedded_audio: true,
         audio_tag: "lazy_motion_audio",
     },
@@ -142,6 +145,7 @@ connect(taggedVideoAudio, taggedVideo, "audio");
 connect(taggedVideo, taggedMotion, "previous");
 connect(taggedMotionVideo, taggedMotion, "video");
 connect(taggedMotion, taggedLazyMotion, "previous");
+connect(taggedLazyLoader, taggedLazyMotion, "source_video");
 connect(taggedLazyMotion, taggedWrapper, "references");
 
 assert.equal(findTaggedRef2VA(taggedEditor), taggedWrapper);
@@ -175,6 +179,14 @@ assert.deepEqual(
         {tag: "lazy_motion_audio", label: "<Audio 2>", active: true,
             sourceLabel: undefined},
     ],
+);
+assert.equal(
+    promptRefs.find(({tag}) => tag === "lazy_motion").source,
+    taggedLazyLoader,
+);
+assert.equal(
+    promptRefs.find(({tag}) => tag === "lazy_motion_audio").source,
+    taggedLazyLoader,
 );
 assert.equal(referencePreviewRecords(
     taggedEditor, 2, {prompt: "Use @hero_look."}).mode, "tagged");

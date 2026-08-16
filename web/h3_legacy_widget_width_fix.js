@@ -24,6 +24,7 @@ const H3_NODE_TYPES = new Set([
     "MiniMaxH3TaggedPictureReference",
     "MiniMaxH3TaggedVideoReference",
     "MiniMaxH3TaggedMotionReference",
+    "MiniMaxH3LazyMotionAVLoader",
     "MiniMaxH3TaggedMotionReferencePath",
     "MiniMaxH3LazyMotionScenePreview",
     "MiniMaxH3TaggedAudioReference",

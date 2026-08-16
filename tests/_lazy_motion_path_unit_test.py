@@ -41,6 +41,20 @@ sys.modules[spec.name] = chain
 spec.loader.exec_module(chain)
 
 
+class FileBackedNativeVideo:
+    def __init__(self, path):
+        self.path = str(path)
+
+    def get_stream_source(self):
+        return self.path
+
+    def get_active_trim_window(self):
+        return 0.0, 0.0
+
+    def get_components(self):
+        raise AssertionError("lazy native VIDEO route decoded all components")
+
+
 def write_fixture(path, frame_count=12, source_fps=24):
     width = height = 64
     sample_rate = 48000
@@ -86,7 +100,7 @@ with tempfile.TemporaryDirectory() as temporary:
     path = pathlib.Path(temporary) / "motion.mkv"
     write_fixture(path)
     node = chain.MiniMaxH3TaggedMotionReferencePath()
-    references, fingerprint, status, preview_source = node.add(
+    references, fingerprint, status, preview_source, full_track = node.add(
         str(path), "performance", "<Subject 1>",
         "the exact body movement and action timing", "source", True,
         "performance_audio", "sequential")
@@ -96,6 +110,36 @@ with tempfile.TemporaryDirectory() as temporary:
     assert chain._is_lazy_motion_descriptor(entry["value"])
     assert entry["semantic_role"] == "motion"
     assert entry["audio_tag"] == "performance_audio"
+    assert tuple(full_track["waveform"].shape) == (1, 1, 24000)
+    assert full_track["sample_rate"] == 48000
+
+    chain._native_video_from_path = lambda media_path: (
+        "native-video", str(media_path))
+    loader = chain.MiniMaxH3LazyMotionAVLoader()
+    loaded_video, loaded_audio, loaded_skip, loaded_status = loader.load(
+        str(path), 2)
+    assert loaded_video == ("native-video", str(path))
+    assert tuple(loaded_audio["waveform"].shape) == (1, 1, 20000)
+    assert loaded_skip == 2
+    assert "full post-skip AUDIO" in loaded_status
+    assert "video frames remain disk-backed" in loaded_status
+
+    native_video = FileBackedNativeVideo(path)
+    (native_refs, native_fingerprint, native_status, native_preview,
+     native_audio) = node.add(
+         "", "native_performance", "<Subject 1>",
+         "the exact body movement and action timing", "source", True,
+         "native_performance_audio", "sequential",
+         source_video=native_video, source_audio=loaded_audio)
+    assert native_refs["entries"][0]["value"]["path"] == str(path)
+    assert native_refs["entries"][0]["value"]["source_route"] == (
+        "native VIDEO loader")
+    assert "native VIDEO loader" in native_status
+    assert native_preview["entry"] is native_refs["entries"][0]
+    assert native_audio is loaded_audio
+    assert len(native_fingerprint) == 64
+    assert isinstance(node.IS_CHANGED(
+        "", source_video=native_video), str)
 
     plan = {
         "compatibility": {"continuation_mode": "masked_av"},
@@ -142,7 +186,7 @@ with tempfile.TemporaryDirectory() as temporary:
 
     path_25 = pathlib.Path(temporary) / "motion_25fps.mkv"
     write_fixture(path_25, frame_count=30, source_fps=25)
-    refs_25, _, status_25, _ = node.add(
+    refs_25, _, status_25, _, full_track_25 = node.add(
         str(path_25), "performance_25", "<Subject 1>",
         "the exact body movement and action timing", "source", True,
         "performance_25_audio", "sequential")
@@ -151,6 +195,7 @@ with tempfile.TemporaryDirectory() as temporary:
     assert descriptor_25["source_fps"] == 25
     assert descriptor_25["fps"] == 24
     assert descriptor_25["frame_count"] == 29, descriptor_25
+    assert tuple(full_track_25["waveform"].shape) == (1, 1, 58000)
     assert "25 -> 24 fps scene-local" in status_25
     converted = chain._decode_lazy_motion_video(
         descriptor_25, 20, 25)
@@ -169,15 +214,17 @@ with tempfile.TemporaryDirectory() as temporary:
     assert np.allclose(
         tail_audio["waveform"].numpy()[..., -400:], 0.0)
 
-    skipped_refs, skipped_fingerprint, skipped_status, _ = node.add(
-        str(path_25), "performance_skip", "<Subject 1>",
-        "the exact body movement and action timing", "source", True,
-        "performance_skip_audio", "sequential", skip_first_frames=10)
+    (skipped_refs, skipped_fingerprint, skipped_status, _,
+     skipped_full_track) = node.add(
+         str(path_25), "performance_skip", "<Subject 1>",
+         "the exact body movement and action timing", "source", True,
+         "performance_skip_audio", "sequential", skip_first_frames=10)
     skipped_entry = skipped_refs["entries"][0]
     skipped_descriptor = skipped_entry["value"]
     assert skipped_descriptor["skip_first_frames"] == 10
     assert abs(skipped_descriptor["skip_seconds"] - 0.4) < 1e-9
     assert skipped_descriptor["frame_count"] == 20
+    assert tuple(skipped_full_track["waveform"].shape) == (1, 1, 40000)
     assert "skip 10 source frames (0.400s)" in skipped_status
     assert skipped_fingerprint != refs_25["fingerprint"]
     skipped_video = chain._decode_lazy_motion_video(
@@ -206,6 +253,7 @@ with tempfile.TemporaryDirectory() as temporary:
         raise AssertionError("skip consuming the full source was accepted")
 
 print(
-    "lazy motion path: file fingerprinting, native-frame skip/seek, scene-only "
+    "lazy motion path: file fingerprinting, native-frame skip/seek, native "
+    "VIDEO + full post-skip AUDIO loading, source-audio passthrough, scene-only "
     "CFR-to-24 AV decode, delivered masked timing, no-Plan blocking, and scene "
     "counter preview pass")

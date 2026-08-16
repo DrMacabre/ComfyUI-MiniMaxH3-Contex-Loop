@@ -26,7 +26,13 @@ Newest first. This file keeps release history out of the onboarding README.
   separate Plan-aware scene-counter preview blocks media output when no Plan is
   connected or the tag is inactive. A native-frame start offset seeks near the
   requested source point and shifts video and audio together without building
-  tensors for the skipped prefix.
+  tensors for the skipped prefix. It also accepts native file-backed `VIDEO`
+  from core Load Video, allowing that loader to fan out normally to both the
+  tagged reference and Run Manager asset registration. A dedicated Lazy
+  Motion AV Loader now exposes that same disk-backed native VIDEO plus the
+  complete post-skip AUDIO track without decoding any video frames. The tagged
+  node accepts and passes through that full track, while retaining direct-path
+  audio extraction for compatibility.
 
 ## v0.4.7 — General masked targets
 

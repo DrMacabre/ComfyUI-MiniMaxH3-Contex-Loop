@@ -427,6 +427,46 @@ def _resolved_media_path(value: Any, label: str) -> str:
     return path
 
 
+def _lazy_motion_media_path(
+        video_path: Any, source_video: Any = None) -> tuple[str, str]:
+    if source_video is not None:
+        get_stream_source = getattr(source_video, "get_stream_source", None)
+        if not callable(get_stream_source):
+            raise ValueError(
+                "Lazy motion source_video must be a native ComfyUI VIDEO "
+                "from a file-backed loader.")
+        try:
+            stream_source = get_stream_source()
+        except Exception as exc:
+            raise ValueError(
+                "Lazy motion source_video could not expose its file source: "
+                "%s" % exc) from exc
+        if not isinstance(stream_source, (str, os.PathLike)):
+            raise ValueError(
+                "Lazy motion source_video is memory-backed. Connect core "
+                "Load Video or provide video_path so scene decoding can "
+                "remain disk-backed.")
+        get_trim = getattr(source_video, "get_active_trim_window", None)
+        if callable(get_trim):
+            try:
+                trim_start, trim_duration = get_trim()
+            except Exception as exc:
+                raise ValueError(
+                    "Lazy motion source_video trim could not be inspected: "
+                    "%s" % exc) from exc
+            if (abs(float(trim_start)) > 1e-9 or
+                    abs(float(trim_duration)) > 1e-9):
+                raise ValueError(
+                    "Lazy motion source_video must be untrimmed. Use "
+                    "skip_first_frames on Tagged Motion Ref for an exact, "
+                    "fingerprinted timeline offset.")
+        return (_resolved_media_path(
+            os.fspath(stream_source), "Lazy motion native VIDEO source"),
+            "native VIDEO loader")
+    return (_resolved_media_path(
+        video_path, "Motion-reference video path"), "direct path")
+
+
 def _stream_start_seconds(stream: Any) -> float:
     if stream.start_time is None or stream.time_base is None:
         return 0.0
@@ -518,6 +558,34 @@ def _probe_lazy_motion_path(
         raise ValueError(
             "Could not inspect lazy motion-reference video %s: %s" %
             (resolved, exc)) from exc
+
+
+def _lazy_motion_descriptor_with_skip(
+        descriptor: dict[str, Any], skip_first_frames: Any) -> dict[str, Any]:
+    prepared = dict(descriptor)
+    skip_first_frames = int(skip_first_frames)
+    if skip_first_frames < 0:
+        raise ValueError(
+            "Lazy motion skip_first_frames cannot be negative.")
+    source_frames = int(prepared.get("source_frame_count", 0))
+    if source_frames > 0 and skip_first_frames >= source_frames:
+        raise ValueError(
+            "Lazy motion skip_first_frames %d consumes all %d source "
+            "frames." % (skip_first_frames, source_frames))
+    source_fps = float(prepared["source_fps"])
+    duration_seconds = float(prepared.get("duration_seconds", 0.0))
+    skip_seconds = skip_first_frames / source_fps
+    if duration_seconds > 0.0 and skip_seconds >= duration_seconds:
+        raise ValueError(
+            "Lazy motion skip_first_frames %d starts at or beyond the "
+            "%.3fs source duration." %
+            (skip_first_frames, duration_seconds))
+    prepared["skip_first_frames"] = skip_first_frames
+    prepared["skip_seconds"] = skip_seconds
+    if duration_seconds > 0.0:
+        prepared["frame_count"] = int(math.ceil(
+            (duration_seconds - skip_seconds) * FPS - 1e-9))
+    return prepared
 
 
 def _is_lazy_motion_descriptor(value: Any) -> bool:
@@ -1060,6 +1128,31 @@ def _decode_lazy_motion_audio(
         "waveform": torch.from_numpy(target).unsqueeze(0),
         "sample_rate": sample_rate,
     }
+
+
+def _decode_lazy_motion_source_audio(
+        descriptor: dict[str, Any]) -> dict[str, Any]:
+    """Decode the complete post-skip audio track on the 24 fps video clock."""
+    frame_count = int(descriptor.get("frame_count", 0))
+    if frame_count < 1:
+        raise ValueError(
+            "Lazy motion source audio requires a known post-skip video "
+            "duration.")
+    audio = _decode_lazy_motion_audio(descriptor, 0, frame_count)
+    if audio is None:
+        raise ValueError(
+            "Lazy motion source video contains no embedded audio stream.")
+    return audio
+
+
+def _native_video_from_path(path: str) -> Any:
+    try:
+        from comfy_api.latest import InputImpl
+    except ImportError as exc:
+        raise RuntimeError(
+            "MiniMax H3 Lazy Motion AV Loader requires ComfyUI's native "
+            "VIDEO API.") from exc
+    return InputImpl.VideoFromFile(path)
 
 
 def _scheduled_video_reference_slice(
@@ -4102,6 +4195,70 @@ class MiniMaxH3TaggedMotionReference:
         return references, references["fingerprint"], status
 
 
+class MiniMaxH3LazyMotionAVLoader:
+    """Expose one disk-backed native VIDEO and its complete timeline audio."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "video_path": ("STRING", {
+                    "default": "",
+                    "tooltip": "Absolute path to the motion-reference video. "
+                               "VIDEO remains file-backed; only its embedded "
+                               "audio track is decoded."}),
+                "skip_first_frames": ("INT", {
+                    "default": 0, "min": 0, "max": 100000000, "step": 1,
+                    "tooltip": "Start the Plan timeline after this many "
+                               "native source frames. The VIDEO wrapper stays "
+                               "untrimmed; connect this INT to the tagged "
+                               "motion node's matching input."}),
+            },
+        }
+
+    RETURN_TYPES = ("VIDEO", "AUDIO", "INT", "STRING")
+    RETURN_NAMES = (
+        "source_video", "source_audio", "skip_first_frames", "status")
+    FUNCTION = "load"
+    CATEGORY = "conditioning/minimax/contex_loop/media"
+    DESCRIPTION = (
+        "Load one motion-reference container without decoding its video "
+        "frames. source_video is ComfyUI's native file-backed VIDEO; "
+        "source_audio is the complete post-skip track aligned to the same "
+        "24 fps timeline for Loop Start, Current Shot, Tagged Audio Ref, and "
+        "Assemble."
+    )
+
+    @classmethod
+    def IS_CHANGED(cls, video_path="", skip_first_frames=0, **kwargs):
+        try:
+            path = _resolved_media_path(
+                video_path, "Lazy motion AV loader video path")
+            stat = os.stat(path)
+            return "%s:%d:%d:%d" % (
+                path, int(stat.st_size), int(stat.st_mtime_ns),
+                int(skip_first_frames))
+        except (OSError, ValueError):
+            return float("NaN")
+
+    def load(self, video_path, skip_first_frames=0):
+        path = _resolved_media_path(
+            video_path, "Lazy motion AV loader video path")
+        descriptor = _lazy_motion_descriptor_with_skip(
+            _probe_lazy_motion_path(path, True), skip_first_frames)
+        source_audio = _decode_lazy_motion_source_audio(descriptor)
+        source_video = _native_video_from_path(path)
+        waveform, sample_rate = _validate_audio(
+            source_audio, "Lazy motion AV loader source audio")
+        duration = int(waveform.shape[-1]) / float(sample_rate)
+        status = (
+            "Lazy native VIDEO + %.3fs full post-skip AUDIO; "
+            "%d source frames skipped; video frames remain disk-backed" %
+            (duration, int(descriptor["skip_first_frames"])))
+        return (source_video, source_audio,
+                int(descriptor["skip_first_frames"]), status)
+
+
 class MiniMaxH3TaggedMotionReferencePath:
     """Register motion media by path and decode only the active scene."""
 
@@ -4111,11 +4268,11 @@ class MiniMaxH3TaggedMotionReferencePath:
             "required": {
                 "video_path": ("STRING", {
                     "default": "",
-                    "tooltip": "Absolute path to one constant-frame-rate "
-                               "video. The node fingerprints the file without "
-                               "materializing an IMAGE batch; Tagged Ref2VA "
-                               "decodes only the active scene window and "
-                               "resamples that window to 24 fps."}),
+                    "tooltip": "Direct-path fallback for one CFR video. "
+                               "Normally leave blank and connect core Load "
+                               "Video to source_video, then fan that loader "
+                               "out to Run Manager. Neither route materializes "
+                               "the full IMAGE batch."}),
                 "tag": ("STRING", {
                     "default": "motion",
                     "tooltip": "Stable @tag for the reusable motion Subject."}),
@@ -4158,14 +4315,27 @@ class MiniMaxH3TaggedMotionReferencePath:
             "optional": {
                 "previous": (TAGGED_REFERENCE_TYPE, {
                     "tooltip": "Optional preceding Tagged Ref chain."}),
+                "source_video": ("VIDEO", {
+                    "tooltip": "Native VIDEO from core Load Video. The node "
+                               "reads only its file path, never get_components, "
+                               "so the same loader output can also connect to "
+                               "Run Manager as the source video asset."}),
+                "source_audio": ("AUDIO", {
+                    "tooltip": "Optional full post-skip track from Lazy "
+                               "Motion AV Loader. It is passed through as "
+                               "source_audio; when omitted and embedded audio "
+                               "is enabled, this node decodes the full track "
+                               "itself for direct-path compatibility."}),
             },
             "hidden": {"dynprompt": "DYNPROMPT", "unique_id": "UNIQUE_ID"},
         }
 
     RETURN_TYPES = (
-        TAGGED_REFERENCE_TYPE, "STRING", "STRING", LAZY_MOTION_SOURCE_TYPE)
+        TAGGED_REFERENCE_TYPE, "STRING", "STRING", LAZY_MOTION_SOURCE_TYPE,
+        "AUDIO")
     RETURN_NAMES = (
-        "references", "reference_fingerprint", "status", "preview_source")
+        "references", "reference_fingerprint", "status", "preview_source",
+        "source_audio")
     FUNCTION = "add"
     CATEGORY = "conditioning/minimax/contex_loop/references/prompt_driven"
     DESCRIPTION = (
@@ -4173,14 +4343,16 @@ class MiniMaxH3TaggedMotionReferencePath:
         "fingerprint instead of a full decoded IMAGE batch. Tagged Ref2VA "
         "later decodes, converts to 24 fps, and resizes only the current Plan "
         "scene, with optional embedded audio from the identical time window "
-        "and a seekable native-frame start offset."
+        "and a seekable native-frame start offset. Prefer Lazy Motion AV "
+        "Loader so native VIDEO can fan out to Run Manager and its complete "
+        "post-skip source_audio can drive source-track chain alignment."
     )
 
     @classmethod
-    def IS_CHANGED(cls, video_path="", skip_first_frames=0, **kwargs):
+    def IS_CHANGED(cls, video_path="", skip_first_frames=0,
+                   source_video=None, **kwargs):
         try:
-            path = _resolved_media_path(
-                video_path, "Motion-reference video path")
+            path, _route = _lazy_motion_media_path(video_path, source_video)
             stat = os.stat(path)
             return "%s:%d:%d:%d" % (
                 path, int(stat.st_size), int(stat.st_mtime_ns),
@@ -4191,37 +4363,21 @@ class MiniMaxH3TaggedMotionReferencePath:
     def add(self, video_path, tag, target_subject, motion_description,
             reference_short_edge="384", use_embedded_audio=True,
             audio_tag="", timeline_mode="sequential", skip_first_frames=0,
-            previous=None, dynprompt=None, unique_id=None):
+            previous=None, source_video=None, source_audio=None,
+            dynprompt=None, unique_id=None):
         mode = _downstream_reference_compliance(dynprompt, unique_id)
         try:
             target, description, short_edge = _motion_reference_fields(
                 target_subject, motion_description, reference_short_edge)
+            resolved_path, source_route = _lazy_motion_media_path(
+                video_path, source_video)
             descriptor = _probe_lazy_motion_path(
-                video_path, bool(use_embedded_audio))
-            skip_first_frames = int(skip_first_frames)
-            if skip_first_frames < 0:
-                raise ValueError(
-                    "Lazy motion skip_first_frames cannot be negative.")
-            source_frames = int(descriptor.get("source_frame_count", 0))
-            if source_frames > 0 and skip_first_frames >= source_frames:
-                raise ValueError(
-                    "Lazy motion skip_first_frames %d consumes all %d source "
-                    "frames." % (skip_first_frames, source_frames))
-            source_fps = float(descriptor["source_fps"])
-            duration_seconds = float(
-                descriptor.get("duration_seconds", 0.0))
-            skip_seconds = skip_first_frames / source_fps
-            if (duration_seconds > 0.0 and
-                    skip_seconds >= duration_seconds):
-                raise ValueError(
-                    "Lazy motion skip_first_frames %d starts at or beyond "
-                    "the %.3fs source duration." %
-                    (skip_first_frames, duration_seconds))
-            descriptor["skip_first_frames"] = skip_first_frames
-            descriptor["skip_seconds"] = skip_seconds
-            if duration_seconds > 0.0:
-                descriptor["frame_count"] = int(math.ceil(
-                    (duration_seconds - skip_seconds) * FPS - 1e-9))
+                resolved_path, bool(use_embedded_audio))
+            descriptor["source_route"] = source_route
+            descriptor = _lazy_motion_descriptor_with_skip(
+                descriptor, skip_first_frames)
+            descriptor["source_route"] = source_route
+            skip_first_frames = int(descriptor["skip_first_frames"])
             file_hash = _file_sha256(descriptor["path"])
             descriptor["file_sha256"] = file_hash
             descriptor["motion_short_edge"] = short_edge
@@ -4243,11 +4399,20 @@ class MiniMaxH3TaggedMotionReferencePath:
                 compliance_mode=mode, timeline_mode=timeline_mode)
             references = _decorate_motion_reference(
                 references, target, description, short_edge)
+            if source_audio is not None:
+                _validate_audio(
+                    source_audio, "Lazy tagged motion full source audio")
+                full_source_audio = source_audio
+            elif bool(use_embedded_audio):
+                full_source_audio = _decode_lazy_motion_source_audio(
+                    descriptor)
+            else:
+                full_source_audio = None
         except (TypeError, ValueError) as exc:
             if mode == "disabled":
                 skipped = _skipped_tagged_reference_result(
                     previous, "Lazy tagged motion reference", exc)
-                return skipped + (None,)
+                return skipped + (None, None)
             raise
         entry = references["entries"][-1]
         paired = " + @%s" % entry["audio_tag"] if entry.get(
@@ -4262,9 +4427,10 @@ class MiniMaxH3TaggedMotionReferencePath:
                        "skip %d source frames (%.3fs)" %
                        (skip_first_frames, descriptor["skip_seconds"]))
         status = (
-            "@%s%s lazy motion -> %s; %s px short edge; %s; %s; %s; %s; %s" %
+            "@%s%s lazy motion -> %s; %s; %s px short edge; %s; %s; %s; %s; %s" %
             (entry["tag"], paired, entry["motion_target"],
-             entry["motion_short_edge"], entry["timeline_mode"],
+             descriptor["source_route"], entry["motion_short_edge"],
+             entry["timeline_mode"],
              rate_status, skip_status, frame_status,
              references["fingerprint"][:12]))
         source = {
@@ -4272,7 +4438,8 @@ class MiniMaxH3TaggedMotionReferencePath:
             "entry": entry,
             "reference_fingerprint": references["fingerprint"],
         }
-        return references, references["fingerprint"], status, source
+        return (references, references["fingerprint"], status, source,
+                full_source_audio)
 
 
 class MiniMaxH3LazyMotionScenePreview:
@@ -8952,6 +9119,7 @@ CHAIN_NODE_CLASS_MAPPINGS = {
     "MiniMaxH3TaggedPictureReference": MiniMaxH3TaggedPictureReference,
     "MiniMaxH3TaggedVideoReference": MiniMaxH3TaggedVideoReference,
     "MiniMaxH3TaggedMotionReference": MiniMaxH3TaggedMotionReference,
+    "MiniMaxH3LazyMotionAVLoader": MiniMaxH3LazyMotionAVLoader,
     "MiniMaxH3TaggedMotionReferencePath": MiniMaxH3TaggedMotionReferencePath,
     "MiniMaxH3LazyMotionScenePreview": MiniMaxH3LazyMotionScenePreview,
     "MiniMaxH3TaggedAudioReference": MiniMaxH3TaggedAudioReference,
@@ -8986,8 +9154,9 @@ CHAIN_NODE_DISPLAY_NAME_MAPPINGS = {
     "MiniMaxH3TaggedPictureReference": "MiniMax H3 Tagged Picture Ref",
     "MiniMaxH3TaggedVideoReference": "MiniMax H3 Tagged Video Ref",
     "MiniMaxH3TaggedMotionReference": "MiniMax H3 Tagged Motion Ref",
+    "MiniMaxH3LazyMotionAVLoader": "MiniMax H3 Lazy Motion AV Loader",
     "MiniMaxH3TaggedMotionReferencePath": (
-        "MiniMax H3 Tagged Motion Ref (Lazy Path)"),
+        "MiniMax H3 Tagged Motion Ref (Lazy VIDEO/Path)"),
     "MiniMaxH3LazyMotionScenePreview": (
         "MiniMax H3 Lazy Motion Scene Preview"),
     "MiniMaxH3TaggedAudioReference": "MiniMax H3 Tagged Audio Ref",

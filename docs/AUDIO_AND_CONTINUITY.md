@@ -52,6 +52,26 @@ the waveform so a changed or incorrectly wired track cannot silently resume old
 checkpoints. The track must cover the total delivered video; a truly silent
 placeholder may be shorter and is padded safely.
 
+When a long motion-reference video also contains the master soundtrack, use
+**Lazy Motion AV Loader** instead of decoding the full video through a
+component splitter:
+
+```text
+Lazy Motion AV Loader source_video ─┬→ Tagged Motion Ref source_video
+                                    └→ Run Manager asset
+Lazy Motion AV Loader source_audio ─┬→ Loop Start
+                                    ├→ Current Shot
+                                    ├→ Tagged Audio Ref
+                                    └→ Assemble
+Lazy Motion AV Loader skip frames ───→ Tagged Motion Ref skip frames
+```
+
+The native VIDEO remains disk-backed. The loader decodes only the complete
+post-skip audio track, which is still required: Loop Start establishes its
+fingerprint and Current Shot maps exact Plan frame windows onto its sample
+clock for H3 audio-latent alignment. Scene-local paired audio from the tagged
+motion reference does not replace this master track.
+
 ### Tagged Ref2VA source timeline
 
 Tagged references need a static media path because their fingerprint normally
