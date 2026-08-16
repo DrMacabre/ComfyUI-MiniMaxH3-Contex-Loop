@@ -2,6 +2,15 @@
 
 Newest first. This file keeps release history out of the onboarding README.
 
+## v0.4.9 — Run Manager active asset target
+
+- Made the Run Manager show the connected Plan `run_name` beside Reference
+  assets so the destination of **Save/update assets** is explicit.
+- After a manual asset save, the saved-run browser now selects the actual
+  destination run instead of remaining on a previously browsed run.
+- Kept asset-only run folders selectable for inspection and opening while
+  leaving **Load into Plan** disabled until a restorable Plan archive exists.
+
 ## v0.4.8 — Feathered AV continuation
 
 - Added `feathered_av` as a third continuation mode. It uses the same aligned

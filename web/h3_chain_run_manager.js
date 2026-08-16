@@ -223,6 +223,7 @@ function mount(node) {
     for (const name of ASSET_WIDGETS) collapseWidget(widgetByName(node, name));
     const state = {
         runs: [], selected: "", busy: false, bindings: [], watchedSources: new Set(),
+        watchedPlanWidget: null,
     };
     const title = element("div", "h3rm-title", "H3 Run Manager");
     const select = element("select", "h3rm-select");
@@ -230,6 +231,7 @@ function mount(node) {
     const details = element("div", "h3rm-details", "Loading saved runs…");
     const assetSection = element("div", "h3rm-section");
     const assetHeader = element("div", "h3rm-section-title");
+    const assetTitle = element("span", "", "Reference assets");
     const assetList = element("div", "h3rm-assets");
     const policies = element("div", "h3rm-policy");
     const actions = element("div", "h3rm-actions");
@@ -257,7 +259,47 @@ function mount(node) {
         policyCheckbox("archive_audio", "Archive audio"),
         policyCheckbox("archive_video", "Archive video"),
     );
-    assetHeader.append(element("span", "", "Reference assets"), policies);
+    assetHeader.append(assetTitle, policies);
+
+    function activeRunName() {
+        const planNode = upstreamPlanNode(node);
+        return String(widgetByName(planNode, "run_name")?.value ?? "").trim();
+    }
+
+    const activeRunChanged = () => {
+        const defer = window.queueMicrotask ?? ((callback) => window.setTimeout(callback, 0));
+        defer(() => renderActiveRun());
+    };
+
+    function updatePlanWatch() {
+        const planWidget = widgetByName(upstreamPlanNode(node), "run_name") ?? null;
+        if (state.watchedPlanWidget === planWidget) return;
+        state.watchedPlanWidget?._h3RunManagerWatchers?.delete(activeRunChanged);
+        state.watchedPlanWidget = planWidget;
+        if (!planWidget) return;
+        planWidget._h3RunManagerWatchers ??= new Set();
+        if (!planWidget._h3RunManagerWatchWrapped) {
+            planWidget._h3RunManagerWatchWrapped = true;
+            const changed = planWidget.callback;
+            planWidget.callback = function () {
+                const result = changed?.apply(this, arguments);
+                for (const listener of this._h3RunManagerWatchers ?? []) listener();
+                return result;
+            };
+        }
+        planWidget._h3RunManagerWatchers.add(activeRunChanged);
+    }
+
+    function renderActiveRun() {
+        updatePlanWatch();
+        const runName = activeRunName();
+        assetTitle.textContent = runName
+            ? `Reference assets → ${runName}`
+            : "Reference assets → no active run_name";
+        assetTitle.title = runName
+            ? `Save/update assets writes to the connected Plan run “${runName}”.`
+            : "Set run_name on the connected Plan before saving assets.";
+    }
 
     function writeBindingsWidget() {
         const widget = widgetByName(node, "asset_bindings_json");
@@ -358,6 +400,7 @@ function mount(node) {
     }
 
     function renderSelection() {
+        renderActiveRun();
         const run = selectedRun();
         if (!run) {
             details.textContent = state.runs.length
@@ -376,7 +419,7 @@ function mount(node) {
         open.disabled = state.busy;
     }
 
-    async function refreshRuns() {
+    async function refreshRuns(preferredRunName = "") {
         setBusy(true);
         status.className = "h3rm-status";
         status.textContent = "Scanning host output…";
@@ -384,16 +427,19 @@ function mount(node) {
             const payload = await jsonRequest("/minimax_h3_context_loop/runs");
             const previous = state.selected;
             state.runs = Array.isArray(payload.runs) ? payload.runs : [];
-            state.selected = state.runs.some((item) => item.run_name === previous)
-                ? previous
-                : state.runs.find((item) => item.restorable)?.run_name
-                    ?? state.runs[0]?.run_name ?? "";
+            const active = activeRunName();
+            const candidates = [preferredRunName, previous, active];
+            state.selected = candidates.find((candidate) =>
+                candidate && state.runs.some((item) => item.run_name === candidate))
+                ?? state.runs.find((item) => item.restorable)?.run_name
+                ?? state.runs[0]?.run_name ?? "";
             select.replaceChildren();
             for (const run of state.runs) {
-                const suffix = run.scene_count == null ? "" : ` · ${run.scene_count} scenes`;
+                const suffix = run.scene_count == null
+                    ? (run.restorable ? "" : " · assets only")
+                    : ` · ${run.scene_count} scenes`;
                 const option = element("option", "", `${run.run_name}${suffix}`);
                 option.value = run.run_name;
-                option.disabled = !run.restorable;
                 select.append(option);
             }
             select.value = state.selected;
@@ -508,8 +554,11 @@ function mount(node) {
         const runName = String(widgetByName(planNode, "run_name")?.value ?? "").trim();
         if (!planNode || !runName || !state.bindings.length || state.busy) {
             status.className = "h3rm-status h3rm-error";
-            status.textContent = planNode
-                ? "Connect at least one loader asset." : "Connect the active Plan first.";
+            status.textContent = !planNode
+                ? "Connect the active Plan first."
+                : !runName
+                    ? "Set run_name on the connected Plan first."
+                    : "Connect at least one loader asset.";
             return;
         }
         syncAssetBindings();
@@ -535,9 +584,10 @@ function mount(node) {
             if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
             const warning = payload.warnings?.length
                 ? ` · ${payload.warnings.join(" · ")}` : "";
-            await refreshRuns();
+            const savedRunName = String(payload.run_name || runName);
+            await refreshRuns(savedRunName);
             status.className = warning ? "h3rm-status h3rm-error" : "h3rm-status";
-            status.textContent = `Saved ${payload.asset_count} bindings, ${payload.archived_asset_count ?? 0} archived${warning}`;
+            status.textContent = `Saved ${payload.asset_count} bindings to “${savedRunName}”, ${payload.archived_asset_count ?? 0} archived${warning}`;
         } catch (error) {
             status.className = "h3rm-status h3rm-error";
             status.textContent = error?.message || String(error);
@@ -602,6 +652,8 @@ function mount(node) {
             source._h3AssetWatchers?.delete(sourceChanged);
         }
         state.watchedSources.clear();
+        state.watchedPlanWidget?._h3RunManagerWatchers?.delete(activeRunChanged);
+        state.watchedPlanWidget = null;
         return removed?.apply(this, arguments);
     };
     node._h3RunManagerRefresh = () => {
@@ -614,7 +666,7 @@ function mount(node) {
     window.setTimeout(() => {
         node._h3RunManagerRefresh?.();
     }, 100);
-    void refreshRuns();
+    void refreshRuns(activeRunName());
 }
 
 app.registerExtension({
