@@ -43,10 +43,13 @@ tensors remain usable even when no browser-playable source file can be found.
 
 ## Prompt revisions
 
-The compact `‹ current / total ›` selector below the editor navigates prompt
-history. Typing updates one draft rather than creating a revision per keystroke.
-When Current Shot executes, that exact prompt becomes immutable; editing it
-creates a child revision.
+The compact `‹ Active current / total ›` selector below the editor activates a
+prompt version in the Plan; it is not a read-only history browser. Each version
+is labeled **Active draft**, **Active executed**, **Draft history**, or
+**Executed history**. Typing updates one active draft rather than creating a
+revision per keystroke. When Current Shot executes, that exact prompt becomes
+immutable; typing from it creates a child draft. Activating an older version
+explicitly replaces the selected scene prompt in the Plan.
 
 History is stored outside Plan JSON and loaded only for the selected scene:
 

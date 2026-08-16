@@ -3,6 +3,7 @@
 import assert from "node:assert/strict";
 import {
     orderedPromptRevisions,
+    promptRevisionHelp,
     promptRevisionLabel,
     promptRevisionNavigation,
 } from "../web/h3_prompt_history_core.mjs";
@@ -23,10 +24,14 @@ assert.equal(navigation.total, 3);
 assert.equal(navigation.previous.id, "b");
 assert.equal(navigation.next, null);
 assert.equal(navigation.parentPosition, 1);
-assert.match(promptRevisionLabel(navigation, "en-US"), /^Draft · .* · branched from 1$/);
+assert.match(promptRevisionLabel(navigation, "en-US"), /^Active draft · .* · branched from 1$/);
+assert.equal(navigation.isActive, true);
+assert.equal(navigation.isExecuted, false);
+assert.equal(navigation.isImmutable, false);
+assert.match(promptRevisionHelp(navigation), /draft is active in the Plan/);
 assert.match(
     promptRevisionLabel(promptRevisionNavigation(history, "b"), "en-US"),
-    /^Executed · .* · branched from 1 · executed 2×$/,
+    /^Executed history · .* · branched from 1 · executed 2×$/,
 );
 
 console.log("H3 prompt history navigation: ChatGPT-style ordering and labels pass");

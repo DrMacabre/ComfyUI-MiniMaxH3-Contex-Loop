@@ -124,12 +124,27 @@ class PromptHistoryStore:
 
     @staticmethod
     def _public_index(index: dict[str, Any]) -> dict[str, Any]:
+        revisions = [dict(item) for item in index["revisions"]]
+        active_revision = index.get("active_revision")
+        active = next((item for item in revisions
+                       if item.get("id") == active_revision), None)
+        executed = [item for item in revisions if item.get("executed_at")]
+        latest_executed = max(
+            executed,
+            key=lambda item: str(item.get("last_executed_at")
+                                 or item.get("executed_at") or ""),
+            default=None)
         return {
             "format": FORMAT,
             "run_name": index["run_name"],
             "scene_id": index["scene_id"],
-            "active_revision": index.get("active_revision"),
-            "revisions": [dict(item) for item in index["revisions"]],
+            "active_revision": active_revision,
+            "active_revision_state": (
+                "executed" if active and active.get("executed_at") else
+                "draft" if active else "empty"),
+            "latest_executed_revision": (
+                latest_executed.get("id") if latest_executed else None),
+            "revisions": revisions,
         }
 
     def list(self, run_name: Any, scene_id: Any) -> dict[str, Any]:

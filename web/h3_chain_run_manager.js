@@ -8,6 +8,10 @@ import {
     collectAssetBindings,
     nodeType,
 } from "./h3_run_assets_core.mjs?v=0.4.11";
+import {
+    runArchiveOptionLabel,
+    runManagerIdentity,
+} from "./h3_run_manager_core.mjs?v=0.4.11";
 
 const NODE_NAME = "MiniMaxH3ChainRunManager";
 const PLAN_NAME = "MiniMaxH3ChainPlan";
@@ -66,6 +70,12 @@ function injectStyles() {
             font:12px/1.4 system-ui,sans-serif; }
         .h3rm-root *, .h3rm-root *::before, .h3rm-root *::after { box-sizing:border-box; }
         .h3rm-title { font-size:15px; font-weight:750; }
+        .h3rm-identity { display:grid; grid-template-columns:1fr 1fr; gap:6px; }
+        .h3rm-identity > span { min-width:0; padding:5px 7px; border:1px solid var(--h3rm-border);
+            border-radius:5px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .h3rm-identity-active { color:#b8d2ff; }
+        .h3rm-identity-selected { color:var(--h3rm-muted); }
+        .h3rm-identity-selected.h3rm-same { color:#a8e6b1; border-color:#4d8a58; }
         .h3rm-section { padding:8px; border:1px solid color-mix(in srgb,var(--h3rm-border) 72%,transparent);
             border-radius:6px; background:var(--h3rm-panel); }
         .h3rm-section-title { display:flex; justify-content:space-between; align-items:center;
@@ -226,6 +236,10 @@ function mount(node) {
         watchedPlanWidget: null,
     };
     const title = element("div", "h3rm-title", "H3 Run Manager");
+    const identity = element("div", "h3rm-identity");
+    const activeIdentity = element("span", "h3rm-identity-active");
+    const selectedIdentity = element("span", "h3rm-identity-selected");
+    identity.append(activeIdentity, selectedIdentity);
     const select = element("select", "h3rm-select");
     select.title = "Saved projects discovered under the ComfyUI host's output/h3_chains folder.";
     const details = element("div", "h3rm-details", "Loading saved runs…");
@@ -268,7 +282,7 @@ function mount(node) {
 
     const activeRunChanged = () => {
         const defer = window.queueMicrotask ?? ((callback) => window.setTimeout(callback, 0));
-        defer(() => renderActiveRun());
+        defer(() => renderSelection());
     };
 
     function updatePlanWatch() {
@@ -402,6 +416,23 @@ function mount(node) {
     function renderSelection() {
         renderActiveRun();
         const run = selectedRun();
+        const runIdentity = runManagerIdentity(activeRunName(), run);
+        activeIdentity.textContent = runIdentity.activeLabel;
+        activeIdentity.title = "Generation and asset saving use this run_name from the connected Plan.";
+        selectedIdentity.textContent = runIdentity.selectedLabel;
+        selectedIdentity.title = runIdentity.same
+            ? "The selected saved archive matches the connected Plan."
+            : "Selection alone does not change the Plan. Load the selected archive to apply it.";
+        selectedIdentity.classList.toggle("h3rm-same", runIdentity.same);
+        load.textContent = runIdentity.loadLabel;
+        saveAssets.textContent = "Save assets to active Plan";
+        saveAssets.title = runIdentity.saveLabel;
+        for (const option of select.options ?? []) {
+            const optionRun = state.runs.find(
+                (item) => item.run_name === option.value);
+            if (optionRun) option.textContent = runArchiveOptionLabel(
+                optionRun, runIdentity.active);
+        }
         if (!run) {
             details.textContent = state.runs.length
                 ? "Select a saved H3 run." : "No saved H3 runs were found.";
@@ -435,15 +466,13 @@ function mount(node) {
                 ?? state.runs[0]?.run_name ?? "";
             select.replaceChildren();
             for (const run of state.runs) {
-                const suffix = run.scene_count == null
-                    ? (run.restorable ? "" : " · assets only")
-                    : ` · ${run.scene_count} scenes`;
-                const option = element("option", "", `${run.run_name}${suffix}`);
+                const option = element(
+                    "option", "", runArchiveOptionLabel(run, active));
                 option.value = run.run_name;
                 select.append(option);
             }
             select.value = state.selected;
-            status.textContent = `${state.runs.length} saved run${state.runs.length === 1 ? "" : "s"}`;
+            status.textContent = `${state.runs.length} saved archive${state.runs.length === 1 ? "" : "s"}`;
         } catch (error) {
             state.runs = [];
             state.selected = "";
@@ -502,9 +531,10 @@ function mount(node) {
             status.className = warning.length
                 ? "h3rm-status h3rm-error" : "h3rm-status";
             status.textContent = warning.length
-                ? `Loaded ${payload.scene_count ?? "saved"} scenes and ${assetApplied} assets · ${warning.join(" · ")}`
-                : `Loaded ${payload.scene_count ?? "saved"} scenes and ${assetApplied} assets`;
+                ? `Active Plan is now “${run.run_name}”: loaded ${payload.scene_count ?? "saved"} scenes and ${assetApplied} assets · ${warning.join(" · ")}`
+                : `Active Plan is now “${run.run_name}”: loaded ${payload.scene_count ?? "saved"} scenes and ${assetApplied} assets`;
             syncAssetBindings();
+            renderSelection();
             graph?.setDirtyCanvas?.(true, true);
         } catch (error) {
             status.className = "h3rm-status h3rm-error";
@@ -602,24 +632,24 @@ function mount(node) {
         status.textContent = "";
         renderSelection();
     });
-    const load = button("Load into Plan", "Replace the connected Plan after confirmation", () => {
+    const load = button("Load selected archive into Plan", "Replace the connected Plan after confirmation", () => {
         void loadRun();
     });
     load.classList.add("h3rm-load");
     const refresh = button("Refresh", "Rescan output/h3_chains on the ComfyUI host", () => {
         void refreshRuns();
     });
-    const open = button("Open folder", "Open the selected run folder on the ComfyUI host", () => {
+    const open = button("Open selected folder", "Open the selected archive folder on the ComfyUI host", () => {
         void openRunFolder();
     });
     const saveAssets = button(
-        "Save/update assets",
+        "Save assets to active Plan",
         "Write loader paths and enabled fallback copies into the active run folder",
         () => { void saveRunAssets(); },
     );
     actions.append(load, refresh, open, saveAssets, status);
     assetSection.append(assetHeader, assetList);
-    root.append(title, select, details, assetSection, actions);
+    root.append(title, identity, select, details, assetSection, actions);
 
     const widget = node.addDOMWidget("h3_run_manager", "h3-run-manager", root, {
         serialize: false,

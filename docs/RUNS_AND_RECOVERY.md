@@ -94,8 +94,20 @@ never included.
 
 Connect the active Plan output to **MiniMax H3 Run Manager**. It discovers runs
 under the ComfyUI host's `output/h3_chains`, including remote Docker hosts.
-Select a run and choose **Load into Plan**; after confirmation it restores
-archived prompts and Plan controls without changing graph links.
+Select a run and choose **Load selected archive into Plan**; after confirmation
+it restores archived prompts and Plan controls without changing graph links.
+
+The two names at the top are deliberately separate:
+
+- **Active Plan** is the connected Plan's current `run_name`. Generation and
+  **Save assets to active Plan** use this name.
+- **Selected archive** is only the folder highlighted in the browser. Selecting
+  it does not change the Plan. **Load selected archive into Plan** is the only
+  action that applies its archived prompts and settings.
+
+When both names match, the archive is marked **ACTIVE PLAN**. When they differ,
+the selected archive is labeled **not loaded**, so opening an old folder or
+inspecting it cannot be mistaken for switching the generation run.
 
 Restore prefers:
 

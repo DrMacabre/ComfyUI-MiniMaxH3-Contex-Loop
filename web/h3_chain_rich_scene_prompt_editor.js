@@ -23,6 +23,7 @@ import {
     promptOptimizerMcpProvider,
 } from "./h3_prompt_optimizer_settings.js";
 import {
+    promptRevisionHelp,
     promptRevisionLabel,
     promptRevisionNavigation,
 } from "./h3_prompt_history_core.mjs?v=0.4.11";
@@ -542,14 +543,14 @@ function mount(node) {
         }
         const navigation = promptRevisionNavigation(history.data, history.revisionId);
         const controls = element("span", "h3rp-history-nav");
-        const previous = button("‹", "Previous prompt version", () => navigation.previous && void selectHistoryRevision(navigation.previous.id));
-        const count = element("span", "h3rp-history-count", `${navigation.position} / ${navigation.total}`);
-        const next = button("›", "Next prompt version", () => navigation.next && void selectHistoryRevision(navigation.next.id));
+        const previous = button("‹", "Activate previous prompt version in the Plan", () => navigation.previous && void selectHistoryRevision(navigation.previous.id));
+        const count = element("span", "h3rp-history-count", `Active ${navigation.position} / ${navigation.total}`);
+        const next = button("›", "Activate next prompt version in the Plan", () => navigation.next && void selectHistoryRevision(navigation.next.id));
         previous.disabled = !navigation.previous;
         next.disabled = !navigation.next;
         controls.append(previous, count, next);
         const metadata = element("span", "h3rp-history-meta", promptRevisionLabel(navigation));
-        metadata.title = metadata.textContent;
+        metadata.title = promptRevisionHelp(navigation);
         history.host.append(controls, metadata);
     }
 

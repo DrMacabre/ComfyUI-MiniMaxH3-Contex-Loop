@@ -2,6 +2,32 @@
 
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import {
+    runArchiveOptionLabel,
+    runManagerIdentity,
+} from "../web/h3_run_manager_core.mjs";
+
+const different = runManagerIdentity("active_project", {
+    run_name: "saved_project",
+});
+assert.equal(different.same, false);
+assert.equal(different.activeLabel, "Active Plan: active_project");
+assert.equal(
+    different.selectedLabel,
+    "Selected archive: saved_project (not loaded)",
+);
+assert.equal(different.loadLabel, "Load selected archive into Plan");
+assert.match(different.saveLabel, /active_project/);
+
+const same = runManagerIdentity("saved_project", {run_name: "saved_project"});
+assert.equal(same.same, true);
+assert.equal(same.loadLabel, "Reload selected archive");
+assert.match(runArchiveOptionLabel({
+    run_name: "saved_project", scene_count: 2, restorable: true,
+}, "saved_project"), /2 scenes · ACTIVE PLAN$/);
+assert.match(runArchiveOptionLabel({
+    run_name: "asset_project", scene_count: null, restorable: false,
+}, ""), /assets only$/);
 
 const source = fs.readFileSync(
     new URL("../web/h3_chain_run_manager.js", import.meta.url), "utf8",
@@ -19,7 +45,7 @@ assert.match(source, /left === "plan_json"/);
 assert.match(source, /widget\.callback\?\.\(inputs\[name\]\)/);
 assert.match(source, /_h3ChainEditorRefresh/);
 assert.match(source, /output\/h3_chains/);
-assert.match(source, /Open folder/);
+assert.match(source, /Open selected folder/);
 assert.match(source, /navigator\.clipboard\.writeText\(payload\.path\)/);
 assert.match(source, /collectAssetBindings\(node\)/);
 assert.match(source, /applyAssetBinding\(graph, binding\)/);
@@ -29,7 +55,8 @@ assert.match(source, /Reference assets →/);
 assert.match(source, /_h3RunManagerWatchers/);
 assert.match(source, /refreshRuns\(savedRunName\)/);
 assert.match(source, /Saved \$\{payload\.asset_count\} bindings to/);
-assert.match(source, /assets only/);
+assert.match(source, /Active Plan is now/);
+assert.match(source, /selectedIdentity\.textContent = runIdentity\.selectedLabel/);
 assert.doesNotMatch(source, /option\.disabled = !run\.restorable/);
 assert.match(source, /removeLegacyStatusOutput/);
 assert.match(source, /output\.name === "asset_status"/);

@@ -20,6 +20,8 @@ def main():
         executed = store.mark_executed(
             "project", "scene_one", "First executed prompt.")
         assert executed["revision"]["executed_at"]
+        assert executed["history"]["active_revision_state"] == "executed"
+        assert executed["history"]["latest_executed_revision"] == first_id
         repeated = store.mark_executed(
             "project", "scene_one", "  First executed prompt.\n")
         assert repeated["revision"]["id"] == first_id
@@ -30,6 +32,8 @@ def main():
         child_id = child["revision"]["id"]
         assert child_id != first_id
         assert child["revision"]["parent_id"] == first_id
+        assert child["history"]["active_revision_state"] == "draft"
+        assert child["history"]["latest_executed_revision"] == first_id
 
         # Continue typing in the unexecuted child instead of creating a file
         # for every keystroke.
