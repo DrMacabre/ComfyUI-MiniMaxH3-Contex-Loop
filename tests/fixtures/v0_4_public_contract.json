@@ -1,0 +1,88 @@
+{
+  "format": "h3_v0_4_public_contract_fixture_v1",
+  "project_version": "0.4.9",
+  "plan_required_input_order": [
+    "plan_json",
+    "run_name",
+    "generation_fingerprint",
+    "width",
+    "height",
+    "context_length",
+    "encode_mode",
+    "anchor_mode",
+    "crop",
+    "audio_mode",
+    "audio_context_length",
+    "default_duration_seconds",
+    "default_steps",
+    "base_seed",
+    "segment_crf",
+    "video_blend_frames",
+    "continuation_mode"
+  ],
+  "legacy_audio_modes": {
+    "source_track": {
+      "final_audio": "source",
+      "source_reference": "on",
+      "generated_continuity": "off"
+    },
+    "generated_audio": {
+      "final_audio": "generated",
+      "source_reference": "off",
+      "generated_continuity": "on"
+    },
+    "source_plus_timeline": {
+      "final_audio": "source",
+      "source_reference": "on",
+      "generated_continuity": "on"
+    }
+  },
+  "positional_outputs": {
+    "MiniMaxH3ChainPlan": [
+      "plan",
+      "summary",
+      "clip_count",
+      "width",
+      "height",
+      "video_blend_frames"
+    ],
+    "MiniMaxH3ChainLoopStart": ["flow", "state", "status"],
+    "MiniMaxH3ChainCurrent": [
+      "state",
+      "clip_index",
+      "clip_count",
+      "shot_id",
+      "prompt",
+      "noise_seed",
+      "length",
+      "steps",
+      "width",
+      "height",
+      "audio_start",
+      "audio_duration",
+      "source_audio_slice",
+      "status"
+    ],
+    "MiniMaxH3ChainContext": [
+      "conditioning",
+      "trim_frames",
+      "is_continuation",
+      "latent"
+    ],
+    "MiniMaxH3ChainLoopEnd": [
+      "manifest",
+      "manifest_json",
+      "last_context_frames",
+      "last_context_latent"
+    ],
+    "MiniMaxH3ChainManifestLoad": ["manifest", "manifest_json", "status"],
+    "MiniMaxH3ChainAssemble": ["video_path"]
+  },
+  "checkpoint_formats": [
+    "h3_chain_plan_archive_v1",
+    "h3_chain_checkpoint_v3",
+    "h3_chain_segment_v3",
+    "h3_chain_manifest_v3",
+    "h3_chain_partial_manifest_v3"
+  ]
+}
