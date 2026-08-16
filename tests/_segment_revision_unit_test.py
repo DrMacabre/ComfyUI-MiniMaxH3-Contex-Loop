@@ -122,6 +122,10 @@ def main():
         assert first_result["ui"]["animated"] == (True,)
         assert first["generated_audio_sha256"] == chain._file_sha256(
             str(first_paths["generated_audio"]))
+        assert first["scene_dependency"]["version"] == (
+            chain.SCENE_DEPENDENCY_VERSION)
+        assert set(first["scene_dependency"]["scopes"]) == set(
+            chain.DEPENDENCY_SCOPES)
         with wave.open(str(first_paths["generated_audio"]), "rb") as audio_file:
             assert audio_file.getnchannels() == 2
             assert audio_file.getframerate() == 8000
@@ -154,6 +158,7 @@ def main():
             encoding="utf-8"))
         assert current["segment"]["revision"] == second["revision"]
         assert current["segment"]["prompt"] == "second take"
+        assert current["scene_dependency"] == second["scene_dependency"]
         assert archived["segment"]["revision"] == first["revision"]
         assert archived["segment"]["prompt"] == "first take"
 

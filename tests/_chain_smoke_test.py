@@ -2108,7 +2108,7 @@ def main():
                 chain._initial_state(
                     chain._plan_with_source_audio(changed_plan, source), 2)
             except ValueError as exc:
-                assert "different settings, prompts, seeds, or durations" in str(exc)
+                assert "scene_generation.prompt_hash" in str(exc)
             else:
                 raise AssertionError("resume accepted a changed predecessor")
             print("resume guard: changed predecessor rejected")
@@ -2133,7 +2133,7 @@ def main():
                 chain._initial_state(chain._plan_with_source_audio(
                     changed_generation_plan, source), 2)
             except ValueError as exc:
-                assert "different settings" in str(exc)
+                assert "global_generation.generation_fingerprint" in str(exc)
             else:
                 raise AssertionError(
                     "resume accepted a changed generation fingerprint")
@@ -2143,7 +2143,7 @@ def main():
                 chain._initial_state(
                     chain._plan_with_source_audio(plan, changed_source), 2)
             except ValueError as exc:
-                assert "different settings, prompts, seeds, or durations" in str(exc)
+                assert "scene_generation.source_reference_window" in str(exc)
             else:
                 raise AssertionError("resume accepted changed source audio")
             print("resume guard: changed source track rejected")

@@ -199,3 +199,14 @@ def source_timeline_shape() -> dict[str, Any]:
             "run_owned_audio_path": "absolute host path or empty",
         },
     }
+
+
+def scene_dependency_shape() -> dict[str, Any]:
+    """Document the versioned, four-scope checkpoint dependency record."""
+    return {
+        "version": SCENE_DEPENDENCY_VERSION,
+        "scene": "one-based integer",
+        "scopes": {scope: "JSON-safe field map" for scope in DEPENDENCY_SCOPES},
+        "fingerprints": {scope: "sha256" for scope in DEPENDENCY_SCOPES},
+        "generation_hash": "sha256 of scopes except assembly_only",
+    }

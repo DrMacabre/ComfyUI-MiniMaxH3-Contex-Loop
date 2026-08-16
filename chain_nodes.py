@@ -89,9 +89,11 @@ from .asset_store import MAX_ASSET_BINDINGS, RunAssetStore
 from .contracts_v05 import (
     AUDIO_POLICY_VERSION,
     CONTINUATION_POLICIES,
+    DEPENDENCY_SCOPES,
     FINAL_AUDIO_POLICIES,
     GENERATED_CONTINUITY_POLICIES,
     PREFLIGHT_VERSION,
+    SCENE_DEPENDENCY_VERSION,
     SOURCE_REFERENCE_POLICIES,
     SOURCE_TIMELINE_VERSION,
     TRANSITION_CONTEXT_LENGTHS,
@@ -2748,6 +2750,174 @@ def _selected_resume_history_hash(
     return recorded or None
 
 
+def _canonical_source_reference_dependency(
+        plan: dict[str, Any], index: int,
+        source_timeline: Any = None, source_audio: Any = None
+        ) -> dict[str, Any] | None:
+    """Hash only the canonical source PCM window which guides one scene."""
+    if not _audio_policy_uses_source_reference(plan):
+        return None
+    shot = plan["shots"][int(index) - 1]
+    external_lead = int(shot.get("external_context_frames", 0))
+    start_frame = (0 if int(index) == 1 and external_lead > 0 else
+                   max(0, int(shot["generation_start_frame"])))
+    frame_count = (int(shot["delivered_frames"])
+                   if int(index) == 1 and external_lead > 0 else
+                   int(shot["raw_frames"]))
+    end_frame = start_frame + frame_count
+    if source_timeline is not None:
+        audio = _source_timeline_scene_audio(
+            source_timeline, start_frame, end_frame)
+        route = "source_timeline"
+    else:
+        if source_audio is None:
+            return None
+        audio = _slice_audio(
+            source_audio, start_frame / float(FPS),
+            frame_count / float(FPS),
+            pad_silence=bool(plan["compatibility"].get(
+                "source_audio_silent_padding")))
+        route = "legacy_audio"
+    waveform, sample_rate = _validate_audio(
+        audio, "Scene %d source-reference dependency" % int(index))
+    return {
+        "route": route,
+        "start_frame": start_frame,
+        "end_frame": end_frame,
+        "frame_count": frame_count,
+        "sample_rate": sample_rate,
+        "sample_count": int(waveform.shape[-1]),
+        "pcm_sha256": _audio_fingerprint({
+            "waveform": waveform, "sample_rate": sample_rate}),
+    }
+
+
+def _scene_dependency_record(
+        plan: dict[str, Any], index: int,
+        source_reference: dict[str, Any] | None = None
+        ) -> dict[str, Any]:
+    """Return one JSON-safe, scoped resume dependency record."""
+    index = int(index)
+    shot = plan["shots"][index - 1]
+    compatibility = plan["compatibility"]
+    policy = _resolved_audio_policy(compatibility)
+    context = _shot_context_length(
+        shot, int(compatibility.get("context_length", 0)))
+    audio_context = _shot_audio_context_length(
+        shot, int(compatibility.get("audio_context_length", 0)), context)
+    transition = str(shot.get(
+        "continuation_mode", compatibility.get("continuation_mode", "guide")))
+    external_hash = str(compatibility.get("external_context_hash") or "")
+    if index == 1 and not external_hash:
+        context = 0
+        audio_context = 0
+        transition = "initial"
+    scopes = {
+        "global_generation": {
+            "plan_version": int(plan.get("version", PLAN_VERSION)),
+            "width": int(compatibility.get("width", 0)),
+            "height": int(compatibility.get("height", 0)),
+            "encode_mode": str(compatibility.get("encode_mode", "video")),
+            "crop": str(compatibility.get("crop", "disabled")),
+            "generation_fingerprint": str(
+                compatibility.get("generation_fingerprint") or ""),
+            "source_reference": str(policy["source_reference"]),
+        },
+        "scene_generation": {
+            "id": str(shot["id"]),
+            "prompt_hash": str(shot["prompt_hash"]),
+            "seed": int(shot["seed"]),
+            "steps": int(shot["steps"]),
+            "raw_frames": int(shot["raw_frames"]),
+            "delivered_frames": int(shot["delivered_frames"]),
+            "generation_start_frame": int(shot["generation_start_frame"]),
+            "active_reference_tags": sorted(set(
+                _REFERENCE_ALIAS_RE.findall(str(shot.get("prompt") or "")))),
+            "source_reference_window": source_reference,
+        },
+        "incoming_boundary": {
+            "continuation_mode": transition,
+            "context_length": context,
+            "audio_context_length": audio_context,
+            "generated_continuity": (
+                str(policy["generated_continuity"])
+                if index > 1 or external_hash else "off"),
+            "anchor_mode": str(compatibility.get("anchor_mode", "head")),
+            "external_context_hash": (
+                external_hash
+                if index == 1 else ""),
+        },
+        "assembly_only": {
+            "final_audio": str(policy["final_audio"]),
+            "source_timeline_fingerprint": str(
+                compatibility.get("source_timeline_fingerprint") or ""),
+            "source_audio_fingerprint": str(
+                compatibility.get("source_audio_hash") or ""),
+            "segment_crf": int(
+                compatibility.get("segment_crf", plan.get("segment_crf", 18))),
+            "video_blend_frames": int(
+                compatibility.get("video_blend_frames", 0)),
+        },
+    }
+    fingerprints = {scope: _fingerprint(scopes[scope])
+                    for scope in DEPENDENCY_SCOPES}
+    generation_hash = _fingerprint({
+        scope: fingerprints[scope]
+        for scope in DEPENDENCY_SCOPES if scope != "assembly_only"})
+    return {
+        "version": SCENE_DEPENDENCY_VERSION,
+        "scene": index,
+        "scopes": scopes,
+        "fingerprints": fingerprints,
+        "generation_hash": generation_hash,
+    }
+
+
+def _dependency_value_diffs(
+        saved: Any, current: Any, prefix: str = "") -> list[tuple[str, Any, Any]]:
+    if isinstance(saved, dict) and isinstance(current, dict):
+        diffs = []
+        for key in sorted(set(saved) | set(current)):
+            field = "%s.%s" % (prefix, key) if prefix else str(key)
+            diffs.extend(_dependency_value_diffs(
+                saved.get(key), current.get(key), field))
+        return diffs
+    if saved != current:
+        return [(prefix, saved, current)]
+    return []
+
+
+def _scene_dependency_diffs(
+        saved: Any, current: Any) -> list[dict[str, Any]]:
+    if not isinstance(saved, dict) or saved.get("version") != (
+            SCENE_DEPENDENCY_VERSION):
+        return []
+    if not isinstance(current, dict) or current.get("version") != (
+            SCENE_DEPENDENCY_VERSION):
+        raise ValueError("Current H3 scene dependency record is invalid.")
+    scene = int(current["scene"])
+    diffs = []
+    for scope in DEPENDENCY_SCOPES:
+        if scope == "assembly_only":
+            continue
+        saved_scope = saved.get("scopes", {}).get(scope, {})
+        current_scope = current.get("scopes", {}).get(scope, {})
+        for field, before, after in _dependency_value_diffs(
+                saved_scope, current_scope):
+            diffs.append({
+                "scope": scope, "scene": scene, "field": field,
+                "saved": before, "current": after,
+                "regeneration_required": True,
+            })
+    return diffs
+
+
+def _format_dependency_mismatches(diffs: list[dict[str, Any]]) -> str:
+    return "; ".join(
+        "scene %(scene)d %(scope)s.%(field)s: saved=%(saved)r, current=%(current)r"
+        % item for item in diffs)
+
+
 def _audio_fingerprint(audio: Any) -> str:
     if torch is None:
         raise RuntimeError("Source-audio checkpoint validation requires torch.")
@@ -4057,6 +4227,7 @@ def _public_segment(value: dict[str, Any]) -> dict[str, Any]:
         "revision", "revision_metadata", "supersedes", "prompt_file",
         "generated_audio", "generated_audio_sha256",
         "raw_frames", "delivered_frames", "history_hash",
+        "scene_dependency",
         "prompt_prefix", "scene_prompt", "prompt", "prompt_hash", "archives",
         "seed", "steps", "continuation_mode", "context_length",
         "audio_context_length",
@@ -4149,7 +4320,8 @@ def _verify_segment_artifacts(segment: dict[str, Any], index: int) -> None:
 
 def _load_resume_state(
         plan: dict[str, Any], start_clip: int,
-        verify_history: bool = True) -> dict[str, Any]:
+        verify_history: bool = True, source_timeline: Any = None,
+        source_audio: Any = None) -> dict[str, Any]:
     if _st_load is None:
         raise RuntimeError("safetensors is required to resume H3 chains.")
     previous_index = start_clip - 1
@@ -4170,8 +4342,32 @@ def _load_resume_state(
                 "Cannot resume clip %d: metadata for predecessor clip %d is "
                 "missing: %s" % (start_clip, index, paths["metadata"]))
         metadata = _read_json(paths["metadata"])
-        accepted = _selected_resume_history_hash(
-            plan, index, metadata, verify_history)
+        saved_dependency = metadata.get("scene_dependency")
+        if bool(verify_history) and isinstance(saved_dependency, dict):
+            current_source_dependency = _canonical_source_reference_dependency(
+                plan, index, source_timeline, source_audio)
+            if current_source_dependency is None:
+                saved_compatibility = metadata.get("compatibility") or {}
+                if (str(saved_compatibility.get("source_audio_hash") or "") ==
+                        str(plan["compatibility"].get(
+                            "source_audio_hash") or "")):
+                    current_source_dependency = saved_dependency.get(
+                        "scopes", {}).get("scene_generation", {}).get(
+                            "source_reference_window")
+            current_dependency = _scene_dependency_record(
+                plan, index, current_source_dependency)
+            dependency_diffs = _scene_dependency_diffs(
+                saved_dependency, current_dependency)
+            if dependency_diffs:
+                raise ValueError(
+                    "Cannot resume clip %d: %s. Regenerate scene %d before "
+                    "continuing." % (
+                        start_clip,
+                        _format_dependency_mismatches(dependency_diffs), index))
+            accepted = str(metadata.get("history_hash") or "") or None
+        else:
+            accepted = _selected_resume_history_hash(
+                plan, index, metadata, verify_history)
         if accepted is None:
             if bool(verify_history):
                 raise ValueError(
@@ -4229,6 +4425,7 @@ def _initial_state(plan: dict[str, Any], start_clip: int,
                    end_clip: int | None = None,
                    external_context: dict[str, Any] | None = None,
                    source_timeline: dict[str, Any] | None = None,
+                   source_audio: dict[str, Any] | None = None,
                    verify_resume_history: bool = True) -> dict[str, Any]:
     total = len(plan["shots"])
     start_clip = int(start_clip)
@@ -4241,7 +4438,8 @@ def _initial_state(plan: dict[str, Any], start_clip: int,
             (start_clip, total))
     if start_clip > 1:
         state = _load_resume_state(
-            plan, start_clip, verify_history=verify_resume_history)
+            plan, start_clip, verify_history=verify_resume_history,
+            source_timeline=source_timeline, source_audio=source_audio)
     else:
         state = {
             "plan": plan,
@@ -7166,7 +7364,8 @@ def _preflight_bind_source(
 
 def _preflight_resume(
         plan: dict[str, Any], start: int, verify_history: bool,
-        report: dict[str, Any]) -> dict[str, Any]:
+        report: dict[str, Any], source_timeline: Any = None,
+        source_audio: Any = None) -> dict[str, Any]:
     result: dict[str, Any] = {
         "requested_start": int(start), "verify_history": bool(verify_history),
         "eligible": True, "predecessors": [],
@@ -7182,8 +7381,33 @@ def _preflight_resume(
                 raise FileNotFoundError(
                     "Predecessor scene %d metadata is missing." % index)
             metadata = _read_json(metadata_path)
-            accepted = _selected_resume_history_hash(
-                plan, index, metadata, verify_history)
+            saved_dependency = metadata.get("scene_dependency")
+            dependency_diffs = []
+            if bool(verify_history) and isinstance(saved_dependency, dict):
+                current_source_dependency = (
+                    _canonical_source_reference_dependency(
+                        plan, index, source_timeline, source_audio))
+                if current_source_dependency is None:
+                    saved_compatibility = metadata.get("compatibility") or {}
+                    if (str(saved_compatibility.get("source_audio_hash") or "") ==
+                            str(plan["compatibility"].get(
+                                "source_audio_hash") or "")):
+                        current_source_dependency = saved_dependency.get(
+                            "scopes", {}).get("scene_generation", {}).get(
+                                "source_reference_window")
+                current_dependency = _scene_dependency_record(
+                    plan, index, current_source_dependency)
+                dependency_diffs = _scene_dependency_diffs(
+                    saved_dependency, current_dependency)
+                accepted = (str(metadata.get("history_hash") or "") or None)
+            else:
+                accepted = _selected_resume_history_hash(
+                    plan, index, metadata, verify_history)
+            item["mismatches"] = dependency_diffs
+            if dependency_diffs:
+                raise ValueError(
+                    "Predecessor scene %d dependency mismatch: %s" % (
+                        index, _format_dependency_mismatches(dependency_diffs)))
             if accepted is None:
                 raise ValueError(
                     "Predecessor scene %d does not match the current "
@@ -7275,6 +7499,13 @@ def _preflight_chain(
                     str(shot.get("prompt") or "")))),
                 "references": [],
             }
+            if (not any(issue["code"].startswith("source_")
+                        for issue in report["errors"])):
+                source_dependency = _canonical_source_reference_dependency(
+                    prepared, int(shot["index"]), runtime_timeline,
+                    source_audio)
+                record["dependency"] = _scene_dependency_record(
+                    prepared, int(shot["index"]), source_dependency)
             report["scenes"].append(record)
         report["source"]["last_complete_scene"] = last_complete
 
@@ -7368,7 +7599,8 @@ def _preflight_chain(
                 "on strict resume verification.")
         report["runtime"] = _preflight_runtime_compatibility(prepared, report)
         report["resume"] = _preflight_resume(
-            prepared, start, verify_resume_history, report)
+            prepared, start, verify_resume_history, report,
+            runtime_timeline, source_audio)
     except Exception as exc:
         _preflight_issue(
             report, "errors", "preflight_internal_validation", str(exc),
@@ -7802,6 +8034,7 @@ class MiniMaxH3ChainLoopStart:
                 prepared_plan, range_start, range_end,
                 external_context=external_context if range_start == 1 else None,
                 source_timeline=runtime_timeline,
+                source_audio=source_audio,
                 verify_resume_history=verify_resume_history)
         else:
             state = dict(initial_state)
@@ -7958,10 +8191,14 @@ class MiniMaxH3ChainCurrent:
         status = ("clip %d/%d %s; raw=%df delivered=%df; %s; %s; seed=%d" %
                   (index, len(plan["shots"]), shot["id"], shot["raw_frames"],
                    shot["delivered_frames"], audio_status, alignment_status,
-                   shot["seed"]))
+                  shot["seed"]))
         cfg = plan["compatibility"]
+        dependency_state = dict(state)
+        dependency_state["current_source_reference_dependency"] = (
+            _canonical_source_reference_dependency(
+                plan, index, source_timeline, source_audio))
         result = (
-            state, index, len(plan["shots"]), shot["id"], shot["prompt"],
+            dependency_state, index, len(plan["shots"]), shot["id"], shot["prompt"],
             shot["seed"], shot["raw_frames"], shot["steps"], cfg["width"],
             cfg["height"], shot["audio_start_seconds"],
             shot["audio_duration_seconds"], audio_slice, status,
@@ -8318,6 +8555,15 @@ class MiniMaxH3ChainSegmentSave:
         checkpoint_tmp = "%s.%s.tmp" % (published_checkpoint, uuid.uuid4().hex)
         committed = False
         try:
+            source_dependency = state.get(
+                "current_source_reference_dependency")
+            if (source_dependency is None
+                    and state.get("source_timeline") is not None
+                    and _audio_policy_uses_source_reference(plan)):
+                source_dependency = _canonical_source_reference_dependency(
+                    plan, index, state.get("source_timeline"), None)
+            scene_dependency = _scene_dependency_record(
+                plan, index, source_dependency)
             video_metadata = _archive_media_metadata(archives)
             video_metadata.update({
                 "title": "H3 scene %d - %s" % (index, shot["id"]),
@@ -8349,6 +8595,7 @@ class MiniMaxH3ChainSegmentSave:
                 "format": "h3_chain_checkpoint_v3",
                 "index": str(index),
                 "history_hash": _history_hash(plan, index),
+                "scene_dependency_hash": scene_dependency["generation_hash"],
                 "prompt_prefix": str(plan.get("prompt_prefix") or ""),
                 "scene_prompt": str(shot.get("scene_prompt") or ""),
                 "prompt": str(shot["prompt"]),
@@ -8370,6 +8617,7 @@ class MiniMaxH3ChainSegmentSave:
                 "raw_frames": shot["raw_frames"],
                 "delivered_frames": shot["delivered_frames"],
                 "history_hash": _history_hash(plan, index),
+                "scene_dependency": scene_dependency,
                 **_prompt_fields(plan, index),
                 "archives": archives,
                 "seed": shot["seed"],
@@ -8413,6 +8661,7 @@ class MiniMaxH3ChainSegmentSave:
                 "run_name": plan["run_name"],
                 "plan_hash": plan["plan_hash"],
                 "history_hash": segment["history_hash"],
+                "scene_dependency": scene_dependency,
                 "compatibility": plan["compatibility"],
                 "archives": archives,
                 "segment": segment,

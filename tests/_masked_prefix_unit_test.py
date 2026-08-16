@@ -496,7 +496,8 @@ def main():
     resume_calls = []
     original_resume_loader = chain._load_resume_state
 
-    def fake_resume_loader(requested_plan, start_clip, verify_history=True):
+    def fake_resume_loader(requested_plan, start_clip, verify_history=True,
+                           source_timeline=None, source_audio=None):
         resume_calls.append((start_clip, verify_history))
         return {
             "plan": requested_plan,
