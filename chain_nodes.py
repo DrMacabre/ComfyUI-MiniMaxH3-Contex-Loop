@@ -86,7 +86,16 @@ from .prompt_history import PromptHistoryStore
 from .prompt_optimizer import optimize_prompt_payload
 from .run_manager import RunArchiveManager
 from .asset_store import MAX_ASSET_BINDINGS, RunAssetStore
-from .contracts_v05 import SOURCE_TIMELINE_VERSION
+from .contracts_v05 import (
+    AUDIO_POLICY_VERSION,
+    FINAL_AUDIO_POLICIES,
+    GENERATED_CONTINUITY_POLICIES,
+    SOURCE_REFERENCE_POLICIES,
+    SOURCE_TIMELINE_VERSION,
+    audio_policy as _contract_audio_policy,
+    migrate_legacy_audio_mode,
+    paired_audio_policy as _contract_paired_audio_policy,
+)
 
 
 _LOG = logging.getLogger("minimax_h3_context_loop.chain")
@@ -125,6 +134,7 @@ REFERENCE_SCHEDULE_TYPE = "H3_REFERENCE_SCHEDULE"
 TAGGED_REFERENCE_TYPE = "H3_TAGGED_REFERENCES"
 LAZY_MOTION_SOURCE_TYPE = "H3_LAZY_MOTION_SOURCE"
 SOURCE_TIMELINE_TYPE = "H3_SOURCE_TIMELINE"
+AUDIO_POLICY_TYPE = "H3_AUDIO_POLICY"
 REFERENCE_SCHEDULE_VERSION = 1
 LAZY_MOTION_SOURCE_VERSION = 3
 
@@ -142,6 +152,70 @@ def _canonical_json(value: Any) -> str:
 
 def _fingerprint(value: Any) -> str:
     return hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
+
+
+def _validate_audio_policy(value: Any) -> dict[str, str]:
+    if not isinstance(value, dict):
+        raise ValueError(
+            "H3 Audio Policy must come from MiniMax H3 Audio Policy.")
+    if value.get("version") != AUDIO_POLICY_VERSION:
+        raise ValueError(
+            "H3 Audio Policy version is missing or obsolete.")
+    return _contract_audio_policy(
+        value.get("final_audio"), value.get("source_reference"),
+        value.get("generated_continuity"))
+
+
+def _resolved_audio_policy(value: Any) -> dict[str, str]:
+    """Resolve an explicit 0.5 policy or faithfully migrate a 0.4 mode."""
+    compatibility = (
+        value.get("compatibility")
+        if isinstance(value, dict) and isinstance(
+            value.get("compatibility"), dict)
+        else value)
+    if not isinstance(compatibility, dict):
+        raise ValueError("H3 audio policy requires Plan compatibility data.")
+    explicit = compatibility.get("audio_policy")
+    if explicit is not None:
+        return _validate_audio_policy(explicit)
+    return migrate_legacy_audio_mode(compatibility.get("audio_mode"))
+
+
+def _legacy_audio_mode_for_policy(policy: Any) -> str:
+    resolved = _validate_audio_policy(policy)
+    for mode in AUDIO_MODES:
+        if migrate_legacy_audio_mode(mode) == resolved:
+            return mode
+    return "custom"
+
+
+def _audio_policy_summary(value: Any) -> str:
+    policy = _resolved_audio_policy(value)
+    return "final=%s/ref=%s/carry=%s" % (
+        policy["final_audio"], policy["source_reference"],
+        policy["generated_continuity"])
+
+
+def _audio_policy_requires_source(value: Any) -> bool:
+    policy = _resolved_audio_policy(value)
+    return (policy["final_audio"] == "source" or
+            policy["source_reference"] == "on")
+
+
+def _audio_policy_uses_source_reference(value: Any) -> bool:
+    return _resolved_audio_policy(value)["source_reference"] == "on"
+
+
+def _audio_policy_uses_generated_continuity(value: Any) -> bool:
+    return _resolved_audio_policy(value)["generated_continuity"] == "on"
+
+
+def _audio_policy_final(value: Any) -> str:
+    return _resolved_audio_policy(value)["final_audio"]
+
+
+def _paired_audio_policy(value: Any) -> str:
+    return _contract_paired_audio_policy(value)
 
 
 def _safe_name(value: str, fallback: str = "chain") -> str:
@@ -701,7 +775,7 @@ def _reference_is_active(entry: dict[str, Any], scene: int) -> bool:
 def _reference_entry_contract(entry: dict[str, Any]) -> dict[str, Any]:
     keys = (
         "kind", "tag", "scenes", "content_hash", "audio_tag",
-        "audio_hash", "semantic_role", "motion_target",
+        "audio_hash", "paired_audio_policy", "semantic_role", "motion_target",
         "motion_description", "motion_short_edge",
     )
     contract = {key: entry[key] for key in keys if key in entry}
@@ -778,7 +852,8 @@ def _append_scheduled_reference(
         audio_tag: Any = "", audio_hash: str = "",
         compliance_mode: str = "strict",
         timeline_mode: Any = None,
-        align_audio_reference: Any = False) -> dict[str, Any]:
+        align_audio_reference: Any = False,
+        paired_audio_policy: Any = None) -> dict[str, Any]:
     compliance = _reference_compliance_mode(compliance_mode)
     entries = _reference_schedule_entries(previous)
     try:
@@ -841,6 +916,16 @@ def _append_scheduled_reference(
             "audio_tag": normalized_audio_tag,
             "audio_hash": str(audio_hash),
         })
+    if kind == "video" and paired_audio_policy is not None:
+        paired_policy = _paired_audio_policy(paired_audio_policy)
+        if paired_policy == "embedded" and audio is None:
+            raise ValueError(
+                "paired_audio_policy=embedded requires paired audio on the "
+                "video reference.")
+        if paired_policy == "off" and audio is not None:
+            raise ValueError(
+                "paired_audio_policy=off cannot carry paired audio.")
+        entry["paired_audio_policy"] = paired_policy
 
     existing_tags = {
         alias for existing in entries
@@ -865,7 +950,8 @@ def _append_tagged_reference(
         content_hash: str, audio: Any = None, audio_tag: Any = "",
         audio_hash: str = "", compliance_mode: str = "strict",
         timeline_mode: Any = None,
-        align_audio_reference: Any = False) -> dict[str, Any]:
+        align_audio_reference: Any = False,
+        paired_audio_policy: Any = None) -> dict[str, Any]:
     if previous is None:
         seed = None
     else:
@@ -875,7 +961,8 @@ def _append_tagged_reference(
         content_hash=content_hash, audio=audio, audio_tag=audio_tag,
         audio_hash=audio_hash, compliance_mode=compliance_mode,
         timeline_mode=timeline_mode,
-        align_audio_reference=align_audio_reference)
+        align_audio_reference=align_audio_reference,
+        paired_audio_policy=paired_audio_policy)
     entries = collection["entries"]
     entries[-1]["activation"] = "prompt"
     return _make_tagged_references(entries)
@@ -1850,11 +1937,11 @@ def _tagged_audio_reference_value(
             "in Current Shot state." %
             (int(length), int(scene), current.get("raw_frames")))
     compatibility = plan.get("compatibility")
-    if not isinstance(compatibility, dict) or compatibility.get(
-            "audio_mode") not in ("source_track", "source_plus_timeline"):
+    if (not isinstance(compatibility, dict) or
+            not _audio_policy_uses_source_reference(compatibility)):
         raise ValueError(
-            "Tagged audio @%s source_timeline requires the Plan audio mode "
-            "source_track or source_plus_timeline." %
+            "Tagged audio @%s source_timeline requires Source reference=on "
+            "in the Plan's Audio Policy." %
             entry.get("tag", "audio"))
     expected_hash = str(compatibility.get("source_audio_hash") or "")
     entry_hash = str(entry.get("content_hash") or "")
@@ -2660,17 +2747,19 @@ def _plan_with_external_context(
         (len(prepared["shots"]), stitched_frames,
          stitched_frames / float(FPS), cfg["width"], cfg["height"],
          configured, int(cfg.get("video_blend_frames", 0)),
-         cfg["audio_mode"], prepared["run_name"]))
+         _audio_policy_summary(cfg), prepared["run_name"]))
     return prepared
 
 
 def _plan_with_source_audio(plan: dict[str, Any],
                             source_audio: dict[str, Any] | None) -> dict[str, Any]:
-    mode = plan["compatibility"]["audio_mode"]
-    if mode in ("source_track", "source_plus_timeline"):
+    policy = _resolved_audio_policy(plan)
+    if _audio_policy_requires_source(plan):
         if source_audio is None:
-            raise ValueError("H3 chain audio mode %s requires source_audio on "
-                             "Loop Start." % mode)
+            raise ValueError(
+                "H3 chain Audio Policy final=%s, source reference=%s "
+                "requires source_audio on Loop Start." %
+                (policy["final_audio"], policy["source_reference"]))
         waveform, sample_rate = _validate_audio(
             source_audio, "H3 Chain Loop Start source audio")
         required_samples = int(round(
@@ -2773,7 +2862,7 @@ def _retime_review_plan(plan: dict[str, Any]) -> None:
         (len(plan["shots"]), stitched_frames,
          stitched_frames / float(FPS), cfg["width"], cfg["height"],
          context_length, int(cfg.get("video_blend_frames", 0)),
-         cfg["audio_mode"], imported, plan["run_name"]))
+         _audio_policy_summary(cfg), imported, plan["run_name"]))
 
 
 def _plan_with_review_revision(plan: dict[str, Any], index: int,
@@ -2848,6 +2937,7 @@ def _normalize_plan(
     generation_fingerprint: str = "",
     video_blend_frames: int = 0,
     continuation_mode: str = "guide",
+    audio_policy: Any = None,
 ) -> dict[str, Any]:
     try:
         raw = json.loads(str(plan_json or ""))
@@ -2885,6 +2975,10 @@ def _normalize_plan(
         raise ValueError("Unknown H3 context crop mode %r." % crop)
     if audio_mode not in AUDIO_MODES:
         raise ValueError("Unknown H3 chain audio mode %r." % audio_mode)
+    resolved_audio_policy = (
+        _validate_audio_policy(audio_policy)
+        if audio_policy is not None
+        else migrate_legacy_audio_mode(audio_mode))
     default_steps = max(1, min(10000, int(default_steps)))
     base_seed = max(0, min(MAX_SEED, int(base_seed)))
     segment_crf = max(0, min(51, int(segment_crf)))
@@ -3061,7 +3155,9 @@ def _normalize_plan(
         "encode_mode": encode_mode,
         "anchor_mode": anchor_mode,
         "crop": crop,
-        "audio_mode": audio_mode,
+        "audio_mode": (
+            _legacy_audio_mode_for_policy(resolved_audio_policy)
+            if audio_policy is not None else audio_mode),
         "audio_context_length": audio_context_length,
         "segment_crf": segment_crf,
         "video_blend_frames": video_blend_frames,
@@ -3070,6 +3166,8 @@ def _normalize_plan(
         # generation dependencies part of the resume contract.
         "generation_fingerprint": str(generation_fingerprint or "").strip(),
     }
+    if audio_policy is not None:
+        compatibility["audio_policy"] = resolved_audio_policy
     # Preserve the exact compatibility/history hashes of every pre-feature
     # guide plan. A missing key is the stable serialized spelling of `guide`;
     # only the behavior-changing experimental mode extends the contract.
@@ -3104,7 +3202,7 @@ def _normalize_plan(
         "blend=%d; audio=%s; run=%s" %
         (len(shots), stitched_frames, stitched_frames / float(FPS), width,
          height, context_length, continuation_summary, video_blend_frames,
-         audio_mode, plan["run_name"]))
+         _audio_policy_summary(compatibility), plan["run_name"]))
     return plan
 
 
@@ -4392,13 +4490,16 @@ class MiniMaxH3ScheduledAudioReference:
                 raise ValueError(
                     "Scheduled H3 standalone audio received no audio (None). "
                     "Most likely, this input is connected to Current Shot's "
-                    "source_audio_slice while the Plan uses generated_audio; that "
-                    "output is intentionally empty in generated_audio mode. For a "
+                    "source_audio_slice while Source reference is off; that "
+                    "output is intentionally empty. For a "
                     "short voice/timbre reference, connect Load Audio directly to "
-                    "Scheduled Audio Ref. For frame-exact source slices plus "
-                    "generated-audio continuity, use source_plus_timeline and set "
-                    "Assemble audio_source to generated if that is the final track "
-                    "you want. Otherwise check that the upstream audio node is not "
+                    "Scheduled Audio Ref. For frame-exact source slices, set "
+                    "Source reference=on in H3 Audio Policy. Generated continuity "
+                    "and the final soundtrack remain independent. In legacy "
+                    "terms, generated_audio leaves this slice empty while "
+                    "source_plus_timeline enables both source reference and "
+                    "generated carry. Otherwise check "
+                    "that the upstream audio node is not "
                     "muted or bypassed, reconnect the AUDIO link, and queue again. "
                     "A playable browser preview does not guarantee that the socket "
                     "emitted AUDIO during this execution.")
@@ -5197,8 +5298,9 @@ class MiniMaxH3TaggedAudioReference:
             if audio is None:
                 raise ValueError(
                     "Tagged H3 audio received no AUDIO value. If Current Shot "
-                    "uses generated_audio, source_audio_slice is intentionally "
-                    "empty; connect a voice/music loader directly instead.")
+                    "has Source reference=off, source_audio_slice is "
+                    "intentionally empty; connect a voice/music loader directly "
+                    "instead.")
             _validate_audio(audio, "Tagged H3 standalone audio")
             references = _append_tagged_reference(
                 previous, kind="audio", tag=tag, value=audio,
@@ -5766,6 +5868,54 @@ class MiniMaxH3ChainExternalVideo:
         return (external_context, status)
 
 
+class MiniMaxH3AudioPolicy:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "final_audio": (list(FINAL_AUDIO_POLICIES), {
+                    "default": "generated",
+                    "tooltip": "Soundtrack muxed into the final MP4: H3's "
+                               "saved generated sound, the exact source "
+                               "track, or no soundtrack."}),
+                "source_reference": (list(SOURCE_REFERENCE_POLICIES), {
+                    "default": "off",
+                    "tooltip": "Whether Current Shot exposes the exact "
+                               "source-timeline window as generation "
+                               "reference audio. This is independent of the "
+                               "final soundtrack."}),
+                "generated_continuity": (
+                    list(GENERATED_CONTINUITY_POLICIES), {
+                        "default": "on",
+                        "tooltip": "Whether guide continuation carries the "
+                                   "previous sampled audio latent into the "
+                                   "next scene. This does not select the final "
+                                   "soundtrack."}),
+            },
+        }
+
+    RETURN_TYPES = (AUDIO_POLICY_TYPE, "STRING")
+    RETURN_NAMES = ("audio_policy", "status")
+    FUNCTION = "build"
+    CATEGORY = "conditioning/minimax/contex_loop/policies"
+    DESCRIPTION = (
+        "Define final soundtrack, exact source-audio reference, and generated "
+        "audio-latent continuity independently. Connect this to Plan. Tagged "
+        "motion paired audio remains a separate reference-local choice."
+    )
+
+    def build(self, final_audio="generated", source_reference="off",
+              generated_continuity="on"):
+        policy = _contract_audio_policy(
+            final_audio, source_reference, generated_continuity)
+        status = _audio_policy_summary({"audio_policy": policy})
+        source_need = (
+            "source timeline required"
+            if _audio_policy_requires_source({"audio_policy": policy})
+            else "no source timeline required")
+        return policy, "%s; %s" % (status, source_need)
+
+
 class MiniMaxH3ChainPlan:
     @classmethod
     def INPUT_TYPES(cls):
@@ -5858,8 +6008,10 @@ class MiniMaxH3ChainPlan:
                                "center-crops overflow. It does not crop Ref2VA "
                                "picture/video reference inputs."}),
                 "audio_mode": (list(AUDIO_MODES), {
-                    "default": "source_track",
-                    "tooltip": "Controls timeline continuity and final audio; it "
+                    "default": "generated_audio",
+                    "tooltip": "Legacy 0.4 fallback used only when no H3 Audio "
+                               "Policy is connected. It controls timeline "
+                               "continuity and final audio; it "
                                "does NOT enable or disable @voice/<Audio N> "
                                "references. For a finished prerecorded voice, "
                                "dialogue, or song that must remain exact, choose "
@@ -5878,10 +6030,10 @@ class MiniMaxH3ChainPlan:
                     "tooltip": "Amount of previous generated sound carried into "
                                "the next scene, measured in 24-fps video frames. "
                                "0 means use context_length; 22 is the tested "
-                               "explicit value. Only generated_audio and "
-                               "source_plus_timeline use it. source_track ignores "
-                               "it because each scene receives a fresh exact "
-                               "slice from the external track. AV mask modes "
+                               "explicit value. It is active only when the Audio "
+                               "Policy has Generated continuity=on. Legacy "
+                               "generated_audio and source_plus_timeline enable "
+                               "that axis; source_track disables it. AV mask modes "
                                "also ignore it and always preserve audio for the "
                                "same duration as context_length. A scene's "
                                "Advanced Audio context can override this default; "
@@ -5958,6 +6110,11 @@ class MiniMaxH3ChainPlan:
                                "the same normalization and validation. Empty or "
                                "disconnected input uses the internal plan_json "
                                "unchanged."}),
+                "audio_policy": (AUDIO_POLICY_TYPE, {
+                    "tooltip": "Recommended 0.5 control from MiniMax H3 Audio "
+                               "Policy. It independently selects final sound, "
+                               "source reference, and generated continuity, "
+                               "and overrides the legacy audio_mode widget."}),
             },
         }
 
@@ -5987,7 +6144,7 @@ class MiniMaxH3ChainPlan:
               audio_context_length, default_duration_seconds, default_steps,
               base_seed, segment_crf, video_blend_frames=0,
               continuation_mode="guide",
-              plan_json_input=None):
+              plan_json_input=None, audio_policy=None):
         effective_plan_json = (
             plan_json_input
             if isinstance(plan_json_input, str) and plan_json_input.strip()
@@ -5998,7 +6155,8 @@ class MiniMaxH3ChainPlan:
             encode_mode,
             anchor_mode, crop, audio_mode, audio_context_length,
             default_duration_seconds, default_steps, base_seed, segment_crf,
-            generation_fingerprint, video_blend_frames, continuation_mode)
+            generation_fingerprint, video_blend_frames, continuation_mode,
+            audio_policy)
         return (plan, plan["summary"], len(plan["shots"]),
                 plan["compatibility"]["width"],
                 plan["compatibility"]["height"],
@@ -6325,9 +6483,10 @@ class MiniMaxH3ChainLoopStart:
                                "still verified. Changes to the predecessor "
                                "itself are not applied retroactively."}),
                 "source_audio": ("AUDIO", {
-                    "tooltip": "Full external soundtrack. Required by "
-                               "source_track and source_plus_timeline. Current "
-                               "Shot slices the exact window for each scene. A "
+                    "tooltip": "Full external soundtrack. Required when the "
+                               "Audio Policy selects final source audio or "
+                               "Source reference=on. Current Shot slices exact "
+                               "windows only when source reference is on. A "
                                "short, completely silent placeholder is padded."}),
                 "external_context": (EXTERNAL_CONTEXT_TYPE, {
                     "tooltip": "Optional output from MiniMax H3 Existing Video "
@@ -6447,7 +6606,7 @@ class MiniMaxH3ChainCurrent:
         "scene 1 context lead.",
         "Current source-audio window for Ref2VA. It is frame-exact normally, "
         "or capped to the target H3 audio grid when alignment is enabled. It is "
-        "empty in generated_audio mode.",
+        "empty when the Plan Audio Policy has Source reference=off.",
         "Current scene timing, delivered frames, source window, and seed.",
     )
     FUNCTION = "current"
@@ -6459,10 +6618,9 @@ class MiniMaxH3ChainCurrent:
         plan = state["plan"]
         index = int(state["index"])
         shot = plan["shots"][index - 1]
-        mode = plan["compatibility"]["audio_mode"]
         audio_slice = None
         alignment_status = "audio ref unavailable"
-        if mode in ("source_track", "source_plus_timeline"):
+        if _audio_policy_uses_source_reference(plan):
             _validate_source_audio_hash(
                 plan["compatibility"], source_audio, "H3 Chain Current Shot")
             external_lead = int(shot.get("external_context_frames", 0))
@@ -6594,7 +6752,7 @@ class MiniMaxH3ChainContext:
                                "from imported video audio. Later loop scenes "
                                "reuse their saved AV latent directly. It may be "
                                "left disconnected for visual-only context or "
-                               "source_track mode."}),
+                               "when generated continuity is off."}),
             }
         }
 
@@ -6635,8 +6793,7 @@ class MiniMaxH3ChainContext:
         external_first = index == 1 and bool(state.get("external_context"))
         generated_audio_context = (
             continuation_mode == "guide"
-            and cfg["audio_mode"] in (
-                "generated_audio", "source_plus_timeline")
+            and _audio_policy_uses_generated_continuity(cfg)
             and audio_context_length > 0)
         has_context = context_length > 0 or generated_audio_context
         if not has_context or (index == 1 and not external_first):
@@ -6807,11 +6964,11 @@ class MiniMaxH3ChainSegmentSave:
                     (index, blend_count, expected_blend_count, blend_frames,
                      expected_frames))
 
-        mode = plan["compatibility"]["audio_mode"]
-        if mode == "generated_audio" and audio is None:
+        if _audio_policy_final(plan) == "generated" and audio is None:
             raise ValueError(
-                "H3 chain generated_audio mode requires decoded audio on Segment "
-                "Save. Wire it through MiniMax H3 Contex Loop Trim first.")
+                "H3 chain final_audio=generated requires decoded audio on "
+                "Segment Save. Wire it through MiniMax H3 Contex Loop Trim "
+                "first.")
         compact = _compact_latent(sampled_latent)
         context_length = min(_plan_context_storage_length(plan), actual_frames)
         context_frames = _tensor_cpu_clone(images[-context_length:])
@@ -7681,7 +7838,8 @@ class MiniMaxH3ChainManifestLoad:
             "optional": {
                 "source_audio": ("AUDIO", {
                     "tooltip": "The original full source track when the plan "
-                               "uses source_track or source_plus_timeline. Its "
+                               "selects final source audio or enables Source "
+                               "reference. Its "
                                "fingerprint must match the saved checkpoints."}),
                 "external_context": (EXTERNAL_CONTEXT_TYPE, {
                     "tooltip": "Reconnect the same Existing Video Context used "
@@ -8654,8 +8812,9 @@ class MiniMaxH3ChainAssemble:
                 "audio_source": (["plan", "source", "generated", "none"],
                                  {
                                      "default": "plan",
-                                     "tooltip": "plan follows the plan's audio "
-                                                "mode; source muxes the external "
+                                     "tooltip": "plan follows the Plan Audio "
+                                                "Policy's Final audio choice; "
+                                                "source muxes the external "
                                                 "track; generated joins saved "
                                                 "delivered scene audio; none "
                                                 "creates a silent MP4."}),
@@ -8713,10 +8872,7 @@ class MiniMaxH3ChainAssemble:
         prelude = _validate_prelude(manifest)
         selected = audio_source
         if selected == "plan":
-            mode = manifest["compatibility"]["audio_mode"]
-            selected = ("source" if mode in
-                        ("source_track", "source_plus_timeline")
-                        else "generated")
+            selected = _audio_policy_final(manifest)
         preserve_generated = manifest.get("format") == "h3_chain_manifest_v3"
         generated_track = None
         generated_warning = ""
@@ -9730,6 +9886,7 @@ if (PromptServer is not None and web is not None and
 
 
 CHAIN_NODE_CLASS_MAPPINGS = {
+    "MiniMaxH3AudioPolicy": MiniMaxH3AudioPolicy,
     "MiniMaxH3ChainPlan": MiniMaxH3ChainPlan,
     "MiniMaxH3ChainScenePromptEditor": MiniMaxH3ChainScenePromptEditor,
     "MiniMaxH3ChainRichScenePromptEditor": MiniMaxH3ChainRichScenePromptEditor,
@@ -9765,6 +9922,7 @@ CHAIN_NODE_CLASS_MAPPINGS = {
 }
 
 CHAIN_NODE_DISPLAY_NAME_MAPPINGS = {
+    "MiniMaxH3AudioPolicy": "MiniMax H3 Audio Policy",
     "MiniMaxH3ChainPlan": "MiniMax H3 Contex Loop Plan",
     "MiniMaxH3ChainScenePromptEditor": "MiniMax H3 Scene Prompt Editor",
     "MiniMaxH3ChainRichScenePromptEditor": (

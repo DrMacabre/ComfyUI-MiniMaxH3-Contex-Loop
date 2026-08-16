@@ -71,6 +71,33 @@ def main():
     else:
         raise AssertionError("unknown legacy audio mode was accepted")
 
+    for final_audio in contracts.FINAL_AUDIO_POLICIES:
+        for source_reference in contracts.SOURCE_REFERENCE_POLICIES:
+            for continuity in contracts.GENERATED_CONTINUITY_POLICIES:
+                policy = contracts.audio_policy(
+                    final_audio, source_reference, continuity)
+                assert policy == {
+                    "version": contracts.AUDIO_POLICY_VERSION,
+                    "final_audio": final_audio,
+                    "source_reference": source_reference,
+                    "generated_continuity": continuity,
+                }
+    assert contracts.paired_audio_policy(True) == "embedded"
+    assert contracts.paired_audio_policy(False) == "off"
+    assert contracts.paired_audio_policy("embedded") == "embedded"
+    try:
+        contracts.audio_policy("copied", "off", "on")
+    except ValueError as exc:
+        assert "final-audio" in str(exc)
+    else:
+        raise AssertionError("unknown final-audio policy was accepted")
+    try:
+        contracts.paired_audio_policy("timeline")
+    except ValueError as exc:
+        assert "paired-audio" in str(exc)
+    else:
+        raise AssertionError("unknown paired-audio policy was accepted")
+
     expected_presets = {
         "cut": ("guide", 0),
         "guide": ("guide", 22),

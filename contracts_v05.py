@@ -78,6 +78,42 @@ def migrate_legacy_audio_mode(mode: str) -> dict[str, str]:
     return {"version": AUDIO_POLICY_VERSION, **policy}
 
 
+def audio_policy(
+    final_audio: str,
+    source_reference: str,
+    generated_continuity: str,
+) -> dict[str, str]:
+    """Validate and return one independent 0.5 audio-policy record."""
+    final = str(final_audio)
+    source = str(source_reference)
+    continuity = str(generated_continuity)
+    if final not in FINAL_AUDIO_POLICIES:
+        raise ValueError("Unknown H3 final-audio policy %r." % final_audio)
+    if source not in SOURCE_REFERENCE_POLICIES:
+        raise ValueError(
+            "Unknown H3 source-reference policy %r." % source_reference)
+    if continuity not in GENERATED_CONTINUITY_POLICIES:
+        raise ValueError(
+            "Unknown H3 generated-continuity policy %r." %
+            generated_continuity)
+    return {
+        "version": AUDIO_POLICY_VERSION,
+        "final_audio": final,
+        "source_reference": source,
+        "generated_continuity": continuity,
+    }
+
+
+def paired_audio_policy(value: str | bool) -> str:
+    """Normalize a reference-local paired-audio choice or legacy boolean."""
+    if isinstance(value, bool):
+        return "embedded" if value else "off"
+    normalized = str(value).strip().lower()
+    if normalized not in PAIRED_AUDIO_POLICIES:
+        raise ValueError("Unknown H3 paired-audio policy %r." % value)
+    return normalized
+
+
 def transition_preset(name: str) -> dict[str, Any]:
     """Return an isolated resolved transition preset."""
     try:
