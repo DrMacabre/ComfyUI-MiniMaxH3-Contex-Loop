@@ -83,9 +83,25 @@ SOLATTN_CUDA_PR117_LAYOUT_MODULE = "ComfyUI-SolAttn-CUDA-PR117"
 # read-only span-registration fingerprint instead of growing a folder-name
 # allowlist forever.  A future upstream marker is accepted as the clean ABI.
 SOLATTN_LAYOUT_OBSERVER_MARKER = "_sol_attn_h3_layout_observer"
-SOLATTN_LAYOUT_OBSERVER_NAMES = frozenset({
-    "_video_span", "_SPANS", "position_ids", "segments",
-})
+
+# The Kijai observer's fingerprint is a nested ``__init__`` in a module
+# that owns two very specific globals: a callable ``_video_span`` that reads
+# the target video span off the layout, and a dict ``_SPANS`` that records it
+# by ``position_ids`` identity.  The wrapper must reference BOTH those globals
+# from its body -- that is what proves this specific module's observer is what
+# is installed, not some unrelated wrapper that happens to live alongside them.
+SOLATTN_LAYOUT_SIGNATURE_GLOBALS = frozenset({"_video_span", "_SPANS"})
+# The wrapper must also touch both PackedLayout attributes used by the
+# observer. Two access patterns appear in the wild and both are equally
+# observe-only:
+#   * ``self.segments`` / ``self.position_ids`` -- attribute lookup, name lands
+#     in ``code.co_names`` (Kijai's upstream ``_morton_h3`` does this).
+#   * ``getattr(self, "segments", [])`` -- defensive lookup, name lands in
+#     ``code.co_consts`` as a string literal (comfy-kitchen PR #117's
+#     ``sol_attn_minimax_v2`` does this).
+# Requiring both attributes via either access route accepts both styles while
+# ensuring that an arbitrary ``__init__`` in the same module does not match.
+SOLATTN_LAYOUT_ATTRIBUTE_NAMES = frozenset({"position_ids", "segments"})
 
 
 REF_SEGMENT_KINDS = ("ref_img", "ref_audio")
@@ -499,13 +515,21 @@ def _is_supported_solattn_layout_module(init):
 
 
 def _is_structural_solattn_layout_observer(init):
-    """Recognise Kijai's observer independently of its install folder.
+    """Recognise a Kijai H3 layout observer independently of its folder.
 
-    The observer calls the constructor captured as ``original_init``, derives
-    the target video span through ``_video_span``, and records the layout in
-    the module's ``_SPANS`` dictionary by ``position_ids`` identity.  These
-    names and globals describe its read-only job; an arbitrary wrapper merely
-    accepting ``*args``/``**kwargs`` is deliberately insufficient.
+    The observer's fingerprint is a nested ``__init__`` in a module that owns
+    two very specific globals -- a callable ``_video_span`` that reads the
+    target span off the layout, and a dict ``_SPANS`` that records it by
+    ``position_ids`` identity -- and the wrapper's body references both.  It
+    must also touch both PackedLayout attributes. Each touch can be a direct
+    attribute lookup (``self.segments``, in which case ``segments`` is in
+    ``co_names``) or a defensive getattr with a string literal
+    (``getattr(self, "segments", [])``, in which case ``"segments"`` is in
+    ``co_consts``).  Both patterns appear in the wild -- Kijai's upstream
+    ``_morton_h3`` uses direct access, comfy-kitchen PR #117's
+    ``sol_attn_minimax_v2`` uses getattr -- and both are equally observe-only.
+    Requiring the complete attribute pair keeps the match fail-closed without
+    imposing a particular access style.
     """
     if bool(getattr(init, SOLATTN_LAYOUT_OBSERVER_MARKER, False)):
         return True
@@ -514,14 +538,28 @@ def _is_structural_solattn_layout_observer(init):
     if code is None or code.co_name != "__init__" or not isinstance(
             namespace, dict):
         return False
-    symbols = set(code.co_names)
-    symbols.update(
-        value for value in code.co_consts if isinstance(value, str))
-    return bool(
-        SOLATTN_LAYOUT_OBSERVER_NAMES.issubset(symbols)
-        and callable(namespace.get("_video_span"))
-        and isinstance(namespace.get("_SPANS"), dict)
-    )
+    # Signature globals: two module-level objects with matching types.  These
+    # names are unique to the Kijai observer design; any module that
+    # ships both a callable ``_video_span`` and a dict ``_SPANS`` is one of
+    # the audited observer variants.
+    if not (callable(namespace.get("_video_span"))
+            and isinstance(namespace.get("_SPANS"), dict)):
+        return False
+    names = set(code.co_names)
+    # The wrapper must actually reference the signature globals from its body,
+    # not merely inherit them from the module.  This rules out unrelated
+    # ``__init__`` methods that happen to live in the same module.
+    if not SOLATTN_LAYOUT_SIGNATURE_GLOBALS.issubset(names):
+        return False
+    # And it must touch both PackedLayout attributes we care about.
+    # Attribute access puts the name in ``co_names``; ``getattr(self, "name",
+    # default)`` puts the name in ``co_consts`` as a string literal.  Accept
+    # either route -- a real observer references both under one of the two
+    # patterns.
+    consts = {c for c in getattr(code, "co_consts", ()) if isinstance(c, str)}
+    if not SOLATTN_LAYOUT_ATTRIBUTE_NAMES.issubset(names | consts):
+        return False
+    return True
 
 
 def _is_supported_solattn_layout_observer(init):
