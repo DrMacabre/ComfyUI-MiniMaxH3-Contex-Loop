@@ -104,6 +104,10 @@ value, and whether regeneration is required.
 - Existing node ids remain registered.
 - Existing outputs retain their positional indices.
 - Existing required widget order remains readable.
+- Plan's retired `audio_mode`, `continuation_mode`, and `context_length`
+  widgets remain serialized for 0.4 compatibility but are hidden in the normal
+  0.5 presentation. Legacy 0.4 Policy Adapter exposes those choices as an
+  explicit compatibility route and emits the two typed 0.5 policies.
 - New policy fields are appended or introduced through frontend-backed
   migration rather than inserted into old positional layouts.
 - Legacy `audio_mode`, full AUDIO fan-out, direct media paths, and manual
@@ -135,7 +139,9 @@ under diagnostics, not as the primary explanation.
 The primary graph displays only generation-bearing connections. Status,
 manifest JSON, booleans used only for inspection, legacy passthroughs, and
 conditional audio sockets are Advanced. Conditional inputs appear when their
-policy needs them. Hiding a socket must not change its backend index.
+policy needs them. The three superseded Plan policy widgets are also hidden;
+the node menu can reveal them for diagnosis. Hiding a socket or widget must not
+change its backend index or serialized position.
 
 ## Delivery order
 

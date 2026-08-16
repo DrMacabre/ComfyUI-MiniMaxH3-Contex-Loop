@@ -145,8 +145,13 @@ dependencies change so incompatible checkpoints cannot be resumed silently.
 
 The semantic Transition Policy maps `Cut` to no carried picture, `Guide` to
 22 guide frames, `Hard AV` to a protected 39-frame AV prefix, and `Soft AV` to
-a temporally feathered 39-frame AV prefix. Advanced mode exposes the legacy
-implementation and context controls when an exact custom value is required.
+a temporally feathered 39-frame AV prefix. The old Plan `continuation_mode`,
+`context_length`, and combined `audio_mode` widgets are hidden from the normal
+0.5 interface so they do not compete with the policy nodes. Existing 0.4
+workflows still deserialize and execute those saved values unchanged. For a
+deliberately old-style graph, use **Legacy 0.4 Policy Adapter** and connect its
+two typed outputs to Plan; the node translates the old choices without making
+them a second set of controls on Plan.
 
 `guide` leaves the target latent noisy and supplies the previous scene as
 fixed conditioning rows. H3 regenerates the repeated head, and Loop Trim

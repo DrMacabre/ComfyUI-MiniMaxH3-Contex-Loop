@@ -28,6 +28,7 @@ import {
     promptRevisionNavigation,
 } from "./h3_prompt_history_core.mjs?v=0.5.0";
 import {availableReferenceRecords} from "./h3_reference_preview_core.mjs?v=0.5.0";
+import {resolveTransitionPolicy} from "./h3_socket_presentation_core.mjs?v=0.5.0";
 import {
     locateStudioTimelineSecond,
     matchingStudioCheckpoint,
@@ -327,24 +328,34 @@ function mount(node) {
     }
 
     function settings() {
+        const transition = resolveTransitionPolicy(state.planNode ?? node);
         return {
-            contextLength:widget(state.planNode, "context_length")?.value ?? 22,
+            contextLength:transition.known
+                ? transition.contextLength
+                : widget(state.planNode, "context_length")?.value ?? 22,
             audioContextLength:widget(state.planNode, "audio_context_length")?.value ?? 22,
             encodeMode:widget(state.planNode, "encode_mode")?.value ?? "video",
             anchorMode:widget(state.planNode, "anchor_mode")?.value ?? "head",
-            continuationMode:widget(state.planNode, "continuation_mode")?.value ?? "guide",
+            continuationMode:transition.known
+                ? transition.continuationMode
+                : widget(state.planNode, "continuation_mode")?.value ?? "guide",
             defaultDurationSeconds:widget(state.planNode, "default_duration_seconds")?.value ?? 15,
             defaultSteps:widget(state.planNode, "default_steps")?.value ?? 20,
         };
     }
 
     function settingsSignature(planNode = state.planNode) {
+        const transition = resolveTransitionPolicy(planNode ?? node);
         return JSON.stringify([
-            widget(planNode, "context_length")?.value ?? 22,
+            transition.known
+                ? transition.contextLength
+                : widget(planNode, "context_length")?.value ?? 22,
             widget(planNode, "audio_context_length")?.value ?? 22,
             widget(planNode, "encode_mode")?.value ?? "video",
             widget(planNode, "anchor_mode")?.value ?? "head",
-            widget(planNode, "continuation_mode")?.value ?? "guide",
+            transition.known
+                ? transition.continuationMode
+                : widget(planNode, "continuation_mode")?.value ?? "guide",
             widget(planNode, "default_duration_seconds")?.value ?? 15,
             widget(planNode, "default_steps")?.value ?? 20,
         ]);

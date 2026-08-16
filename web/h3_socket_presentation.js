@@ -1,6 +1,7 @@
 import {app} from "/scripts/app.js";
 import {
     AUDIO_POLICY_NODE,
+    LEGACY_POLICY_NODE,
     PLAN_NODE,
     TRANSITION_POLICY_NODE,
     applySocketPresentation,
@@ -11,7 +12,7 @@ import {
 
 const EXTENSION = "minimax_h3_context_loop.socket_presentation";
 const WATCHED_POLICY_NODES = new Set([
-    AUDIO_POLICY_NODE, PLAN_NODE, TRANSITION_POLICY_NODE,
+    AUDIO_POLICY_NODE, LEGACY_POLICY_NODE, PLAN_NODE, TRANSITION_POLICY_NODE,
 ]);
 
 function collapseWidget(widget) {
@@ -128,8 +129,8 @@ app.registerExtension({
             const advanced = Boolean(this.properties?.h3_show_advanced_sockets);
             options.push({
                 content: advanced
-                    ? "Hide advanced H3 sockets"
-                    : "Show advanced H3 sockets",
+                    ? "Hide advanced / legacy H3 controls"
+                    : "Show advanced / legacy H3 controls",
                 callback: () => {
                     this.properties ??= {};
                     this.properties.h3_show_advanced_sockets = !advanced;

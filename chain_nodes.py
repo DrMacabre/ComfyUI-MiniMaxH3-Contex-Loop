@@ -6722,6 +6722,69 @@ class MiniMaxH3TransitionPolicy:
                 int(policy["context_length"]), status)
 
 
+class MiniMaxH3Legacy04PolicyAdapter:
+    """Expose the retired 0.4 Plan policy widgets without cluttering Plan."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "audio_mode": (list(AUDIO_MODES), {
+                    "default": "generated_audio",
+                    "tooltip": "Legacy 0.4 combined audio mode. The adapter "
+                               "translates it exactly into the independent "
+                               "0.5 Audio Policy axes."}),
+                "continuation_mode": (list(CONTINUATION_MODES), {
+                    "default": "guide",
+                    "tooltip": "Legacy 0.4 low-level continuation "
+                               "implementation. Prefer the semantic 0.5 "
+                               "Transition Policy for new workflows."}),
+                "context_length": (list(H3_CONTEXT_LENGTHS), {
+                    "default": 22,
+                    "tooltip": "Legacy 0.4 global visual overlap. This is "
+                               "paired with continuation_mode and translated "
+                               "into a typed 0.5 Transition Policy."}),
+            },
+        }
+
+    RETURN_TYPES = (AUDIO_POLICY_TYPE, TRANSITION_POLICY_TYPE, "STRING")
+    RETURN_NAMES = ("audio_policy", "transition_policy", "status")
+    OUTPUT_TOOLTIPS = (
+        "Typed 0.5 Audio Policy equivalent to the selected 0.4 audio_mode.",
+        "Typed 0.5 Transition Policy equivalent to the selected raw mode and "
+        "context pair.",
+        "Human-readable summary of the translated legacy settings.",
+    )
+    FUNCTION = "build"
+    CATEGORY = "conditioning/minimax/contex_loop/policies/legacy"
+    DESCRIPTION = (
+        "Compatibility adapter for the combined audio mode and raw incoming-"
+        "transition controls formerly shown on the 0.4 Plan node. New 0.5 "
+        "workflows should use Audio Policy and Transition Policy directly."
+    )
+
+    def build(self, audio_mode="generated_audio",
+              continuation_mode="guide", context_length=22):
+        audio = migrate_legacy_audio_mode(audio_mode)
+        mode = str(continuation_mode)
+        context = int(context_length)
+        matched_preset = None
+        for candidate in ("cut", "guide", "hard_av", "soft_av"):
+            resolved = _contract_transition_policy(candidate)
+            if (resolved["continuation_mode"] == mode and
+                    int(resolved["context_length"]) == context):
+                matched_preset = candidate
+                break
+        transition = _contract_transition_policy(
+            matched_preset or "guide",
+            expert_override=matched_preset is None,
+            continuation_mode=mode,
+            context_length=context)
+        status = "legacy 0.4: audio=%s; transition=%s/%df" % (
+            audio_mode, mode, context)
+        return (audio, transition, status)
+
+
 class MiniMaxH3AudioPolicy:
     @classmethod
     def INPUT_TYPES(cls):
@@ -6823,7 +6886,11 @@ class MiniMaxH3ChainPlan:
                                "so its latent always matches the plan."}),
                 "context_length": (list(H3_CONTEXT_LENGTHS), {
                     "default": 22,
-                    "tooltip": "Default previous-scene video frames used to "
+                    "tooltip": "Legacy 0.4 fallback, hidden in the normal 0.5 "
+                               "interface. Connect Transition Policy for new "
+                               "workflows or Legacy 0.4 Policy Adapter when "
+                               "rebuilding an old control surface. Default "
+                               "previous-scene video frames used to "
                                "continue motion. Use 22 for guide mode and 39 "
                                "for masked_av/feathered_av so the AV clocks "
                                "meet exactly. "
@@ -6863,7 +6930,8 @@ class MiniMaxH3ChainPlan:
                                "picture/video reference inputs."}),
                 "audio_mode": (list(AUDIO_MODES), {
                     "default": "generated_audio",
-                    "tooltip": "Legacy 0.4 fallback used only when no H3 Audio "
+                    "tooltip": "Legacy 0.4 fallback, hidden in the normal 0.5 "
+                               "interface and used only when no H3 Audio "
                                "Policy is connected. It controls timeline "
                                "continuity and final audio; it "
                                "does NOT enable or disable @voice/<Audio N> "
@@ -6936,7 +7004,9 @@ class MiniMaxH3ChainPlan:
                                "delivered duration remain unchanged."}),
                 "continuation_mode": (list(CONTINUATION_MODES), {
                     "default": "guide",
-                    "tooltip": "Inherited default for scenes without a "
+                    "tooltip": "Legacy 0.4 fallback, hidden in the normal 0.5 "
+                               "interface. Connect Transition Policy for new "
+                               "workflows. Inherited default for scenes without a "
                                "per-scene continuation override. guide keeps "
                                "the established Motion Context "
                                "path: previous AV is supplied as fixed guide "
@@ -11498,6 +11568,7 @@ if (PromptServer is not None and web is not None and
 
 CHAIN_NODE_CLASS_MAPPINGS = {
     "MiniMaxH3TransitionPolicy": MiniMaxH3TransitionPolicy,
+    "MiniMaxH3Legacy04PolicyAdapter": MiniMaxH3Legacy04PolicyAdapter,
     "MiniMaxH3AudioPolicy": MiniMaxH3AudioPolicy,
     "MiniMaxH3ChainPlan": MiniMaxH3ChainPlan,
     "MiniMaxH3ChainScenePromptEditor": MiniMaxH3ChainScenePromptEditor,
@@ -11540,6 +11611,8 @@ CHAIN_NODE_CLASS_MAPPINGS = {
 
 CHAIN_NODE_DISPLAY_NAME_MAPPINGS = {
     "MiniMaxH3TransitionPolicy": "MiniMax H3 Transition Policy",
+    "MiniMaxH3Legacy04PolicyAdapter": (
+        "MiniMax H3 Legacy 0.4 Policy Adapter"),
     "MiniMaxH3AudioPolicy": "MiniMax H3 Audio Policy",
     "MiniMaxH3ChainPlan": "MiniMax H3 Contex Loop Plan",
     "MiniMaxH3ChainScenePromptEditor": "MiniMax H3 Scene Prompt Editor",

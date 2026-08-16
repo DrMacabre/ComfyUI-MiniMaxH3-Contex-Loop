@@ -5,6 +5,7 @@ import {
     hasSourceTimeline,
     presentationForNode,
     resolveAudioPolicy,
+    resolveTransitionPolicy,
 } from "../web/h3_socket_presentation_core.mjs";
 
 class Graph {
@@ -36,8 +37,11 @@ const audioPolicy = node(1, "MiniMaxH3AudioPolicy", [], [["audio_policy", [10]]]
     ["generated_continuity", "on"],
 ]);
 const plan = node(2, "MiniMaxH3ChainPlan", [
-    ["audio_policy", 10],
-], [["plan", [11]]], [["audio_mode", "source_track"]]);
+    ["audio_policy", 10], ["transition_policy", null],
+], [["plan", [11]]], [
+    ["audio_mode", "source_track"], ["continuation_mode", "guide"],
+    ["context_length", 22],
+]);
 const start = node(3, "MiniMaxH3ChainLoopStart", [
     ["plan", 11], ["source_audio", null], ["source_timeline", null],
 ], [["flow", null], ["state", [12]], ["status", null]]);
@@ -54,6 +58,11 @@ assert.deepEqual(resolveAudioPolicy(start), {
     source: "typed",
 });
 assert.equal(hasSourceTimeline(start), false);
+const planPresentation = presentationForNode(plan, false);
+assert.equal(planPresentation.hiddenWidgets.has("audio_mode"), true);
+assert.equal(planPresentation.hiddenWidgets.has("continuation_mode"), true);
+assert.equal(planPresentation.hiddenWidgets.has("context_length"), true);
+assert.equal(presentationForNode(plan, true).hiddenWidgets.size, 0);
 
 const inputOrder = start.inputs.map((slot) => slot.name);
 const outputOrder = start.outputs.map((slot) => slot.name);
@@ -114,10 +123,47 @@ transition.widgets.find((item) => item.name === "expert_override").value = true;
 transitionPresentation = presentationForNode(transition, false);
 assert.equal(transitionPresentation.hiddenWidgets.has("expert_context_length"), false);
 
+plan.inputs.find((slot) => slot.name === "transition_policy").link = 23;
+plan.graph._nodes.push(transition);
+transition.graph = plan.graph;
+plan.graph.links[23] = {origin_id: 7, target_id: 2};
+transition.widgets.find((item) => item.name === "expert_override").value = false;
+transition.widgets.find((item) => item.name === "preset").value = "soft_av";
+assert.deepEqual(resolveTransitionPolicy(plan), {
+    known: true,
+    preset: "soft_av",
+    continuationMode: "feathered_av",
+    contextLength: 39,
+    expertOverride: false,
+    source: "typed",
+});
+
+const legacyAdapter = node(8, "MiniMaxH3Legacy04PolicyAdapter", [], [
+    ["audio_policy", null], ["transition_policy", null], ["status", null],
+], [
+    ["audio_mode", "source_plus_timeline"],
+    ["continuation_mode", "masked_av"], ["context_length", 56],
+]);
+assert.deepEqual(resolveAudioPolicy(legacyAdapter), {
+    known: true,
+    finalAudio: "source",
+    sourceReference: "on",
+    generatedContinuity: "on",
+    source: "legacy_adapter",
+});
+assert.deepEqual(resolveTransitionPolicy(legacyAdapter), {
+    known: true,
+    preset: "custom",
+    continuationMode: "masked_av",
+    contextLength: 56,
+    expertOverride: true,
+    source: "legacy_adapter",
+});
+
 const extensionSource = fs.readFileSync(
     new URL("../web/h3_socket_presentation.js", import.meta.url), "utf8");
-assert.match(extensionSource, /Show advanced H3 sockets/);
-assert.match(extensionSource, /Hide advanced H3 sockets/);
+assert.match(extensionSource, /Show advanced \/ legacy H3 controls/);
+assert.match(extensionSource, /Hide advanced \/ legacy H3 controls/);
 assert.doesNotMatch(extensionSource, /removeInput|removeOutput/);
 
 console.log("H3 socket presentation: positional compatibility and policy visibility pass");

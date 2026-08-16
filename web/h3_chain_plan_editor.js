@@ -24,6 +24,7 @@ import {
     sharedPrompt,
 } from "./h3_chain_plan_core.mjs?v=0.5.0";
 import {availableReferenceRecords} from "./h3_reference_preview_core.mjs?v=0.5.0";
+import {resolveTransitionPolicy} from "./h3_socket_presentation_core.mjs?v=0.5.0";
 
 // This scene editor is an original implementation. Its quick @ reference and
 // # dialogue interactions are inspired by nkxx188/ComfyUI-MiniMaxH3-Easy,
@@ -464,12 +465,17 @@ function mountEditor(node) {
     }
 
     function currentSettings() {
+        const transition = resolveTransitionPolicy(node);
         return {
-            contextLength: widgetValue(node, "context_length", 22),
+            contextLength: transition.known
+                ? transition.contextLength
+                : widgetValue(node, "context_length", 22),
             audioContextLength: widgetValue(node, "audio_context_length", 22),
             encodeMode: widgetValue(node, "encode_mode", "video"),
             anchorMode: widgetValue(node, "anchor_mode", "head"),
-            continuationMode: widgetValue(node, "continuation_mode", "guide"),
+            continuationMode: transition.known
+                ? transition.continuationMode
+                : widgetValue(node, "continuation_mode", "guide"),
             defaultDurationSeconds: widgetValue(node, "default_duration_seconds", 15),
             defaultSteps: widgetValue(node, "default_steps", 20),
         };
@@ -833,7 +839,8 @@ function mountEditor(node) {
             syncPlan();
         });
         const context = element("select", "h3c-context");
-        const planContextLength = Number(widgetValue(node, "context_length", 22));
+        const resolvedPlanSettings = currentSettings();
+        const planContextLength = Number(resolvedPlanSettings.contextLength);
         for (const [value, label] of [
             ["", `Plan default · ${planContextLength}`],
             ["0", "0 · new visual"],
@@ -870,9 +877,7 @@ function mountEditor(node) {
             syncPlan();
         });
         const continuation = element("select", "h3c-continuation");
-        const planContinuationMode = widgetValue(
-            node, "continuation_mode", "guide",
-        );
+        const planContinuationMode = resolvedPlanSettings.continuationMode;
         for (const [value, label] of [
             ["", `Plan default · ${planContinuationMode}`],
             ["guide", "Guide · new shot"],

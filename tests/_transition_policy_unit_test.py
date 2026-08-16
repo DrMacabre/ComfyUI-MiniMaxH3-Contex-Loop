@@ -128,7 +128,26 @@ assert node.RETURN_TYPES == (
 assert chain.CHAIN_NODE_CLASS_MAPPINGS[
     "MiniMaxH3TransitionPolicy"] is chain.MiniMaxH3TransitionPolicy
 
+legacy_adapter = chain.MiniMaxH3Legacy04PolicyAdapter()
+legacy_audio, legacy_transition, legacy_status = legacy_adapter.build(
+    "source_plus_timeline", "feathered_av", 56)
+assert legacy_audio == chain.migrate_legacy_audio_mode("source_plus_timeline")
+assert legacy_transition["continuation_mode"] == "feathered_av"
+assert legacy_transition["context_length"] == 56
+assert legacy_transition["expert_override"] is True
+assert "legacy 0.4" in legacy_status
+matched_audio, matched_transition, _ = legacy_adapter.build(
+    "generated_audio", "masked_av", 39)
+assert matched_audio == chain.migrate_legacy_audio_mode("generated_audio")
+assert matched_transition["preset"] == "hard_av"
+assert matched_transition["expert_override"] is False
+assert chain.CHAIN_NODE_CLASS_MAPPINGS[
+    "MiniMaxH3Legacy04PolicyAdapter"] is (
+        chain.MiniMaxH3Legacy04PolicyAdapter)
+assert len(legacy_adapter.OUTPUT_TOOLTIPS) == len(legacy_adapter.RETURN_TYPES)
+assert all(legacy_adapter.OUTPUT_TOOLTIPS)
+
 print(
     "transition policy: Cut/Guide/Hard AV/Feathered AV presets, expert "
-    "overrides, zero-context delivery, AV safety validation, legacy fallback, "
-    "Plan resolution, and typed node registration pass")
+    "overrides, zero-context delivery, AV safety validation, legacy fallback "
+    "and adapter, Plan resolution, and typed node registration pass")
