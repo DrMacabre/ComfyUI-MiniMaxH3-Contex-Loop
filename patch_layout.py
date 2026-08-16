@@ -514,9 +514,11 @@ def _is_structural_solattn_layout_observer(init):
     if code is None or code.co_name != "__init__" or not isinstance(
             namespace, dict):
         return False
-    names = set(code.co_names)
+    symbols = set(code.co_names)
+    symbols.update(
+        value for value in code.co_consts if isinstance(value, str))
     return bool(
-        SOLATTN_LAYOUT_OBSERVER_NAMES.issubset(names)
+        SOLATTN_LAYOUT_OBSERVER_NAMES.issubset(symbols)
         and callable(namespace.get("_video_span"))
         and isinstance(namespace.get("_SPANS"), dict)
     )

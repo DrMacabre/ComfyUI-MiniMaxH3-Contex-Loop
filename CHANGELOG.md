@@ -2,6 +2,14 @@
 
 Newest first. This file keeps release history out of the onboarding README.
 
+## Unreleased
+
+- Fixed folder-independent Sol-Attn recognition for the defensive
+  `getattr(self, "segments", ...)` observer used by the Kitchen PR helper,
+  while continuing to require the complete `_video_span`, `_SPANS`,
+  `position_ids`, and `segments` fingerprint. Thanks to @tsolful in PR #16
+  for identifying the bytecode lookup difference.
+
 ## v0.4.8 — Renamed Sol-Attn observer compatibility
 
 - Made Sol-Attn H3 layout-observer compatibility independent of the custom

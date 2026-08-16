@@ -56,7 +56,8 @@ Checks:
  12. The CUDA PR117 checkout's path-valued wrapper identity composes in both
      load orders, but only with the same audited ``original_init`` closure.
  13. Renamed/path-loaded copies of the read-only SolAttn observer are
-     recognised structurally, including a nested observer stack.
+     recognised structurally, including defensive getattr access and a nested
+     observer stack, while a partial fingerprint remains refused.
 """
 
 import importlib
@@ -231,7 +232,7 @@ def load_patch_named(mm, name):
 
 
 def install_structural_solattn(mm, module_name):
-    """Install the upstream observer shape under an arbitrary module name."""
+    """Install the defensive-getattr observer under an arbitrary name."""
     namespace = {"_SPANS": {}}
     exec(compile(
         '''def _video_span(layout):
@@ -244,7 +245,8 @@ def install(layout_cls, module_name):
     def __init__(self, *args, **kwargs):
         original_init(self, *args, **kwargs)
         span = _video_span(self)
-        bounds = next(((a, b) for a, b, kind in self.segments
+        bounds = next(((a, b) for a, b, kind in
+                       getattr(self, "segments", []) or []
                        if kind == "video"), None)
         if getattr(self, "position_ids", None) is not None and bounds is not None:
             _SPANS[id(self.position_ids)] = (self, bounds, span)
@@ -252,6 +254,27 @@ def install(layout_cls, module_name):
     __init__.__module__ = module_name
     layout_cls.__init__ = __init__
 ''', "<structural-solattn-observer>", "exec"), namespace)
+    namespace["install"](mm.PackedLayout, module_name)
+    return namespace
+
+
+def install_partial_solattn_lookalike(mm, module_name):
+    """Install a closure with only half the audited layout fingerprint."""
+    namespace = {"_SPANS": {}, "_video_span": lambda _layout: None}
+    exec(compile(
+        '''def install(layout_cls, module_name):
+    original_init = layout_cls.__init__
+
+    def __init__(self, *args, **kwargs):
+        original_init(self, *args, **kwargs)
+        span = _video_span(self)
+        position_ids = getattr(self, "position_ids", None)
+        if position_ids is not None:
+            _SPANS[id(position_ids)] = (self, span)
+
+    __init__.__module__ = module_name
+    layout_cls.__init__ = __init__
+''', "<partial-solattn-lookalike>", "exec"), namespace)
     namespace["install"](mm.PackedLayout, module_name)
     return namespace
 
@@ -634,8 +657,18 @@ def main():
         keyframes=run, refs=[dict(marked)], frame_count=FC)
     assert id(lay_struct.position_ids) in observer_a["_SPANS"]
     assert id(lay_struct.position_ids) in observer_b["_SPANS"]
-    print("13. arbitrary renamed SolAttn helpers and nested read-only "
-          "observer copies compose without a folder-name allowlist")
+
+    mm_partial = make_mm()
+    install_partial_solattn_lookalike(
+        mm_partial,
+        "/workspace/custom_nodes/partial-sol-attn-lookalike",
+    )
+    ours_partial = load_patch(mm_partial)
+    assert ours_partial._already_patched() == "foreign"
+    assert not ours_partial.apply_patch(), \
+        "a partial observer fingerprint was accepted"
+    print("13. defensive-getattr and nested renamed SolAttn observers compose "
+          "without a folder allowlist; a partial fingerprint remains refused")
 
     # 14. The explicit workflow node may promote the current pack over an
     # older compatible vendor. Unlike the same-name reload cases above, real
