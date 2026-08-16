@@ -32,8 +32,10 @@ import {resolveTransitionPolicy} from "./h3_socket_presentation_core.mjs?v=0.5.0
 import {
     locateStudioTimelineSecond,
     matchingStudioCheckpoint,
+    matchingStudioSourceScene,
     studioCheckpointSignature,
     studioSceneStartSeconds,
+    studioSourceSecond,
 } from "./h3_chain_plan_studio_core.mjs?v=0.5.0";
 import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.5.0";
 
@@ -88,8 +90,11 @@ function injectStyles() {
         .h3studio-statusline strong { color:var(--hs-text); }
         .h3studio-timeline-shell { flex:0 0 auto; padding:7px; border:1px solid var(--hs-border);
             border-radius:7px; background:var(--hs-panel); }
-        .h3studio-ruler { position:relative; height:18px; margin-bottom:4px; border-bottom:1px solid var(--hs-border);
+        .h3studio-ruler { position:relative; height:18px; margin:0 0 4px 83px; width:calc(100% - 83px); border-bottom:1px solid var(--hs-border);
             color:var(--hs-muted); font-size:10px; overflow:hidden; cursor:pointer; }
+        .h3studio-track { display:grid; grid-template-columns:78px minmax(0,1fr); gap:5px; align-items:stretch; margin-top:4px; }
+        .h3studio-track-label { display:flex; align-items:center; justify-content:flex-end; color:var(--hs-muted);
+            font-size:9px; font-weight:750; letter-spacing:.06em; text-align:right; }
         .h3studio-timeline { display:flex; gap:3px; min-height:76px; overflow-x:auto; overflow-y:hidden; }
         .h3studio-card { --scene:#84aaff; position:relative; isolation:isolate; flex:1 0 138px; min-width:138px;
             height:70px; overflow:hidden; padding:0 !important; text-align:left; border:1px solid var(--scene) !important;
@@ -105,6 +110,10 @@ function injectStyles() {
         .h3studio-render-dot { position:absolute; right:6px; top:6px; width:8px; height:8px; border-radius:50%;
             background:#687080; box-shadow:0 0 0 1px #111; }
         .h3studio-rendered .h3studio-render-dot { background:#62d58b; }
+        .h3studio-source-card { border-style:dashed !important; }
+        .h3studio-source-card .h3studio-render-dot { background:#b58cff; }
+        .h3studio-source-empty { display:flex; align-items:center; padding:0 10px; color:var(--hs-muted);
+            min-height:48px; border:1px dashed var(--hs-border); border-radius:5px; }
         .h3studio-playhead { position:absolute; top:0; bottom:0; width:1px; background:#ff626a; pointer-events:none; }
         .h3studio-panel { flex:1 1 auto; min-height:0; overflow:auto; padding:9px;
             border:1px solid var(--hs-border); border-radius:7px; background:var(--hs-panel); }
@@ -130,8 +139,19 @@ function injectStyles() {
         .h3studio-json { min-height:360px; font:13px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace !important; }
         .h3studio-json-actions { margin-top:7px; }
         .h3studio-player { display:flex; flex-direction:column; gap:7px; height:100%; min-height:330px; }
-        .h3studio-player video { flex:1 1 auto; min-height:260px; width:100%; background:#050608; object-fit:contain; border-radius:6px; }
+        .h3studio-compare-stage { position:relative; flex:1 1 auto; min-height:260px; overflow:hidden;
+            background:#050608; border-radius:6px; }
+        .h3studio-compare-stage video { position:absolute; inset:0; width:100%; height:100%; background:#050608; object-fit:contain; }
+        .h3studio-source-layer { position:absolute; inset:0; overflow:hidden; pointer-events:none; }
+        .h3studio-source-layer video { width:100%; height:100%; }
+        .h3studio-wipe-line { position:absolute; top:0; bottom:0; width:2px; background:#d2b8ff;
+            box-shadow:0 0 0 1px rgba(0,0,0,.45); pointer-events:none; }
+        .h3studio-compare-label { position:absolute; top:7px; z-index:2; padding:3px 6px; border-radius:4px;
+            background:rgba(5,7,12,.7); color:#fff; font-size:10px; pointer-events:none; }
+        .h3studio-compare-label-generated { right:7px; }
+        .h3studio-compare-label-source { left:7px; }
         .h3studio-player-controls input[type=range] { flex:1; padding:0; }
+        .h3studio-compare-controls { display:grid; grid-template-columns:auto minmax(100px,1fr) auto; gap:6px; align-items:center; }
         .h3studio-refs { display:none; gap:5px; padding:7px; border:1px solid var(--hs-border);
             border-radius:6px; background:var(--hs-bg); flex-wrap:wrap; }
         .h3studio-refs.h3studio-open { display:flex; }
@@ -300,10 +320,12 @@ function mount(node) {
         view:["scene","shared","player","json"].includes(node.properties[VIEW_PROPERTY])
             ? node.properties[VIEW_PROPERTY] : "scene",
         checkpoints:new Map(), checkpointSignature:"", checkpointError:"", checkpointToken:0,
-        pollTimer:null, checkpointTimer:null, timelineHost:null, panelHost:null,
+        sourcePreview:null,
+        pollTimer:null, checkpointTimer:null, timelineHost:null, sourceTimelineHost:null, panelHost:null,
         planNotifyTimer:null,
-        playhead:null, player:null, playerAudio:null, playerSlider:null,
-        playerIndex:-1,
+        playhead:null, player:null, playerAudio:null,
+        sourcePlayer:null, sourceLayer:null,
+        playerSlider:null, playerIndex:-1,
         timelinePosition:null, pendingSeek:0,
         history:{sceneKey:"", data:null, revisionId:null, host:null, textarea:null,
             status:null, loadToken:0, loadPromise:null, saveTimer:null,
@@ -623,6 +645,26 @@ function mount(node) {
         });
     }
 
+    function sourceScene(index) {
+        return matchingStudioSourceScene(
+            state.sourcePreview, index, timing().shots[index],
+        );
+    }
+
+    function sourceReference(index) {
+        return sourceScene(index)?.references?.[0] ?? null;
+    }
+
+    function sourcePreviewUrl(index, reference = sourceReference(index)) {
+        if (!state.sourcePreview?.token || !reference) return "";
+        const query = new URLSearchParams({
+            token:state.sourcePreview.token,
+            scene:String(index + 1),
+            slot:String(reference.slot ?? 0),
+        });
+        return api.apiURL(`/minimax_h3_context_loop/plan-studio/source-preview?${query.toString()}`);
+    }
+
     function renderTimeline() {
         const host = state.timelineHost;
         if (!host || !state.plan) return;
@@ -654,13 +696,65 @@ function mount(node) {
             card.append(copy, element("span", "h3studio-render-dot"));
             host.append(card);
         }
+        renderSourceTimeline();
+    }
+
+    function renderSourceTimeline() {
+        const host = state.sourceTimelineHost;
+        if (!host || !state.plan) return;
+        host.replaceChildren();
+        const result = timing();
+        const available = result.shots.some((_row, index) => sourceScene(index));
+        if (!available) {
+            host.append(element(
+                "div", "h3studio-source-empty",
+                state.sourcePreview?.status
+                    ?? "Queue Plan Studio once with Tagged Motion References connected to reveal exact source windows.",
+            ));
+            return;
+        }
+        for (let index = 0; index < state.plan.shots.length; index += 1) {
+            const row = result.shots[index];
+            const scene = sourceScene(index);
+            const reference = scene?.references?.[0] ?? null;
+            const card = button("", reference
+                ? `Scene ${index + 1} source motion @${reference.tag}`
+                : `Scene ${index + 1} has no active path-backed motion reference`,
+            () => void selectScene(index));
+            card.className = `h3studio-card h3studio-source-card${index === state.active ? " h3studio-selected" : ""}`;
+            card.style.setProperty("--scene", automaticSceneColor(index));
+            card.style.flexGrow = String(Math.max(.55, row.deliveredFrames / Math.max(1, result.totalFrames) * state.plan.shots.length));
+            if (reference && index === state.active) {
+                const media = element("video");
+                media.muted = true; media.playsInline = true; media.preload = "metadata";
+                media.src = sourcePreviewUrl(index, reference);
+                media.addEventListener("loadedmetadata", () => {
+                    try { media.currentTime = studioSourceSecond(reference, 0); }
+                    catch (_error) {}
+                }, {once:true});
+                card.append(media);
+            }
+            const copy = element("span", "h3studio-card-copy");
+            copy.append(
+                element("span", "h3studio-card-title", reference
+                    ? `@${reference.tag} · ${reference.start_frame}:${reference.end_frame}`
+                    : "No active @motion"),
+                element("span", "h3studio-card-meta", reference
+                    ? `${reference.frame_count}f source · +${reference.compare_offset_frames}f compare offset`
+                    : `Scene ${index + 1}`),
+            );
+            card.append(copy, element("span", "h3studio-render-dot"));
+            host.append(card);
+        }
     }
 
     function updateTimelineSelection() {
-        if (!state.timelineHost) return;
-        [...state.timelineHost.querySelectorAll(".h3studio-card")].forEach(
-            (card, index) => card.classList.toggle("h3studio-selected", index === state.active),
-        );
+        for (const host of [state.timelineHost, state.sourceTimelineHost]) {
+            if (!host) continue;
+            [...host.querySelectorAll(".h3studio-card")].forEach(
+                (card, index) => card.classList.toggle("h3studio-selected", index === state.active),
+            );
+        }
     }
 
     async function selectScene(index, synchronize = true) {
@@ -669,7 +763,7 @@ function mount(node) {
         if (state.view === "player") {
             state.timelinePosition = studioSceneStartSeconds(timing().shots, state.active);
         }
-        persistView(); updateTimelineSelection(); renderPanel();
+        persistView(); renderTimeline(); renderPanel();
         if (synchronize) publishActiveScene();
     }
 
@@ -921,10 +1015,13 @@ function mount(node) {
     function disposePlayer() {
         const current = state.player;
         const currentAudio = state.playerAudio;
+        const sourceCurrent = state.sourcePlayer;
         state.player = null;
         state.playerAudio = null;
+        state.sourcePlayer = null;
+        state.sourceLayer = null;
         state.playerSlider = null;
-        for (const media of [current, currentAudio]) {
+        for (const media of [current, currentAudio, sourceCurrent]) {
             if (!media) continue;
             try { media.pause(); } catch (_error) {}
             media.removeAttribute("src");
@@ -939,30 +1036,18 @@ function mount(node) {
         if (location.index < 0) return;
         const {index, localSeconds, targetSeconds:target} = location;
         const media = playerCheckpoint(index);
-        const source = media?.video;
+        const generated = media?.video;
+        const reference = sourceReference(index);
+        const source = sourcePreviewUrl(index, reference);
         state.playerIndex = index; state.pendingSeek = localSeconds;
         state.timelinePosition = target;
         if (state.active !== index) {
-            state.active = index; persistView(); updateTimelineSelection();
+            state.active = index; persistView(); renderTimeline();
             publishActiveScene();
         }
         if (state.playerSlider) state.playerSlider.value = String(target);
         if (state.playhead) state.playhead.style.left = `${result.totalSeconds ? target / result.totalSeconds * 100 : 0}%`;
         if (!state.player) return;
-        if (!source) {
-            delete state.player.dataset.source;
-            state.player.removeAttribute("src"); state.player.load();
-            if (state.playerAudio) {
-                try { state.playerAudio.pause(); } catch (_error) {}
-                delete state.playerAudio.dataset.source;
-                state.playerAudio.removeAttribute("src");
-                state.playerAudio.load();
-            }
-            const label = root.querySelector(".h3studio-player-label");
-            if (label) label.textContent = `Scene ${index + 1} has no saved segment.`;
-            return;
-        }
-        const url = videoUrl(source);
         const targetPlayer = state.player;
         const targetAudio = state.playerAudio;
         const requestedSeek = state.pendingSeek;
@@ -986,7 +1071,7 @@ function mount(node) {
                 requestedSeek, Math.max(0, duration - .02),
             ); } catch (_error) {}
         };
-        const applySeek = () => {
+        const applyGeneratedSeek = () => {
             if (state.player !== targetPlayer || !targetPlayer?.isConnected) return;
             const duration = Number.isFinite(targetPlayer.duration) ? targetPlayer.duration : requestedSeek;
             try { targetPlayer.currentTime = Math.min(requestedSeek, Math.max(0, duration - .02)); }
@@ -997,28 +1082,78 @@ function mount(node) {
         if (targetAudio?.dataset.source) {
             targetAudio.addEventListener("loadedmetadata", seekAudio, {once:true});
         }
-        if (targetPlayer.dataset.source !== url) {
-            targetPlayer.dataset.source = url; targetPlayer.src = url; targetPlayer.load();
-            targetPlayer.addEventListener("loadedmetadata", applySeek, {once:true});
-        } else applySeek();
+        if (!generated) {
+            delete targetPlayer.dataset.source;
+            targetPlayer.removeAttribute("src"); targetPlayer.load();
+        } else {
+            const url = videoUrl(generated);
+            if (targetPlayer.dataset.source !== url) {
+                targetPlayer.dataset.source = url; targetPlayer.src = url; targetPlayer.load();
+                targetPlayer.addEventListener("loadedmetadata", applyGeneratedSeek, {once:true});
+            } else applyGeneratedSeek();
+        }
+        if (state.sourcePlayer) {
+            const targetSource = state.sourcePlayer;
+            const requestedSourceSeek = studioSourceSecond(reference, localSeconds);
+            const applySourceSeek = () => {
+                if (state.sourcePlayer !== targetSource || !targetSource?.isConnected) return;
+                try { targetSource.currentTime = requestedSourceSeek; }
+                catch (_error) {}
+            };
+            if (!source) {
+                delete targetSource.dataset.source;
+                targetSource.removeAttribute("src"); targetSource.load();
+            } else if (targetSource.dataset.source !== source) {
+                targetSource.dataset.source = source; targetSource.src = source; targetSource.load();
+                targetSource.addEventListener("loadedmetadata", applySourceSeek, {once:true});
+            } else applySourceSeek();
+        }
         const label = root.querySelector(".h3studio-player-label");
-        if (label) label.textContent = `Scene ${index + 1} · ${timing().shots[index].id}`;
+        if (label) label.textContent = generated
+            ? `Scene ${index + 1} · ${timing().shots[index].id}${reference ? ` ↔ @${reference.tag}` : ""}`
+            : `Scene ${index + 1} has no saved segment${reference ? ` · @${reference.tag} is ready` : ""}.`;
+        const audioChoice = root.querySelector(".h3studio-audio-choice");
+        const sourceAudioOption = audioChoice?.querySelector('option[value="source"]');
+        if (sourceAudioOption) sourceAudioOption.disabled = !reference?.has_audio;
+        if (audioChoice?.value === "source" && !reference?.has_audio) {
+            audioChoice.value = "generated";
+        }
+        const useSourceAudio = audioChoice?.value === "source";
+        state.player.muted = useSourceAudio;
+        if (state.playerAudio) {
+            state.playerAudio.muted = useSourceAudio;
+            if (useSourceAudio) state.playerAudio.pause();
+        }
+        if (state.sourcePlayer) state.sourcePlayer.muted = !useSourceAudio;
     }
 
     function renderPlayerPanel() {
         const wrapper = element("div", "h3studio-player");
-        const label = element("div", "h3studio-player-label", "Saved scene preview");
-        const video = element("video"); video.controls = true; video.playsInline = true; video.preload = "metadata";
+        const label = element("div", "h3studio-player-label", "Generated ↔ motion-reference comparison");
+        const stage = element("div", "h3studio-compare-stage");
+        const video = element("video"); video.playsInline = true; video.preload = "metadata";
         const audio = element("audio"); audio.preload = "metadata"; audio.hidden = true;
+        const sourceVideo = element("video"); sourceVideo.playsInline = true;
+        sourceVideo.preload = "metadata"; sourceVideo.muted = true;
+        const sourceLayer = element("div", "h3studio-source-layer");
+        sourceLayer.style.clipPath = "inset(0 50% 0 0)";
+        const wipeLine = element("span", "h3studio-wipe-line"); wipeLine.style.left = "50%";
+        sourceLayer.append(sourceVideo);
+        stage.append(
+            video, sourceLayer, wipeLine,
+            element("span", "h3studio-compare-label h3studio-compare-label-source", "MOTION REF"),
+            element("span", "h3studio-compare-label h3studio-compare-label-generated", "GENERATED"),
+        );
         const controls = element("div", "h3studio-player-controls");
-        const play = button("▶", "Play the delivered timeline from the current position", () => {
-            void video.play().catch(() => {});
+        const play = button("▶", "Play or pause the delivered timeline from the current position", () => {
+            if (video.paused) void video.play().catch(() => {});
+            else video.pause();
         });
         const slider = element("input"); slider.type = "range"; slider.min = "0"; slider.max = String(timing().totalSeconds); slider.step = String(1 / 24); slider.value = "0";
         const clock = element("span", "", `0 / ${formatClock(timing().totalSeconds)}`);
         slider.addEventListener("input", () => seekTimeline(Number(slider.value), false));
         const synchronizeAudio = (play = false) => {
-            if (!audio.dataset.source) return;
+            if (!audio.dataset.source || audioChoice.value === "source") return;
             audio.playbackRate = video.playbackRate;
             if (Math.abs((Number(audio.currentTime) || 0) -
                     (Number(video.currentTime) || 0)) > .12) {
@@ -1026,16 +1161,50 @@ function mount(node) {
             }
             if (play) void audio.play().catch(() => {});
         };
-        video.addEventListener("playing", () => synchronizeAudio(true));
-        video.addEventListener("pause", () => audio.pause());
-        video.addEventListener("waiting", () => audio.pause());
+        const syncSource = () => {
+            const reference = sourceReference(state.playerIndex);
+            if (!reference || !sourceVideo.dataset.source) return;
+            const target = studioSourceSecond(reference, video.currentTime);
+            if (Math.abs(sourceVideo.currentTime - target) > .055) {
+                try { sourceVideo.currentTime = target; } catch (_error) {}
+            }
+        };
+        video.addEventListener("playing", () => {
+            play.textContent = "❚❚";
+            synchronizeAudio(true);
+            syncSource();
+            if (sourceVideo.dataset.source) void sourceVideo.play().catch(() => {});
+        });
+        video.addEventListener("pause", () => {
+            play.textContent = "▶";
+            audio.pause();
+            sourceVideo.pause();
+        });
+        video.addEventListener("waiting", () => {
+            audio.pause();
+            sourceVideo.pause();
+        });
         video.addEventListener("seeking", () => {
-            audio.pause(); synchronizeAudio(false);
+            audio.pause();
+            sourceVideo.pause();
+            synchronizeAudio(false);
+            syncSource();
         });
         video.addEventListener("seeked", () => {
             synchronizeAudio(!video.paused);
+            syncSource();
+            if (!video.paused && sourceVideo.dataset.source) {
+                void sourceVideo.play().catch(() => {});
+            }
         });
-        video.addEventListener("ratechange", () => synchronizeAudio(false));
+        video.addEventListener("ratechange", () => {
+            synchronizeAudio(false);
+            sourceVideo.playbackRate = video.playbackRate;
+        });
+        sourceVideo.addEventListener("canplay", () => {
+            syncSource();
+            if (!video.paused) void sourceVideo.play().catch(() => {});
+        });
         video.addEventListener("timeupdate", () => {
             synchronizeAudio(false);
             const result = timing();
@@ -1045,6 +1214,7 @@ function mount(node) {
             state.timelinePosition = current;
             slider.value = String(current); clock.textContent = `${formatClock(current)} / ${formatClock(result.totalSeconds)}`;
             if (state.playhead) state.playhead.style.left = `${result.totalSeconds ? current / result.totalSeconds * 100 : 0}%`;
+            syncSource();
         });
         video.addEventListener("ended", () => {
             audio.pause();
@@ -1054,13 +1224,35 @@ function mount(node) {
             const start = studioSceneStartSeconds(result.shots, next);
             seekTimeline(start, true);
         });
+        const compareControls = element("div", "h3studio-compare-controls");
+        const wipe = element("input"); wipe.type = "range"; wipe.min = "0"; wipe.max = "100";
+        wipe.step = "1"; wipe.value = "50";
+        wipe.addEventListener("input", () => {
+            const percent = Number(wipe.value);
+            sourceLayer.style.clipPath = `inset(0 ${100 - percent}% 0 0)`;
+            wipeLine.style.left = `${percent}%`;
+        });
+        const audioChoice = element("select", "h3studio-audio-choice");
+        for (const [value, text] of [["generated", "Generated audio"], ["source", "Motion-ref audio"]]) {
+            const option = element("option", "", text); option.value = value; audioChoice.append(option);
+        }
+        audioChoice.addEventListener("change", () => {
+            const useSource = audioChoice.value === "source";
+            video.muted = useSource;
+            audio.muted = useSource;
+            sourceVideo.muted = !useSource;
+            if (useSource) audio.pause();
+            else synchronizeAudio(!video.paused);
+        });
+        compareControls.append(element("span", "", "Wipe"), wipe, audioChoice);
         state.player = video; state.playerAudio = audio;
-        state.playerSlider = slider;
+        state.sourcePlayer = sourceVideo;
+        state.sourceLayer = sourceLayer; state.playerSlider = slider;
         controls.append(play, slider, clock, button("Refresh", "Rescan saved checkpoints and segments", async () => {
             await refreshCheckpoints(); renderPanel();
         }));
-        wrapper.append(label, video, audio, controls,
-            element("div", "h3studio-message", "Playback uses synchronized Review previews when available and otherwise pairs each saved segment with its delivered-audio sidecar."));
+        wrapper.append(label, stage, audio, compareControls, controls,
+            element("div", "h3studio-message", "The source side is a cached low-resolution slice of the exact active @motion window; its compare offset skips incoming context removed from the delivered scene. Playback uses synchronized Review previews when available and otherwise pairs each saved segment with its delivered-audio sidecar."));
         setTimeout(() => {
             if (state.player !== video || !video.isConnected) return;
             const result = timing();
@@ -1158,7 +1350,25 @@ function mount(node) {
         const shell = element("div", "h3studio-timeline-shell");
         const ruler = element("div", "h3studio-ruler");
         const timelineHost = element("div", "h3studio-timeline");
-        shell.append(ruler, timelineHost); state.timelineHost = timelineHost;
+        const sourceTimelineHost = element("div", "h3studio-timeline");
+        const generatedTrack = element("div", "h3studio-track");
+        generatedTrack.append(
+            element("div", "h3studio-track-label", "GENERATED"), timelineHost,
+        );
+        const sourceTrack = element("div", "h3studio-track");
+        sourceTrack.append(
+            element("div", "h3studio-track-label", "MOTION REF"), sourceTimelineHost,
+        );
+        let syncingScroll = false;
+        const syncScroll = (from, to) => {
+            if (syncingScroll) return;
+            syncingScroll = true; to.scrollLeft = from.scrollLeft; syncingScroll = false;
+        };
+        timelineHost.addEventListener("scroll", () => syncScroll(timelineHost, sourceTimelineHost));
+        sourceTimelineHost.addEventListener("scroll", () => syncScroll(sourceTimelineHost, timelineHost));
+        shell.append(ruler, generatedTrack, sourceTrack);
+        state.timelineHost = timelineHost;
+        state.sourceTimelineHost = sourceTimelineHost;
         const panelHost = element("div", "h3studio-panel"); state.panelHost = panelHost;
         root.append(head, toolbar, status, shell, panelHost);
         renderRuler(ruler, timing().totalSeconds); renderToolbarState(); renderStatus(); renderTimeline(); renderPanel();
@@ -1199,6 +1409,7 @@ function mount(node) {
             if (runChanged) {
                 state.checkpoints = new Map(); state.checkpointSignature = "";
                 state.checkpointError = ""; state.timelinePosition = null;
+                state.sourcePreview = null;
             }
             state.active = Math.min(state.active, state.plan.shots.length - 1); renderShell(); void refreshCheckpoints();
         } catch (error) { showFailure(`Connected Plan JSON is invalid:\n${error.message}`); }
@@ -1216,6 +1427,15 @@ function mount(node) {
         return result;
     };
     const onPromptExecuted = (event) => {
+        const sourceValues = event.detail?.output?.h3_plan_studio_source_timeline;
+        const sourcePayload = Array.isArray(sourceValues) ? sourceValues.at(-1) : null;
+        const displayNode = event.detail?.display_node ?? event.detail?.node;
+        if (sourcePayload && String(displayNode ?? "") === String(node.id ?? "")
+                && String(sourcePayload.run_name ?? "") === runName()) {
+            state.sourcePreview = sourcePayload;
+            renderTimeline();
+            if (state.view === "player") renderPanel();
+        }
         const values = event.detail?.output?.h3_chain_active_scene;
         const scene = Array.isArray(values) ? values.at(-1) : null;
         if (!scene || String(scene.run_name ?? "") !== runName()) return;

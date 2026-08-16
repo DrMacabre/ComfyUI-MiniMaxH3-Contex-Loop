@@ -134,6 +134,12 @@ runs before model-dependent sampling and reports:
 Errors include a user action. Sample counts and latent-grid details may appear
 under diagnostics, not as the primary explanation.
 
+Plan Studio also consumes those same reference-window results for its motion
+comparison track. It does not decode the full reference into IMAGE tensors.
+The server seeks and transcodes only the selected scene window to a cached
+low-resolution MP4; the comparison player offsets Guide windows past the
+incoming context that is removed from the delivered scene.
+
 ## Socket presentation rules
 
 The primary graph displays only generation-bearing connections. Status,

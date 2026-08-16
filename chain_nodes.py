@@ -24,6 +24,7 @@ import secrets
 import shutil
 import subprocess
 import sys
+import threading
 import time
 import uuid
 import wave
@@ -112,6 +113,11 @@ PLAN_VERSION = 2
 MAX_SHOTS = 128
 MAX_SEED = 0xFFFFFFFFFFFFFFFF
 MAX_H3_FRAMES = 3592  # largest 17k+5 value accepted by H3's 3600-frame socket
+PLAN_STUDIO_PREVIEW_TTL_SECONDS = 6 * 60 * 60
+PLAN_STUDIO_PREVIEW_MAX_SESSIONS = 32
+PLAN_STUDIO_PREVIEW_MAX_HEIGHT = 480
+_PLAN_STUDIO_SOURCE_PREVIEWS: dict[str, dict[str, Any]] = {}
+_PLAN_STUDIO_PREVIEW_BUILD_LOCK = threading.Lock()
 H3_CONTEXT_LENGTHS = (
     1, 5, 22, 39, 56, 73, 90, 107, 124,
     141, 158, 175, 192, 209, 226, 243,
@@ -7622,7 +7628,9 @@ def _preflight_chain(
                             scene=int(shot["index"]), tag=tag)
                 for entry in active:
                     detail = {"tag": str(entry.get("tag") or ""),
-                              "kind": str(entry.get("kind") or "")}
+                              "kind": str(entry.get("kind") or ""),
+                              "semantic_role": str(
+                                  entry.get("semantic_role") or "")}
                     window = _preflight_reference_window(
                         entry, prepared, int(shot["index"]))
                     if window is not None:
@@ -7700,6 +7708,178 @@ def _preflight_failure_text(report: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _plan_studio_preview_cleanup() -> None:
+    now = time.monotonic()
+    expired = [
+        token for token, session in _PLAN_STUDIO_SOURCE_PREVIEWS.items()
+        if now - float(session.get("created", 0.0)) >
+        PLAN_STUDIO_PREVIEW_TTL_SECONDS
+    ]
+    for token in expired:
+        _PLAN_STUDIO_SOURCE_PREVIEWS.pop(token, None)
+    overflow = len(_PLAN_STUDIO_SOURCE_PREVIEWS) - (
+        PLAN_STUDIO_PREVIEW_MAX_SESSIONS - 1)
+    if overflow > 0:
+        oldest = sorted(
+            _PLAN_STUDIO_SOURCE_PREVIEWS,
+            key=lambda item: float(
+                _PLAN_STUDIO_SOURCE_PREVIEWS[item].get("created", 0.0)))
+        for token in oldest[:overflow]:
+            _PLAN_STUDIO_SOURCE_PREVIEWS.pop(token, None)
+
+
+def _plan_studio_preview_media(
+        value: Any, window: dict[str, Any]) -> dict[str, Any] | None:
+    start = int(window["start_frame"])
+    end = int(window["end_frame"])
+    if _is_source_timeline(value):
+        source = _validate_source_timeline(value, require_runtime=True)
+        video = source.get("video")
+        if video is None:
+            return None
+        audio = source["audio"]
+        audio_kind = str(audio.get("kind") or "none")
+        audio_path = ""
+        audio_seek = 0.0
+        if audio_kind in ("embedded", "external_path"):
+            audio_path = _resolved_media_path(
+                audio.get("path"), "Plan Studio source-preview audio")
+            audio_seek = (
+                float(audio.get("timeline_offset_seconds", 0.0)) +
+                start / float(FPS))
+        media_fingerprint = str(source["fingerprints"]["timeline"])
+    elif _is_lazy_motion_descriptor(value):
+        video = value
+        audio_kind = "embedded" if value.get("audio") is not None else "none"
+        audio_path = str(value.get("path") or "") if audio_kind == "embedded" else ""
+        audio_seek = (
+            float(value.get("skip_seconds", 0.0)) +
+            start / float(FPS))
+        media_fingerprint = str(value.get("file_sha256") or "")
+        if not media_fingerprint:
+            media_fingerprint = _file_sha256(_resolved_media_path(
+                value.get("path"), "Plan Studio source-preview video"))
+    else:
+        return None
+    video_path = _resolved_media_path(
+        video.get("path"), "Plan Studio source-preview video")
+    video_seek = (
+        float(video.get("skip_seconds", 0.0)) +
+        start / float(FPS))
+    return {
+        "video_path": video_path,
+        "video_seek_seconds": video_seek,
+        "audio_path": audio_path,
+        "audio_seek_seconds": audio_seek,
+        "audio_kind": audio_kind,
+        "has_audio": bool(audio_path),
+        "start_frame": start,
+        "end_frame": end,
+        "frame_count": end - start,
+        "media_fingerprint": media_fingerprint,
+    }
+
+
+def _register_plan_studio_source_previews(
+        plan: dict[str, Any], report: dict[str, Any],
+        tagged_references: Any = None,
+        reference_schedule: Any = None) -> dict[str, Any]:
+    references = (tagged_references if tagged_references is not None
+                  else reference_schedule)
+    route = ("tagged" if tagged_references is not None else
+             "scheduled" if reference_schedule is not None else "none")
+    payload: dict[str, Any] = {
+        "version": 1,
+        "run_name": str(plan.get("run_name") or ""),
+        "route": route,
+        "token": "",
+        "scenes": [],
+        "status": "No active path-backed motion reference is available.",
+    }
+    if references is None:
+        return payload
+    entries = (_tagged_reference_entries(references)
+               if route == "tagged"
+               else _reference_schedule_entries(references))
+    motion_entries: dict[str, dict[str, Any]] = {}
+    for entry in entries:
+        if (str(entry.get("kind") or "") != "video" or
+                str(entry.get("semantic_role") or "") != "motion"):
+            continue
+        for alias in _reference_entry_tags(entry):
+            motion_entries[str(alias)] = entry
+    if not motion_entries:
+        return payload
+
+    token = secrets.token_urlsafe(24)
+    records: dict[str, dict[str, Any]] = {}
+    public_scenes = []
+    shots = {int(shot["index"]): shot for shot in plan["shots"]}
+    for scene in report.get("scenes") or ():
+        scene_index = int(scene.get("index", 0))
+        shot = shots.get(scene_index)
+        if shot is None:
+            continue
+        public_refs = []
+        for detail in scene.get("references") or ():
+            if (str(detail.get("kind") or "") != "video" or
+                    str(detail.get("semantic_role") or "") != "motion" or
+                    not isinstance(detail.get("window"), dict)):
+                continue
+            tag = str(detail.get("tag") or "")
+            entry = motion_entries.get(tag)
+            if entry is None:
+                continue
+            try:
+                media = _plan_studio_preview_media(
+                    entry.get("value"), detail["window"])
+            except (OSError, TypeError, ValueError) as exc:
+                _LOG.warning(
+                    "Plan Studio could not register @%s source preview: %s",
+                    tag, exc)
+                continue
+            if media is None:
+                continue
+            slot = len(public_refs)
+            record_key = "%d:%d" % (scene_index, slot)
+            records[record_key] = media
+            comparison_offset = max(
+                0, int(media["frame_count"]) -
+                int(shot["delivered_frames"]))
+            public_refs.append({
+                "slot": slot,
+                "tag": tag,
+                "start_frame": int(media["start_frame"]),
+                "end_frame": int(media["end_frame"]),
+                "frame_count": int(media["frame_count"]),
+                "compare_offset_frames": comparison_offset,
+                "has_audio": bool(media["has_audio"]),
+                "timeline_mode": str(
+                    detail["window"].get("mode") or ""),
+            })
+        if public_refs:
+            public_scenes.append({
+                "scene": scene_index,
+                "scene_id": str(scene.get("id") or shot["id"]),
+                "delivered_frames": int(shot["delivered_frames"]),
+                "references": public_refs,
+            })
+    if not records:
+        return payload
+    _plan_studio_preview_cleanup()
+    _PLAN_STUDIO_SOURCE_PREVIEWS[token] = {
+        "created": time.monotonic(),
+        "records": records,
+    }
+    payload.update({
+        "token": token,
+        "scenes": public_scenes,
+        "status": "%d scene source window(s) ready for lazy preview." %
+                  len(public_scenes),
+    })
+    return payload
+
+
 class MiniMaxH3ChainPlanStudio:
     @classmethod
     def INPUT_TYPES(cls):
@@ -7747,14 +7927,31 @@ class MiniMaxH3ChainPlanStudio:
     def passthrough(self, plan, source_timeline=None, source_audio=None,
                     start_clip=1, scene_range="", verify_resume_history=True,
                     tagged_references=None, reference_schedule=None):
-        _prepared, report = _preflight_chain(
+        prepared, report = _preflight_chain(
             plan, source_timeline=source_timeline, source_audio=source_audio,
             start_clip=start_clip, scene_range=scene_range,
             verify_resume_history=verify_resume_history,
             tagged_references=tagged_references,
             reference_schedule=reference_schedule)
-        return (plan, report, bool(report["ok"]), report["summary"],
-                json.dumps(report, ensure_ascii=False, sort_keys=True))
+        try:
+            source_previews = _register_plan_studio_source_previews(
+                prepared, report, tagged_references, reference_schedule)
+        except Exception as exc:
+            _LOG.warning("Plan Studio source-preview registration failed: %s", exc)
+            source_previews = {
+                "version": 1,
+                "run_name": str(plan.get("run_name") or ""),
+                "route": "none",
+                "token": "",
+                "scenes": [],
+                "status": "Source preview registration failed: %s" % exc,
+            }
+        result = (plan, report, bool(report["ok"]), report["summary"],
+                  json.dumps(report, ensure_ascii=False, sort_keys=True))
+        return {
+            "ui": {"h3_plan_studio_source_timeline": [source_previews]},
+            "result": result,
+        }
 
 
 class MiniMaxH3ChainPreflight:
@@ -11515,6 +11712,118 @@ async def _save_run_assets(request):
     return web.json_response(payload)
 
 
+def _plan_studio_source_preview_path(record: dict[str, Any]) -> str:
+    cache_key = _fingerprint({
+        "version": 1,
+        "media": record["media_fingerprint"],
+        "video_seek": round(float(record["video_seek_seconds"]), 9),
+        "audio_seek": round(float(record["audio_seek_seconds"]), 9),
+        "start_frame": int(record["start_frame"]),
+        "end_frame": int(record["end_frame"]),
+        "audio_kind": str(record["audio_kind"]),
+        "max_height": PLAN_STUDIO_PREVIEW_MAX_HEIGHT,
+    })
+    cache_dir = os.path.join(
+        _output_root(), "h3_chains", ".plan_studio_source_previews")
+    os.makedirs(cache_dir, exist_ok=True)
+    return os.path.join(cache_dir, "%s.mp4" % cache_key)
+
+
+def _build_plan_studio_source_preview(record: dict[str, Any]) -> str:
+    # The active timeline card and comparison player can request the same URL
+    # at once. Serialize the short cache fill so that only one ffmpeg process
+    # builds a given (or any other) Studio preview at a time.
+    with _PLAN_STUDIO_PREVIEW_BUILD_LOCK:
+        return _build_plan_studio_source_preview_unlocked(record)
+
+
+def _build_plan_studio_source_preview_unlocked(
+        record: dict[str, Any]) -> str:
+    output_path = _plan_studio_source_preview_path(record)
+    if os.path.isfile(output_path) and os.path.getsize(output_path) > 0:
+        return output_path
+    ffmpeg = _usable_ffmpeg()
+    if ffmpeg is None:
+        raise RuntimeError(
+            "Plan Studio source comparison requires a working ffmpeg.")
+    temporary = "%s.%s.tmp.mp4" % (output_path, uuid.uuid4().hex)
+    duration = int(record["frame_count"]) / float(FPS)
+    command = [
+        ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+        "-ss", "%.9f" % float(record["video_seek_seconds"]),
+        "-i", str(record["video_path"]),
+    ]
+    external_audio = (
+        bool(record.get("audio_path")) and
+        os.path.realpath(str(record["audio_path"])) !=
+        os.path.realpath(str(record["video_path"])))
+    if external_audio:
+        command.extend([
+            "-ss", "%.9f" % float(record["audio_seek_seconds"]),
+            "-i", str(record["audio_path"]),
+        ])
+    command.extend([
+        "-t", "%.9f" % duration,
+        "-map", "0:v:0",
+        "-vf", "fps=%d,scale=854:%d:force_original_aspect_ratio=decrease:"
+               "force_divisible_by=2" % (FPS, PLAN_STUDIO_PREVIEW_MAX_HEIGHT),
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "29",
+        "-pix_fmt", "yuv420p", "-fps_mode", "cfr",
+    ])
+    if record.get("has_audio"):
+        command.extend([
+            "-map", "1:a:0?" if external_audio else "0:a:0?",
+            "-af", "aresample=async=1:first_pts=0,apad",
+            "-c:a", "aac", "-b:a", "64k", "-ac", "2",
+        ])
+    else:
+        command.append("-an")
+    command.extend(["-movflags", "+faststart", temporary])
+    try:
+        _run_ffmpeg(command, timeout_seconds=max(60.0, duration * 8.0))
+        if not os.path.isfile(temporary) or os.path.getsize(temporary) < 1:
+            raise RuntimeError("ffmpeg produced an empty source preview.")
+        os.replace(temporary, output_path)
+    finally:
+        _safe_unlink(temporary)
+    return output_path
+
+
+async def _plan_studio_source_preview(request):
+    token = str(request.query.get("token") or "")
+    try:
+        scene = int(request.query.get("scene", 0))
+        slot = int(request.query.get("slot", 0))
+    except (TypeError, ValueError):
+        return web.json_response(
+            {"error": "Source preview scene and slot must be integers."},
+            status=400)
+    if not re.fullmatch(r"[A-Za-z0-9_-]{24,64}", token):
+        return web.json_response(
+            {"error": "Source preview token is invalid."}, status=400)
+    _plan_studio_preview_cleanup()
+    session = _PLAN_STUDIO_SOURCE_PREVIEWS.get(token)
+    if session is None:
+        return web.json_response(
+            {"error": "Source preview expired. Queue Plan Studio once to refresh it."},
+            status=410)
+    record = session.get("records", {}).get("%d:%d" % (scene, slot))
+    if record is None:
+        return web.json_response(
+            {"error": "No active motion-reference window exists for this scene."},
+            status=404)
+    session["created"] = time.monotonic()
+    try:
+        path = await asyncio.to_thread(
+            _build_plan_studio_source_preview, record)
+    except (OSError, RuntimeError, TypeError, ValueError) as exc:
+        _LOG.warning("Plan Studio source preview failed: %s", exc)
+        return web.json_response({"error": str(exc)}, status=500)
+    return web.FileResponse(path, headers={
+        "Cache-Control": "private, max-age=21600, immutable",
+    })
+
+
 async def _optimize_scene_prompt(request):
     try:
         body = await request.json()
@@ -11562,6 +11871,9 @@ if (PromptServer is not None and web is not None and
         "/minimax_h3_context_loop/run")(_load_saved_run)
     PromptServer.instance.routes.post(
         "/minimax_h3_context_loop/run-assets")(_save_run_assets)
+    PromptServer.instance.routes.get(
+        "/minimax_h3_context_loop/plan-studio/source-preview")(
+            _plan_studio_source_preview)
     PromptServer.instance.routes.post(
         "/minimax_h3_context_loop/prompt-optimize")(_optimize_scene_prompt)
 

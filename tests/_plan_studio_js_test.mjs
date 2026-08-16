@@ -5,8 +5,10 @@ import fs from "node:fs";
 import {
     locateStudioTimelineSecond,
     matchingStudioCheckpoint,
+    matchingStudioSourceScene,
     studioCheckpointSignature,
     studioSceneStartSeconds,
+    studioSourceSecond,
 } from "../web/h3_chain_plan_studio_core.mjs";
 
 const rows = [
@@ -40,6 +42,22 @@ assert.notEqual(
     }]),
 );
 
+const sourceTimeline = {token:"opaque", scenes:[{
+    scene:2, scene_id:"two", delivered_frames:340,
+    references:[{frame_count:362, compare_offset_frames:22}],
+}]};
+assert.equal(
+    matchingStudioSourceScene(sourceTimeline, 1, rows[1]).scene_id, "two",
+);
+assert.equal(matchingStudioSourceScene(sourceTimeline, 0, rows[0]), null);
+assert.equal(
+    matchingStudioSourceScene(sourceTimeline, 1, {...rows[1], deliveredFrames:339}),
+    null,
+);
+assert.ok(Math.abs(studioSourceSecond(
+    sourceTimeline.scenes[0].references[0], 1,
+) - (22 / 24 + 1)) < 1e-9);
+
 const source = fs.readFileSync(
     new URL("../web/h3_chain_plan_studio.js", import.meta.url),
     "utf8",
@@ -53,6 +71,10 @@ assert.match(source, /h3studio-timeline/);
 assert.match(source, /Scene prompt/);
 assert.match(source, /Shared prompt/);
 assert.match(source, /Playback uses synchronized Review previews/);
+assert.match(source, /Generated ↔ motion-reference comparison/);
+assert.match(source, /MOTION REF/);
+assert.match(source, /plan-studio\/source-preview/);
+assert.match(source, /h3_plan_studio_source_timeline/);
 assert.match(source, /\/minimax_h3_context_loop\/checkpoints/);
 assert.match(source, /\/minimax_h3_context_loop\/prompt-history/);
 assert.match(source, /promptRevisionNavigation/);

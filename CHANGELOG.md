@@ -18,6 +18,10 @@ Newest first. This file keeps release history out of the onboarding README.
 - Added model-free Chain Preflight and shared Plan Studio validation for source
   duration, scene windows, references, runtime compatibility, and resume
   eligibility.
+- Added a second Plan Studio track for the exact active motion-reference
+  windows. Selected scenes are transcoded lazily to cached low-resolution
+  previews, and the player provides synchronized generated/reference wipe
+  comparison with incoming-context offsets applied automatically.
 - Replaced opaque whole-Plan resume hashes with structured scene dependencies
   and actionable diffs. Future-scene, incoming-boundary, and assembly-only
   changes no longer force regeneration of an accepted predecessor.

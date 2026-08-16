@@ -102,8 +102,9 @@ with tempfile.TemporaryDirectory() as temporary:
 
     studio = chain.MiniMaxH3ChainPlanStudio().passthrough(
         plan, source_timeline=timeline)
-    assert studio[0] is plan and studio[2] is True
-    assert json.loads(studio[4])["version"] == chain.PREFLIGHT_VERSION
+    assert studio["result"][0] is plan and studio["result"][2] is True
+    assert json.loads(studio["result"][4])["version"] == chain.PREFLIGHT_VERSION
+    assert "h3_plan_studio_source_timeline" in studio["ui"]
 
     short = deferred_timeline(30)
     _prepared, failed = chain._preflight_chain(

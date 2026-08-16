@@ -69,3 +69,27 @@ export function locateStudioTimelineSecond(rows, seconds) {
     }
     return {index: scenes.length - 1, startSeconds, localSeconds: 0, targetSeconds, totalSeconds};
 }
+
+export function matchingStudioSourceScene(payload, index, timingRow) {
+    if (!payload?.token || !timingRow) return null;
+    const scene = Number(index) + 1;
+    const item = (Array.isArray(payload.scenes) ? payload.scenes : []).find(
+        (candidate) => Number(candidate?.scene) === scene,
+    );
+    if (!item || String(item.scene_id ?? "") !== String(timingRow.id ?? "")) {
+        return null;
+    }
+    if (Number(item.delivered_frames) !== Number(timingRow.deliveredFrames)) {
+        return null;
+    }
+    const references = Array.isArray(item.references) ? item.references : [];
+    return references.length ? item : null;
+}
+
+export function studioSourceSecond(reference, deliveredLocalSeconds, fps = 24) {
+    const rate = Math.max(1, Number(fps) || 24);
+    const offset = Math.max(0, Number(reference?.compare_offset_frames) || 0) / rate;
+    const local = Math.max(0, Number(deliveredLocalSeconds) || 0);
+    const duration = Math.max(0, Number(reference?.frame_count) || 0) / rate;
+    return Math.min(Math.max(0, duration - 0.02), offset + local);
+}
