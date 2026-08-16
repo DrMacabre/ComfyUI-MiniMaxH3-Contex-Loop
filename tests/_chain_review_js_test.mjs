@@ -181,6 +181,8 @@ const submitSource = reviewSource.slice(
 assert.match(submitSource, /const submittedToken = submittedReview\.token/);
 assert.match(submitSource, /const submittedIndex = submittedReview\.clip_index/);
 assert.match(submitSource, /promptEditedInGate[\s\S]*planScenePrompt/);
+assert.match(submitSource, /reviewPromptEditorEnabled\(\)/);
+assert.match(submitSource, /planScenePrompt/);
 assert.match(submitSource, /token: submittedToken/);
 assert.match(submitSource, /scene_prompt: submittedPrompt/);
 assert.match(
@@ -215,6 +217,13 @@ assert.match(reviewSource, /h3r-video-grip/);
 assert.match(reviewSource, /h3_chain_review_video_height/);
 assert.match(reviewSource, /h3_chain_review_prompt_height/);
 assert.match(reviewSource, /promptResizeObserver = new ResizeObserver/);
+assert.match(reviewSource, /MiniMaxH3ContexLoop\.ReviewGate\.PromptEditor/);
+assert.match(reviewSource, /Enable prompt editing inside Review Gate/);
+assert.match(reviewSource, /defaultValue: false/);
+assert.match(reviewSource, /Prompt editing in Review Gate is disabled by default in 0\.5/);
+assert.match(reviewSource, /Scene Prompt Editor or Rich Scene Prompt Editor/);
+assert.match(reviewSource, /promptLabel\.hidden = !enabled/);
+assert.match(reviewSource, /promptNotice\.hidden = enabled/);
 assert.match(reviewSource, /_h3ReviewApplyLayout/);
 assert.match(reviewSource, /nodeType\.prototype\.onConfigure/);
 assert.match(reviewSource, /setPointerCapture/);

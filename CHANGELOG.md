@@ -4,6 +4,10 @@ Newest first. This file keeps release history out of the onboarding README.
 
 ## v0.5.0 — Source Timeline and workflow clarity
 
+- Disabled the legacy Review Gate prompt textarea by default and added an
+  Interface setting to restore it. While disabled, Retry and Reroll use the
+  active Plan prompt authored in Scene Prompt Editor or Rich Scene Prompt
+  Editor.
 - Added the typed Source Timeline contract so path-backed picture and audio are
   registered once, remain lazy, and are sliced per scene without full-track
   AUDIO fan-out.

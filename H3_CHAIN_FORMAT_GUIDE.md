@@ -948,9 +948,12 @@ combined `prompt`, `prompt_hash`, `prompt_file_sha256`, `seed`, and paths to the
 recovery archives. `prompt_hash` identifies normalized prompt text, while
 `prompt_file_sha256` verifies the exact sidecar bytes. Older Windows sidecars
 that used CRLF line endings remain resumable through normalized text checking.
-The same prompt fields are also stored in the safetensors metadata. Review Gate
-retries rewrite `plan.json`, `workflow.json`, and `api_prompt.json` with the
-effective scene prompt and exact uint64 seed before saving the replacement.
+The same prompt fields are also stored in the safetensors metadata. In 0.5,
+edit the active prompt in Scene Prompt Editor or Rich Scene Prompt Editor;
+Review Gate reads that Plan prompt on Retry/Reroll. Its legacy textarea is
+available through the Interface setting. Review retries rewrite `plan.json`,
+`workflow.json`, and `api_prompt.json` with the effective scene prompt and
+exact uint64 seed before saving the replacement.
 Both segment and assembled MP4 files use ComfyUI's standard `workflow` and
 `prompt` tags, so metadata-aware ComfyUI loaders can recover the graph directly;
 assembled files additionally embed the completed `h3_manifest`.

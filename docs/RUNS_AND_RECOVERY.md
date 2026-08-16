@@ -6,7 +6,7 @@ Place **Review Gate** between Segment + Checkpoint and Loop End. Each scene is
 persisted before the gate waits, then the gate offers:
 
 - **Approve & continue**
-- **Retry prompt / seed**
+- **Retry scene / seed / length**
 - **Reroll seed**
 - **Approve & stop**, optionally assembling a partial video
 
@@ -16,10 +16,12 @@ the default height.
 
 When a Scene Prompt Editor or Rich Scene Prompt Editor is bound to the same
 Plan, Review Gate selects the scene under review there automatically. Editor
-changes appear in the Gate and **Retry prompt / seed** or **Reroll seed** uses
-the live Plan prompt. The Gate prompt field remains an explicit fallback: if
-you type in it, that text wins for the submitted retry and is synchronized back
-to the Plan and connected editor after the server accepts it.
+changes are used by **Retry prompt / seed** or **Reroll seed** through the live
+Plan prompt. In 0.5, Review Gate's own prompt field is disabled by default.
+Restore it under **Settings → MiniMax H3 Contex Loop → Interface → Review Gate
+→ Enable prompt editing inside Review Gate**. When enabled, text explicitly
+typed in that field wins for the submitted retry and is synchronized back to
+the Plan and connected editor after the server accepts it.
 
 During sampling, the optional floating **Cancel & reroll scene N** control
 targets only the active H3 prompt. It waits for confirmed interruption, writes a
