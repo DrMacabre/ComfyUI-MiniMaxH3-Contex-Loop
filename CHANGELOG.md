@@ -2,6 +2,16 @@
 
 Newest first. This file keeps release history out of the onboarding README.
 
+## v0.4.10 — Final-output publishing
+
+- Fixed scene and final MP4 publication in ComfyUI's global Media Assets panel
+  by using the native animated-video output descriptor recognized by job
+  history.
+- Added optional Final Assemble controls to copy the completed MP4 into the
+  regular ComfyUI output tree. The relative subfolder supports nested folders
+  and date tokens, an empty value targets the output root, and collisions are
+  versioned without replacing the canonical chain final.
+
 ## v0.4.9 — Defensive Sol-Attn observer detection
 
 - Fixed folder-independent Sol-Attn recognition for the defensive
