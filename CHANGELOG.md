@@ -2,7 +2,7 @@
 
 Newest first. This file keeps release history out of the onboarding README.
 
-## Unreleased
+## v0.4.9 — Defensive Sol-Attn observer detection
 
 - Fixed folder-independent Sol-Attn recognition for the defensive
   `getattr(self, "segments", ...)` observer used by the Kitchen PR helper,
