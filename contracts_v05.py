@@ -19,6 +19,11 @@ FINAL_AUDIO_POLICIES = ("generated", "source", "none")
 SOURCE_REFERENCE_POLICIES = ("off", "on")
 GENERATED_CONTINUITY_POLICIES = ("off", "on")
 PAIRED_AUDIO_POLICIES = ("off", "embedded")
+CONTINUATION_POLICIES = ("guide", "masked_av", "feathered_av")
+TRANSITION_CONTEXT_LENGTHS = (
+    0, 1, 5, 22, 39, 56, 73, 90, 107, 124,
+    141, 158, 175, 192, 209, 226, 243,
+)
 
 LEGACY_AUDIO_MODE_POLICIES = {
     "source_track": {
@@ -121,6 +126,42 @@ def transition_preset(name: str) -> dict[str, Any]:
     except KeyError as exc:
         raise ValueError("Unknown H3 transition preset %r." % name) from exc
     return {"version": TRANSITION_POLICY_VERSION, "preset": str(name), **preset}
+
+
+def transition_policy(
+    preset: str,
+    *,
+    expert_override: bool = False,
+    continuation_mode: str | None = None,
+    context_length: int | None = None,
+) -> dict[str, Any]:
+    """Resolve a semantic preset and optional explicit low-level override."""
+    resolved = transition_preset(preset)
+    expert = bool(expert_override)
+    if expert:
+        mode = str(continuation_mode)
+        if mode not in CONTINUATION_POLICIES:
+            raise ValueError(
+                "Unknown H3 continuation implementation %r." %
+                continuation_mode)
+        try:
+            context = int(context_length)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "H3 transition context must be 0 or one of %s." %
+                (TRANSITION_CONTEXT_LENGTHS,)) from exc
+        if context not in TRANSITION_CONTEXT_LENGTHS:
+            raise ValueError(
+                "H3 transition context must be 0 or one of %s." %
+                (TRANSITION_CONTEXT_LENGTHS,))
+        if mode in ("masked_av", "feathered_av") and context < 5:
+            raise ValueError(
+                "H3 AV transition implementations require at least 5 context "
+                "frames.")
+        resolved["continuation_mode"] = mode
+        resolved["context_length"] = context
+    resolved["expert_override"] = expert
+    return resolved
 
 
 def source_timeline_shape() -> dict[str, Any]:

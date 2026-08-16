@@ -111,6 +111,25 @@ def main():
         assert resolved["context_length"] == context
         resolved["context_length"] = 999
         assert contracts.transition_preset(name)["context_length"] == context
+        policy = contracts.transition_policy(name)
+        assert policy["continuation_mode"] == mode
+        assert policy["context_length"] == context
+        assert policy["expert_override"] is False
+    expert = contracts.transition_policy(
+        "guide", expert_override=True,
+        continuation_mode="feathered_av", context_length=56)
+    assert expert["preset"] == "guide"
+    assert expert["continuation_mode"] == "feathered_av"
+    assert expert["context_length"] == 56
+    assert expert["expert_override"] is True
+    try:
+        contracts.transition_policy(
+            "guide", expert_override=True,
+            continuation_mode="masked_av", context_length=1)
+    except ValueError as exc:
+        assert "at least 5" in str(exc)
+    else:
+        raise AssertionError("one-frame AV transition was accepted")
 
     shape = contracts.source_timeline_shape()
     assert shape["version"] == contracts.SOURCE_TIMELINE_VERSION

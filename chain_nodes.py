@@ -88,13 +88,17 @@ from .run_manager import RunArchiveManager
 from .asset_store import MAX_ASSET_BINDINGS, RunAssetStore
 from .contracts_v05 import (
     AUDIO_POLICY_VERSION,
+    CONTINUATION_POLICIES,
     FINAL_AUDIO_POLICIES,
     GENERATED_CONTINUITY_POLICIES,
     SOURCE_REFERENCE_POLICIES,
     SOURCE_TIMELINE_VERSION,
+    TRANSITION_CONTEXT_LENGTHS,
+    TRANSITION_POLICY_VERSION,
     audio_policy as _contract_audio_policy,
     migrate_legacy_audio_mode,
     paired_audio_policy as _contract_paired_audio_policy,
+    transition_policy as _contract_transition_policy,
 )
 
 
@@ -135,6 +139,7 @@ TAGGED_REFERENCE_TYPE = "H3_TAGGED_REFERENCES"
 LAZY_MOTION_SOURCE_TYPE = "H3_LAZY_MOTION_SOURCE"
 SOURCE_TIMELINE_TYPE = "H3_SOURCE_TIMELINE"
 AUDIO_POLICY_TYPE = "H3_AUDIO_POLICY"
+TRANSITION_POLICY_TYPE = "H3_TRANSITION_POLICY"
 REFERENCE_SCHEDULE_VERSION = 1
 LAZY_MOTION_SOURCE_VERSION = 3
 
@@ -216,6 +221,57 @@ def _audio_policy_final(value: Any) -> str:
 
 def _paired_audio_policy(value: Any) -> str:
     return _contract_paired_audio_policy(value)
+
+
+def _validate_transition_policy(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError(
+            "H3 Transition Policy must come from MiniMax H3 Transition Policy.")
+    if value.get("version") != TRANSITION_POLICY_VERSION:
+        raise ValueError(
+            "H3 Transition Policy version is missing or obsolete.")
+    return _contract_transition_policy(
+        value.get("preset"),
+        expert_override=bool(value.get("expert_override", False)),
+        continuation_mode=value.get("continuation_mode"),
+        context_length=value.get("context_length"))
+
+
+def _resolved_transition_policy(value: Any) -> dict[str, Any]:
+    compatibility = (
+        value.get("compatibility")
+        if isinstance(value, dict) and isinstance(
+            value.get("compatibility"), dict)
+        else value)
+    if not isinstance(compatibility, dict):
+        raise ValueError(
+            "H3 transition policy requires Plan compatibility data.")
+    explicit = compatibility.get("transition_policy")
+    if explicit is not None:
+        return _validate_transition_policy(explicit)
+    mode = str(compatibility.get("continuation_mode", "guide"))
+    context = int(compatibility.get("context_length", 0))
+    preset = "legacy"
+    for candidate in ("cut", "guide", "hard_av", "soft_av"):
+        resolved = _contract_transition_policy(candidate)
+        if (resolved["continuation_mode"] == mode and
+                int(resolved["context_length"]) == context):
+            preset = candidate
+            break
+    return {
+        "version": TRANSITION_POLICY_VERSION,
+        "preset": preset,
+        "continuation_mode": mode,
+        "context_length": context,
+        "expert_override": False,
+    }
+
+
+def _transition_policy_summary(value: Any) -> str:
+    policy = _resolved_transition_policy(value)
+    return "%s/%s/%df" % (
+        policy["preset"], policy["continuation_mode"],
+        int(policy["context_length"]))
 
 
 def _safe_name(value: str, fallback: str = "chain") -> str:
@@ -2938,6 +2994,7 @@ def _normalize_plan(
     video_blend_frames: int = 0,
     continuation_mode: str = "guide",
     audio_policy: Any = None,
+    transition_policy: Any = None,
 ) -> dict[str, Any]:
     try:
         raw = json.loads(str(plan_json or ""))
@@ -2971,6 +3028,13 @@ def _normalize_plan(
     if continuation_mode not in CONTINUATION_MODES:
         raise ValueError(
             "Unknown H3 continuation mode %r." % continuation_mode)
+    resolved_transition_policy = (
+        _validate_transition_policy(transition_policy)
+        if transition_policy is not None else None)
+    if resolved_transition_policy is not None:
+        context_length = int(resolved_transition_policy["context_length"])
+        continuation_mode = str(
+            resolved_transition_policy["continuation_mode"])
     if crop not in ("disabled", "center"):
         raise ValueError("Unknown H3 context crop mode %r." % crop)
     if audio_mode not in AUDIO_MODES:
@@ -3168,6 +3232,8 @@ def _normalize_plan(
     }
     if audio_policy is not None:
         compatibility["audio_policy"] = resolved_audio_policy
+    if transition_policy is not None:
+        compatibility["transition_policy"] = resolved_transition_policy
     # Preserve the exact compatibility/history hashes of every pre-feature
     # guide plan. A missing key is the stable serialized spelling of `guide`;
     # only the behavior-changing experimental mode extends the contract.
@@ -3199,10 +3265,11 @@ def _normalize_plan(
     )
     plan["summary"] = (
         "%d clips; %d delivered frames (%.3fs) at %dx%d; context=%d/%s; "
-        "blend=%d; audio=%s; run=%s" %
+        "blend=%d; audio=%s; transition=%s; run=%s" %
         (len(shots), stitched_frames, stitched_frames / float(FPS), width,
          height, context_length, continuation_summary, video_blend_frames,
-         _audio_policy_summary(compatibility), plan["run_name"]))
+         _audio_policy_summary(compatibility),
+         _transition_policy_summary(compatibility), plan["run_name"]))
     return plan
 
 
@@ -5868,6 +5935,62 @@ class MiniMaxH3ChainExternalVideo:
         return (external_context, status)
 
 
+class MiniMaxH3TransitionPolicy:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "preset": (("cut", "guide", "hard_av", "soft_av"), {
+                    "default": "guide",
+                    "tooltip": "How the incoming scene consumes its "
+                               "predecessor: independent cut, guide rows, "
+                               "hard protected AV prefix, or temporally "
+                               "feathered AV prefix."}),
+                "expert_override": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Off uses the tested preset values. On lets "
+                               "the two expert widgets below replace the "
+                               "preset implementation and context count."}),
+                "expert_continuation_mode": (
+                    list(CONTINUATION_POLICIES), {
+                        "default": "guide",
+                        "tooltip": "Expert only. Low-level continuation "
+                                   "implementation used when override is on."}),
+                "expert_context_length": (
+                    list(TRANSITION_CONTEXT_LENGTHS), {
+                        "default": 22,
+                        "tooltip": "Expert only. Incoming visual context in "
+                                   "frames. 0 creates an independent cut; AV "
+                                   "mask implementations require at least 5."}),
+            },
+        }
+
+    RETURN_TYPES = (TRANSITION_POLICY_TYPE, "STRING", "INT", "STRING")
+    RETURN_NAMES = (
+        "transition_policy", "continuation_mode", "context_length", "status")
+    FUNCTION = "build"
+    CATEGORY = "conditioning/minimax/contex_loop/policies"
+    DESCRIPTION = (
+        "Resolve a human-facing incoming-transition preset to the exact "
+        "continuation implementation and context length used by Plan. Expert "
+        "overrides remain explicit in the policy and resume contract."
+    )
+
+    def build(self, preset="guide", expert_override=False,
+              expert_continuation_mode="guide", expert_context_length=22):
+        policy = _contract_transition_policy(
+            preset, expert_override=expert_override,
+            continuation_mode=expert_continuation_mode,
+            context_length=expert_context_length)
+        status = _transition_policy_summary({"transition_policy": policy})
+        if policy["expert_override"]:
+            status += "; expert override"
+        else:
+            status += "; tested preset"
+        return (policy, policy["continuation_mode"],
+                int(policy["context_length"]), status)
+
+
 class MiniMaxH3AudioPolicy:
     @classmethod
     def INPUT_TYPES(cls):
@@ -6115,6 +6238,11 @@ class MiniMaxH3ChainPlan:
                                "Policy. It independently selects final sound, "
                                "source reference, and generated continuity, "
                                "and overrides the legacy audio_mode widget."}),
+                "transition_policy": (TRANSITION_POLICY_TYPE, {
+                    "tooltip": "Recommended 0.5 control from MiniMax H3 "
+                               "Transition Policy. It overrides the legacy "
+                               "context_length and continuation_mode widgets "
+                               "with one resolved incoming-transition preset."}),
             },
         }
 
@@ -6144,7 +6272,8 @@ class MiniMaxH3ChainPlan:
               audio_context_length, default_duration_seconds, default_steps,
               base_seed, segment_crf, video_blend_frames=0,
               continuation_mode="guide",
-              plan_json_input=None, audio_policy=None):
+              plan_json_input=None, audio_policy=None,
+              transition_policy=None):
         effective_plan_json = (
             plan_json_input
             if isinstance(plan_json_input, str) and plan_json_input.strip()
@@ -6156,7 +6285,7 @@ class MiniMaxH3ChainPlan:
             anchor_mode, crop, audio_mode, audio_context_length,
             default_duration_seconds, default_steps, base_seed, segment_crf,
             generation_fingerprint, video_blend_frames, continuation_mode,
-            audio_policy)
+            audio_policy, transition_policy)
         return (plan, plan["summary"], len(plan["shots"]),
                 plan["compatibility"]["width"],
                 plan["compatibility"]["height"],
@@ -6971,7 +7100,8 @@ class MiniMaxH3ChainSegmentSave:
                 "first.")
         compact = _compact_latent(sampled_latent)
         context_length = min(_plan_context_storage_length(plan), actual_frames)
-        context_frames = _tensor_cpu_clone(images[-context_length:])
+        context_frames = _tensor_cpu_clone(
+            images[:0] if context_length == 0 else images[-context_length:])
         parts = compact["samples"]
         tensors = {
             "context_frames": context_frames,
@@ -9886,6 +10016,7 @@ if (PromptServer is not None and web is not None and
 
 
 CHAIN_NODE_CLASS_MAPPINGS = {
+    "MiniMaxH3TransitionPolicy": MiniMaxH3TransitionPolicy,
     "MiniMaxH3AudioPolicy": MiniMaxH3AudioPolicy,
     "MiniMaxH3ChainPlan": MiniMaxH3ChainPlan,
     "MiniMaxH3ChainScenePromptEditor": MiniMaxH3ChainScenePromptEditor,
@@ -9922,6 +10053,7 @@ CHAIN_NODE_CLASS_MAPPINGS = {
 }
 
 CHAIN_NODE_DISPLAY_NAME_MAPPINGS = {
+    "MiniMaxH3TransitionPolicy": "MiniMax H3 Transition Policy",
     "MiniMaxH3AudioPolicy": "MiniMax H3 Audio Policy",
     "MiniMaxH3ChainPlan": "MiniMax H3 Contex Loop Plan",
     "MiniMaxH3ChainScenePromptEditor": "MiniMax H3 Scene Prompt Editor",
