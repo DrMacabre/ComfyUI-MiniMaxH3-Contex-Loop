@@ -8,7 +8,7 @@ import {
     promptTextToLines,
     promptValueToText,
     sharedPrompt,
-} from "./h3_chain_plan_core.mjs?v=0.4.11";
+} from "./h3_chain_plan_core.mjs?v=0.5.0";
 import {
     PROMPT_ASSIST_DEFAULT_INSTRUCTIONS,
     PROMPT_ASSIST_MODES,
@@ -17,15 +17,16 @@ import {
     makePromptAssistRequest,
     promptSceneKey,
     promptSourceRevision,
-} from "./h3_prompt_assistant_core.mjs?v=0.4.11";
-import {PromptAssistantClient} from "./h3_prompt_assistant_client.mjs?v=0.4.11";
+} from "./h3_prompt_assistant_core.mjs?v=0.5.0";
+import {PromptAssistantClient} from "./h3_prompt_assistant_client.mjs?v=0.5.0";
 import {
+    promptRevisionHelp,
     promptRevisionLabel,
     promptRevisionNavigation,
-} from "./h3_prompt_history_core.mjs?v=0.4.11";
-import {availableReferenceRecords} from "./h3_reference_preview_core.mjs?v=0.4.11";
-import {tokenizeRichPrompt} from "./h3_rich_prompt_editor_core.mjs?v=0.4.11";
-import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.4.11";
+} from "./h3_prompt_history_core.mjs?v=0.5.0";
+import {availableReferenceRecords} from "./h3_reference_preview_core.mjs?v=0.5.0";
+import {tokenizeRichPrompt} from "./h3_rich_prompt_editor_core.mjs?v=0.5.0";
+import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.5.0";
 
 const {publishCompanionScene, rebaseScenePrompt} = promptCompanionSync;
 function publishCompanionPrompt(...args) {
@@ -742,14 +743,14 @@ function mount(node) {
         }
         const navigation = promptRevisionNavigation(history.data, history.revisionId);
         const controls = element("span", "h3sp-history-nav");
-        const previous = button("‹", "Previous prompt version", () => {
+        const previous = button("‹", "Activate previous prompt version in the Plan", () => {
             if (navigation.previous) void selectHistoryRevision(navigation.previous.id);
         });
         const count = element(
             "span", "h3sp-history-count",
-            `${navigation.position} / ${navigation.total}`,
+            `Active ${navigation.position} / ${navigation.total}`,
         );
-        const next = button("›", "Next prompt version", () => {
+        const next = button("›", "Activate next prompt version in the Plan", () => {
             if (navigation.next) void selectHistoryRevision(navigation.next.id);
         });
         previous.disabled = !navigation.previous;
@@ -758,7 +759,7 @@ function mount(node) {
         const metadata = element(
             "span", "h3sp-history-meta", promptRevisionLabel(navigation),
         );
-        metadata.title = metadata.textContent;
+        metadata.title = promptRevisionHelp(navigation);
         host.append(controls, metadata);
     }
 

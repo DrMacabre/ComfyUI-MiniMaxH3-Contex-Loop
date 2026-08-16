@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/minimax-h3-contex-loop.svg" alt="MiniMax H3 Contex Loop v0.4 — scene plans that survive the render" width="100%">
+  <img src="assets/minimax-h3-contex-loop.svg" alt="MiniMax H3 Contex Loop v0.5 — scene plans that survive the render" width="100%">
 </p>
 
 # ComfyUI MiniMax H3 Contex Loop
@@ -31,6 +31,7 @@ giant cumulative image tensor.
 | 🩹 | Native-first spatial/temporal AV masks for video inpainting |
 | 🖼️ | Lossless PNG re-decode from saved scene latents |
 | 🔬 | In-graph audio-seam diagnostics |
+| 🧭 | Model-free preflight with scene-level dependency diffs |
 
 In the default `guide` mode, updated ComfyUI core owns guide placement and
 reference-payload merging; this pack does not patch H3. The experimental
@@ -51,10 +52,10 @@ so clearing all browser data should not be necessary. An `ffmpeg` executable
 on `PATH` is preferred, but review and final assembly can fall back to
 ComfyUI's bundled PyAV when FFmpeg is missing or cannot launch.
 
-Version 0.4 expects a ComfyUI build containing the native **Add Guide for
+Version 0.5 expects a ComfyUI build containing the native **Add Guide for
 MiniMax H3** implementation from
 [PR #15439](https://github.com/Comfy-Org/ComfyUI/pull/15439). Update ComfyUI
-before starting a new v0.4 workflow.
+before starting a new v0.5 workflow.
 
 NikoDemon80's upstream H3 Motion Context pack is optional and may be installed
 alongside this one for its manual Motion Context, Save Latent, and Load Latent
@@ -62,7 +63,7 @@ nodes. H3-Multishot is also supported through guarded payload reuse.
 
 ## Choose a workflow
 
-Start with the maintained v0.4 example for your generation mode:
+Start with the maintained v0.5 example for your generation mode:
 
 - [T2V — Normal](<example_workflows/MiniMax H3 T2V - Normal.json>) or
   [Studio](<example_workflows/MiniMax H3 T2V - Studio.json>).
@@ -73,7 +74,7 @@ Start with the maintained v0.4 example for your generation mode:
   [Tagged](<example_workflows/MiniMax H3 Ref2V - Tagged.json>), or
   [Studio Tagged](<example_workflows/MiniMax H3 Ref2V - Studio Tagged.json>).
   Use [Studio Tagged Source Audio](<example_workflows/MiniMax H3 Ref2V - Studio Tagged Source Audio.json>)
-  for a fully wired `source_timeline` audio-reference example.
+  for the canonical single-wire Source Timeline audio-reference example.
 - [Sequential motion reference](<example_workflows/EXPERIMENTAL MiniMax H3 Ref2V - Sequential Motion.json>)
   remains explicitly experimental.
 - [Masked video inpaint](<example_workflows/MiniMax H3 - Masked Video Inpaint.json>)
@@ -94,15 +95,16 @@ numeric-schedule examples remain available under `example_workflows/Archive/`.
 ## The loop
 
 ```text
-Plan → Loop Start → Current Shot → H3 conditioning
-                                      ↓
-                               Contex Loop Context
-                                      ↓
-                           sample → decode → Loop Trim
-                                      ↓
-                     Segment + Checkpoint → Review Gate
-                                      ↓
-                                  Loop End ──↺
+Audio Policy ─┐
+Transition ───┼→ Plan → Preflight → Loop Start → Current Shot → H3 conditioning
+Source Timeline┘                                  ↓
+                                           Contex Loop Context
+                                                  ↓
+                                       sample → decode → Loop Trim
+                                                  ↓
+                                 Segment + Checkpoint → Review Gate
+                                                  ↓
+                                              Loop End ──↺
 
 Loop End manifest → Assemble
 ```
@@ -111,8 +113,9 @@ For a first run:
 
 1. Open an example and give the Plan a unique `run_name`.
 2. Edit the scene prompts in the Plan or the large Scene Prompt Editor.
-3. Choose an audio mode. For a prerecorded song, connect the same full track to
-   Loop Start, Current Shot, and Assemble.
+3. Choose an Audio Policy and incoming Transition. Register source media once
+   with Source Timeline, then connect that descriptor to Preflight (or Plan
+   Studio) and Loop Start. Do not repeat the full AUDIO wire downstream.
 4. Queue the workflow. Review Gate pauses after every safely saved scene.
 5. Approve, edit and retry, reroll the seed, or approve and stop.
 6. Assemble the completed or partial manifest.
@@ -125,8 +128,8 @@ instead of overwriting an MP4 with the same requested name.
 | Setting | Good starting point | Meaning |
 |---|---:|---|
 | `width × height` | `960 × 544` | Multiples of 32 |
-| `continuation_mode` | `guide` | Inherited default: `guide` for a new shot, `masked_av` for an exact continuation, or `feathered_av` for a softer AV handoff |
-| `context_length` | `22` guide / `39` AV mask | Repeated motion history carried into continuations |
+| Incoming Transition | `Guide (22f)` | Semantic choice into each scene: Cut, Guide, Hard AV, or Soft AV |
+| Context | preset-controlled | Advanced overrides can set the exact repeated motion history |
 | `encode_mode` | `video` | Preserves motion in the VAE latent |
 | `anchor_mode` | `head` | Regenerates then trims the repeated opening context |
 | `crop` | `disabled` | Best when source and target framing already agree |
@@ -138,19 +141,22 @@ Use `generation_fingerprint` to record model, VAE, LoRA, references, CFG,
 sampler, and scheduler choices that live outside the Plan. Change it when those
 dependencies change so incompatible checkpoints cannot be resumed silently.
 
-### Guide, masked AV, and feathered AV continuation
+### Cut, Guide, Hard AV, and Soft AV transitions
+
+The semantic Transition Policy maps `Cut` to no carried picture, `Guide` to
+22 guide frames, `Hard AV` to a protected 39-frame AV prefix, and `Soft AV` to
+a temporally feathered 39-frame AV prefix. Advanced mode exposes the legacy
+implementation and context controls when an exact custom value is required.
 
 `guide` leaves the target latent noisy and supplies the previous scene as
 fixed conditioning rows. H3 regenerates the repeated head, and Loop Trim
 removes it. This remains the default.
 
-Continuation mode can be overridden per scene in **Show advanced** without
+Incoming transition can be overridden per scene in **Show advanced** without
 adding another scene-card row. The choice describes the transition **into that
-scene**: use `guide` for a new shot that should remember the preceding clip,
-`masked_av` when the same shot should continue with a hard protected prefix,
-or `feathered_av` when that prefix needs a softer denoise handoff. Scene 1 uses
-its choice only when Existing Video Context supplies a predecessor. In Plan
-JSON, set `shots[n].continuation_mode`; omitting it inherits the Plan node.
+scene**. Scene 1 uses it only when Existing Video Context supplies a
+predecessor. Legacy Plan JSON may still set `shots[n].continuation_mode` and
+`context_length`; omitting them inherits the Plan defaults.
 
 The same Advanced group has per-scene **Context into scene** and **Audio
 context** controls. Blank inherits the corresponding Plan default. Video `0`
@@ -219,11 +225,17 @@ against the original source timeline.
 
 ## Audio at a glance
 
-| Mode | Use it when |
-|---|---|
-| `source_track` | A finished song or spoken performance must remain exact in the final video. |
-| `generated_audio` | H3 should generate new speech, ambience, effects, or music. |
-| `source_plus_timeline` | You intentionally want both the source slice and generated-audio history; experimental. |
+Audio Policy separates three decisions that the old mode selector combined:
+
+| Axis | Choices | Meaning |
+|---|---|---|
+| Final audio | Generated / Source / None | What Assemble places in the final MP4 |
+| Source reference | On / Off | Whether the exact current source window guides H3 |
+| Generated continuity | On / Off | Whether the previous sampled audio latent enters the next scene |
+
+Saved 0.4 modes remain compatible: `generated_audio` maps to
+Generated/Off/On, `source_track` to Source/On/Off, and
+`source_plus_timeline` to Source/On/On.
 
 For a 362-frame source-audio reference, Current Shot's experimental
 `align_audio_reference` switch trims only the Ref2VA slice to **15.070 s**. It
@@ -239,10 +251,9 @@ WAV preservation, timing behavior, and the Seam Probe.
 Load Image ─→ Tagged Picture Ref ─┐
 24 fps IMAGE (+ paired AUDIO) ─→ Tagged Video Ref ─┐
 24 fps motion IMAGE ─→ Tagged Motion Ref ──────────┤
-Lazy Motion AV Loader source_video ─┬→ Tagged Motion Ref (Lazy VIDEO/Path) ┤
-                                    └→ Run Manager asset                  │
-Lazy Motion AV Loader source_audio ─┬→ Loop Start / Current Shot / Assemble
-                                    └→ Tagged Audio Ref or tagged passthrough
+Load Video + Load Audio ─→ Source Timeline ─┬→ Preflight / Plan Studio
+                                            └→ Loop Start
+Source Timeline ─→ Tagged Motion Ref (Source Timeline) ─────────────────┤
 Standalone AUDIO ─→ Tagged Audio Ref ──────────────┴→ Tagged Ref2VA
 
 Current Shot prompt / scene / dimensions / length ───────────────────↗
@@ -273,16 +284,12 @@ context span of motion after the protected prefix. Generic Tagged Video Ref
 keeps overlap-inclusive target-window slicing.
 
 For long control videos, **Tagged Motion Ref (Lazy VIDEO/Path)** avoids holding
-the complete decoded float32 IMAGE batch in RAM. Prefer **Lazy Motion AV
-Loader** when the same container supplies a source track. Its `source_video`
-is a native file-backed `VIDEO` that can fan out to the tagged node and Run
-Manager. Its `source_audio` is the complete post-skip track for Loop Start,
-Current Shot, Tagged Audio Ref, and Assemble; only audio is decoded in full.
-Connect the loader's `skip_first_frames` output to the tagged node so both
-streams share one timeline origin. The tagged node passes connected
-`source_audio` through on its own output for convenient fan-out. When using
-the direct-path fallback, it can derive that full output itself whenever
-embedded audio is enabled.
+the complete decoded float32 IMAGE batch in RAM. Register the native file-backed
+video and its embedded or external audio once with **Source Timeline**. The
+descriptor retains the shared skip origin and lets Current Shot decode only the
+active picture/audio window. **Lazy Motion AV Loader** remains as a 0.4
+compatibility adapter, but new workflows do not need its full decoded-audio
+fan-out.
 
 Core **Load Video** remains supported for generated-audio workflows: the
 tagged node reads only its loader disk path—never `get_components()`—and the
@@ -303,15 +310,17 @@ when the selected scene does not activate the motion tag—the preview emits no
 IMAGE or AUDIO. Keeping preview on a separate branch avoids a circular
 Plan/reference fingerprint connection.
 
-For a song or other full source track, set Tagged Audio Ref to
-`source_timeline`, keep the full loader AUDIO connected to that node, and wire
-Current Shot `state` to Tagged Ref2VA. Tagged Ref2VA then derives the exact
-scene-local audio window internally. Do not connect `source_audio_slice` to the
-Tagged Audio Ref: returning that node's fingerprint to Plan would make a graph
-cycle. The
+For a song or other full source track, choose Source as final audio and enable
+Source reference in Audio Policy. Connect the full loader only to Source
+Timeline. Current Shot exposes the exact scene-local slice, which can feed a
+standalone Tagged Audio Ref while its state feeds Tagged Ref2VA. Keep the
+picture/reference-registry fingerprint connected to Plan; do not return a
+downstream Current-Shot audio fingerprint to Plan, which would form a graph
+cycle. The structured scene dependency already records the canonical PCM
+window. The
 [Studio Tagged Source Audio example](<example_workflows/MiniMax H3 Ref2V - Studio Tagged Source Audio.json>)
-shows the full loader fan-out, `@audio_1` activation, source-track Plan mode,
-H3-grid alignment, assembly, recovery, and Run Manager asset binding.
+shows this single-wire timeline, `@audio_1` activation, H3-grid alignment,
+assembly, recovery, and Run Manager asset binding.
 
 The original numeric-range nodes remain available in the **legacy schedule**
 category when explicit selectors are useful.

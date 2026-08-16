@@ -12,6 +12,7 @@ Choose the guide that matches the task in front of you.
 | [Masked editing](MASKED_EDITING.md) | Video inpainting, 32px mask cells, audio masks, outpainting preparation, and clip-bridge targets |
 | [Compatibility](COMPATIBILITY.md) | Patch ownership, native Add Guide, SolAttn, H3-Multishot, and frontend compatibility |
 | [Version 0.5 architecture](V0_5_ARCHITECTURE.md) | Frozen Source Timeline, audio-policy, transition, dependency, migration, and preflight contracts |
+| [Migrating to 0.5](MIGRATING_TO_0_5.md) | Compatibility mappings, automatic workflow migration, Source Timeline rewiring, and resume behavior |
 
 Other references:
 

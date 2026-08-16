@@ -83,9 +83,9 @@ def _activate_inline_patches():
         return "native"
     if not _legacy_core_warning_emitted:
         _LOG.warning(
-            "MiniMax H3 Contex Loop 0.4: this ComfyUI build does not include "
+            "MiniMax H3 Contex Loop 0.5: this ComfyUI build does not include "
             "the native H3 Add Guide API merged in Comfy-Org/ComfyUI PR "
-            "#15439. Update ComfyUI for the supported 0.4 path. Falling back "
+            "#15439. Update ComfyUI for the supported 0.5 path. Falling back "
             "to legacy compatibility patches for this session; they are more "
             "likely to conflict with other H3 extensions.")
         _legacy_core_warning_emitted = True

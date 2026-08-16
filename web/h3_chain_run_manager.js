@@ -7,11 +7,11 @@ import {
     assetInputNumber,
     collectAssetBindings,
     nodeType,
-} from "./h3_run_assets_core.mjs?v=0.4.11";
+} from "./h3_run_assets_core.mjs?v=0.5.0";
 import {
     runArchiveOptionLabel,
     runManagerIdentity,
-} from "./h3_run_manager_core.mjs?v=0.4.11";
+} from "./h3_run_manager_core.mjs?v=0.5.0";
 
 const NODE_NAME = "MiniMaxH3ChainRunManager";
 const PLAN_NAME = "MiniMaxH3ChainPlan";

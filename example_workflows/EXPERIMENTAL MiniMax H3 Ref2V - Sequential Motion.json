@@ -1,8 +1,8 @@
 {
   "id": "c0b8422a-84d4-44f8-91ce-31c68a9a119e",
   "revision": 0,
-  "last_node_id": 1953,
-  "last_link_id": 101,
+  "last_node_id": 1956,
+  "last_link_id": 105,
   "nodes": [
     {
       "id": 1,
@@ -359,7 +359,7 @@
         {
           "name": "plan",
           "type": "H3_CHAIN_PLAN",
-          "link": 75
+          "link": 104
         },
         {
           "name": "source_audio",
@@ -1730,6 +1730,18 @@
             "name": "generation_fingerprint"
           },
           "link": 100
+        },
+        {
+          "name": "audio_policy",
+          "type": "H3_AUDIO_POLICY",
+          "link": 102,
+          "shape": 7
+        },
+        {
+          "name": "transition_policy",
+          "type": "H3_TRANSITION_POLICY",
+          "link": 103,
+          "shape": 7
         }
       ],
       "outputs": [
@@ -2312,7 +2324,8 @@
           "name": "references",
           "type": "H3_TAGGED_REFERENCES",
           "links": [
-            98
+            98,
+            105
           ]
         },
         {
@@ -2385,6 +2398,179 @@
       "widgets_values": [],
       "color": "#59451e",
       "bgcolor": "rgba(24,24,27,.9)"
+    },
+    {
+      "id": 1954,
+      "type": "MiniMaxH3AudioPolicy",
+      "pos": [
+        -1092,
+        704
+      ],
+      "size": [
+        320,
+        150
+      ],
+      "flags": {},
+      "order": 46,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "audio_policy",
+          "type": "H3_AUDIO_POLICY",
+          "links": [
+            102
+          ]
+        },
+        {
+          "name": "status",
+          "type": "STRING",
+          "links": null
+        }
+      ],
+      "title": "0.5 AUDIO INTENT",
+      "properties": {
+        "Node name for S&R": "MiniMaxH3AudioPolicy"
+      },
+      "widgets_values": [
+        "generated",
+        "off",
+        "on"
+      ]
+    },
+    {
+      "id": 1955,
+      "type": "MiniMaxH3TransitionPolicy",
+      "pos": [
+        -1092,
+        904
+      ],
+      "size": [
+        320,
+        190
+      ],
+      "flags": {},
+      "order": 47,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "transition_policy",
+          "type": "H3_TRANSITION_POLICY",
+          "links": [
+            103
+          ]
+        },
+        {
+          "name": "continuation_mode",
+          "type": "STRING",
+          "links": null
+        },
+        {
+          "name": "context_length",
+          "type": "INT",
+          "links": null
+        },
+        {
+          "name": "status",
+          "type": "STRING",
+          "links": null
+        }
+      ],
+      "title": "0.5 INCOMING TRANSITION",
+      "properties": {
+        "Node name for S&R": "MiniMaxH3TransitionPolicy"
+      },
+      "widgets_values": [
+        "guide",
+        false,
+        "guide",
+        22
+      ]
+    },
+    {
+      "id": 1956,
+      "type": "MiniMaxH3ChainPreflight",
+      "pos": [
+        -992,
+        0
+      ],
+      "size": [
+        384,
+        260
+      ],
+      "flags": {},
+      "order": 48,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "plan",
+          "type": "H3_CHAIN_PLAN",
+          "link": 75
+        },
+        {
+          "name": "source_timeline",
+          "shape": 7,
+          "type": "H3_SOURCE_TIMELINE",
+          "link": null
+        },
+        {
+          "name": "source_audio",
+          "shape": 7,
+          "type": "AUDIO",
+          "link": null
+        },
+        {
+          "name": "tagged_references",
+          "shape": 7,
+          "type": "H3_TAGGED_REFERENCES",
+          "link": 105
+        },
+        {
+          "name": "reference_schedule",
+          "shape": 7,
+          "type": "H3_REFERENCE_SCHEDULE",
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "name": "plan",
+          "type": "H3_CHAIN_PLAN",
+          "links": [
+            104
+          ]
+        },
+        {
+          "name": "preflight",
+          "type": "H3_PREFLIGHT",
+          "links": null
+        },
+        {
+          "name": "ready",
+          "type": "BOOLEAN",
+          "links": null
+        },
+        {
+          "name": "status",
+          "type": "STRING",
+          "links": null
+        },
+        {
+          "name": "report_json",
+          "type": "STRING",
+          "links": null
+        }
+      ],
+      "title": "0.5 PREFLIGHT — BLOCKS BEFORE MODELS",
+      "properties": {
+        "Node name for S&R": "MiniMaxH3ChainPreflight"
+      },
+      "widgets_values": [
+        1,
+        "",
+        true
+      ]
     }
   ],
   "links": [
@@ -2784,7 +2970,7 @@
       75,
       1930,
       0,
-      1701,
+      1956,
       0,
       "H3_CHAIN_PLAN"
     ],
@@ -2955,6 +3141,38 @@
       1703,
       1,
       "CONDITIONING"
+    ],
+    [
+      102,
+      1954,
+      0,
+      1700,
+      1,
+      "H3_AUDIO_POLICY"
+    ],
+    [
+      103,
+      1955,
+      0,
+      1700,
+      2,
+      "H3_TRANSITION_POLICY"
+    ],
+    [
+      104,
+      1956,
+      0,
+      1701,
+      0,
+      "H3_CHAIN_PLAN"
+    ],
+    [
+      105,
+      1952,
+      0,
+      1956,
+      3,
+      "H3_TAGGED_REFERENCES"
     ]
   ],
   "groups": [

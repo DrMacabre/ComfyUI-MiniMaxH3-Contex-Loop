@@ -7,6 +7,13 @@ Each completed mode should contain the same two-workflow pair:
 2. **Studio** — the same generation graph and prompt plan with Plan Studio as
    the authoring interface.
 
+All maintained 0.5 Chain examples make Audio Policy and Transition Policy
+explicit.
+Normal workflows place a model-free Preflight node before Loop Start; Studio
+workflows use Plan Studio's shared preflight inputs and report. Old Plan audio
+and continuation widgets remain readable compatibility controls, not the
+recommended authoring surface.
+
 ```text
 example_workflows/
 ├── assets/
@@ -237,11 +244,12 @@ the sampler on the unprepared conditioner latent.
   fallbacks by default and restores each saved run's Plan plus the matching
   loader selections.
 - [`MiniMax H3 Ref2V - Studio Tagged Source Audio.json`](<MiniMax H3 Ref2V - Studio Tagged Source Audio.json>)
-  derives from Studio Tagged and adds a full-track Load Audio fan-out to Loop
-  Start, Current Shot, final/recovery assembly, Run Manager, and Tagged Audio
-  Ref. The audio node uses `@audio_1`, `source_timeline`, and enabled
-  `align_audio_reference`; Tagged Ref2VA receives Current Shot state and the
-  final audio-reference fingerprint returns to Plan without a graph cycle.
+  derives from Studio Tagged and registers Load Audio once with Source
+  Timeline. The descriptor feeds Plan Studio preflight, Loop Start, recovery,
+  and assembly through saved state. Current Shot's scene-local slice feeds the
+  `@audio_1` Tagged Audio Ref with `align_audio_reference` enabled; its
+  downstream fingerprint is deliberately not returned to Plan, avoiding a
+  cycle while structured dependencies retain exact PCM provenance.
 - [`EXPERIMENTAL MiniMax H3 Ref2V - Sequential Motion.json`](<EXPERIMENTAL MiniMax H3 Ref2V - Sequential Motion.json>)
   adds one long video with embedded audio as `@motion` + `@motion_audio` and
   predates the dedicated Tagged Motion Ref. For new motion-transfer workflows,
@@ -278,5 +286,5 @@ prompt-driven wrapper slices it. The Plan uses `generated_audio`; paired
 
 [`Archive/`](Archive/) contains the previous mixed catalog unchanged for
 compatibility, research, and migration. These workflows are not deleted, but
-they are not the recommended type-based starting points for the 0.4 examples.
+they are not the recommended type-based starting points for the 0.5 examples.
 The archived catalog explains their historical purpose and extra dependencies.

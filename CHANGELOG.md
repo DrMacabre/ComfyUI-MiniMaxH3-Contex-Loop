@@ -2,6 +2,31 @@
 
 Newest first. This file keeps release history out of the onboarding README.
 
+## v0.5.0 — Source Timeline and workflow clarity
+
+- Added the typed Source Timeline contract so path-backed picture and audio are
+  registered once, remain lazy, and are sliced per scene without full-track
+  AUDIO fan-out.
+- Split audio intent into final soundtrack, source-reference, and generated-
+  continuity axes while preserving the exact behavior of saved 0.4 modes.
+- Added Cut, Guide, Hard AV, and Soft AV incoming-transition policies with
+  advanced access to the existing low-level controls.
+- Added model-free Chain Preflight and shared Plan Studio validation for source
+  duration, scene windows, references, runtime compatibility, and resume
+  eligibility.
+- Replaced opaque whole-Plan resume hashes with structured scene dependencies
+  and actionable diffs. Future-scene, incoming-boundary, and assembly-only
+  changes no longer force regeneration of an accepted predecessor.
+- Simplified conditional socket presentation, clarified active Plan versus
+  selected Run Manager archive state, and made prompt-history activation
+  explicit.
+- Migrated every maintained workflow to explicit policies and preflight. The
+  source-audio demo now uses canonical Source Timeline wiring and Current
+  Shot's scene-local reference slice.
+- Added an idempotent workflow migration tool, frozen 0.4 positional fixtures,
+  and backend/frontend release validation. Existing nodes, workflow JSON,
+  manifests, and checkpoints remain supported.
+
 ## v0.4.9 — Run Manager active asset target
 
 - Made the Run Manager show the connected Plan `run_name` beside Reference

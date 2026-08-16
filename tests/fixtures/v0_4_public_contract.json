@@ -20,6 +20,12 @@
     "video_blend_frames",
     "continuation_mode"
   ],
+  "loop_start_optional_input_order": [
+    "scene_range",
+    "verify_resume_history",
+    "source_audio",
+    "external_context"
+  ],
   "legacy_audio_modes": {
     "source_track": {
       "final_audio": "source",

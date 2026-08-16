@@ -1,4 +1,4 @@
-"""ComfyUI MiniMax H3 Contex Loop.
+"""ComfyUI MiniMax H3 Contex Loop 0.5.
 
 Disk-backed recursive MiniMax H3 scene loops with frame-exact picture/audio
 continuation, review gates, checkpoint resume, and final assembly.
@@ -32,7 +32,7 @@ When ComfyUI's native MiniMax H3 Add Guide API from merged PR #15439 is
 available, core owns arbitrary-position video/audio guides, Ref2VA target
 alignment, and keyframe/ref payload merging. This pack switches automatically
 to native guide records and installs no H3 layout or payload wrapper. Version
-0.4 emits a one-time update warning before using the legacy fallback.
+0.5 emits a one-time update warning before using the legacy fallback.
 """
 
 from .nodes import (

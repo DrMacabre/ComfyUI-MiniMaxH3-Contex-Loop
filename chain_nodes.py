@@ -5552,11 +5552,12 @@ class MiniMaxH3LazyMotionAVLoader:
     FUNCTION = "load"
     CATEGORY = "conditioning/minimax/contex_loop/media"
     DESCRIPTION = (
-        "Load one motion-reference container without decoding its video "
-        "frames. source_video is ComfyUI's native file-backed VIDEO; "
+        "Legacy 0.4 adapter: load one motion-reference container without "
+        "decoding its video frames. source_video is ComfyUI's native "
+        "file-backed VIDEO; "
         "source_audio is the complete post-skip track aligned to the same "
-        "24 fps timeline for Loop Start, Current Shot, Tagged Audio Ref, and "
-        "Assemble."
+        "24 fps timeline for legacy downstream AUDIO fan-out. New workflows "
+        "should register the container with Source Timeline instead."
     )
 
     @classmethod
@@ -7959,16 +7960,19 @@ class MiniMaxH3ChainLoopStart:
                                "Source reference=on. Current Shot slices exact "
                                "windows only when source reference is on. A "
                                "short, completely silent placeholder is padded."}),
-                "source_timeline": (SOURCE_TIMELINE_TYPE, {
-                    "tooltip": "Primary 0.5 media wire from Source Timeline "
-                               "or Run Manager. It replaces the repeated full "
-                               "source_audio connection and stays lazy across "
-                               "recursive scenes."}),
                 "external_context": (EXTERNAL_CONTEXT_TYPE, {
                     "tooltip": "Optional output from MiniMax H3 Existing Video "
                                "Context. When connected, scene 1 continues from "
                                "that video's tail and its repeated head is "
                                "trimmed exactly like every later scene."}),
+                # Append 0.5 sockets after every 0.4 custom-type socket. Saved
+                # workflows address these positions numerically even though
+                # execution ultimately resolves the input by name.
+                "source_timeline": (SOURCE_TIMELINE_TYPE, {
+                    "tooltip": "Primary 0.5 media wire from Source Timeline "
+                               "or Run Manager. It replaces the repeated full "
+                               "source_audio connection and stays lazy across "
+                               "recursive scenes."}),
             },
             "hidden": {
                 "initial_state": (STATE_TYPE,),
@@ -8071,9 +8075,9 @@ class MiniMaxH3ChainCurrent:
             },
             "optional": {
                 "source_audio": ("AUDIO", {
-                    "tooltip": "The same full source track connected to Loop "
-                               "Start. It is sliced frame-exactly for the current "
-                               "scene in source-track modes."}),
+                    "tooltip": "Legacy 0.4 full-track input. New workflows "
+                               "obtain the frame-exact scene slice from Source "
+                               "Timeline carried in state."}),
                 "align_audio_reference": ("BOOLEAN", {
                     "default": False,
                     "tooltip": "Experimental. Cap only source_audio_slice 5ms "

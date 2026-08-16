@@ -1,8 +1,8 @@
 {
   "id": "c0b8422a-84d4-44f8-91ce-31c68a9a119e",
   "revision": 0,
-  "last_node_id": 1957,
-  "last_link_id": 103,
+  "last_node_id": 1959,
+  "last_link_id": 105,
   "nodes": [
     {
       "id": 1,
@@ -28,7 +28,7 @@
           ]
         }
       ],
-      "title": "H3 MODEL \u2014 REQUIRED",
+      "title": "H3 MODEL — REQUIRED",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -199,7 +199,7 @@
         "Node name for S&R": "Note"
       },
       "widgets_values": [
-        "SOURCE ASSET \u2014 CC0\n\nLight-blue soldier crabs on Bribie Island, filmed in 2015 by Watermark Resort Caloundra. Wikimedia Commons records the video as CC0 1.0.\n\nhttps://commons.wikimedia.org/wiki/File:Light-blue_soldier_crabs_on_Bribie_Island.webm\n\nCopy soldier_crabs_bribie_island_cc0.webm and soldier_crabs_inpaint_mask.png from example_workflows/assets/ to ComfyUI/input/."
+        "SOURCE ASSET — CC0\n\nLight-blue soldier crabs on Bribie Island, filmed in 2015 by Watermark Resort Caloundra. Wikimedia Commons records the video as CC0 1.0.\n\nhttps://commons.wikimedia.org/wiki/File:Light-blue_soldier_crabs_on_Bribie_Island.webm\n\nCopy soldier_crabs_bribie_island_cc0.webm and soldier_crabs_inpaint_mask.png from example_workflows/assets/ to ComfyUI/input/."
       ],
       "color": "#432f66",
       "bgcolor": "rgba(24,24,27,.9)"
@@ -223,7 +223,7 @@
       "title": "T2VA PROMPT FORMAT",
       "properties": {},
       "widgets_values": [
-        "T2VA PROMPT FORMAT\n\nT2VA begins directly with these three fields in this exact order\u2014there is no Picture alignment instruction:\n\nintegrated_multimodal_description: [Shot 1] Describe visible style, composition, subjects, actions, camera movement, dialogue, and synchronized diegetic events.\n\noverall_soundscape: Summarize ambience, physical sounds, and non-verbal human sounds.\n\nnon_diegetic_music: Describe audience-only music, or use N/A.\n\nFor a chained continuation, explicitly continue the incoming pose, action phase, camera position and motion, lighting, environment, object states, ambience, and speaker identity. Do not re-establish or reset the shot unless a cut is intentional."
+        "T2VA PROMPT FORMAT\n\nT2VA begins directly with these three fields in this exact order—there is no Picture alignment instruction:\n\nintegrated_multimodal_description: [Shot 1] Describe visible style, composition, subjects, actions, camera movement, dialogue, and synchronized diegetic events.\n\noverall_soundscape: Summarize ambience, physical sounds, and non-verbal human sounds.\n\nnon_diegetic_music: Describe audience-only music, or use N/A.\n\nFor a chained continuation, explicitly continue the incoming pose, action phase, camera position and motion, lighting, environment, object states, ambience, and speaker identity. Do not re-establish or reset the shot unless a cut is intentional."
       ],
       "color": "#432",
       "bgcolor": "#653"
@@ -353,7 +353,7 @@
           "links": null
         }
       ],
-      "title": "LOOP START \u2014 NO EXTERNAL CONTINUATION",
+      "title": "LOOP START — NO EXTERNAL CONTINUATION",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -558,7 +558,7 @@
           "links": null
         }
       ],
-      "title": "CURRENT T2V SCENE \u2014 PROMPT / SEED / TIMING",
+      "title": "CURRENT T2V SCENE — PROMPT / SEED / TIMING",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -785,7 +785,7 @@
           ]
         }
       ],
-      "title": "CORE H3 T2VA \u2014 EMPTY GRID DEFINES AV SHAPES",
+      "title": "CORE H3 T2VA — EMPTY GRID DEFINES AV SHAPES",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -830,7 +830,7 @@
           ]
         }
       ],
-      "title": "LIGHTX2V TURBO \u2014 8 STEP V1.0",
+      "title": "LIGHTX2V TURBO — 8 STEP V1.0",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -911,7 +911,7 @@
           ]
         }
       ],
-      "title": "AUTO CONTEXT \u2014 clip 1 bypass / continuation",
+      "title": "AUTO CONTEXT — clip 1 bypass / continuation",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -1184,7 +1184,7 @@
           "links": null
         }
       ],
-      "title": "H3 sampler \u2014 SINGLE LOOP BODY",
+      "title": "H3 sampler — SINGLE LOOP BODY",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -1470,7 +1470,7 @@
           "links": null
         }
       ],
-      "title": "FINAL ASSEMBLY \u2014 5-FRAME VISUAL BLEND",
+      "title": "FINAL ASSEMBLY — 5-FRAME VISUAL BLEND",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -1579,7 +1579,20 @@
       "flags": {},
       "order": 7,
       "mode": 0,
-      "inputs": [],
+      "inputs": [
+        {
+          "name": "audio_policy",
+          "type": "H3_AUDIO_POLICY",
+          "link": 104,
+          "shape": 7
+        },
+        {
+          "name": "transition_policy",
+          "type": "H3_TRANSITION_POLICY",
+          "link": 105,
+          "shape": 7
+        }
+      ],
       "outputs": [
         {
           "name": "plan",
@@ -1616,7 +1629,7 @@
           ]
         }
       ],
-      "title": "TWO-SCENE SOURCE-INPAINT LOOP \u2014 311 DELIVERED FRAMES",
+      "title": "TWO-SCENE SOURCE-INPAINT LOOP — 311 DELIVERED FRAMES",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -1665,6 +1678,30 @@
           "name": "plan",
           "type": "H3_CHAIN_PLAN",
           "link": 74
+        },
+        {
+          "name": "source_timeline",
+          "type": "H3_SOURCE_TIMELINE",
+          "link": null,
+          "shape": 7
+        },
+        {
+          "name": "source_audio",
+          "type": "AUDIO",
+          "link": null,
+          "shape": 7
+        },
+        {
+          "name": "tagged_references",
+          "type": "H3_TAGGED_REFERENCES",
+          "link": null,
+          "shape": 7
+        },
+        {
+          "name": "reference_schedule",
+          "type": "H3_REFERENCE_SCHEDULE",
+          "link": null,
+          "shape": 7
         }
       ],
       "outputs": [
@@ -1678,7 +1715,7 @@
           ]
         }
       ],
-      "title": "PLAN STUDIO \u2014 TIMELINE / REVISIONS / PREVIEWS",
+      "title": "PLAN STUDIO — TIMELINE / REVISIONS / PREVIEWS",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -1687,7 +1724,11 @@
         "h3_plan_studio_active_scene": 0,
         "h3_plan_studio_view": "player"
       },
-      "widgets_values": [],
+      "widgets_values": [
+        1,
+        "",
+        true
+      ],
       "color": "#1f1f48",
       "bgcolor": "rgba(24,24,27,.9)"
     },
@@ -1845,7 +1886,7 @@
           "links": null
         }
       ],
-      "title": "LOOP END \u2014 ADVANCE T2V SCENE",
+      "title": "LOOP END — ADVANCE T2V SCENE",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -1908,7 +1949,7 @@
           "links": null
         }
       ],
-      "title": "REVIEW GATE \u2014 APPROVE / EDIT+RETRY / REROLL / STOP",
+      "title": "REVIEW GATE — APPROVE / EDIT+RETRY / REROLL / STOP",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.4.0",
@@ -1944,12 +1985,12 @@
       "mode": 0,
       "inputs": [],
       "outputs": [],
-      "title": "T2V STUDIO \u2014 HOW TO USE",
+      "title": "T2V STUDIO — HOW TO USE",
       "properties": {
         "Node name for S&R": "Note"
       },
       "widgets_values": [
-        "MASKED VIDEO INPAINT \u2014 CHAIN LOOP\n\nThis is a real Chain Loop workflow, including Current Shot, checkpoint/review, Loop End, resume, and disk assembly. Two 175-frame generations share a 39-frame protected overlap, delivering the largest valid span contained by the bundled 313-frame source: 311 frames. Scene 1 selects source frames 0..174; scene 2 selects 136..310 and retains the preceding edited result in its protected prefix.\n\nThe pack-native Loop Source AV Target selects the current source interval from Chain state, then fits picture and sound to the exact stock H3 joint target. It does not use LTXVConcatAVLatent or LTXVSeparateAVLatent. The source picture and audio therefore share the same frame-derived 24-fps start and duration. Apply Target Mask preserves source audio and every black video cell; only white cells are regenerated. Loop Mask Slice broadcasts the bundled one-frame mask explicitly. Replace its mask input with a tracked MASK batch covering the complete source timeline to follow a moving object; scene 2 automatically receives mask frames 136..310, including the same 39-frame overlap as source AV."
+        "MASKED VIDEO INPAINT — CHAIN LOOP\n\nThis is a real Chain Loop workflow, including Current Shot, checkpoint/review, Loop End, resume, and disk assembly. Two 175-frame generations share a 39-frame protected overlap, delivering the largest valid span contained by the bundled 313-frame source: 311 frames. Scene 1 selects source frames 0..174; scene 2 selects 136..310 and retains the preceding edited result in its protected prefix.\n\nThe pack-native Loop Source AV Target selects the current source interval from Chain state, then fits picture and sound to the exact stock H3 joint target. It does not use LTXVConcatAVLatent or LTXVSeparateAVLatent. The source picture and audio therefore share the same frame-derived 24-fps start and duration. Apply Target Mask preserves source audio and every black video cell; only white cells are regenerated. Loop Mask Slice broadcasts the bundled one-frame mask explicitly. Replace its mask input with a tracked MASK batch covering the complete source timeline to follow a moving object; scene 2 automatically receives mask frames 136..310, including the same 39-frame overlap as source AV."
       ],
       "color": "#432f66",
       "bgcolor": "rgba(24,24,27,.9)"
@@ -2008,7 +2049,7 @@
           "links": null
         }
       ],
-      "title": "CC0 2015 SOLDIER CRABS \u2014 SOURCE AV",
+      "title": "CC0 2015 SOLDIER CRABS — SOURCE AV",
       "properties": {
         "cnr_id": "comfyui-videohelpersuite",
         "Node name for S&R": "VHS_LoadVideo",
@@ -2177,7 +2218,7 @@
         "white = generate",
         "preserve source audio"
       ],
-      "title": "APPLY SPATIAL MASK \u2014 SOURCE AUDIO PRESERVED"
+      "title": "APPLY SPATIAL MASK — SOURCE AUDIO PRESERVED"
     },
     {
       "id": 1953,
@@ -2213,7 +2254,7 @@
         "soldier_crabs_inpaint_mask.png",
         "red"
       ],
-      "title": "STATIC MASK \u2014 REPLACE WITH TRACKED MASK BATCH"
+      "title": "STATIC MASK — REPLACE WITH TRACKED MASK BATCH"
     },
     {
       "id": 1954,
@@ -2307,7 +2348,7 @@
         "Node name for S&R": "PreviewImage"
       },
       "widgets_values": [],
-      "title": "Verify generated 32\u00d732 cells"
+      "title": "Verify generated 32×32 cells"
     },
     {
       "id": 1956,
@@ -2399,6 +2440,95 @@
       ],
       "color": "#1f1f48",
       "bgcolor": "rgba(24,24,27,.9)"
+    },
+    {
+      "id": 1958,
+      "type": "MiniMaxH3AudioPolicy",
+      "pos": [
+        -1092,
+        704
+      ],
+      "size": [
+        320,
+        150
+      ],
+      "flags": {},
+      "order": 39,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "audio_policy",
+          "type": "H3_AUDIO_POLICY",
+          "links": [
+            104
+          ]
+        },
+        {
+          "name": "status",
+          "type": "STRING",
+          "links": null
+        }
+      ],
+      "title": "0.5 AUDIO INTENT",
+      "properties": {
+        "Node name for S&R": "MiniMaxH3AudioPolicy"
+      },
+      "widgets_values": [
+        "generated",
+        "off",
+        "on"
+      ]
+    },
+    {
+      "id": 1959,
+      "type": "MiniMaxH3TransitionPolicy",
+      "pos": [
+        -1092,
+        904
+      ],
+      "size": [
+        320,
+        190
+      ],
+      "flags": {},
+      "order": 40,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "transition_policy",
+          "type": "H3_TRANSITION_POLICY",
+          "links": [
+            105
+          ]
+        },
+        {
+          "name": "continuation_mode",
+          "type": "STRING",
+          "links": null
+        },
+        {
+          "name": "context_length",
+          "type": "INT",
+          "links": null
+        },
+        {
+          "name": "status",
+          "type": "STRING",
+          "links": null
+        }
+      ],
+      "title": "0.5 INCOMING TRANSITION",
+      "properties": {
+        "Node name for S&R": "MiniMaxH3TransitionPolicy"
+      },
+      "widgets_values": [
+        "hard_av",
+        false,
+        "masked_av",
+        39
+      ]
     }
   ],
   "links": [
@@ -2985,6 +3115,22 @@
       1956,
       0,
       "STRING"
+    ],
+    [
+      104,
+      1958,
+      0,
+      1700,
+      0,
+      "H3_AUDIO_POLICY"
+    ],
+    [
+      105,
+      1959,
+      0,
+      1700,
+      1,
+      "H3_TRANSITION_POLICY"
     ]
   ],
   "groups": [
@@ -3038,7 +3184,7 @@
     },
     {
       "id": 6,
-      "title": "T2V \u2014 PLAN STUDIO AUTHORING",
+      "title": "T2V — PLAN STUDIO AUTHORING",
       "bounding": [
         -672,
         480,

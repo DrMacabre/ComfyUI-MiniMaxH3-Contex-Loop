@@ -53,6 +53,21 @@ def plan_required_input_order(module):
     return [ast.literal_eval(key) for key in required.keys]
 
 
+def method_input_order(module, class_name, group):
+    node = class_node(module, class_name)
+    method = next(item for item in node.body
+                  if isinstance(item, ast.FunctionDef)
+                  and item.name == "INPUT_TYPES")
+    returned = next(item.value for item in ast.walk(method)
+                    if isinstance(item, ast.Return))
+    assert isinstance(returned, ast.Dict)
+    outer = {ast.literal_eval(key): value
+             for key, value in zip(returned.keys, returned.values)}
+    values = outer[group]
+    assert isinstance(values, ast.Dict)
+    return [ast.literal_eval(key) for key in values.keys]
+
+
 def main():
     assert FIXTURE["format"] == "h3_v0_4_public_contract_fixture_v1"
     assert contracts.SOURCE_TIMELINE_VERSION == "h3_source_timeline_v1"
@@ -149,6 +164,10 @@ def main():
     module = ast.parse(source)
     assert plan_required_input_order(module) == FIXTURE[
         "plan_required_input_order"]
+    loop_optional = method_input_order(
+        module, "MiniMaxH3ChainLoopStart", "optional")
+    assert loop_optional[:4] == FIXTURE["loop_start_optional_input_order"]
+    assert loop_optional[4:] == ["source_timeline"]
     for node_name, output_names in FIXTURE["positional_outputs"].items():
         assert return_names(module, node_name) == output_names, node_name
     for format_name in FIXTURE["checkpoint_formats"]:

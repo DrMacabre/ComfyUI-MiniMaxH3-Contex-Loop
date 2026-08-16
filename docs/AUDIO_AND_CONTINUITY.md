@@ -1,17 +1,27 @@
 # Audio and continuity
 
-## Choose an audio mode
+## Choose an audio policy
 
-| Mode | Timeline behavior | Final assembly |
+Version 0.5 separates three independent decisions:
+
+| Axis | Values | Meaning |
 |---|---|---|
-| `source_track` | Current Shot provides the current source slice to Ref2VA; Motion Context carries picture history. | Uses the original source track. |
-| `generated_audio` | Motion Context carries the previous H3 audio latent. | Concatenates checkpointed generated audio. |
-| `source_plus_timeline` | Ref2VA receives the source slice and Motion Context carries generated-audio history. Experimental. | `audio_source: plan` selects the source track. |
+| Final audio | `generated`, `source`, `none` | What Assemble places in the final MP4 |
+| Source reference | `on`, `off` | Whether the exact active source window guides H3 |
+| Generated continuity | `on`, `off` | Whether the previous sampled audio latent continues into the next scene |
 
-For a complete prerecorded voice, song, or dialogue performance that must remain
-exact, use `source_track`. For a short voice/timbre reference where H3 should
-generate new words, use `generated_audio` and schedule that short clip as an
-ordinary audio reference.
+For a prerecorded song or dialogue performance that must remain exact, choose
+Source final audio and enable Source reference. For a short voice/timbre
+reference where H3 should generate new words, choose Generated final audio and
+schedule that clip as an ordinary tagged audio reference.
+
+Saved 0.4 modes migrate without changing behavior:
+
+| Legacy `audio_mode` | Final | Source reference | Generated continuity |
+|---|---|---|---|
+| `generated_audio` | generated | off | on |
+| `source_track` | source | on | off |
+| `source_plus_timeline` | source | on | on |
 
 These descriptions are for the default `guide` continuation mode. In the
 experimental `masked_av` and `feathered_av` modes, Chain Context places a
@@ -28,33 +38,34 @@ rounding at the AV boundary. At 39 frames, `feathered_av` fully protects the
 first 8 video / 42 audio steps and ramps the final 4 video / 23 audio prefix
 steps.
 
-The Plan node mode is an inherited default and each scene may override it. The
-override controls the transition into that scene: `guide` for a new shot with
-interpretive continuity, `masked_av` for exact same-shot continuation, or
-`feathered_av` for the same target-latent continuation with a softer boundary.
-Mixed plans must still use global context/encode/anchor settings compatible
-with every AV mask scene.
+Transition Policy controls the incoming boundary: Cut carries no picture,
+Guide uses 22 guide frames, Hard AV uses a protected 39-frame prefix, and Soft
+AV uses the same prefix with a feathered denoise boundary. Advanced mode keeps
+the exact legacy implementation and context controls. Mixed plans must still
+use encode/anchor settings compatible with every AV-mask scene.
 
-## Source-track wiring
+## Source Timeline wiring
 
-Connect the same full ComfyUI AUDIO value to:
+Register picture and sound once. New workflows pass a typed descriptor instead
+of repeating a decoded full-track AUDIO wire:
 
 ```text
-Load Audio ─┬→ Loop Start
-            ├→ Current Shot
-            └→ Assemble
+Load Video ─┐
+            ├→ Source Timeline ─┬→ Preflight / Plan Studio
+Load Audio ─┘                   └→ Loop Start → Current Shot
+                                                   └→ scene-local source slice
 
-Current Shot source_audio_slice → Ref2VA / Scheduled Audio Ref
+Loop End manifest → Assemble (recovers the timeline descriptor)
 ```
 
-Current Shot cuts each raw scene window from the full track. Loop Start hashes
-the waveform so a changed or incorrectly wired track cannot silently resume old
-checkpoints. The track must cover the total delivered video; a truly silent
-placeholder may be shorter and is padded safely.
+Current Shot requests each overlap-aware scene window from the descriptor.
+Loop Start fingerprints the source so changed media cannot silently resume old
+checkpoints. Path-backed video and audio remain lazy; only the active scene is
+decoded. A tensor-only AUDIO input is normalized once into a run-owned file.
+The source must cover the required delivered timeline; Preflight reports the
+exact shortfall and last complete scene before model loading.
 
-When a long motion-reference video also contains the master soundtrack, use
-**Lazy Motion AV Loader** instead of decoding the full video through a
-component splitter:
+The 0.4 Lazy Motion AV Loader fan-out remains accepted as a compatibility route:
 
 ```text
 Lazy Motion AV Loader source_video ─┬→ Tagged Motion Ref source_video
@@ -72,30 +83,33 @@ fingerprint and Current Shot maps exact Plan frame windows onto its sample
 clock for H3 audio-latent alignment. Scene-local paired audio from the tagged
 motion reference does not replace this master track.
 
+For new workflows, Source Timeline performs that registration without decoding
+the complete audio track or requiring the downstream fan-out.
+
 ### Tagged Ref2VA source timeline
 
-Tagged references need a static media path because their fingerprint normally
-returns to Plan. Connecting `Current Shot source_audio_slice` to Tagged Audio
-Ref would close this cycle:
+Current Shot's source slice may feed a standalone Tagged Audio Ref. Keep the
+registry fingerprint that returns to Plan independent of that downstream slice:
 
 ```text
-Plan → Loop Start → Current Shot → Tagged Audio Ref → fingerprint → Plan
+Plan → Loop Start → Current Shot → Tagged Audio Ref → Tagged Ref2VA
+  ↑                                                     │
+  └──────── picture/reference registry fingerprint ─────┘
 ```
 
-Use the Tagged Audio Ref `source_timeline` mode instead:
+The canonical topology is:
 
 ```text
-Load Audio ─┬→ Loop Start
-            ├→ Current Shot
-            └→ Tagged Audio Ref ─┬→ Tagged Ref2VA
-                                 └→ fingerprint → Plan
-
-Current Shot state ─────────────────→ Tagged Ref2VA
+Load Audio → Source Timeline → Loop Start → Current Shot
+                                             ├→ source_audio_slice → Tagged Audio Ref
+                                             └→ state ─────────────→ Tagged Ref2VA
 ```
 
-The Tagged Audio Ref hashes the full source track. Tagged Ref2VA validates it
-against Loop Start and derives the active scene's overlap-aware slice internally.
-Its optional alignment switch changes only that derived reference slice.
+The structured scene dependency records the canonical PCM window, so that
+scene—not unrelated future audio—is invalidated when the source changes. Do not
+return the slice-derived audio fingerprint to Plan, because that would create a
+real graph cycle. Current Shot's optional alignment switch changes only the
+reference slice.
 
 ## Experimental reference-grid alignment
 

@@ -21,19 +21,20 @@ import {
     setShotLengthMode,
     sharedPrompt,
     shotLengthMode,
-} from "./h3_chain_plan_core.mjs?v=0.4.11";
+} from "./h3_chain_plan_core.mjs?v=0.5.0";
 import {
+    promptRevisionHelp,
     promptRevisionLabel,
     promptRevisionNavigation,
-} from "./h3_prompt_history_core.mjs?v=0.4.11";
-import {availableReferenceRecords} from "./h3_reference_preview_core.mjs?v=0.4.11";
+} from "./h3_prompt_history_core.mjs?v=0.5.0";
+import {availableReferenceRecords} from "./h3_reference_preview_core.mjs?v=0.5.0";
 import {
     locateStudioTimelineSecond,
     matchingStudioCheckpoint,
     studioCheckpointSignature,
     studioSceneStartSeconds,
-} from "./h3_chain_plan_studio_core.mjs?v=0.4.11";
-import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.4.11";
+} from "./h3_chain_plan_studio_core.mjs?v=0.5.0";
+import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.5.0";
 
 const {connectedPromptEditors, publishCompanionScene} = promptCompanionSync;
 function publishCompanionPrompt(...args) {
@@ -438,17 +439,17 @@ function mount(node) {
             return;
         }
         const navigation = promptRevisionNavigation(history.data, history.revisionId);
-        const previous = button("‹", "Previous prompt version", () => {
+        const previous = button("‹", "Activate previous prompt version in the Plan", () => {
             if (navigation.previous) void selectHistoryRevision(navigation.previous.id);
         });
-        const next = button("›", "Next prompt version", () => {
+        const next = button("›", "Activate next prompt version in the Plan", () => {
             if (navigation.next) void selectHistoryRevision(navigation.next.id);
         });
         previous.disabled = !navigation.previous;
         next.disabled = !navigation.next;
-        const count = element("span", "h3studio-history-count", `${navigation.position} / ${navigation.total}`);
+        const count = element("span", "h3studio-history-count", `Active ${navigation.position} / ${navigation.total}`);
         const metadata = element("span", "h3studio-history-meta", promptRevisionLabel(navigation));
-        metadata.title = metadata.textContent;
+        metadata.title = promptRevisionHelp(navigation);
         history.host.append(previous, count, next, metadata);
     }
 

@@ -149,3 +149,12 @@ policy needs them. Hiding a socket must not change its backend index.
 8. Hide redundant sockets without changing positions.
 9. Clarify Run Manager and prompt-history state.
 10. Run migration, integration, and release validation.
+
+## Release validation
+
+All ten delivery stages are implemented. The maintained workflow catalog uses
+explicit audio and transition policies, Source Timeline, and model-free
+preflight. The migration tool is idempotent, the frozen 0.4 positional contract
+is covered by regression tests, and backend/frontend release checks enforce a
+single package version. Archived 0.4 workflows remain unchanged examples of the
+supported compatibility route.

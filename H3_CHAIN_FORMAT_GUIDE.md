@@ -163,13 +163,15 @@ shot value > JSON defaults > H3 Chain Plan node defaults.
 
 RECOMMENDED PLAN SETTINGS
 - width/height: multiples of 32; 960x544 is a good starting point.
-- context_length: 22
-- continuation_mode: guide
+- Transition Policy: Guide (22 frames); use Hard AV or Soft AV (39 frames)
+  only for same-shot target-latent continuation.
 - encode_mode: video
 - anchor_mode: head
 - crop: disabled
-- audio_mode: source_track for music videos
-- audio_context_length: 0 in source_track; 22 for generated-audio continuity
+- Audio Policy for an exact music track: Source / source reference on /
+  generated continuity off.
+- Legacy fallback: context_length 22, continuation_mode guide, audio_mode
+  source_track.
 - segment_crf: 18–20
 
 RUN / RESUME
@@ -188,9 +190,11 @@ RUN / RESUME
 - Change generation_fingerprint whenever model, VAE, LoRA, references, CFG,
   scheduler, or another generation dependency changes.
 
-SOURCE-TRACK WIRING
-Wire the same Load Audio output to Loop Start, Current Shot and Assemble.
-The source song must cover the complete delivered video duration.
+SOURCE-TIMELINE WIRING
+Register video/audio once with Source Timeline. Connect the descriptor to
+Preflight (or Plan Studio) and Loop Start. Current Shot obtains scene slices
+from state and Assemble recovers the descriptor from the manifest. The source
+song must cover the complete delivered video duration.
 ```
 
 ## Complete JSON shape
@@ -508,12 +512,14 @@ advanced**; Plan Studio keeps them in the existing scene-properties row.
 | `run_name` | Filename-safe text; normalized to at most 96 characters | Give each independent render a unique name. Keep it unchanged only when resuming. |
 | `generation_fingerprint` | Any stable version string | Include model, VAE, LoRA, global-reference, CFG, sampler, and scheduler versions. Change it when any external generation dependency changes. |
 | `width`, `height` | Positive multiples of 32, UI range 32–4096 | `960 × 544` is the supplied long-form workflow setting. |
-| `continuation_mode` | `guide` or `masked_av` | Inherited default for scenes without `shots[n].continuation_mode`. `guide` suits new shots; `masked_av` writes a preserved AV prefix for same-shot continuation and requires Chain Context's latent output to feed the sampler. |
-| `context_length` | `1`, then native runs `5`, `22`, `39`, ... `243` | Use `22` for guide mode. Use `39` for masked AV so 24 fps video and 40 Hz audio meet on an exact 65-step boundary. Masked AV requires at least 5. |
+| `transition_policy` | Cut, Guide, Hard AV, Soft AV policy wire | Preferred 0.5 incoming-boundary control. |
+| `audio_policy` | Independent final/reference/continuity policy wire | Preferred 0.5 audio-intent control. |
+| `continuation_mode` | `guide`, `masked_av`, or `feathered_av` | Legacy/advanced implementation override for scenes without `shots[n].continuation_mode`. |
+| `context_length` | `0`, `1`, then native runs `5`, `22`, `39`, ... `243` | Legacy/advanced exact context. Use 22 for Guide and 39 for AV so picture and audio meet on an exact boundary. |
 | `encode_mode` | `video` or `frames` | Use `video`. It preserves motion inside the VAE latent and is more efficient. |
 | `anchor_mode` | `head` or `before` | Use `head`; wire `trim_frames` into MiniMax H3 Contex Loop Trim. |
 | `crop` | `disabled` or `center` | Use `disabled` when references and output already share the intended framing. |
-| `audio_mode` | `source_track`, `generated_audio`, or `source_plus_timeline` | Use `source_track` for music videos. |
+| `audio_mode` | `source_track`, `generated_audio`, or `source_plus_timeline` | Legacy 0.4 fallback when Audio Policy is unconnected. |
 | `audio_context_length` | `0`–`240` frames | In generated-audio modes, `0` follows the video context length; `22` is the tested explicit value. It is unused for video-only context in `source_track`. |
 | `default_duration_seconds` | Positive seconds, up to 149.667 s | Used only when JSON defaults and the scene both omit a length. |
 | `default_steps` | `1`–`10000` | Used only when JSON defaults and the scene both omit steps. |
@@ -596,7 +602,7 @@ are safe because they do not skip the chain's motion dependency.
 
 ### Video-reference timeline modes
 
-`sequential` is experimental in 0.4. `restart_each_scene` remains the safe,
+`sequential` remains experimental in 0.5. `restart_each_scene` remains the safe,
 backward-compatible default and preserves existing schedule fingerprints.
 
 Each Scheduled Video Ref chooses one of two source-timeline behaviors:
@@ -766,13 +772,14 @@ scene 1 delivered frames = raw_frames - scene 1's effective context_length
 Therefore a 362-frame first scene with 22 imported context frames contributes
 340 new frames. Keep Loop Trim connected with `match_tail=true`.
 
-`source_audio` has two distinct meanings in this setup:
+Legacy `source_audio` has two distinct meanings in this setup:
 
 - Existing Video Context `source_audio` is the soundtrack of the video being
   extended. Its tail seeds the first join and its full normalized duration is
   preserved when prepend is enabled.
-- Loop Start / Current Shot / Assemble `source_audio` is the soundtrack for the
-  generated extension. For scene 1 the loop constructs one raw conditioning
+- Loop Start / Current Shot / Assemble `source_audio` is the compatibility
+  soundtrack for the generated extension. In 0.5, register that media once with
+  Source Timeline instead. For scene 1 the loop constructs one raw conditioning
   window from the imported audio tail followed by this track from time zero.
 
 For `generated_audio` or `source_plus_timeline`, connect the H3 audio VAE to
@@ -799,7 +806,9 @@ changing it correctly invalidates dependent generated scenes.
 
 Recommended for a music video driven by one song.
 
-- Wire the same full `AUDIO` value to Loop Start, Current Shot, and Assemble.
+- In 0.5, set Audio Policy to Source/On/Off and connect the full track once to
+  Source Timeline. The old Loop Start/Current Shot/Assemble AUDIO fan-out
+  remains accepted for saved 0.4 workflows.
 - Current Shot slices a frame-exact raw audio window for each Ref2VA scene.
 - Motion Context carries picture context only.
 - Assemble muxes the original source track over the stitched video.

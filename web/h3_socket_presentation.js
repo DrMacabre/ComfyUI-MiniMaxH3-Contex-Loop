@@ -7,7 +7,7 @@ import {
     hasAdvancedPresentation,
     nodeType,
     presentationForNode,
-} from "./h3_socket_presentation_core.mjs?v=0.4.9";
+} from "./h3_socket_presentation_core.mjs?v=0.5.0";
 
 const EXTENSION = "minimax_h3_context_loop.socket_presentation";
 const WATCHED_POLICY_NODES = new Set([
