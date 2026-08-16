@@ -59,6 +59,7 @@ def main():
     assert contracts.AUDIO_POLICY_VERSION == "h3_audio_policy_v1"
     assert contracts.TRANSITION_POLICY_VERSION == "h3_transition_policy_v1"
     assert contracts.SCENE_DEPENDENCY_VERSION == "h3_scene_dependency_v1"
+    assert contracts.PREFLIGHT_VERSION == "h3_preflight_v1"
 
     for legacy, expected in FIXTURE["legacy_audio_modes"].items():
         migrated = contracts.migrate_legacy_audio_mode(legacy)

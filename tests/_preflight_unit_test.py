@@ -1,0 +1,134 @@
+#!/usr/bin/env python3
+"""0.5 preflight is model-free, structured, and shared by Studio/Start."""
+
+import importlib.util
+import json
+import pathlib
+import sys
+import tempfile
+import types
+
+import torch
+
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+PACKAGE = "h3_preflight_unit"
+
+folder_paths = types.ModuleType("folder_paths")
+folder_paths.get_output_directory = lambda: str(ROOT)
+folder_paths.get_temp_directory = lambda: str(ROOT)
+folder_paths.get_input_directory = lambda: str(ROOT)
+folder_paths.get_annotated_filepath = lambda value: str(value)
+sys.modules["folder_paths"] = folder_paths
+
+package = types.ModuleType(PACKAGE)
+package.__path__ = [str(ROOT)]
+sys.modules[PACKAGE] = package
+
+shared_nodes = types.ModuleType(PACKAGE + ".nodes")
+shared_nodes.MiniMaxH3MotionContext = object
+shared_nodes._claim_inline_patch_ownership = lambda: "test"
+shared_nodes._prepare_native_guide_conditioning = lambda value: value
+shared_nodes._resize = lambda *args: None
+shared_nodes._streams_from_latent = lambda *args: None
+sys.modules[shared_nodes.__name__] = shared_nodes
+
+spec = importlib.util.spec_from_file_location(
+    PACKAGE + ".chain_nodes", ROOT / "chain_nodes.py")
+chain = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = chain
+spec.loader.exec_module(chain)
+
+
+def make_plan(run_name):
+    policy = chain._contract_audio_policy("source", "on", "off")
+    return chain._normalize_plan(
+        json.dumps({"shots": [
+            {"id": "one", "prompt": "Opening action.", "length": 22},
+            {"id": "two", "prompt": "Continuation action.", "length": 22},
+        ]}),
+        run_name, 64, 64, 5, "video", "head", "disabled",
+        "source_track", 5, 1.0, 8, 7, 18, "stack:auto:v1", 0,
+        "guide", policy)
+
+
+def deferred_timeline(frames):
+    sample_rate = 48000
+    samples = round(frames / 24 * sample_rate)
+    audio = {
+        "waveform": torch.linspace(-0.5, 0.5, samples).reshape(1, 1, -1),
+        "sample_rate": sample_rate,
+    }
+    audio_hash = chain._audio_fingerprint(audio)
+    timeline_hash = chain._fingerprint({"audio": audio_hash, "frames": frames})
+    return {
+        "version": chain.SOURCE_TIMELINE_VERSION,
+        "kind": "source_timeline",
+        "fps": 24,
+        "origin": {"source_fps": 24.0, "skip_first_frames": 0,
+                   "skip_seconds": 0.0},
+        "extent": {"frame_count": frames,
+                   "duration_seconds": frames / 24.0},
+        "video": None,
+        "audio": {"kind": "deferred_tensor", "value": audio,
+                  "sample_rate": sample_rate, "channels": 1,
+                  "duration_seconds": frames / 24.0,
+                  "timeline_offset_seconds": 0.0,
+                  "content_sha256": audio_hash},
+        "fingerprints": {"video": "", "audio": audio_hash,
+                         "timeline": timeline_hash},
+        "recovery": {"video_path": "", "audio_path": "",
+                     "deferred_audio_requires_materialization": True},
+    }
+
+
+with tempfile.TemporaryDirectory() as temporary:
+    root = pathlib.Path(temporary)
+    chain._output_root = lambda: str(root)
+    plan = make_plan("preflight")
+    timeline = deferred_timeline(39)
+
+    prepared, report = chain._preflight_chain(
+        plan, source_timeline=timeline)
+    assert report["ok"] is True
+    assert report["status"] == "warning"  # isolated test lacks Comfy runtime
+    assert report["source"]["required_frames"] == 39
+    assert report["source"]["last_complete_scene"] == 2
+    assert [scene["overlap_trim_frames"] for scene in report["scenes"]] == [0, 5]
+    assert report["scenes"][1]["source_start_frame"] == 17
+    assert prepared["compatibility"]["source_timeline_fingerprint"] == (
+        timeline["fingerprints"]["timeline"])
+    assert not root.exists() or not any(root.iterdir())
+
+    studio = chain.MiniMaxH3ChainPlanStudio().passthrough(
+        plan, source_timeline=timeline)
+    assert studio[0] is plan and studio[2] is True
+    assert json.loads(studio[4])["version"] == chain.PREFLIGHT_VERSION
+
+    short = deferred_timeline(30)
+    _prepared, failed = chain._preflight_chain(
+        plan, source_timeline=short)
+    assert failed["ok"] is False
+    assert failed["source"]["shortfall_frames"] == 9
+    assert failed["source"]["last_complete_scene"] == 1
+    issue = next(item for item in failed["errors"]
+                 if item["code"] == "source_audio_too_short")
+    assert issue["action"]
+
+    materialized = []
+    original = chain._materialize_source_timeline_audio
+    chain._materialize_source_timeline_audio = (
+        lambda *args, **kwargs: materialized.append(True))
+    try:
+        try:
+            chain.MiniMaxH3ChainLoopStart().start(
+                plan, 1, source_timeline=short)
+        except ValueError as exc:
+            assert "source_audio_too_short" in str(exc)
+        else:
+            raise AssertionError("Loop Start accepted failed preflight")
+    finally:
+        chain._materialize_source_timeline_audio = original
+    assert materialized == []
+
+print("H3 preflight: exact timing, source shortfall, Studio report, and early Loop Start block pass")

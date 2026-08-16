@@ -14,6 +14,7 @@ SOURCE_TIMELINE_VERSION = "h3_source_timeline_v1"
 AUDIO_POLICY_VERSION = "h3_audio_policy_v1"
 TRANSITION_POLICY_VERSION = "h3_transition_policy_v1"
 SCENE_DEPENDENCY_VERSION = "h3_scene_dependency_v1"
+PREFLIGHT_VERSION = "h3_preflight_v1"
 
 FINAL_AUDIO_POLICIES = ("generated", "source", "none")
 SOURCE_REFERENCE_POLICIES = ("off", "on")

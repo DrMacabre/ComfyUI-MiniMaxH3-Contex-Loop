@@ -91,6 +91,7 @@ from .contracts_v05 import (
     CONTINUATION_POLICIES,
     FINAL_AUDIO_POLICIES,
     GENERATED_CONTINUITY_POLICIES,
+    PREFLIGHT_VERSION,
     SOURCE_REFERENCE_POLICIES,
     SOURCE_TIMELINE_VERSION,
     TRANSITION_CONTEXT_LENGTHS,
@@ -140,6 +141,7 @@ LAZY_MOTION_SOURCE_TYPE = "H3_LAZY_MOTION_SOURCE"
 SOURCE_TIMELINE_TYPE = "H3_SOURCE_TIMELINE"
 AUDIO_POLICY_TYPE = "H3_AUDIO_POLICY"
 TRANSITION_POLICY_TYPE = "H3_TRANSITION_POLICY"
+PREFLIGHT_TYPE = "H3_PREFLIGHT_REPORT"
 REFERENCE_SCHEDULE_VERSION = 1
 LAZY_MOTION_SOURCE_VERSION = 3
 
@@ -6881,6 +6883,517 @@ class MiniMaxH3ChainRichScenePromptEditor:
         return (plan,)
 
 
+def _preflight_issue(
+        report: dict[str, Any], level: str, code: str, message: str,
+        action: str = "", **context: Any) -> None:
+    issue = {"code": str(code), "message": str(message),
+             "action": str(action or "")}
+    issue.update({key: value for key, value in context.items()
+                  if value is not None})
+    report[level].append(issue)
+
+
+def _preflight_reference_window(
+        entry: dict[str, Any], plan: dict[str, Any], scene: int
+        ) -> dict[str, Any] | None:
+    if entry.get("kind") != "video":
+        return None
+    shots = plan["shots"]
+    shot = shots[int(scene) - 1]
+    mode = str(entry.get("timeline_mode") or "restart_each_scene")
+    if mode == "restart_each_scene":
+        start, length = 0, int(shot["raw_frames"])
+    elif mode == "sequential":
+        ranges = entry.get("ranges") or ()
+        if entry.get("activation") == "prompt":
+            aliases = set(_reference_entry_tags(entry))
+            origin = next((
+                index for index, candidate in enumerate(shots, 1)
+                if aliases.intersection(_REFERENCE_ALIAS_RE.findall(
+                    str(candidate.get("prompt") or "")))
+            ), int(scene))
+        else:
+            origin = int(ranges[0][0]) if ranges else 1
+        current_mode = str(shot.get(
+            "continuation_mode",
+            plan["compatibility"].get("continuation_mode", "guide")))
+        if (entry.get("semantic_role") == "motion"
+                and current_mode in MASKED_CONTINUATION_MODES):
+            start = sum(int(item["delivered_frames"])
+                        for item in shots[origin - 1:int(scene) - 1])
+            length = int(shot["delivered_frames"])
+        else:
+            start = (int(shot["generation_start_frame"])
+                     - int(shots[origin - 1]["generation_start_frame"]))
+            length = int(shot["raw_frames"])
+    else:
+        raise ValueError(
+            "Reference @%s has unknown timeline mode %r." %
+            (entry.get("tag", "video"), mode))
+    return {"mode": mode, "start_frame": int(start),
+            "end_frame": int(start + length), "frame_count": int(length)}
+
+
+def _preflight_runtime_compatibility(
+        plan: dict[str, Any], report: dict[str, Any]) -> dict[str, Any]:
+    try:
+        from .patch_layout import compatibility_report, native_guides_available
+    except ImportError as exc:
+        runtime = {
+            "guide": {"ok": None, "mode": "inspection_unavailable",
+                      "message": str(exc)},
+            "mask": {"needed": False},
+        }
+        _preflight_issue(
+            report, "warnings", "runtime_inspection_unavailable",
+            "H3 runtime compatibility could not be inspected in this "
+            "model-free process: %s" % exc,
+            "Run preflight inside the active ComfyUI process before sampling.")
+        return runtime
+
+    guide = compatibility_report()
+    runtime: dict[str, Any] = {"guide": guide, "mask": {"needed": False}}
+    if not guide["ok"]:
+        _preflight_issue(
+            report, "errors", "guide_layout_conflict", guide["message"],
+            guide["action"])
+    masked_scenes = []
+    default_mode = str(
+        plan["compatibility"].get("continuation_mode", "guide"))
+    for shot in plan["shots"]:
+        mode = str(shot.get("continuation_mode", default_mode))
+        if mode in MASKED_CONTINUATION_MODES:
+            masked_scenes.append(int(shot["index"]))
+    if not masked_scenes:
+        return runtime
+    mask: dict[str, Any] = {"needed": True, "scenes": masked_scenes}
+    runtime["mask"] = mask
+    if not native_guides_available():
+        mask.update({"ok": False, "mode": "native_guide_required"})
+        _preflight_issue(
+            report, "errors", "masked_av_requires_native_guides",
+            "Masked AV continuation requires ComfyUI's native H3 guide API.",
+            "Update ComfyUI to a build containing the native H3 Add Guide "
+            "API, then restart ComfyUI.", scenes=masked_scenes)
+        return runtime
+    try:
+        from .h3_mask_compat import capability_status as engine_status
+        from .h3_mask_payload_compat import capability_status as payload_status
+        engine = engine_status()
+        payload = payload_status()
+        indicators = engine.get("mask_engine_indicators") or {}
+        characteristic = [
+            bool(indicators.get("mask_row_values")),
+            bool(indicators.get("mod_row")),
+            bool(indicators.get("forward_masks")),
+            bool(indicators.get("inner_masks")),
+        ]
+        partial = any(characteristic) and not all(characteristic)
+        mask.update({
+            "ok": not partial,
+            "mode": ("ready" if (
+                engine.get("mask_engine_complete")
+                and (payload.get("native_av_mask_payload")
+                     or payload.get("wrapper_present")))
+                else "runtime_bridge_available"),
+            "engine": engine,
+            "payload": payload,
+        })
+        if partial:
+            _preflight_issue(
+                report, "errors", "partial_mask_runtime",
+                "A partially updated H3 AV-mask runtime was detected.",
+                "Update ComfyUI and this node pack together, then restart.",
+                scenes=masked_scenes)
+    except Exception as exc:
+        mask.update({"ok": False, "mode": "inspection_failed",
+                     "detail": str(exc)})
+        _preflight_issue(
+            report, "errors", "mask_runtime_inspection_failed",
+            "Could not inspect H3 AV-mask compatibility: %s" % exc,
+            "Update ComfyUI and restart before using masked AV transitions.",
+            scenes=masked_scenes)
+    return runtime
+
+
+def _preflight_bind_source(
+        plan: dict[str, Any], report: dict[str, Any],
+        source_timeline: Any = None, source_audio: Any = None
+        ) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    if source_timeline is not None and source_audio is not None:
+        raise ValueError(
+            "Connect Source Timeline or legacy source_audio, not both.")
+    if source_timeline is None and isinstance(plan.get("source_timeline"), dict):
+        source_timeline = _source_timeline_from_recovery(
+            plan["source_timeline"])
+    required = _audio_policy_requires_source(plan)
+    prepared = dict(plan)
+    prepared["base_plan_hash"] = str(
+        plan.get("base_plan_hash") or plan["plan_hash"])
+    prepared["compatibility"] = dict(plan["compatibility"])
+    required_frames = int(plan["total_delivered_frames"])
+    source_report: dict[str, Any] = {
+        "route": "none", "required_frames": required_frames,
+        "required_seconds": required_frames / float(FPS),
+    }
+    if source_timeline is not None:
+        source = _validate_source_timeline(source_timeline)
+        extent = int(source["extent"]["frame_count"])
+        audio_frames = _source_timeline_available_audio_frames(source)
+        source_report.update({
+            "route": "source_timeline",
+            "extent_frames": extent,
+            "extent_seconds": extent / float(FPS),
+            "audio_kind": source["audio"]["kind"],
+            "audio_frames": audio_frames,
+            "origin": dict(source["origin"]),
+            "timeline_fingerprint": source["fingerprints"]["timeline"],
+        })
+        paths = []
+        if source.get("video") is not None:
+            paths.append(("video", str(source["video"].get("path") or "")))
+        if source["audio"]["kind"] in ("embedded", "external_path"):
+            paths.append(("audio", str(source["audio"].get("path") or "")))
+        source_report["paths"] = [
+            {"kind": kind, "path": path,
+             "available": bool(path and os.path.isfile(path))}
+            for kind, path in paths]
+        for item in source_report["paths"]:
+            if not item["available"]:
+                _preflight_issue(
+                    report, "errors", "source_path_missing",
+                    "Source Timeline %s is unavailable: %s" %
+                    (item["kind"], item["path"] or "<empty path>"),
+                    "Relink the media in Source Timeline or restore its Run "
+                    "Manager archive.", kind=item["kind"])
+        if required and source["audio"]["kind"] == "none":
+            _preflight_issue(
+                report, "errors", "source_audio_missing",
+                "The active Audio Policy requires source audio, but Source "
+                "Timeline has none.",
+                "Choose embedded/external audio or disable source reference "
+                "and source final audio in H3 Audio Policy.")
+        shortfall = max(0, required_frames - audio_frames) if required else 0
+        source_report["shortfall_frames"] = shortfall
+        source_report["shortfall_seconds"] = shortfall / float(FPS)
+        if shortfall:
+            deferred = source["audio"].get("value")
+            silent = False
+            if source["audio"]["kind"] == "deferred_tensor" and deferred is not None:
+                waveform, _sample_rate = _validate_audio(
+                    deferred, "Preflight Source Timeline audio")
+                silent = _audio_is_silent(waveform)
+            if silent:
+                source_report["silent_padding_frames"] = shortfall
+                _preflight_issue(
+                    report, "warnings", "silent_source_will_pad",
+                    "Silent placeholder audio is %.3f seconds short and will "
+                    "be padded." % (shortfall / float(FPS)),
+                    "No action is required unless real source audio was intended.")
+            else:
+                _preflight_issue(
+                    report, "errors", "source_audio_too_short",
+                    "Source audio is %d frames (%.3fs) short." %
+                    (shortfall, shortfall / float(FPS)),
+                    "Shorten the Plan to a complete scene or provide a longer "
+                    "source track.")
+        audio_hash = (str(source["fingerprints"].get("audio") or "none")
+                      if required else "none")
+        timeline_hash = str(source["fingerprints"]["timeline"])
+        prepared["compatibility"].update({
+            "source_audio_hash": audio_hash,
+            "source_audio_silent_padding": bool(
+                source_report.get("silent_padding_frames")),
+            "source_timeline_fingerprint": timeline_hash,
+        })
+        prepared["plan_hash"] = _fingerprint({
+            "prepared_plan_hash": plan["plan_hash"],
+            "source_audio_hash": audio_hash,
+            "source_timeline_fingerprint": timeline_hash,
+        })
+        report["source"] = source_report
+        return prepared, source
+    if required and source_audio is None:
+        _preflight_issue(
+            report, "errors", "source_audio_missing",
+            "The active Audio Policy requires source audio.",
+            "Connect one H3 Source Timeline to Loop Start, or use the legacy "
+            "source_audio input.")
+        source_hash = "none"
+    elif source_audio is not None:
+        waveform, sample_rate = _validate_audio(
+            source_audio, "Preflight legacy source audio")
+        available = int(waveform.shape[-1])
+        available_frames = int(math.floor(
+            available / float(sample_rate) * FPS + 1e-9))
+        shortfall = max(0, required_frames - available_frames) if required else 0
+        source_report.update({
+            "route": "legacy_audio", "sample_rate": sample_rate,
+            "sample_count": available, "audio_frames": available_frames,
+            "shortfall_frames": shortfall,
+            "shortfall_seconds": shortfall / float(FPS),
+        })
+        if shortfall and not _audio_is_silent(waveform):
+            _preflight_issue(
+                report, "errors", "source_audio_too_short",
+                "Legacy source audio is %d frames (%.3fs) short." %
+                (shortfall, shortfall / float(FPS)),
+                "Shorten the Plan to a complete scene or provide a longer track.")
+        elif shortfall:
+            _preflight_issue(
+                report, "warnings", "silent_source_will_pad",
+                "Silent placeholder audio is %.3f seconds short and will be "
+                "padded." % (shortfall / float(FPS)))
+        source_hash = _audio_fingerprint(source_audio) if required else "none"
+    else:
+        source_hash = "none"
+    prepared["compatibility"].update({
+        "source_audio_hash": source_hash,
+        "source_audio_silent_padding": bool(
+            source_report.get("shortfall_frames") and source_audio is not None
+            and _audio_is_silent(_validate_audio(
+                source_audio, "Preflight legacy source audio")[0])),
+    })
+    prepared["plan_hash"] = _fingerprint(
+        {"prepared_plan_hash": plan["plan_hash"],
+         "source_audio_hash": source_hash}
+        if plan["compatibility"].get("external_context_hash") else
+        {"base_plan_hash": plan["plan_hash"],
+         "source_audio_hash": source_hash})
+    report["source"] = source_report
+    return prepared, None
+
+
+def _preflight_resume(
+        plan: dict[str, Any], start: int, verify_history: bool,
+        report: dict[str, Any]) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "requested_start": int(start), "verify_history": bool(verify_history),
+        "eligible": True, "predecessors": [],
+    }
+    if int(start) <= 1:
+        return result
+    for index in range(1, int(start)):
+        item: dict[str, Any] = {"scene": index, "ok": False}
+        try:
+            metadata_path = _artifact_paths(plan, index)["metadata"]
+            item["metadata"] = metadata_path
+            if not os.path.isfile(metadata_path):
+                raise FileNotFoundError(
+                    "Predecessor scene %d metadata is missing." % index)
+            metadata = _read_json(metadata_path)
+            accepted = _selected_resume_history_hash(
+                plan, index, metadata, verify_history)
+            if accepted is None:
+                raise ValueError(
+                    "Predecessor scene %d does not match the current "
+                    "generation history." % index)
+            segment = metadata.get("segment")
+            if not isinstance(segment, dict):
+                raise ValueError(
+                    "Predecessor scene %d has no segment record." % index)
+            if str(segment.get("history_hash") or "") != accepted:
+                raise ValueError(
+                    "Predecessor scene %d has inconsistent history metadata."
+                    % index)
+            _verify_segment_artifacts(segment, index)
+            item.update({"ok": True, "history_hash": accepted,
+                         "revision": segment.get("revision")})
+        except (OSError, TypeError, ValueError) as exc:
+            result["eligible"] = False
+            item["error"] = str(exc)
+            _preflight_issue(
+                report, "errors", "resume_predecessor_invalid", str(exc),
+                ("Regenerate the missing/changed predecessor, or disable "
+                 "verify_resume_history only when intentionally reusing a "
+                 "valid saved predecessor."), scene=index)
+        result["predecessors"].append(item)
+    return result
+
+
+def _preflight_chain(
+        plan: Any, *, source_timeline: Any = None, source_audio: Any = None,
+        start_clip: int = 1, scene_range: Any = "",
+        verify_resume_history: bool = True, tagged_references: Any = None,
+        reference_schedule: Any = None) -> tuple[dict[str, Any], dict[str, Any]]:
+    report: dict[str, Any] = {
+        "version": PREFLIGHT_VERSION, "ok": False, "status": "error",
+        "errors": [], "warnings": [], "info": [], "scenes": [],
+        "source": {}, "references": {}, "runtime": {}, "resume": {},
+        "generation": {},
+    }
+    prepared = plan
+    try:
+        if not isinstance(plan, dict) or not isinstance(plan.get("shots"), list):
+            raise ValueError("Preflight requires a validated H3 Chain Plan.")
+        start, end = _parse_scene_range(
+            scene_range, len(plan["shots"]), start_clip)
+        report["selection"] = {"start": start, "end": end}
+        prepared, runtime_timeline = _preflight_bind_source(
+            plan, report, source_timeline, source_audio)
+        if not report.get("source"):
+            # Timeline route returns before setting the shared report field.
+            source = runtime_timeline
+            report["source"] = {
+                "route": "source_timeline",
+                "required_frames": int(plan["total_delivered_frames"]),
+                "required_seconds": int(plan["total_delivered_frames"]) / float(FPS),
+                "extent_frames": int(source["extent"]["frame_count"]),
+                "extent_seconds": float(source["extent"]["duration_seconds"]),
+                "audio_kind": source["audio"]["kind"],
+                "audio_frames": _source_timeline_available_audio_frames(source),
+                "origin": dict(source["origin"]),
+                "timeline_fingerprint": source["fingerprints"]["timeline"],
+            }
+        available = int(report["source"].get(
+            "audio_frames", report["source"].get("extent_frames", 0)))
+        cumulative = 0
+        last_complete = 0
+        for shot in prepared["shots"]:
+            cumulative += int(shot["delivered_frames"])
+            if available >= cumulative or not _audio_policy_requires_source(prepared):
+                last_complete = int(shot["index"])
+            context = int(shot["raw_frames"]) - int(shot["delivered_frames"])
+            mode = str(shot.get(
+                "continuation_mode",
+                prepared["compatibility"].get("continuation_mode", "guide")))
+            record = {
+                "index": int(shot["index"]), "id": str(shot["id"]),
+                "selected": start <= int(shot["index"]) <= end,
+                "raw_frames": int(shot["raw_frames"]),
+                "delivered_frames": int(shot["delivered_frames"]),
+                "overlap_trim_frames": context,
+                "duration_seconds": int(shot["raw_frames"]) / float(FPS),
+                "delivered_seconds": int(shot["delivered_frames"]) / float(FPS),
+                "source_start_frame": max(
+                    0, int(shot["generation_start_frame"])),
+                "source_end_frame": max(
+                    0, int(shot["generation_start_frame"]))
+                    + int(shot["raw_frames"]),
+                "transition": mode,
+                "prompt_tags": sorted(set(_REFERENCE_ALIAS_RE.findall(
+                    str(shot.get("prompt") or "")))),
+                "references": [],
+            }
+            report["scenes"].append(record)
+        report["source"]["last_complete_scene"] = last_complete
+
+        if tagged_references is not None and reference_schedule is not None:
+            _preflight_issue(
+                report, "errors", "multiple_reference_routes",
+                "Connect tagged_references or reference_schedule, not both.",
+                "Keep the reference system used by the active Ref2VA node.")
+        references = (tagged_references if tagged_references is not None
+                      else reference_schedule)
+        route = ("tagged" if tagged_references is not None else
+                 "scheduled" if reference_schedule is not None else "none")
+        report["references"] = {"route": route, "fingerprint": "",
+                                "registered_tags": []}
+        if references is not None:
+            entries = (_tagged_reference_entries(references)
+                       if route == "tagged"
+                       else _reference_schedule_entries(references))
+            registered = sorted({tag for entry in entries
+                                 for tag in _reference_entry_tags(entry)})
+            report["references"].update({
+                "fingerprint": str(references.get("fingerprint") or ""),
+                "registered_tags": registered,
+            })
+            for scene_record, shot in zip(report["scenes"], prepared["shots"]):
+                prompt_tags = set(scene_record["prompt_tags"])
+                if route == "tagged":
+                    active = [entry for entry in entries if prompt_tags.intersection(
+                        _reference_entry_tags(entry))]
+                else:
+                    active = [entry for entry in entries if _reference_is_active(
+                        entry, int(shot["index"]))]
+                    unresolved = sorted(prompt_tags - set(registered))
+                    for tag in unresolved:
+                        _preflight_issue(
+                            report, "errors", "unresolved_reference_tag",
+                            "Scene %d uses unresolved scheduled reference @%s."
+                            % (int(shot["index"]), tag),
+                            "Register that tag or remove it from the scene prompt.",
+                            scene=int(shot["index"]), tag=tag)
+                for entry in active:
+                    detail = {"tag": str(entry.get("tag") or ""),
+                              "kind": str(entry.get("kind") or "")}
+                    window = _preflight_reference_window(
+                        entry, prepared, int(shot["index"]))
+                    if window is not None:
+                        detail["window"] = window
+                        value = entry.get("value")
+                        if _is_source_timeline(value):
+                            capacity = int(value["extent"]["frame_count"])
+                        elif _is_lazy_motion_descriptor(value):
+                            capacity = int(value.get("frame_count", 0))
+                            path = str(value.get("path") or "")
+                            detail["available"] = bool(
+                                path and os.path.isfile(path))
+                        else:
+                            capacity = int(getattr(value, "shape", (0,))[0])
+                        detail["available_frames"] = capacity
+                        if capacity and int(window["end_frame"]) > capacity:
+                            _preflight_issue(
+                                report, "errors", "reference_too_short",
+                                "Reference @%s needs frames %d:%d for scene %d, "
+                                "but has %d." % (
+                                    detail["tag"], window["start_frame"],
+                                    window["end_frame"], int(shot["index"]),
+                                    capacity),
+                                "Provide a longer reference or change its timeline mode.",
+                                scene=int(shot["index"]), tag=detail["tag"])
+                    scene_record["references"].append(detail)
+        elif any(item["prompt_tags"] for item in report["scenes"]):
+            _preflight_issue(
+                report, "warnings", "reference_registry_not_connected",
+                "Scene prompts contain @tags, but no reference registry is "
+                "connected to preflight.",
+                "Connect the active Tagged or Scheduled reference output to "
+                "preflight for scene-window validation.")
+
+        fingerprint = str(
+            prepared["compatibility"].get("generation_fingerprint") or "")
+        report["generation"] = {
+            "fingerprint": fingerprint,
+            "covered": bool(fingerprint),
+            "scope": "external model/sampler/reference graph",
+        }
+        if not fingerprint:
+            _preflight_issue(
+                report, "warnings", "generation_fingerprint_missing",
+                "Model, sampler, CFG, scheduler, and reference graph are not "
+                "covered by the Plan's generation fingerprint.",
+                "Connect an automatic generation fingerprint before relying "
+                "on strict resume verification.")
+        report["runtime"] = _preflight_runtime_compatibility(prepared, report)
+        report["resume"] = _preflight_resume(
+            prepared, start, verify_resume_history, report)
+    except Exception as exc:
+        _preflight_issue(
+            report, "errors", "preflight_internal_validation", str(exc),
+            "Correct the reported Plan or media input and run preflight again.")
+    report["ok"] = not report["errors"]
+    report["status"] = (
+        "ready" if report["ok"] and not report["warnings"]
+        else "warning" if report["ok"] else "error")
+    report["summary"] = (
+        "H3 preflight %s: %d error(s), %d warning(s), %d scene(s)." %
+        (report["status"], len(report["errors"]), len(report["warnings"]),
+         len(report["scenes"])))
+    return prepared, report
+
+
+def _preflight_failure_text(report: dict[str, Any]) -> str:
+    lines = [str(report.get("summary") or "H3 preflight failed.")]
+    for issue in report.get("errors") or ():
+        line = "%s: %s" % (issue.get("code", "error"), issue.get("message", ""))
+        if issue.get("action"):
+            line += " Action: %s" % issue["action"]
+        lines.append(line)
+    return "\n".join(lines)
+
+
 class MiniMaxH3ChainPlanStudio:
     @classmethod
     def INPUT_TYPES(cls):
@@ -6892,15 +7405,32 @@ class MiniMaxH3ChainPlanStudio:
                                "interface and writes edits back to the connected "
                                "Plan; this socket passes the validated Plan "
                                "through unchanged."}),
-            }
+            },
+            "optional": {
+                "source_timeline": (SOURCE_TIMELINE_TYPE, {
+                    "tooltip": "Optional source media for the shared model-free preflight."}),
+                "source_audio": ("AUDIO", {
+                    "tooltip": "Legacy source route; do not connect with Source Timeline."}),
+                "start_clip": ("INT", {"default": 1, "min": 1,
+                    "max": MAX_SHOTS, "tooltip": "Resume scene to preflight."}),
+                "scene_range": ("STRING", {"default": "",
+                    "tooltip": "Optional contiguous scene selection to preflight."}),
+                "verify_resume_history": ("BOOLEAN", {"default": True}),
+                "tagged_references": (TAGGED_REFERENCE_TYPE, {
+                    "tooltip": "Optional active prompt-driven reference registry."}),
+                "reference_schedule": (REFERENCE_SCHEDULE_TYPE, {
+                    "tooltip": "Optional legacy scheduled reference registry."}),
+            },
         }
 
-    RETURN_TYPES = (PLAN_TYPE,)
-    RETURN_NAMES = ("plan",)
+    RETURN_TYPES = (PLAN_TYPE, PREFLIGHT_TYPE, "BOOLEAN", "STRING", "STRING")
+    RETURN_NAMES = ("plan", "preflight", "ready", "status", "report_json")
     OUTPUT_TOOLTIPS = (
-        "The connected validated Plan, unchanged at execution time. Plan "
-        "Studio may be inline before Loop Start or connected as an editor-only "
-        "branch.",
+        "The connected validated Plan, unchanged at execution time.",
+        "Structured model-free preflight report.",
+        "True when no blocking preflight error remains.",
+        "Concise error/warning count.",
+        "JSON serialization of the structured report.",
     )
     FUNCTION = "passthrough"
     CATEGORY = "conditioning/minimax/contex_loop"
@@ -6908,8 +7438,34 @@ class MiniMaxH3ChainPlanStudio:
                    "scene navigation, prompt revisions, saved-segment status, "
                    "and preview playback. The original Plan node is unchanged.")
 
-    def passthrough(self, plan):
-        return (plan,)
+    def passthrough(self, plan, source_timeline=None, source_audio=None,
+                    start_clip=1, scene_range="", verify_resume_history=True,
+                    tagged_references=None, reference_schedule=None):
+        _prepared, report = _preflight_chain(
+            plan, source_timeline=source_timeline, source_audio=source_audio,
+            start_clip=start_clip, scene_range=scene_range,
+            verify_resume_history=verify_resume_history,
+            tagged_references=tagged_references,
+            reference_schedule=reference_schedule)
+        return (plan, report, bool(report["ok"]), report["summary"],
+                json.dumps(report, ensure_ascii=False, sort_keys=True))
+
+
+class MiniMaxH3ChainPreflight:
+    @classmethod
+    def INPUT_TYPES(cls):
+        studio = MiniMaxH3ChainPlanStudio.INPUT_TYPES()
+        return {"required": studio["required"], "optional": studio["optional"]}
+
+    RETURN_TYPES = MiniMaxH3ChainPlanStudio.RETURN_TYPES
+    RETURN_NAMES = MiniMaxH3ChainPlanStudio.RETURN_NAMES
+    FUNCTION = "check"
+    CATEGORY = "conditioning/minimax/contex_loop"
+    DESCRIPTION = ("Model-free validation of Plan timing, Source Timeline, "
+                   "references, runtime compatibility, and resume artifacts.")
+
+    def check(self, plan, **kwargs):
+        return MiniMaxH3ChainPlanStudio().passthrough(plan, **kwargs)
 
 
 class MiniMaxH3ChainRunManager:
@@ -7220,6 +7776,19 @@ class MiniMaxH3ChainLoopStart:
                 raise ValueError(
                     "H3 Chain Loop Start accepts one source-media route: "
                     "connect Source Timeline or legacy source_audio, not both.")
+            _dry_plan, preflight = _preflight_chain(
+                prepared_plan, source_timeline=source_timeline,
+                source_audio=source_audio, start_clip=start_clip,
+                scene_range=scene_range,
+                verify_resume_history=verify_resume_history)
+            if not preflight["ok"]:
+                raise ValueError(_preflight_failure_text(preflight))
+            for issue in preflight["warnings"]:
+                _LOG.warning(
+                    "H3 preflight warning [%s]: %s%s",
+                    issue.get("code", "warning"), issue.get("message", ""),
+                    (" Action: %s" % issue["action"]
+                     if issue.get("action") else ""))
             runtime_timeline = None
             if source_timeline is not None:
                 prepared_plan, runtime_timeline = _plan_with_source_timeline(
@@ -10675,6 +11244,7 @@ CHAIN_NODE_CLASS_MAPPINGS = {
     "MiniMaxH3ChainScenePromptEditor": MiniMaxH3ChainScenePromptEditor,
     "MiniMaxH3ChainRichScenePromptEditor": MiniMaxH3ChainRichScenePromptEditor,
     "MiniMaxH3ChainPlanStudio": MiniMaxH3ChainPlanStudio,
+    "MiniMaxH3ChainPreflight": MiniMaxH3ChainPreflight,
     "MiniMaxH3ChainRunManager": MiniMaxH3ChainRunManager,
     "MiniMaxH3ChainFirstSceneImage": MiniMaxH3ChainFirstSceneImage,
     "MiniMaxH3ChainFrameIndexSwitch": MiniMaxH3ChainFrameIndexSwitch,
@@ -10717,6 +11287,7 @@ CHAIN_NODE_DISPLAY_NAME_MAPPINGS = {
     "MiniMaxH3ChainRichScenePromptEditor": (
         "MiniMax H3 Rich Scene Prompt Editor (Experimental)"),
     "MiniMaxH3ChainPlanStudio": "MiniMax H3 Plan Studio (Experimental)",
+    "MiniMaxH3ChainPreflight": "MiniMax H3 Chain Preflight",
     "MiniMaxH3ChainRunManager": "MiniMax H3 Run Manager",
     "MiniMaxH3ChainFirstSceneImage": "MiniMax H3 Frame Gate",
     "MiniMaxH3ChainFrameIndexSwitch": "MiniMax H3 Frame Index Switch",
