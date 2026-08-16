@@ -122,7 +122,9 @@ MANIFEST_TYPE = "H3_CHAIN_MANIFEST"
 EXTERNAL_CONTEXT_TYPE = "H3_CHAIN_EXTERNAL_CONTEXT"
 REFERENCE_SCHEDULE_TYPE = "H3_REFERENCE_SCHEDULE"
 TAGGED_REFERENCE_TYPE = "H3_TAGGED_REFERENCES"
+LAZY_MOTION_SOURCE_TYPE = "H3_LAZY_MOTION_SOURCE"
 REFERENCE_SCHEDULE_VERSION = 1
+LAZY_MOTION_SOURCE_VERSION = 1
 
 _PENDING_REVIEWS: dict[str, dict[str, Any]] = {}
 _PENDING_FINAL_REVIEW_PREVIEWS: dict[
@@ -414,6 +416,104 @@ def _normalize_reference_tag(value: Any, label: str) -> str:
     return tag
 
 
+def _resolved_media_path(value: Any, label: str) -> str:
+    path = os.path.realpath(os.path.abspath(os.path.expanduser(
+        str(value or "").strip())))
+    if not str(value or "").strip():
+        raise ValueError("%s cannot be blank." % label)
+    if not os.path.isfile(path):
+        raise ValueError("%s does not exist or is not a file: %s" %
+                         (label, path))
+    return path
+
+
+def _stream_start_seconds(stream: Any) -> float:
+    if stream.start_time is None or stream.time_base is None:
+        return 0.0
+    return float(stream.start_time * stream.time_base)
+
+
+def _probe_lazy_motion_path(
+        path: str, use_embedded_audio: bool) -> dict[str, Any]:
+    if av is None:
+        raise RuntimeError("Lazy H3 motion references require PyAV.")
+    resolved = _resolved_media_path(path, "Motion-reference video path")
+    try:
+        with av.open(resolved, mode="r") as container:
+            videos = list(container.streams.video)
+            if len(videos) != 1:
+                raise ValueError(
+                    "Lazy motion reference %s contains %d video streams; "
+                    "exactly one is required." % (resolved, len(videos)))
+            video = videos[0]
+            rate = video.average_rate or video.base_rate or video.guessed_rate
+            if rate is None or not math.isfinite(float(rate)):
+                raise ValueError(
+                    "Lazy motion reference has no usable frame rate.")
+            if abs(float(rate) - float(FPS)) > 1e-3:
+                raise ValueError(
+                    "Lazy motion reference must be constant 24 fps; got "
+                    "%.6g fps. Convert it with Reference Video Prep first."
+                    % float(rate))
+            width = int(video.codec_context.width or 0)
+            height = int(video.codec_context.height or 0)
+            if width < 1 or height < 1:
+                raise ValueError(
+                    "Lazy motion reference has invalid video dimensions.")
+            frame_count = int(video.frames or 0)
+            if frame_count < 1 and video.duration is not None:
+                frame_count = int(round(
+                    float(video.duration * video.time_base) * FPS))
+
+            audios = list(container.streams.audio)
+            audio_info = None
+            if bool(use_embedded_audio):
+                if len(audios) != 1:
+                    raise ValueError(
+                        "Lazy motion reference requested embedded audio, but "
+                        "%s contains %d audio streams; exactly one is "
+                        "required." % (resolved, len(audios)))
+                audio = audios[0]
+                sample_rate = int(
+                    audio.codec_context.sample_rate or audio.rate or 0)
+                channels = len(audio.codec_context.layout.channels)
+                if sample_rate < 1 or channels not in (1, 2):
+                    raise ValueError(
+                        "Lazy motion-reference audio must be mono or stereo "
+                        "with a valid sample rate.")
+                audio_info = {
+                    "sample_rate": sample_rate,
+                    "channels": channels,
+                    "start_seconds": _stream_start_seconds(audio),
+                }
+            return {
+                "version": LAZY_MOTION_SOURCE_VERSION,
+                "kind": "lazy_motion_path",
+                "path": resolved,
+                "fps": FPS,
+                "width": width,
+                "height": height,
+                "frame_count": frame_count,
+                "video_start_seconds": _stream_start_seconds(video),
+                "audio": audio_info,
+            }
+    except ValueError:
+        raise
+    except Exception as exc:
+        raise ValueError(
+            "Could not inspect lazy motion-reference video %s: %s" %
+            (resolved, exc)) from exc
+
+
+def _is_lazy_motion_descriptor(value: Any) -> bool:
+    return (
+        isinstance(value, dict)
+        and int(value.get("version", -1)) == LAZY_MOTION_SOURCE_VERSION
+        and value.get("kind") == "lazy_motion_path"
+        and isinstance(value.get("path"), str)
+    )
+
+
 def _parse_reference_selector(
         value: Any, total: int | None = None) -> tuple[tuple[int, int], ...]:
     """Parse a disjoint, one-based scene selector and merge overlaps."""
@@ -645,6 +745,176 @@ def _append_tagged_reference(
     return _make_tagged_references(entries)
 
 
+def _lazy_motion_target_size(
+        descriptor: dict[str, Any]) -> tuple[int, int]:
+    source_w = int(descriptor["width"])
+    source_h = int(descriptor["height"])
+    short_edge = str(descriptor.get("motion_short_edge") or "384")
+    if short_edge == "source" or min(source_w, source_h) <= int(short_edge):
+        return source_w, source_h
+    scale = int(short_edge) / float(min(source_w, source_h))
+    target_h = max(32, round(source_h * scale / 32) * 32)
+    target_w = max(32, round(source_w * scale / 32) * 32)
+    return target_w, target_h
+
+
+def _decode_lazy_motion_video(
+        descriptor: dict[str, Any], source_start: int,
+        source_end: int) -> Any:
+    if av is None or np is None or torch is None:
+        raise RuntimeError(
+            "Lazy H3 motion video decoding requires PyAV, NumPy, and torch.")
+    path = _resolved_media_path(
+        descriptor.get("path"), "Lazy motion-reference video path")
+    source_start = int(source_start)
+    source_end = int(source_end)
+    requested = source_end - source_start
+    if source_start < 0 or requested < 5:
+        raise ValueError(
+            "Lazy motion-reference video window must contain at least five "
+            "frames; got %d:%d." % (source_start, source_end))
+    target_w, target_h = _lazy_motion_target_size(descriptor)
+    buffer = np.empty(
+        (requested, target_h, target_w, 3), dtype=np.uint8)
+    decoded = 0
+    with av.open(path, mode="r") as container:
+        videos = list(container.streams.video)
+        if len(videos) != 1:
+            raise ValueError(
+                "Lazy motion reference changed and now contains %d video "
+                "streams; exactly one is required." % len(videos))
+        first_timestamp = None
+        for frame_index, frame in enumerate(container.decode(videos[0])):
+            if frame.pts is not None and frame.time_base is not None:
+                timestamp = float(frame.pts * frame.time_base)
+                if first_timestamp is None:
+                    first_timestamp = timestamp
+                expected = (timestamp - first_timestamp) * FPS
+                if abs(expected - frame_index) > 0.05:
+                    raise ValueError(
+                        "Lazy motion reference is not constant 24 fps near "
+                        "decoded frame %d (timestamp maps to %.4f)." %
+                        (frame_index, expected))
+            if frame_index < source_start:
+                continue
+            if frame_index >= source_end:
+                break
+            if (int(frame.width) != target_w or
+                    int(frame.height) != target_h):
+                frame = frame.reformat(
+                    width=target_w, height=target_h, format="rgb24")
+                array = frame.to_ndarray()
+            else:
+                array = frame.to_ndarray(format="rgb24")
+            buffer[decoded] = array
+            decoded += 1
+    if decoded != requested:
+        raise ValueError(
+            "Lazy motion reference %s yielded only %d of %d requested "
+            "frames for source window %d:%d." %
+            (path, decoded, requested, source_start, source_end))
+    return torch.from_numpy(buffer).to(dtype=torch.float32).div_(255.0)
+
+
+def _resampled_audio_frames(resampler: Any, frame: Any):
+    values = resampler.resample(frame)
+    if values is None:
+        return ()
+    if isinstance(values, (list, tuple)):
+        return values
+    return (values,)
+
+
+def _decode_lazy_motion_audio(
+        descriptor: dict[str, Any], source_start: int,
+        source_end: int) -> dict[str, Any] | None:
+    audio_info = descriptor.get("audio")
+    if audio_info is None:
+        return None
+    if av is None or np is None or torch is None:
+        raise RuntimeError(
+            "Lazy H3 motion audio decoding requires PyAV, NumPy, and torch.")
+    path = _resolved_media_path(
+        descriptor.get("path"), "Lazy motion-reference video path")
+    sample_rate = int(audio_info["sample_rate"])
+    channels = int(audio_info["channels"])
+    layout = "mono" if channels == 1 else "stereo"
+    video_start = float(descriptor.get("video_start_seconds", 0.0))
+    audio_start = float(audio_info.get("start_seconds", 0.0))
+    start_seconds = video_start + int(source_start) / float(FPS)
+    end_seconds = video_start + int(source_end) / float(FPS)
+    sample_start = int(round((start_seconds - audio_start) * sample_rate))
+    sample_end = int(round((end_seconds - audio_start) * sample_rate))
+    if sample_start < 0 or sample_end <= sample_start:
+        raise ValueError(
+            "Lazy motion-reference audio cannot cover video window %d:%d "
+            "because its stream starts at %.6fs." %
+            (int(source_start), int(source_end), audio_start))
+    target = np.empty((channels, sample_end - sample_start), dtype=np.float32)
+    cursor = 0
+    copied = 0
+    with av.open(path, mode="r") as container:
+        audios = list(container.streams.audio)
+        if len(audios) != 1:
+            raise ValueError(
+                "Lazy motion reference changed and now contains %d audio "
+                "streams; exactly one is required." % len(audios))
+        resampler = av.AudioResampler(
+            format="fltp", layout=layout, rate=sample_rate)
+
+        def consume(output_frame):
+            nonlocal cursor, copied
+            array = output_frame.to_ndarray()
+            if array.ndim == 1:
+                array = array.reshape(1, -1)
+            if tuple(array.shape[:1]) != (channels,):
+                raise ValueError(
+                    "Lazy motion-reference audio decoded to unexpected shape "
+                    "%s." % (tuple(array.shape),))
+            count = int(array.shape[-1])
+            if (output_frame.pts is not None and
+                    output_frame.time_base is not None):
+                frame_seconds = float(
+                    output_frame.pts * output_frame.time_base)
+                cursor = int(round(
+                    (frame_seconds - audio_start) * sample_rate))
+            copy_start = max(cursor, sample_start)
+            copy_end = min(cursor + count, sample_end)
+            if copy_end > copy_start:
+                source_offset = copy_start - cursor
+                target_offset = copy_start - sample_start
+                span = copy_end - copy_start
+                target[:, target_offset:target_offset + span] = (
+                    array[:, source_offset:source_offset + span])
+                copied += span
+            cursor += count
+
+        stop = False
+        for frame in container.decode(audios[0]):
+            for output_frame in _resampled_audio_frames(resampler, frame):
+                consume(output_frame)
+                if cursor >= sample_end:
+                    stop = True
+                    break
+            if stop:
+                break
+        if not stop:
+            for output_frame in _resampled_audio_frames(resampler, None):
+                consume(output_frame)
+                if cursor >= sample_end:
+                    break
+    if copied != sample_end - sample_start:
+        raise ValueError(
+            "Lazy motion reference %s yielded only %d of %d requested audio "
+            "samples for video window %d:%d." %
+            (path, copied, sample_end - sample_start,
+             int(source_start), int(source_end)))
+    return {
+        "waveform": torch.from_numpy(target).unsqueeze(0),
+        "sample_rate": sample_rate,
+    }
+
+
 def _scheduled_video_reference_slice(
         entry: dict[str, Any], state: Any, scene: int, scene_count: int,
         length: int) -> tuple[Any, Any, str]:
@@ -654,6 +924,15 @@ def _scheduled_video_reference_slice(
     video = entry["value"]
     audio = entry.get("audio")
     if timeline_mode == "restart_each_scene":
+        if _is_lazy_motion_descriptor(video):
+            source_start, source_end = 0, int(length)
+            decoded_video = _decode_lazy_motion_video(
+                video, source_start, source_end)
+            decoded_audio = _decode_lazy_motion_audio(
+                video, source_start, source_end)
+            return decoded_video, decoded_audio, (
+                "@%s lazy restart frames %d:%d" %
+                (entry.get("tag", "video"), source_start, source_end))
         return video, audio, ""
     if timeline_mode != "sequential":
         raise ValueError(
@@ -736,8 +1015,9 @@ def _scheduled_video_reference_slice(
             "Sequential scheduled video @%s resolved a negative source "
             "window for scene %d." %
             (entry.get("tag", "video"), int(scene)))
-    available = int(video.shape[0])
-    if source_end > available:
+    available = int(video.get("frame_count", 0)) if (
+        _is_lazy_motion_descriptor(video)) else int(video.shape[0])
+    if available > 0 and source_end > available:
         raise ValueError(
             "Sequential scheduled video @%s needs source frames %d:%d for "
             "scene %d, but the 24 fps reference contains only %d frames. "
@@ -745,9 +1025,15 @@ def _scheduled_video_reference_slice(
             "restart_each_scene." %
             (entry.get("tag", "video"), source_start, source_end,
              int(scene), available))
-    sliced_video = video[source_start:source_end]
-    sliced_audio = None
-    if audio is not None:
+    if _is_lazy_motion_descriptor(video):
+        sliced_video = _decode_lazy_motion_video(
+            video, source_start, source_end)
+        sliced_audio = _decode_lazy_motion_audio(
+            video, source_start, source_end)
+    else:
+        sliced_video = video[source_start:source_end]
+        sliced_audio = None
+    if audio is not None and not _is_lazy_motion_descriptor(video):
         waveform, sample_rate = _validate_audio(
             audio, "Sequential scheduled video @%s audio" % entry.get(
                 "tag", "video"))
@@ -3508,6 +3794,44 @@ class MiniMaxH3TaggedVideoReference:
         return references, references["fingerprint"], status
 
 
+def _motion_reference_fields(
+        target_subject: Any, motion_description: Any,
+        reference_short_edge: Any) -> tuple[str, str, str]:
+    target = " ".join(str(target_subject or "").split())
+    subject_labels = re.findall(
+        r"<Subject\s+[1-9]\d*>", target, flags=re.IGNORECASE)
+    target_remainder = re.sub(
+        r"<Subject\s+[1-9]\d*>", "", target, flags=re.IGNORECASE)
+    target_remainder = re.sub(
+        r"(?:\band\b|,|&|\s)+", "", target_remainder,
+        flags=re.IGNORECASE)
+    if not subject_labels or target_remainder:
+        raise ValueError(
+            "Tagged H3 motion target_subject must contain only existing "
+            "native labels, such as <Subject 1> or "
+            "<Subject 1> and <Subject 2>.")
+    description = " ".join(str(motion_description or "").split())
+    if not description:
+        raise ValueError("Tagged H3 motion_description cannot be blank.")
+    short_edge = str(reference_short_edge or "384").strip().lower()
+    if short_edge not in MOTION_REFERENCE_SHORT_EDGES:
+        raise ValueError(
+            "Tagged H3 motion reference_short_edge must be one of %s." %
+            (MOTION_REFERENCE_SHORT_EDGES,))
+    return target, description.rstrip(". "), short_edge
+
+
+def _decorate_motion_reference(
+        references: dict[str, Any], target: str, description: str,
+        short_edge: str) -> dict[str, Any]:
+    entries = references["entries"]
+    entries[-1]["semantic_role"] = "motion"
+    entries[-1]["motion_target"] = target
+    entries[-1]["motion_description"] = description
+    entries[-1]["motion_short_edge"] = short_edge
+    return _make_tagged_references(entries)
+
+
 class MiniMaxH3TaggedMotionReference:
     """Register video media while exposing its action as a reusable Subject."""
 
@@ -3587,29 +3911,8 @@ class MiniMaxH3TaggedMotionReference:
                 raise ValueError(
                     "Tagged H3 motion reference must be an IMAGE batch "
                     "containing at least 5 frames.")
-            target = " ".join(str(target_subject or "").split())
-            subject_labels = re.findall(
-                r"<Subject\s+[1-9]\d*>", target, flags=re.IGNORECASE)
-            target_remainder = re.sub(
-                r"<Subject\s+[1-9]\d*>", "", target,
-                flags=re.IGNORECASE)
-            target_remainder = re.sub(
-                r"(?:\band\b|,|&|\s)+", "", target_remainder,
-                flags=re.IGNORECASE)
-            if not subject_labels or target_remainder:
-                raise ValueError(
-                    "Tagged H3 motion target_subject must contain only "
-                    "existing native labels, such as <Subject 1> or "
-                    "<Subject 1> and <Subject 2>.")
-            description = " ".join(str(motion_description or "").split())
-            if not description:
-                raise ValueError(
-                    "Tagged H3 motion_description cannot be blank.")
-            short_edge = str(reference_short_edge or "384").strip().lower()
-            if short_edge not in MOTION_REFERENCE_SHORT_EDGES:
-                raise ValueError(
-                    "Tagged H3 motion reference_short_edge must be one of %s." %
-                    (MOTION_REFERENCE_SHORT_EDGES,))
+            target, description, short_edge = _motion_reference_fields(
+                target_subject, motion_description, reference_short_edge)
             prepared_video = video
             if short_edge != "source":
                 source_h, source_w = int(video.shape[1]), int(video.shape[2])
@@ -3632,12 +3935,8 @@ class MiniMaxH3TaggedMotionReference:
                 content_hash=_tensor_fingerprint(prepared_video), audio=audio,
                 audio_tag=audio_tag, audio_hash=paired_hash,
                 compliance_mode=mode, timeline_mode=timeline_mode)
-            entries = references["entries"]
-            entries[-1]["semantic_role"] = "motion"
-            entries[-1]["motion_target"] = target
-            entries[-1]["motion_description"] = description.rstrip(". ")
-            entries[-1]["motion_short_edge"] = short_edge
-            references = _make_tagged_references(entries)
+            references = _decorate_motion_reference(
+                references, target, description, short_edge)
         except (TypeError, ValueError) as exc:
             if mode == "disabled":
                 return _skipped_tagged_reference_result(
@@ -3654,6 +3953,215 @@ class MiniMaxH3TaggedMotionReference:
                 len(references["entries"]),
                 references["fingerprint"][:12]))
         return references, references["fingerprint"], status
+
+
+class MiniMaxH3TaggedMotionReferencePath:
+    """Register motion media by path and decode only the active scene."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "video_path": ("STRING", {
+                    "default": "",
+                    "tooltip": "Absolute path to one constant-24-fps video. "
+                               "The node fingerprints the file without "
+                               "materializing an IMAGE batch; Tagged Ref2VA "
+                               "decodes only the active scene window."}),
+                "tag": ("STRING", {
+                    "default": "motion",
+                    "tooltip": "Stable @tag for the reusable motion Subject."}),
+                "target_subject": ("STRING", {
+                    "default": "<Subject 1>",
+                    "tooltip": "Existing H3 Subject that performs the "
+                               "referenced action."}),
+                "motion_description": ("STRING", {
+                    "default": "the supplied pose sequence, action, and motion timing",
+                    "multiline": True,
+                    "tooltip": "Transferable action evidence only; exclude "
+                               "identity, wardrobe, setting, and lighting."}),
+                "reference_short_edge": (list(MOTION_REFERENCE_SHORT_EDGES), {
+                    "default": "384",
+                    "tooltip": "Resize each decoded scene window before it "
+                               "becomes a float IMAGE tensor. 384 minimizes "
+                               "RAM and appearance pressure; source preserves "
+                               "the original dimensions."}),
+                "use_embedded_audio": ("BOOLEAN", {
+                    "default": True,
+                    "tooltip": "Decode the same exact time window from the "
+                               "video's single embedded audio stream and send "
+                               "it as paired Ref2VA audio."}),
+                "audio_tag": ("STRING", {
+                    "default": "",
+                    "tooltip": "Alias for embedded paired audio. Blank "
+                               "derives @<motion_tag>_audio."}),
+                "timeline_mode": (list(REFERENCE_VIDEO_TIMELINE_MODES), {
+                    "default": "sequential",
+                    "tooltip": "sequential follows the Plan timeline and "
+                               "uses delivered-frame timing for masked AV. "
+                               "restart_each_scene decodes from frame 0."}),
+            },
+            "optional": {
+                "previous": (TAGGED_REFERENCE_TYPE, {
+                    "tooltip": "Optional preceding Tagged Ref chain."}),
+            },
+            "hidden": {"dynprompt": "DYNPROMPT", "unique_id": "UNIQUE_ID"},
+        }
+
+    RETURN_TYPES = (
+        TAGGED_REFERENCE_TYPE, "STRING", "STRING", LAZY_MOTION_SOURCE_TYPE)
+    RETURN_NAMES = (
+        "references", "reference_fingerprint", "status", "preview_source")
+    FUNCTION = "add"
+    CATEGORY = "conditioning/minimax/contex_loop/references/prompt_driven"
+    DESCRIPTION = (
+        "Path-backed Tagged Motion Ref. It stores a file descriptor and "
+        "fingerprint instead of a full decoded IMAGE batch. Tagged Ref2VA "
+        "later decodes and resizes only the current Plan scene, with optional "
+        "embedded audio from the identical window."
+    )
+
+    @classmethod
+    def IS_CHANGED(cls, video_path="", **kwargs):
+        try:
+            path = _resolved_media_path(
+                video_path, "Motion-reference video path")
+            stat = os.stat(path)
+            return "%s:%d:%d" % (
+                path, int(stat.st_size), int(stat.st_mtime_ns))
+        except (OSError, ValueError):
+            return float("NaN")
+
+    def add(self, video_path, tag, target_subject, motion_description,
+            reference_short_edge="384", use_embedded_audio=True,
+            audio_tag="", timeline_mode="sequential", previous=None,
+            dynprompt=None, unique_id=None):
+        mode = _downstream_reference_compliance(dynprompt, unique_id)
+        try:
+            target, description, short_edge = _motion_reference_fields(
+                target_subject, motion_description, reference_short_edge)
+            descriptor = _probe_lazy_motion_path(
+                video_path, bool(use_embedded_audio))
+            file_hash = _file_sha256(descriptor["path"])
+            descriptor["file_sha256"] = file_hash
+            descriptor["motion_short_edge"] = short_edge
+            video_hash = _fingerprint({
+                "lazy_motion_file_sha256": file_hash,
+                "video_stream": 0,
+            })
+            audio_value = descriptor if bool(use_embedded_audio) else None
+            audio_hash = (_fingerprint({
+                "lazy_motion_file_sha256": file_hash,
+                "audio_stream": 0,
+            }) if audio_value is not None else "")
+            references = _append_tagged_reference(
+                previous, kind="video", tag=tag, value=descriptor,
+                content_hash=video_hash, audio=audio_value,
+                audio_tag=audio_tag, audio_hash=audio_hash,
+                compliance_mode=mode, timeline_mode=timeline_mode)
+            references = _decorate_motion_reference(
+                references, target, description, short_edge)
+        except (TypeError, ValueError) as exc:
+            if mode == "disabled":
+                skipped = _skipped_tagged_reference_result(
+                    previous, "Lazy tagged motion reference", exc)
+                return skipped + (None,)
+            raise
+        entry = references["entries"][-1]
+        paired = " + @%s" % entry["audio_tag"] if entry.get(
+            "audio_tag") else ""
+        frames = int(descriptor.get("frame_count", 0))
+        frame_status = "%d indexed frames" % frames if frames else (
+            "container frame count unavailable")
+        status = (
+            "@%s%s lazy motion -> %s; %s px short edge; %s; %s; %s" %
+            (entry["tag"], paired, entry["motion_target"],
+             entry["motion_short_edge"], entry["timeline_mode"],
+             frame_status, references["fingerprint"][:12]))
+        source = {
+            "version": LAZY_MOTION_SOURCE_VERSION,
+            "entry": entry,
+            "reference_fingerprint": references["fingerprint"],
+        }
+        return references, references["fingerprint"], status, source
+
+
+class MiniMaxH3LazyMotionScenePreview:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "source": (LAZY_MOTION_SOURCE_TYPE, {
+                    "tooltip": "preview_source from Tagged Motion Ref Path."}),
+                "scene": ("INT", {
+                    "default": 1, "min": 1, "max": MAX_SHOTS, "step": 1,
+                    "tooltip": "Plan scene to decode. The numeric arrows act "
+                               "as a scene counter."}),
+            },
+            "optional": {
+                "plan": (PLAN_TYPE, {
+                    "tooltip": "Connect the same Loop Plan used for "
+                               "generation. Without a Plan, IMAGE and AUDIO "
+                               "outputs remain blocked."}),
+            },
+        }
+
+    RETURN_TYPES = ("IMAGE", "AUDIO", "STRING")
+    RETURN_NAMES = ("scene_video", "scene_audio", "status")
+    FUNCTION = "preview"
+    CATEGORY = "conditioning/minimax/contex_loop/references/prompt_driven"
+    DESCRIPTION = (
+        "Decode the exact lazy motion-reference window for a selected Plan "
+        "scene. It is an inspection branch only and does not feed the "
+        "reference fingerprint back into Plan. No Plan means no media output."
+    )
+
+    @staticmethod
+    def _blocked(status: str):
+        blocker = (ExecutionBlocker(None)
+                   if ExecutionBlocker is not None else None)
+        return blocker, blocker, status
+
+    def preview(self, source, scene, plan=None):
+        if plan is None:
+            return self._blocked(
+                "No Plan connected; lazy motion scene preview is disabled.")
+        if (not isinstance(source, dict)
+                or int(source.get("version", -1)) !=
+                LAZY_MOTION_SOURCE_VERSION
+                or not isinstance(source.get("entry"), dict)):
+            raise ValueError(
+                "Lazy motion preview requires preview_source from Tagged "
+                "Motion Ref Path.")
+        if not isinstance(plan, dict) or not isinstance(plan.get("shots"), list):
+            raise ValueError("Lazy motion preview requires a valid H3 Plan.")
+        shots = plan["shots"]
+        scene = int(scene)
+        if scene < 1 or scene > len(shots):
+            return self._blocked(
+                "Scene %d is outside this %d-scene Plan." %
+                (scene, len(shots)))
+        entry = source["entry"]
+        prompt = _prompt_text(
+            shots[scene - 1].get("prompt", ""),
+            "Scene %d prompt" % scene)
+        active_tags = set(_REFERENCE_ALIAS_RE.findall(prompt)).intersection(
+            _reference_entry_tags(entry))
+        if not active_tags:
+            return self._blocked(
+                "Scene %d does not activate @%s or its paired audio tag." %
+                (scene, entry.get("tag", "motion")))
+        length = int(shots[scene - 1]["raw_frames"])
+        video, audio, detail = _scheduled_video_reference_slice(
+            entry, {"index": scene, "plan": plan}, scene, len(shots), length)
+        audio_output = audio
+        if audio_output is None:
+            audio_output = (ExecutionBlocker(None)
+                            if ExecutionBlocker is not None else None)
+        return video, audio_output, (
+            "Scene %d/%d: %s; decoded %d frames at %dx%d" %
+            (scene, len(shots), detail or "restart_each_scene",
+             int(video.shape[0]), int(video.shape[2]), int(video.shape[1])))
 
 
 class MiniMaxH3TaggedAudioReference:
@@ -8255,6 +8763,8 @@ CHAIN_NODE_CLASS_MAPPINGS = {
     "MiniMaxH3TaggedPictureReference": MiniMaxH3TaggedPictureReference,
     "MiniMaxH3TaggedVideoReference": MiniMaxH3TaggedVideoReference,
     "MiniMaxH3TaggedMotionReference": MiniMaxH3TaggedMotionReference,
+    "MiniMaxH3TaggedMotionReferencePath": MiniMaxH3TaggedMotionReferencePath,
+    "MiniMaxH3LazyMotionScenePreview": MiniMaxH3LazyMotionScenePreview,
     "MiniMaxH3TaggedAudioReference": MiniMaxH3TaggedAudioReference,
     "MiniMaxH3TaggedReferenceToVideo": MiniMaxH3TaggedReferenceToVideo,
     "MiniMaxH3ChainExternalVideo": MiniMaxH3ChainExternalVideo,
@@ -8287,6 +8797,10 @@ CHAIN_NODE_DISPLAY_NAME_MAPPINGS = {
     "MiniMaxH3TaggedPictureReference": "MiniMax H3 Tagged Picture Ref",
     "MiniMaxH3TaggedVideoReference": "MiniMax H3 Tagged Video Ref",
     "MiniMaxH3TaggedMotionReference": "MiniMax H3 Tagged Motion Ref",
+    "MiniMaxH3TaggedMotionReferencePath": (
+        "MiniMax H3 Tagged Motion Ref (Lazy Path)"),
+    "MiniMaxH3LazyMotionScenePreview": (
+        "MiniMax H3 Lazy Motion Scene Preview"),
     "MiniMaxH3TaggedAudioReference": "MiniMax H3 Tagged Audio Ref",
     "MiniMaxH3TaggedReferenceToVideo": "MiniMax H3 Tagged Ref2VA",
     "MiniMaxH3ChainExternalVideo": "MiniMax H3 Existing Video Context",

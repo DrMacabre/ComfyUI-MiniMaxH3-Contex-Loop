@@ -20,6 +20,10 @@ Newest first. This file keeps release history out of the onboarding README.
   Scene 2+ now excludes the repeated prefix from the unpositioned native video
   bank and applies the identical delivered-frame window to paired audio,
   removing the context-length motion delay without changing generic video refs.
+- Added path-backed Tagged Motion Ref for long 24 fps control videos. It keeps
+  compressed media on disk and decodes/resizes only the active scene plus its
+  exact embedded-audio window. A separate Plan-aware scene-counter preview
+  blocks media output when no Plan is connected or the tag is inactive.
 
 ## v0.4.7 — General masked targets
 

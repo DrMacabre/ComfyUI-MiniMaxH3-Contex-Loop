@@ -124,6 +124,13 @@ const taggedMotionVideo = add(makeNode(60, "LoadVideo", {
 const taggedMotion = add(makeNode(61, "MiniMaxH3TaggedMotionReference", {
     tag: "motion", target_subject: "<Subject 1> and <Subject 2>",
 }));
+const taggedLazyMotion = add(makeNode(
+    62, "MiniMaxH3TaggedMotionReferencePath", {
+        video_path: "/media/motion.mkv", tag: "lazy_motion",
+        target_subject: "<Subject 1>", use_embedded_audio: true,
+        audio_tag: "lazy_motion_audio",
+    },
+));
 connect(taggedEditor, taggedRelay, "state");
 connect(taggedRelay, taggedWrapper, "prompt");
 connect(taggedImageA, taggedPictureA, "image");
@@ -134,17 +141,19 @@ connect(taggedVideoFile, taggedVideo, "video");
 connect(taggedVideoAudio, taggedVideo, "audio");
 connect(taggedVideo, taggedMotion, "previous");
 connect(taggedMotionVideo, taggedMotion, "video");
-connect(taggedMotion, taggedWrapper, "references");
+connect(taggedMotion, taggedLazyMotion, "previous");
+connect(taggedLazyMotion, taggedWrapper, "references");
 
 assert.equal(findTaggedRef2VA(taggedEditor), taggedWrapper);
 assert.deepEqual(
     collectTaggedNodes(taggedWrapper),
-    [taggedPictureA, taggedPictureB, taggedVideo, taggedMotion],
+    [taggedPictureA, taggedPictureB, taggedVideo, taggedMotion,
+        taggedLazyMotion],
 );
 const promptRefs = taggedReferenceRecords(
     taggedEditor,
     "<Subject 1> and <Subject 2> use @hero_look, " +
-    "@performance_audio, and @motion.",
+    "@performance_audio, @motion, and @lazy_motion.",
 ).records;
 assert.deepEqual(
     promptRefs.map(({tag, label, active, sourceLabel}) => ({
@@ -159,7 +168,11 @@ assert.deepEqual(
             sourceLabel: "<Video 1>"},
         {tag: "motion", label: "<Subject 3>", active: true,
             sourceLabel: "<Video 2>"},
+        {tag: "lazy_motion", label: "<Subject 4>", active: true,
+            sourceLabel: "<Video 3>"},
         {tag: "performance_audio", label: "<Audio 1>", active: true,
+            sourceLabel: undefined},
+        {tag: "lazy_motion_audio", label: "<Audio 2>", active: true,
             sourceLabel: undefined},
     ],
 );
@@ -175,8 +188,8 @@ assert.deepEqual(
     availableReferenceRecords(taggedEditor, 2, {
         prompt: "Use @hero_look.", includeInactive: true,
     }).records.map(({tag}) => tag),
-    ["hero_face", "hero_look", "performance", "motion",
-        "performance_audio"],
+    ["hero_face", "hero_look", "performance", "motion", "lazy_motion",
+        "performance_audio", "lazy_motion_audio"],
 );
 
 const coreEditor = add(makeNode(10, "MiniMaxH3ChainScenePromptEditor"));

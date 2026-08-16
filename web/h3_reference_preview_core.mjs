@@ -10,6 +10,8 @@ export const AUDIO_REF_TYPE = "MiniMaxH3ScheduledAudioReference";
 export const TAGGED_PICTURE_REF_TYPE = "MiniMaxH3TaggedPictureReference";
 export const TAGGED_VIDEO_REF_TYPE = "MiniMaxH3TaggedVideoReference";
 export const TAGGED_MOTION_REF_TYPE = "MiniMaxH3TaggedMotionReference";
+export const TAGGED_MOTION_PATH_REF_TYPE =
+    "MiniMaxH3TaggedMotionReferencePath";
 export const TAGGED_AUDIO_REF_TYPE = "MiniMaxH3TaggedAudioReference";
 
 const SCHEDULE_TYPES = new Set([
@@ -21,6 +23,7 @@ const TAGGED_TYPES = new Set([
     TAGGED_PICTURE_REF_TYPE,
     TAGGED_VIDEO_REF_TYPE,
     TAGGED_MOTION_REF_TYPE,
+    TAGGED_MOTION_PATH_REF_TYPE,
     TAGGED_AUDIO_REF_TYPE,
 ]);
 
@@ -224,26 +227,33 @@ export function taggedReferenceRecords(editorNode, prompt = "") {
             record.active = used.has(record.tag);
             pictures.push(record);
         } else if (type === TAGGED_VIDEO_REF_TYPE ||
-                type === TAGGED_MOTION_REF_TYPE) {
-            const video = baseRecord(node, "video", 1, "video");
+                type === TAGGED_MOTION_REF_TYPE ||
+                type === TAGGED_MOTION_PATH_REF_TYPE) {
+            const pathBacked = type === TAGGED_MOTION_PATH_REF_TYPE;
+            const video = baseRecord(
+                node, "video", 1, pathBacked ? "video_path" : "video");
+            if (pathBacked) video.source = node;
             video.selector = "prompt tag";
-            video.semanticRole = type === TAGGED_MOTION_REF_TYPE
+            video.semanticRole = (
+                type === TAGGED_MOTION_REF_TYPE || pathBacked)
                 ? "motion" : "video";
             video.tagActive = used.has(video.tag);
             const audioSource = inputSource(node, "audio");
+            const embeddedAudio = pathBacked && Boolean(
+                widgetValue(node, "use_embedded_audio", true));
             const explicit = referenceTag(widgetValue(node, "audio_tag", ""));
             const audioTag = explicit || `${video.tag}_audio`;
             video.active = video.tagActive || Boolean(
-                audioSource && used.has(audioTag));
+                (audioSource || embeddedAudio) && used.has(audioTag));
             videos.push(video);
-            if (audioSource) {
+            if (audioSource || embeddedAudio) {
                 pairedAudios.push({
                     node,
                     kind: "audio",
                     tag: audioTag,
                     selector: "prompt tag",
                     active: video.active,
-                    source: audioSource,
+                    source: audioSource || node,
                     label: null,
                     pairedWith: video,
                 });

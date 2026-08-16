@@ -239,6 +239,7 @@ WAV preservation, timing behavior, and the Seam Probe.
 Load Image ─→ Tagged Picture Ref ─┐
 24 fps IMAGE (+ paired AUDIO) ─→ Tagged Video Ref ─┐
 24 fps motion IMAGE ─→ Tagged Motion Ref ──────────┤
+24 fps video path ─→ Tagged Motion Ref (Lazy Path) ┤
 Standalone AUDIO ─→ Tagged Audio Ref ──────────────┴→ Tagged Ref2VA
 
 Current Shot prompt / scene / dimensions / length ───────────────────↗
@@ -267,6 +268,16 @@ timeline: the repeated continuation prefix is excluded from the native video
 reference and from its paired audio. This prevents H3 from replaying one
 context span of motion after the protected prefix. Generic Tagged Video Ref
 keeps overlap-inclusive target-window slicing.
+
+For long control videos, **Tagged Motion Ref (Lazy Path)** avoids holding the
+complete decoded float32 IMAGE batch in RAM. It fingerprints the media file at
+registration time, then Tagged Ref2VA decodes and resizes only the active Plan
+scene. Optional embedded audio is decoded from the identical time window. Its
+`preview_source` can feed **Lazy Motion Scene Preview** together with the Plan;
+the integer scene widget selects the exact window to inspect. With no Plan—or
+when the selected scene does not activate the motion tag—the preview emits no
+IMAGE or AUDIO. Keeping preview on a separate branch avoids a circular
+Plan/reference fingerprint connection.
 
 For a song or other full source track, set Tagged Audio Ref to
 `source_timeline`, keep the full loader AUDIO connected to that node, and wire
