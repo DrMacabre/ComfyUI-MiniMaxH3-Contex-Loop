@@ -175,6 +175,51 @@ def _available_versioned_path(path: str) -> str:
         version += 1
 
 
+def _safe_output_subfolder(value: str) -> str:
+    """Return a safe, date-expanded subfolder relative to ComfyUI output."""
+    text = _expand_filename_date(value).strip().replace("\\", "/")
+    if not text or text == ".":
+        return ""
+    if text.startswith("/") or re.match(r"^[A-Za-z]:", text):
+        raise ValueError(
+            "H3 Chain Assemble output_subfolder must be relative to the "
+            "ComfyUI output folder.")
+    parts = []
+    for part in text.split("/"):
+        if not part or part == ".":
+            continue
+        if part == "..":
+            raise ValueError(
+                "H3 Chain Assemble output_subfolder cannot contain '..'.")
+        safe = _safe_name(part, "")
+        if not safe:
+            raise ValueError(
+                "H3 Chain Assemble output_subfolder contains an invalid "
+                "folder name.")
+        parts.append(safe)
+    return os.path.join(*parts) if parts else ""
+
+
+def _copy_final_to_output(final_path: str, output_subfolder: str) -> str:
+    """Copy a completed final beside regular ComfyUI outputs without overwrite."""
+    root = os.path.abspath(_output_root())
+    relative_folder = _safe_output_subfolder(output_subfolder)
+    destination_dir = os.path.abspath(os.path.join(root, relative_folder))
+    if os.path.commonpath([root, destination_dir]) != root:
+        raise ValueError(
+            "H3 Chain Assemble output_subfolder escapes the output folder.")
+    os.makedirs(destination_dir, exist_ok=True)
+    destination = _available_versioned_path(os.path.join(
+        destination_dir, os.path.basename(final_path)))
+    temporary = "%s.%s.tmp" % (destination, uuid.uuid4().hex)
+    try:
+        shutil.copy2(final_path, temporary)
+        os.replace(temporary, destination)
+    finally:
+        _safe_unlink(temporary)
+    return destination
+
+
 def _prompt_text(value: Any, label: str) -> str:
     """Normalize a prompt string or a human-editable JSON array of lines."""
     if isinstance(value, list):
@@ -6685,6 +6730,17 @@ class MiniMaxH3ChainAssemble:
                                "video segments."}),
             },
             "optional": {
+                "copy_to_output": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Also copy the completed MP4 out of the chain "
+                               "folder into the regular ComfyUI output tree."}),
+                "output_subfolder": ("STRING", {
+                    "default": "",
+                    "tooltip": "Relative folder for the optional output copy. "
+                               "Empty means the output root. Nested folders and "
+                               "date tokens such as renders/%date:yyyy-MM-dd% "
+                               "are supported; the filename widget above still "
+                               "sets the MP4 name."}),
                 "source_audio": ("AUDIO", {
                     "tooltip": "Full original source track. Required when "
                                "audio_source resolves to source; it is trimmed "
@@ -6708,7 +6764,8 @@ class MiniMaxH3ChainAssemble:
         return float("NaN")
 
     def assemble(self, manifest, audio_source, filename, audio_bitrate,
-                 source_audio=None, overwrite_existing=False):
+                 source_audio=None, overwrite_existing=False,
+                 copy_to_output=False, output_subfolder=""):
         segments = _validate_manifest(manifest)
         prelude = _validate_prelude(manifest)
         selected = audio_source
@@ -6891,23 +6948,28 @@ class MiniMaxH3ChainAssemble:
                 if os.path.exists(temporary):
                     os.unlink(temporary)
 
+        output_copy = (_copy_final_to_output(final_path, output_subfolder)
+                       if copy_to_output else None)
         sidecar_status = (
             "; generated audio -> %s" % generated_sidecar_path
             if generated_sidecar_path is not None else
             ("; %s" % generated_warning if generated_warning else ""))
+        copy_status = ("; output copy -> %s" % output_copy
+                       if output_copy is not None else "")
         blend_status = (
             "; %d-frame cumulative visual blend" % int(
                 manifest["compatibility"].get("video_blend_frames", 0))
             if blend_enabled else "; hard cuts")
-        status = "assembled %d generated clips%s with %s%s -> %s%s" % (
+        status = "assembled %d generated clips%s with %s%s -> %s%s%s" % (
             len(segments), " + existing-video prelude" if prelude else "",
-            backend, blend_status, final_path, sidecar_status)
+            backend, blend_status, final_path, sidecar_status, copy_status)
         _LOG.info("H3 Chain %s", status)
-        _publish_final_review_preview(manifest, final_path, status)
+        published_video = output_copy or final_path
+        _publish_final_review_preview(manifest, published_video, status)
         return {
             "ui": {
                 "text": [status],
-                "images": [_video_output_item(final_path)],
+                "images": [_video_output_item(published_video)],
                 "animated": (True,),
             },
             "result": (final_path,),

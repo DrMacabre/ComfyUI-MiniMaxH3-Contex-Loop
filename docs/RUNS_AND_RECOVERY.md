@@ -141,6 +141,12 @@ tokens such as `%date:yyyy-MM-dd%`, `%year%`, `%month%`, `%day%`, `%hour%`,
 `%minute%`, and `%second%`. Existing files are never overwritten; numbered
 suffixes are added automatically.
 
+Enable `copy_to_output` to keep the canonical final in the run folder and also
+publish an MP4 into the regular ComfyUI output tree. `output_subfolder` is
+relative to that output root, supports nested folders and the same date tokens,
+and may be empty to place the copy directly in `output/`. The existing
+`filename` value is used for both copies, and collisions are versioned.
+
 ## Re-decode checkpoints to PNG
 
 Connect a manifest and the original H3 video VAE to **Export PNG Sequence**. It

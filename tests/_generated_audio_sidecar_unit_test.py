@@ -51,6 +51,9 @@ def audio(value):
 
 
 def main():
+    assemble_inputs = chain.MiniMaxH3ChainAssemble.INPUT_TYPES()
+    assert assemble_inputs["optional"]["copy_to_output"][1]["default"] is False
+    assert assemble_inputs["optional"]["output_subfolder"][1]["default"] == ""
     with tempfile.TemporaryDirectory() as tempdir:
         folder_paths.output_directory = tempdir
         segment_path = pathlib.Path(
@@ -100,7 +103,9 @@ def main():
         chain._run_ffmpeg = fake_ffmpeg
         try:
             result = chain.MiniMaxH3ChainAssemble().assemble(
-                manifest, "source", "source_final", 96, source)
+                manifest, "source", "source_final", 96, source,
+                copy_to_output=True,
+                output_subfolder="published/finals")
 
             chain.shutil.which = lambda executable: (
                 "/broken/ffmpeg" if executable == "ffmpeg"
@@ -128,9 +133,12 @@ def main():
 
         final_path = pathlib.Path(result["result"][0])
         sidecar_path = final_path.with_suffix(".generated.wav")
+        output_copy = pathlib.Path(
+            tempdir, "published", "finals", "source_final.mp4")
         assert final_path.is_file()
+        assert output_copy.read_bytes() == final_path.read_bytes()
         assert result["ui"]["images"] == [
-            chain._video_output_item(str(final_path))]
+            chain._video_output_item(str(output_copy))]
         assert result["ui"]["animated"] == (True,)
         assert sidecar_path.is_file()
         assert muxed_pcm and not any(muxed_pcm[0])
@@ -140,6 +148,17 @@ def main():
             assert generated_audio.getnframes() == round(5 / chain.FPS * 8000)
             assert any(generated_audio.readframes(generated_audio.getnframes()))
         assert "generated audio ->" in result["ui"]["text"][0]
+        assert "output copy ->" in result["ui"]["text"][0]
+        second_copy = pathlib.Path(chain._copy_final_to_output(
+            str(final_path), "published/finals"))
+        assert second_copy.name == "source_final_001.mp4"
+        assert second_copy.read_bytes() == final_path.read_bytes()
+        try:
+            chain._copy_final_to_output(str(final_path), "../escape")
+        except ValueError as exc:
+            assert "cannot contain '..'" in str(exc)
+        else:
+            raise AssertionError("output copy accepted a parent traversal")
         assert pathlib.Path(fallback["result"][0]).is_file()
         assert fallback["ui"]["images"] == [
             chain._video_output_item(fallback["result"][0])]
