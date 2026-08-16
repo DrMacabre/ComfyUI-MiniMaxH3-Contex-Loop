@@ -41,13 +41,12 @@ sys.modules[spec.name] = chain
 spec.loader.exec_module(chain)
 
 
-def write_fixture(path):
+def write_fixture(path, frame_count=12, source_fps=24):
     width = height = 64
-    frame_count = 12
     sample_rate = 48000
-    sample_count = round(frame_count / 24 * sample_rate)
+    sample_count = round(frame_count / source_fps * sample_rate)
     container = av.open(str(path), mode="w")
-    video = container.add_stream("libx264rgb", rate=24)
+    video = container.add_stream("libx264rgb", rate=source_fps)
     video.width = width
     video.height = height
     video.pix_fmt = "rgb24"
@@ -57,10 +56,10 @@ def write_fixture(path):
     try:
         for index in range(frame_count):
             array = np.full(
-                (height, width, 3), index * 10, dtype=np.uint8)
+                (height, width, 3), index * 7, dtype=np.uint8)
             frame = av.VideoFrame.from_ndarray(array, format="rgb24")
             frame.pts = index
-            frame.time_base = Fraction(1, 24)
+            frame.time_base = Fraction(1, source_fps)
             for packet in video.encode(frame):
                 container.mux(packet)
         for packet in video.encode():
@@ -112,8 +111,8 @@ with tempfile.TemporaryDirectory() as temporary:
     video, audio, detail = chain._scheduled_video_reference_slice(
         entry, {"index": 2, "plan": plan}, 2, 2, 7)
     assert tuple(video.shape) == (5, 64, 64, 3)
-    assert abs(float(video[0, 0, 0, 0]) - 70 / 255) < 1e-6
-    assert abs(float(video[-1, 0, 0, 0]) - 110 / 255) < 1e-6
+    assert abs(float(video[0, 0, 0, 0]) - 49 / 255) < 1e-6
+    assert abs(float(video[-1, 0, 0, 0]) - 77 / 255) < 1e-6
     assert tuple(audio["waveform"].shape) == (1, 1, 10000)
     assert audio["sample_rate"] == 48000
     assert detail == (
@@ -141,6 +140,35 @@ with tempfile.TemporaryDirectory() as temporary:
     assert blocked_video is None and blocked_audio is None
     assert "does not activate" in inactive_status
 
+    path_25 = pathlib.Path(temporary) / "motion_25fps.mkv"
+    write_fixture(path_25, frame_count=30, source_fps=25)
+    refs_25, _, status_25, _ = node.add(
+        str(path_25), "performance_25", "<Subject 1>",
+        "the exact body movement and action timing", "source", True,
+        "performance_25_audio", "sequential")
+    entry_25 = refs_25["entries"][0]
+    descriptor_25 = entry_25["value"]
+    assert descriptor_25["source_fps"] == 25
+    assert descriptor_25["fps"] == 24
+    assert descriptor_25["frame_count"] == 29, descriptor_25
+    assert "25 -> 24 fps scene-local" in status_25
+    converted = chain._decode_lazy_motion_video(
+        descriptor_25, 20, 25)
+    assert tuple(converted.shape) == (5, 64, 64, 3)
+    expected_source_indices = [20, 21, 22, 23, 25]
+    for target_index, source_index in enumerate(expected_source_indices):
+        expected = source_index * 7 / 255
+        assert abs(float(converted[target_index, 0, 0, 0]) - expected) < 1e-6
+    converted_audio = chain._decode_lazy_motion_audio(
+        descriptor_25, 20, 25)
+    assert tuple(converted_audio["waveform"].shape) == (1, 1, 10000)
+    tail_video = chain._decode_lazy_motion_video(descriptor_25, 24, 29)
+    tail_audio = chain._decode_lazy_motion_audio(descriptor_25, 24, 29)
+    assert tuple(tail_video.shape) == (5, 64, 64, 3)
+    assert tuple(tail_audio["waveform"].shape) == (1, 1, 10000)
+    assert np.allclose(
+        tail_audio["waveform"].numpy()[..., -400:], 0.0)
+
 print(
-    "lazy motion path: file fingerprinting, scene-only AV decode, delivered "
-    "masked timing, no-Plan blocking, and scene counter preview pass")
+    "lazy motion path: file fingerprinting, scene-only CFR-to-24 AV decode, "
+    "delivered masked timing, no-Plan blocking, and scene counter preview pass")

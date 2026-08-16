@@ -124,7 +124,7 @@ REFERENCE_SCHEDULE_TYPE = "H3_REFERENCE_SCHEDULE"
 TAGGED_REFERENCE_TYPE = "H3_TAGGED_REFERENCES"
 LAZY_MOTION_SOURCE_TYPE = "H3_LAZY_MOTION_SOURCE"
 REFERENCE_SCHEDULE_VERSION = 1
-LAZY_MOTION_SOURCE_VERSION = 1
+LAZY_MOTION_SOURCE_VERSION = 2
 
 _PENDING_REVIEWS: dict[str, dict[str, Any]] = {}
 _PENDING_FINAL_REVIEW_PREVIEWS: dict[
@@ -450,20 +450,30 @@ def _probe_lazy_motion_path(
             if rate is None or not math.isfinite(float(rate)):
                 raise ValueError(
                     "Lazy motion reference has no usable frame rate.")
-            if abs(float(rate) - float(FPS)) > 1e-3:
+            source_rate = Fraction(rate)
+            source_fps = float(source_rate)
+            if source_fps <= 0.0:
                 raise ValueError(
-                    "Lazy motion reference must be constant 24 fps; got "
-                    "%.6g fps. Convert it with Reference Video Prep first."
-                    % float(rate))
+                    "Lazy motion reference has an invalid frame rate %.6g."
+                    % source_fps)
             width = int(video.codec_context.width or 0)
             height = int(video.codec_context.height or 0)
             if width < 1 or height < 1:
                 raise ValueError(
                     "Lazy motion reference has invalid video dimensions.")
-            frame_count = int(video.frames or 0)
-            if frame_count < 1 and video.duration is not None:
-                frame_count = int(round(
-                    float(video.duration * video.time_base) * FPS))
+            source_frame_count = int(video.frames or 0)
+            if source_frame_count > 0:
+                duration_seconds = source_frame_count / source_fps
+            elif video.duration is not None:
+                duration_seconds = float(video.duration * video.time_base)
+            elif container.duration is not None:
+                duration_seconds = float(container.duration) / float(
+                    av.time_base)
+            else:
+                duration_seconds = 0.0
+            frame_count = (int(math.ceil(
+                duration_seconds * FPS - 1e-9))
+                if duration_seconds > 0.0 else 0)
 
             audios = list(container.streams.audio)
             audio_info = None
@@ -491,9 +501,14 @@ def _probe_lazy_motion_path(
                 "kind": "lazy_motion_path",
                 "path": resolved,
                 "fps": FPS,
+                "source_fps": source_fps,
+                "source_rate_numerator": int(source_rate.numerator),
+                "source_rate_denominator": int(source_rate.denominator),
                 "width": width,
                 "height": height,
                 "frame_count": frame_count,
+                "source_frame_count": source_frame_count,
+                "duration_seconds": duration_seconds,
                 "video_start_seconds": _stream_start_seconds(video),
                 "audio": audio_info,
             }
@@ -771,8 +786,13 @@ def _decode_lazy_motion_video(
     requested = source_end - source_start
     if source_start < 0 or requested < 5:
         raise ValueError(
-            "Lazy motion-reference video window must contain at least five "
-            "frames; got %d:%d." % (source_start, source_end))
+            "Lazy motion-reference 24 fps target window must contain at "
+            "least five frames; got %d:%d." % (source_start, source_end))
+    source_fps = float(descriptor.get("source_fps", FPS))
+    if not math.isfinite(source_fps) or source_fps <= 0.0:
+        raise ValueError(
+            "Lazy motion reference has invalid source_fps %.6g." %
+            source_fps)
     target_w, target_h = _lazy_motion_target_size(descriptor)
     buffer = np.empty(
         (requested, target_h, target_w, 3), dtype=np.uint8)
@@ -783,35 +803,85 @@ def _decode_lazy_motion_video(
             raise ValueError(
                 "Lazy motion reference changed and now contains %d video "
                 "streams; exactly one is required." % len(videos))
+        video = videos[0]
+        actual_rate = (
+            video.average_rate or video.base_rate or video.guessed_rate)
+        if (actual_rate is None or
+                abs(float(actual_rate) - source_fps) > 1e-3):
+            raise ValueError(
+                "Lazy motion reference changed frame rate after it was "
+                "registered (expected %.6g fps, got %s)." %
+                (source_fps, actual_rate))
         first_timestamp = None
-        for frame_index, frame in enumerate(container.decode(videos[0])):
+        previous_frame = None
+        previous_time = None
+        previous_array = None
+        target_index = source_start
+        tolerance = 1e-7
+
+        def frame_array(frame):
+            if (int(frame.width) != target_w or
+                    int(frame.height) != target_h):
+                converted = frame.reformat(
+                    width=target_w, height=target_h, format="rgb24")
+                return converted.to_ndarray()
+            return frame.to_ndarray(format="rgb24")
+
+        def emit_previous():
+            nonlocal decoded, previous_array
+            if previous_frame is None:
+                raise ValueError(
+                    "Lazy motion reference starts after its first 24 fps "
+                    "target timestamp.")
+            if previous_array is None:
+                previous_array = frame_array(previous_frame)
+            buffer[decoded] = previous_array
+            decoded += 1
+
+        for frame_index, frame in enumerate(container.decode(video)):
             if frame.pts is not None and frame.time_base is not None:
                 timestamp = float(frame.pts * frame.time_base)
                 if first_timestamp is None:
                     first_timestamp = timestamp
-                expected = (timestamp - first_timestamp) * FPS
+                timestamp_relative = timestamp - first_timestamp
+                expected = timestamp_relative * source_fps
                 if abs(expected - frame_index) > 0.05:
                     raise ValueError(
-                        "Lazy motion reference is not constant 24 fps near "
+                        "Lazy motion reference is not constant %.6g fps near "
                         "decoded frame %d (timestamp maps to %.4f)." %
-                        (frame_index, expected))
-            if frame_index < source_start:
-                continue
-            if frame_index >= source_end:
+                        (source_fps, frame_index, expected))
+            # Once CFR has been verified, use its rational frame index rather
+            # than container PTS for target selection. Coarse time bases (for
+            # example milliseconds) otherwise move boundary frames backward
+            # or forward by one during scene-local conversion.
+            relative_time = frame_index / source_fps
+            while (target_index < source_end and
+                   target_index / float(FPS) <
+                   relative_time - tolerance):
+                if (previous_time is None or
+                        target_index / float(FPS) <
+                        previous_time - tolerance):
+                    raise ValueError(
+                        "Lazy motion reference cannot cover 24 fps target "
+                        "frame %d." % target_index)
+                emit_previous()
+                target_index += 1
+            if target_index >= source_end:
                 break
-            if (int(frame.width) != target_w or
-                    int(frame.height) != target_h):
-                frame = frame.reformat(
-                    width=target_w, height=target_h, format="rgb24")
-                array = frame.to_ndarray()
-            else:
-                array = frame.to_ndarray(format="rgb24")
-            buffer[decoded] = array
-            decoded += 1
+            previous_frame = frame
+            previous_time = relative_time
+            previous_array = None
+        if target_index < source_end and previous_frame is not None:
+            display_end = previous_time + 1.0 / source_fps
+            while (target_index < source_end and
+                   target_index / float(FPS) <
+                   display_end - tolerance):
+                emit_previous()
+                target_index += 1
     if decoded != requested:
         raise ValueError(
             "Lazy motion reference %s yielded only %d of %d requested "
-            "frames for source window %d:%d." %
+            "frames for 24 fps target window %d:%d." %
             (path, decoded, requested, source_start, source_end))
     return torch.from_numpy(buffer).to(dtype=torch.float32).div_(255.0)
 
@@ -850,9 +920,11 @@ def _decode_lazy_motion_audio(
             "Lazy motion-reference audio cannot cover video window %d:%d "
             "because its stream starts at %.6fs." %
             (int(source_start), int(source_end), audio_start))
-    target = np.empty((channels, sample_end - sample_start), dtype=np.float32)
+    requested = sample_end - sample_start
+    target = np.zeros((channels, requested), dtype=np.float32)
+    coverage = np.zeros((requested,), dtype=np.bool_)
     cursor = 0
-    copied = 0
+    cursor_initialized = False
     with av.open(path, mode="r") as container:
         audios = list(container.streams.audio)
         if len(audios) != 1:
@@ -863,7 +935,7 @@ def _decode_lazy_motion_audio(
             format="fltp", layout=layout, rate=sample_rate)
 
         def consume(output_frame):
-            nonlocal cursor, copied
+            nonlocal cursor, cursor_initialized
             array = output_frame.to_ndarray()
             if array.ndim == 1:
                 array = array.reshape(1, -1)
@@ -872,12 +944,14 @@ def _decode_lazy_motion_audio(
                     "Lazy motion-reference audio decoded to unexpected shape "
                     "%s." % (tuple(array.shape),))
             count = int(array.shape[-1])
-            if (output_frame.pts is not None and
+            if (not cursor_initialized and
+                    output_frame.pts is not None and
                     output_frame.time_base is not None):
                 frame_seconds = float(
                     output_frame.pts * output_frame.time_base)
                 cursor = int(round(
                     (frame_seconds - audio_start) * sample_rate))
+            cursor_initialized = True
             copy_start = max(cursor, sample_start)
             copy_end = min(cursor + count, sample_end)
             if copy_end > copy_start:
@@ -886,7 +960,7 @@ def _decode_lazy_motion_audio(
                 span = copy_end - copy_start
                 target[:, target_offset:target_offset + span] = (
                     array[:, source_offset:source_offset + span])
-                copied += span
+                coverage[target_offset:target_offset + span] = True
             cursor += count
 
         stop = False
@@ -903,12 +977,22 @@ def _decode_lazy_motion_audio(
                 consume(output_frame)
                 if cursor >= sample_end:
                     break
-    if copied != sample_end - sample_start:
-        raise ValueError(
-            "Lazy motion reference %s yielded only %d of %d requested audio "
-            "samples for video window %d:%d." %
-            (path, copied, sample_end - sample_start,
-             int(source_start), int(source_end)))
+    copied = int(np.count_nonzero(coverage))
+    if copied != requested:
+        first_missing = int(np.flatnonzero(~coverage)[0])
+        internal_gap = bool(np.any(coverage[first_missing:]))
+        tail_missing = requested - first_missing
+        maximum_rounding_pad = int(math.ceil(sample_rate / float(FPS)))
+        if internal_gap or tail_missing > maximum_rounding_pad:
+            raise ValueError(
+                "Lazy motion reference %s yielded only %d of %d requested "
+                "audio samples for video window %d:%d." %
+                (path, copied, requested,
+                 int(source_start), int(source_end)))
+        _LOG.info(
+            "h3_lazy_motion: tail padded %d zero audio samples while "
+            "converting %.6g fps video to a 24 fps target window",
+            tail_missing, float(descriptor.get("source_fps", FPS)))
     return {
         "waveform": torch.from_numpy(target).unsqueeze(0),
         "sample_rate": sample_rate,
@@ -3964,10 +4048,11 @@ class MiniMaxH3TaggedMotionReferencePath:
             "required": {
                 "video_path": ("STRING", {
                     "default": "",
-                    "tooltip": "Absolute path to one constant-24-fps video. "
-                               "The node fingerprints the file without "
+                    "tooltip": "Absolute path to one constant-frame-rate "
+                               "video. The node fingerprints the file without "
                                "materializing an IMAGE batch; Tagged Ref2VA "
-                               "decodes only the active scene window."}),
+                               "decodes only the active scene window and "
+                               "resamples that window to 24 fps."}),
                 "tag": ("STRING", {
                     "default": "motion",
                     "tooltip": "Stable @tag for the reusable motion Subject."}),
@@ -4017,8 +4102,8 @@ class MiniMaxH3TaggedMotionReferencePath:
     DESCRIPTION = (
         "Path-backed Tagged Motion Ref. It stores a file descriptor and "
         "fingerprint instead of a full decoded IMAGE batch. Tagged Ref2VA "
-        "later decodes and resizes only the current Plan scene, with optional "
-        "embedded audio from the identical window."
+        "later decodes, converts to 24 fps, and resizes only the current Plan "
+        "scene, with optional embedded audio from the identical time window."
     )
 
     @classmethod
@@ -4073,11 +4158,14 @@ class MiniMaxH3TaggedMotionReferencePath:
         frames = int(descriptor.get("frame_count", 0))
         frame_status = "%d indexed frames" % frames if frames else (
             "container frame count unavailable")
+        source_fps = float(descriptor.get("source_fps", FPS))
+        rate_status = ("24 fps source" if abs(source_fps - FPS) <= 1e-3
+                       else "%.6g -> 24 fps scene-local" % source_fps)
         status = (
-            "@%s%s lazy motion -> %s; %s px short edge; %s; %s; %s" %
+            "@%s%s lazy motion -> %s; %s px short edge; %s; %s; %s; %s" %
             (entry["tag"], paired, entry["motion_target"],
              entry["motion_short_edge"], entry["timeline_mode"],
-             frame_status, references["fingerprint"][:12]))
+             rate_status, frame_status, references["fingerprint"][:12]))
         source = {
             "version": LAZY_MOTION_SOURCE_VERSION,
             "entry": entry,

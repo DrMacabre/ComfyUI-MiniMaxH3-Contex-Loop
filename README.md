@@ -239,7 +239,7 @@ WAV preservation, timing behavior, and the Seam Probe.
 Load Image ─→ Tagged Picture Ref ─┐
 24 fps IMAGE (+ paired AUDIO) ─→ Tagged Video Ref ─┐
 24 fps motion IMAGE ─→ Tagged Motion Ref ──────────┤
-24 fps video path ─→ Tagged Motion Ref (Lazy Path) ┤
+CFR video path ─→ Tagged Motion Ref (Lazy Path) ──┤
 Standalone AUDIO ─→ Tagged Audio Ref ──────────────┴→ Tagged Ref2VA
 
 Current Shot prompt / scene / dimensions / length ───────────────────↗
@@ -272,7 +272,10 @@ keeps overlap-inclusive target-window slicing.
 For long control videos, **Tagged Motion Ref (Lazy Path)** avoids holding the
 complete decoded float32 IMAGE batch in RAM. It fingerprints the media file at
 registration time, then Tagged Ref2VA decodes and resizes only the active Plan
-scene. Optional embedded audio is decoded from the identical time window. Its
+scene. Constant-frame-rate sources such as 25 or 30 fps are resampled to 24 fps
+inside that scene window, so Reference Video Prep and its full-video tensors
+are not required. Optional embedded audio is decoded from the identical time
+window, preserving duration and synchronization. Its
 `preview_source` can feed **Lazy Motion Scene Preview** together with the Plan;
 the integer scene widget selects the exact window to inspect. With no Plan—or
 when the selected scene does not activate the motion tag—the preview emits no
