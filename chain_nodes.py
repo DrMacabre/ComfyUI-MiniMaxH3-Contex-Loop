@@ -4756,6 +4756,54 @@ def _write_segment_video(images: Any, path: str, fps: int, crf: int,
         raise
 
 
+def _write_lossless_rgb_video(
+    images: Any,
+    path: str,
+    fps: int,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    """Persist an ephemeral RGB checkpoint decode without generation loss."""
+    if av is None or torch is None:
+        raise RuntimeError("Lossless H3 recovery video requires PyAV and torch.")
+    if len(images.shape) != 4 or int(images.shape[0]) < 1:
+        raise ValueError(
+            "H3 recovery images must be [frames,height,width,channels].")
+    height, width = int(images.shape[1]), int(images.shape[2])
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    stem, extension = os.path.splitext(path)
+    temporary = stem + ".tmp" + extension
+    _safe_unlink(temporary)
+    container = None
+    try:
+        container = av.open(temporary, mode="w")
+        if metadata:
+            for key, value in metadata.items():
+                if value is not None:
+                    container.metadata[str(key)] = str(value)
+        stream = container.add_stream(
+            "libx264rgb", rate=Fraction(int(fps), 1))
+        stream.width = width
+        stream.height = height
+        stream.pix_fmt = "rgb24"
+        stream.options = {"crf": "0", "preset": "medium"}
+        for image in images:
+            array = (torch.clamp(image[..., :3] * 255.0, 0, 255)
+                     .to(device="cpu", dtype=torch.uint8).numpy())
+            frame = av.VideoFrame.from_ndarray(array, format="rgb24")
+            for packet in stream.encode(frame):
+                container.mux(packet)
+        for packet in stream.encode():
+            container.mux(packet)
+        container.close()
+        container = None
+        os.replace(temporary, path)
+    except Exception:
+        if container is not None:
+            container.close()
+        _safe_unlink(temporary)
+        raise
+
+
 def _write_wav(audio: dict[str, Any], path: str) -> None:
     if torch is None:
         raise RuntimeError("H3 chain audio assembly requires torch.")
@@ -10216,42 +10264,183 @@ def _fit_pyav_audio_samples(waveform: Any, required_samples: int) -> Any:
     return waveform[..., :required_samples]
 
 
+def _scheduled_blend_frames(
+    value: Any,
+    boundary_count: int,
+    configured: int,
+) -> list[int]:
+    """Resolve a compact per-boundary assembly schedule.
+
+    ``plan`` retains the historical global value. Numeric lists are consumed
+    in timeline order and repeat their final value for later boundaries, which
+    lets ``5,30`` express a five-frame first join followed by thirty-frame
+    joins without knowing whether recovery is currently partial or complete.
+    """
+    boundary_count = max(0, int(boundary_count))
+    if boundary_count == 0:
+        return []
+    text = str(value if value is not None else "plan").strip().lower()
+    if not text or text == "plan":
+        return [max(0, int(configured))] * boundary_count
+    parts = [part for part in re.split(r"[\s,;]+", text) if part]
+    if not parts:
+        raise ValueError(
+            "H3 Chain Assemble blend_schedule must be 'plan' or a list of "
+            "non-negative frame counts such as 5,30.")
+    values = []
+    for part in parts:
+        try:
+            frame_count = int(part)
+        except ValueError as exc:
+            raise ValueError(
+                "H3 Chain Assemble blend_schedule contains %r; use 'plan' "
+                "or integer frame counts such as 5,30." % part) from exc
+        if frame_count < 0:
+            raise ValueError(
+                "H3 Chain Assemble blend_schedule cannot contain negative "
+                "frame counts.")
+        values.append(frame_count)
+    if len(values) < boundary_count:
+        values.extend([values[-1]] * (boundary_count - len(values)))
+    return values[:boundary_count]
+
+
+def _decode_scheduled_blend_artifact(
+    manifest: dict[str, Any],
+    segment: dict[str, Any],
+    requested_blend: int,
+    video_vae: Any,
+    output_path: str,
+) -> None:
+    """Re-decode one checkpoint's raw video for a larger recovery blend."""
+    if video_vae is None:
+        raise ValueError(
+            "H3 Chain Assemble boundary before clip %d requests %d blend "
+            "frames, but only %d were saved. Connect the original MiniMax H3 "
+            "video VAE to blend_video_vae so recovery can re-decode the saved "
+            "checkpoint without rerunning diffusion." %
+            (int(segment.get("index", 0)), int(requested_blend),
+             int(segment.get("blend_frames", 0))))
+    if _st_load is None or torch is None:
+        raise RuntimeError(
+            "Scheduled H3 recovery blending requires safetensors and torch.")
+    checkpoint = _absolute_output_path(segment["checkpoint"])
+    tensors = _st_load(checkpoint)
+    video = tensors.get("video")
+    if video is None:
+        raise ValueError(
+            "H3 Chain checkpoint for clip %d has no video latent." %
+            int(segment.get("index", 0)))
+    images = video_vae.decode(video)
+    if not torch.is_tensor(images):
+        raise ValueError(
+            "H3 Chain blend recovery VAE returned %r instead of IMAGE." %
+            type(images))
+    if images.ndim == 5:
+        images = images.reshape(
+            -1, images.shape[-3], images.shape[-2], images.shape[-1])
+    if images.ndim != 4:
+        raise ValueError(
+            "H3 Chain blend recovery VAE returned image shape %s; expected "
+            "[frames,height,width,channels]." % (tuple(images.shape),))
+    raw_frames = int(segment["raw_frames"])
+    delivered_frames = int(segment["delivered_frames"])
+    repeated_frames = raw_frames - delivered_frames
+    if int(images.shape[0]) != raw_frames:
+        raise ValueError(
+            "H3 Chain blend recovery decoded %d frames for clip %d; its "
+            "checkpoint requires %d." %
+            (int(images.shape[0]), int(segment.get("index", 0)), raw_frames))
+    start = repeated_frames - int(requested_blend)
+    scheduled = images[start:raw_frames]
+    expected = delivered_frames + int(requested_blend)
+    if int(scheduled.shape[0]) != expected:
+        raise RuntimeError(
+            "H3 Chain blend recovery selected %d frames; expected %d." %
+            (int(scheduled.shape[0]), expected))
+    try:
+        _write_lossless_rgb_video(
+            scheduled, output_path, FPS, metadata={
+                "title": "H3 scheduled recovery blend clip %d" %
+                         int(segment.get("index", 0)),
+                "h3_blend_frames": str(int(requested_blend)),
+                "h3_checkpoint_sha256": str(
+                    segment.get("checkpoint_sha256") or ""),
+            })
+    except Exception:
+        _safe_unlink(output_path)
+        raise
+    finally:
+        del scheduled, images, video, tensors
+    _LOG.info(
+        "H3 Chain re-decoded clip %d checkpoint for a %d-frame recovery "
+        "blend; diffusion was not rerun.",
+        int(segment.get("index", 0)), int(requested_blend))
+
+
 def _blend_video_records(
     manifest: dict[str, Any],
     segments: list[dict[str, Any]],
     prelude: dict[str, Any] | None,
+    blend_schedule: Any = "plan",
+    video_vae: Any = None,
+    temporary_paths: list[str] | None = None,
 ) -> list[dict[str, Any]]:
-    """Resolve the hard base and each disk-backed overlap continuation."""
+    """Resolve scheduled joins and their disk-backed overlap continuations."""
     configured = int(
         (manifest.get("compatibility") or {}).get("video_blend_frames", 0))
-    if configured < 1:
+    boundary_count = len(segments) if prelude is not None else max(
+        0, len(segments) - 1)
+    schedule = _scheduled_blend_frames(
+        blend_schedule, boundary_count, configured)
+    if not any(schedule):
         return []
     records: list[dict[str, Any]] = []
     has_predecessor = prelude is not None
+    boundary_index = 0
     if prelude is not None:
         records.append({
             "path": _absolute_output_path(prelude["video"]),
             "input_frames": int(prelude["frame_count"]),
             "delivered_frames": int(prelude["frame_count"]),
             "blend_frames": 0,
+            "skip_frames": 0,
         })
 
     for item in segments:
         delivered = int(item["delivered_frames"])
         repeated = max(0, int(item.get("raw_frames", delivered)) - delivered)
-        expected_blend = min(configured, repeated) if has_predecessor else 0
+        expected_blend = int(schedule[boundary_index]) if has_predecessor else 0
+        if has_predecessor:
+            boundary_index += 1
+        if expected_blend > repeated:
+            raise ValueError(
+                "H3 Chain Assemble boundary before clip %d requests a "
+                "%d-frame blend, but that scene repeats only %d context "
+                "frames." %
+                (int(item.get("index", 0)), expected_blend, repeated))
+        skip_frames = 0
         if expected_blend:
             recorded_blend = int(item.get("blend_frames", 0))
             value = item.get("blend_segment")
-            if recorded_blend != expected_blend or not isinstance(value, str):
-                raise ValueError(
-                    "H3 chain clip %d requires a %d-frame blend artifact, but "
-                    "the manifest contains %d. Re-save the scene with Plan "
-                    "video_blend_frames connected to Loop Trim and its "
-                    "images_with_overlap connected to Segment Save." %
-                    (int(item.get("index", 0)), expected_blend,
-                     recorded_blend))
-            path = _absolute_output_path(value)
+            if recorded_blend >= expected_blend and isinstance(value, str):
+                path = _absolute_output_path(value)
+                skip_frames = recorded_blend - expected_blend
+            else:
+                if temporary_paths is None:
+                    raise RuntimeError(
+                        "H3 Chain scheduled blend recovery has no temporary "
+                        "artifact owner.")
+                final_dir = os.path.join(
+                    _output_root(), "h3_chains",
+                    _safe_name(manifest.get("run_name"), "h3_chain"), "final")
+                os.makedirs(final_dir, exist_ok=True)
+                path = os.path.join(
+                    final_dir, ".scheduled_blend_clip_%04d.%s.mkv" %
+                    (int(item.get("index", 0)), uuid.uuid4().hex))
+                _decode_scheduled_blend_artifact(
+                    manifest, item, expected_blend, video_vae, path)
+                temporary_paths.append(path)
         else:
             path = _absolute_output_path(item["segment"])
         if not os.path.isfile(path):
@@ -10261,6 +10450,7 @@ def _blend_video_records(
             "input_frames": delivered + expected_blend,
             "delivered_frames": delivered,
             "blend_frames": expected_blend,
+            "skip_frames": skip_frames,
         })
         has_predecessor = True
     if not records:
@@ -10284,22 +10474,28 @@ def _ffmpeg_blend_video(
 
     filters = []
     for index in range(len(records)):
+        skip = int(records[index].get("skip_frames", 0))
+        count = int(records[index]["input_frames"])
         filters.append(
-            "[%d:v]fps=%d,settb=AVTB,setpts=N/(%d*TB)[v%d]" %
-            (index, FPS, FPS, index))
+            "[%d:v]fps=%d,trim=start_frame=%d:end_frame=%d,"
+            "settb=AVTB,setpts=N/(%d*TB)[v%d]" %
+            (index, FPS, skip, skip + count, FPS, index))
     previous = "v0"
     cumulative = int(records[0]["delivered_frames"])
     for index, record in enumerate(records[1:], start=1):
         blend = int(record["blend_frames"])
-        if blend < 1:
-            raise ValueError(
-                "H3 cumulative blend input %d has no retained overlap." % index)
         raw_output = "xfade%d" % index
         output = "blend%d" % index
-        filters.append(
-            "[%s][v%d]xfade=transition=fade:duration=%.9f:offset=%.9f[%s]" %
-            (previous, index, blend / float(FPS),
-             (cumulative - blend) / float(FPS), raw_output))
+        if blend:
+            filters.append(
+                "[%s][v%d]xfade=transition=fade:duration=%.9f:"
+                "offset=%.9f[%s]" %
+                (previous, index, blend / float(FPS),
+                 (cumulative - blend) / float(FPS), raw_output))
+        else:
+            filters.append(
+                "[%s][v%d]concat=n=2:v=1:a=0[%s]" %
+                (previous, index, raw_output))
         # xfade reports an unknown 1/0 frame rate on its output in some FFmpeg
         # builds. Normalize every intermediate before feeding the next xfade;
         # otherwise chains longer than two clips fail despite CFR inputs.
@@ -10385,6 +10581,13 @@ def _pyav_blend_video(
             next_blend = (int(records[record_index + 1]["blend_frames"])
                           if record_index + 1 < len(records) else 0)
             seen = 0
+            for _ in range(int(record.get("skip_frames", 0))):
+                try:
+                    next(iterator)
+                except StopIteration as exc:
+                    raise ValueError(
+                        "H3 blend input ended before its scheduled overlap.") \
+                        from exc
             if record_index == 0:
                 for array in iterator:
                     pending.append(array)
@@ -10860,6 +11063,15 @@ class MiniMaxH3ChainAssemble:
                                "date tokens such as renders/%date:yyyy-MM-dd% "
                                "are supported; the filename widget above still "
                                "sets the MP4 name."}),
+                "blend_schedule": ("STRING", {
+                    "default": "plan",
+                    "tooltip": "Assembly-only visual blend schedule. 'plan' "
+                               "uses the Plan's global value. A list such as "
+                               "5,30 applies 5 frames at the first boundary "
+                               "and 30 at every later boundary. The final "
+                               "value repeats; extra values are ignored by a "
+                               "shorter partial manifest. This never reruns "
+                               "diffusion."}),
                 "source_audio": ("AUDIO", {
                     "tooltip": "Full original source track. Required when "
                                "audio_source resolves to source; it is trimmed "
@@ -10868,6 +11080,13 @@ class MiniMaxH3ChainAssemble:
                     "tooltip": "Primary 0.5 source-audio route. Usually this "
                                "can be left unconnected because the manifest "
                                "contains its path-backed recovery descriptor."}),
+                "blend_video_vae": ("VAE", {
+                    "tooltip": "Optional recovery-only MiniMax H3 video VAE. "
+                               "Connect the original VAE when blend_schedule "
+                               "requests more overlap than the saved blend "
+                               "MP4 retained. Assemble then re-decodes the "
+                               "existing checkpoint; it does not sample or "
+                               "regenerate the scene."}),
             },
         }
 
@@ -10889,7 +11108,8 @@ class MiniMaxH3ChainAssemble:
     def assemble(self, manifest, audio_source, filename, audio_bitrate,
                  source_audio=None, overwrite_existing=False,
                  copy_to_output=False, output_subfolder="",
-                 source_timeline=None):
+                 source_timeline=None, blend_schedule="plan",
+                 blend_video_vae=None):
         segments = _validate_manifest(manifest)
         prelude = _validate_prelude(manifest)
         selected = audio_source
@@ -10988,8 +11208,6 @@ class MiniMaxH3ChainAssemble:
                 raise FileNotFoundError("H3 chain segment is missing: %s" % path)
             segment_paths.append(path)
             delivered_frames.append(int(item["delivered_frames"]))
-        blend_records = _blend_video_records(manifest, segments, prelude)
-        blend_enabled = bool(blend_records)
         ffmpeg = _usable_ffmpeg()
         if not ffmpeg and av is None:
             raise RuntimeError(
@@ -11000,7 +11218,15 @@ class MiniMaxH3ChainAssemble:
             if os.path.exists(temporary):
                 os.unlink(temporary)
         backend = "ffmpeg"
+        blend_records: list[dict[str, Any]] = []
+        scheduled_blend_temps: list[str] = []
         try:
+            blend_records = _blend_video_records(
+                manifest, segments, prelude,
+                blend_schedule=blend_schedule,
+                video_vae=blend_video_vae,
+                temporary_paths=scheduled_blend_temps)
+            blend_enabled = bool(blend_records)
             media_metadata = _manifest_media_metadata(manifest)
             if blend_enabled:
                 _write_ffmetadata(metadata_tmp, media_metadata)
@@ -11079,7 +11305,7 @@ class MiniMaxH3ChainAssemble:
             os.replace(final_tmp, final_path)
         finally:
             for temporary in (concat_path, video_tmp, final_tmp, wav_tmp,
-                              metadata_tmp):
+                              metadata_tmp, *scheduled_blend_temps):
                 if os.path.exists(temporary):
                     os.unlink(temporary)
 
@@ -11091,10 +11317,14 @@ class MiniMaxH3ChainAssemble:
             ("; %s" % generated_warning if generated_warning else ""))
         copy_status = ("; output copy -> %s" % output_copy
                        if output_copy is not None else "")
+        resolved_blends = [
+            int(record["blend_frames"])
+            for record in blend_records[1:]
+        ] if blend_records else []
         blend_status = (
-            "; %d-frame cumulative visual blend" % int(
-                manifest["compatibility"].get("video_blend_frames", 0))
-            if blend_enabled else "; hard cuts")
+            "; scheduled visual blends [%s]" % ",".join(
+                str(value) for value in resolved_blends)
+            if any(resolved_blends) else "; hard cuts")
         status = "assembled %d generated clips%s with %s%s -> %s%s%s" % (
             len(segments), " + existing-video prelude" if prelude else "",
             backend, blend_status, final_path, sidecar_status, copy_status)

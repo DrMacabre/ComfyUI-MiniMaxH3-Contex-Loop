@@ -171,6 +171,26 @@ tokens such as `%date:yyyy-MM-dd%`, `%year%`, `%month%`, `%day%`, `%hour%`,
 `%minute%`, and `%second%`. Existing files are never overwritten; numbered
 suffixes are added automatically.
 
+### Recovery blend schedules
+
+`blend_schedule` can override the Plan's global visual blend only during
+assembly. `plan` preserves the recorded setting. A comma-separated schedule is
+applied to scene boundaries in timeline order: `5,30` uses five frames for the
+first join and thirty for every later join because the last value repeats.
+`0` produces hard cuts. This does not change checkpoints, prompts, seeds, or
+generated frames.
+
+When the requested boundary fits inside the saved blend MP4, assembly reuses
+that artifact directly. If it requests more overlap than Segment Save retained,
+connect the original MiniMax H3 video VAE to `blend_video_vae`. Recovery then
+re-decodes the existing safetensors checkpoint into a temporary lossless RGB
+video and deletes it after assembly. Diffusion is never rerun. The final video
+still receives the one H.264 encode required by any pixel-space crossfade.
+
+Each scheduled value must not exceed that incoming scene's repeated context.
+For example, a chain whose first join has five context frames and later joins
+have thirty-nine can use `5,30`; requesting thirty at the first join is rejected.
+
 Enable `copy_to_output` to keep the canonical final in the run folder and also
 publish an MP4 into the regular ComfyUI output tree. `output_subfolder` is
 relative to that output root, supports nested folders and the same date tokens,

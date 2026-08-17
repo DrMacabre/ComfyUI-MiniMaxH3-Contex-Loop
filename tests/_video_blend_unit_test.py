@@ -83,6 +83,15 @@ def main():
         assert "requires anchor_mode=head" in str(exc)
     else:
         raise AssertionError("before-mode blend was accepted")
+    assert chain._scheduled_blend_frames("plan", 3, 5) == [5, 5, 5]
+    assert chain._scheduled_blend_frames("5,30", 4, 0) == [5, 30, 30, 30]
+    assert chain._scheduled_blend_frames("0", 2, 39) == [0, 0]
+    try:
+        chain._scheduled_blend_frames("5,nope", 2, 0)
+    except ValueError as exc:
+        assert "integer frame counts" in str(exc)
+    else:
+        raise AssertionError("invalid blend schedule was accepted")
 
     with tempfile.TemporaryDirectory() as temporary:
         folder_paths.output_directory = temporary
@@ -174,6 +183,65 @@ def main():
             blended_manifest, "none", "final", 128)["result"][0]
         assert len(decode(assembled)) == 9
 
+        scheduled_records = chain._blend_video_records(
+            blended_manifest, blended_manifest["segments"], None,
+            blend_schedule="1")
+        assert scheduled_records[1]["blend_frames"] == 1
+        assert scheduled_records[1]["skip_frames"] == 1
+        assert scheduled_records[1]["input_frames"] == 5
+        scheduled = chain.MiniMaxH3ChainAssemble().assemble(
+            blended_manifest, "none", "scheduled_one", 128,
+            blend_schedule="1")["result"][0]
+        assert len(decode(scheduled)) == 9
+
+        # A larger recovery blend is reconstructed from the existing raw
+        # checkpoint latent through the optional VAE. The intermediate is
+        # lossless RGB and is deleted after final assembly.
+        narrow_overlap = root / "narrow_overlap.mp4"
+        chain._write_segment_video(
+            torch.cat((frames(1, (0, 1, 0)), frames(4, (0, 0, 1))),
+                      dim=0),
+            str(narrow_overlap), 24, 0)
+        recoverable_checkpoint = root / "recoverable.safetensors"
+        chain._st_save(
+            {"video": torch.zeros((1, 1), dtype=torch.float32)},
+            str(recoverable_checkpoint))
+        recoverable_delivered = root / "recoverable_delivered.mp4"
+        chain._write_segment_video(
+            frames(4, (0, 0, 1)), str(recoverable_delivered), 24, 0)
+        recoverable_two = segment(
+            2, recoverable_delivered,
+            recoverable_checkpoint, 4, 6)
+        recoverable_two.update({
+            "blend_segment": str(narrow_overlap),
+            "blend_segment_sha256": chain._file_sha256(str(narrow_overlap)),
+            "blend_frames": 1,
+        })
+        recoverable_manifest = {
+            **blended_manifest,
+            "run_name": "assembled_recovered_schedule",
+            "compatibility": {
+                **blended_manifest["compatibility"],
+                "video_blend_frames": 1,
+            },
+            "segments": [
+                segment(1, base, checkpoint_one, 5, 5),
+                recoverable_two,
+            ],
+        }
+
+        class FakeVideoVAE:
+            def decode(self, _video):
+                return overlap.clone()
+
+        recovered = chain.MiniMaxH3ChainAssemble().assemble(
+            recoverable_manifest, "none", "scheduled_recovered", 128,
+            blend_schedule="2", blend_video_vae=FakeVideoVAE())["result"][0]
+        assert len(decode(recovered)) == 9
+        assert not list((root / "h3_chains" /
+                         "assembled_recovered_schedule" / "final").glob(
+                             ".scheduled_blend_clip_*"))
+
         delivered_two = root / "delivered_two.mp4"
         chain._write_segment_video(
             frames(4, (0, 0, 1)), str(delivered_two), 24, 0)
@@ -193,8 +261,8 @@ def main():
             hard_manifest, "none", "final", 128)["result"][0]
         assert len(decode(hard)) == 9
 
-    print("H3 video blend: extended context validation, chained xfade CFR, "
-          "and frame-exact cumulative PyAV/ffmpeg assembly pass")
+    print("H3 video blend: extended context validation, scheduled recovery, "
+          "chained xfade CFR, and frame-exact PyAV/ffmpeg assembly pass")
 
 
 if __name__ == "__main__":
