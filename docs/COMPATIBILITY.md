@@ -12,7 +12,7 @@ The two continuation engines and public masking path are capability-gated:
   ComfyUI PR #15439 and use the existing guarded guide fallback only on older
   builds. Tapered Guide alters only its disposable RGB context before VAE
   encoding;
-- `masked_av`, `feathered_av`, and `feathered_av_rgb` prefer native per-token H3 AV masks from PR
+- `masked_av` and `feathered_av` prefer native per-token H3 AV masks from PR
   #15375 and lazily install only missing mask-engine, payload, token-aligned
   inpaint-scale, and legacy sampler-bridge behavior when the masked path
   executes. It follows

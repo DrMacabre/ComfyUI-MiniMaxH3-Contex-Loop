@@ -100,6 +100,7 @@ from .contracts_v05 import (
     TRANSITION_CONTEXT_LENGTHS,
     TRANSITION_POLICY_VERSION,
     audio_policy as _contract_audio_policy,
+    migrate_continuation_mode,
     migrate_legacy_audio_mode,
     paired_audio_policy as _contract_paired_audio_policy,
     transition_policy as _contract_transition_policy,
@@ -124,13 +125,9 @@ H3_CONTEXT_LENGTHS = (
 )
 AUDIO_MODES = ("source_track", "generated_audio", "source_plus_timeline")
 CONTINUATION_MODES = (
-    "guide", "tapered_guide", "masked_av", "feathered_av",
-    "feathered_av_rgb")
+    "guide", "tapered_guide", "masked_av", "feathered_av")
 GUIDE_CONTINUATION_MODES = frozenset(("guide", "tapered_guide"))
-MASKED_CONTINUATION_MODES = frozenset((
-    "masked_av", "feathered_av", "feathered_av_rgb"))
-FEATHERED_CONTINUATION_MODES = frozenset((
-    "feathered_av", "feathered_av_rgb"))
+MASKED_CONTINUATION_MODES = frozenset(("masked_av", "feathered_av"))
 REFERENCE_AUDIO_TIMELINE_MODES = ("standalone", "source_timeline")
 MOTION_REFERENCE_SHORT_EDGES = ("384", "512", "768", "source")
 
@@ -265,7 +262,8 @@ def _resolved_transition_policy(value: Any) -> dict[str, Any]:
     explicit = compatibility.get("transition_policy")
     if explicit is not None:
         return _validate_transition_policy(explicit)
-    mode = str(compatibility.get("continuation_mode", "guide"))
+    mode = migrate_continuation_mode(
+        compatibility.get("continuation_mode", "guide"))
     context = int(compatibility.get("context_length", 0))
     preset = "legacy"
     for candidate in (
@@ -307,7 +305,6 @@ def _transition_policy_display(value: Any) -> str:
         "tapered_guide": "Tapered Guide",
         "masked_av": "Masked AV",
         "feathered_av": "Feathered AV",
-        "feathered_av_rgb": "Feathered AV + RGB Guide",
     }
     preset = str(policy["preset"])
     implementation = str(policy["continuation_mode"])
@@ -3521,6 +3518,7 @@ def _normalize_plan(
         raise ValueError("Unknown H3 context encode mode %r." % encode_mode)
     if anchor_mode not in ("head", "before"):
         raise ValueError("Unknown H3 context anchor mode %r." % anchor_mode)
+    continuation_mode = migrate_continuation_mode(continuation_mode)
     if continuation_mode not in CONTINUATION_MODES:
         raise ValueError(
             "Unknown H3 continuation mode %r." % continuation_mode)
@@ -3585,8 +3583,8 @@ def _normalize_plan(
             raise ValueError("Shot %d: %s" % (index, exc)) from exc
         resolved_context_lengths.append(shot_context_length)
 
-        shot_continuation_mode = item.get(
-            "continuation_mode", continuation_mode)
+        shot_continuation_mode = migrate_continuation_mode(item.get(
+            "continuation_mode", continuation_mode))
         if shot_continuation_mode not in CONTINUATION_MODES:
             raise ValueError(
                 "Shot %d has unknown H3 continuation mode %r." %
@@ -4191,16 +4189,13 @@ _TAPERED_GUIDE_PALETTE = (
     (160, 120, 175),
 )
 _TAPERED_GUIDE_ALPHA = 0.30
-_TAPERED_AV_RGB_ALPHA = 0.10
 _TAPERED_GUIDE_ALPHA_END = 0.0
 _TAPERED_GUIDE_RAMP_FRAMES = 8
 _TAPERED_GUIDE_BLOCK_PIXELS = 16
 _TAPERED_GUIDE_LUMA = (0.2126, 0.7152, 0.0722)
 
 
-def _tapered_guide_alpha(
-        position: int, frame_count: int,
-        maximum: float = _TAPERED_GUIDE_ALPHA) -> float:
+def _tapered_guide_alpha(position: int, frame_count: int) -> float:
     """Return the tuned chroma-noise taper for one Guide frame."""
     position = int(position)
     frame_count = int(frame_count)
@@ -4209,9 +4204,9 @@ def _tapered_guide_alpha(
     ramp = min(_TAPERED_GUIDE_RAMP_FRAMES, frame_count)
     from_end = frame_count - 1 - position
     if from_end >= ramp:
-        return float(maximum)
-    return (float(maximum)
-            + (_TAPERED_GUIDE_ALPHA_END - float(maximum))
+        return _TAPERED_GUIDE_ALPHA
+    return (_TAPERED_GUIDE_ALPHA
+            + (_TAPERED_GUIDE_ALPHA_END - _TAPERED_GUIDE_ALPHA)
             * (ramp - from_end) / ramp)
 
 
@@ -4240,8 +4235,7 @@ def _luma_preserving_chroma_target(source: Any, color: Any) -> Any:
 
 
 def _tapered_guide_context(
-        frames: Any, context_length: int, seed: int,
-        maximum: float = _TAPERED_GUIDE_ALPHA) -> Any:
+        frames: Any, context_length: int, seed: int) -> Any:
     """Build a disposable noisy tail for repair-biased Guide continuation.
 
     The accepted predecessor tensor remains untouched. Only the exact tail
@@ -4285,7 +4279,7 @@ def _tapered_guide_context(
         noisy = torch.nn.functional.interpolate(
             small, size=(height, width), mode="nearest")[0].permute(1, 2, 0)
         noisy = noisy.to(device=tail.device, dtype=tail.dtype)
-        amount = _tapered_guide_alpha(position, count, maximum)
+        amount = _tapered_guide_alpha(position, count)
         target = _luma_preserving_chroma_target(
             tail[position, ..., :3], noisy)
         tail[position, ..., :3] = torch.lerp(
@@ -6892,10 +6886,7 @@ class MiniMaxH3TransitionPolicy:
                         "tooltip": "Expert only. Low-level continuation "
                                    "implementation used when override is on. "
                                    "Hard AV resolves to masked_av; Soft AV "
-                                   "resolves to feathered_av. "
-                                   "feathered_av_rgb is an experimental Soft "
-                                   "AV variant with a weak luma-preserving "
-                                   "RGB guide."}),
+                                   "resolves to feathered_av."}),
                 "expert_context_length": (
                     list(TRANSITION_CONTEXT_LENGTHS), {
                         "default": 22,
@@ -7107,8 +7098,7 @@ class MiniMaxH3ChainPlan:
                                "rebuilding an old control surface. Default "
                                "previous-scene video frames used to "
                                "continue motion. Use 22 for guide mode and 39 "
-                               "for masked_av, feathered_av, or "
-                               "feathered_av_rgb so the AV clocks "
+                               "for masked_av or feathered_av so the AV clocks "
                                "meet exactly. "
                                "A scene's Advanced selector can override this; "
                                "blank inherits it and 0 starts a visually new scene. "
@@ -7233,11 +7223,7 @@ class MiniMaxH3ChainPlan:
                                "protects both with per-stream denoise masks. "
                                "feathered_av uses the same prefix but "
                                "progressively denoises its final temporal "
-                               "steps for a softer handoff. "
-                               "feathered_av_rgb keeps that clean AV target "
-                               "prefix and additionally supplies a disposable "
-                               "luma-preserving chroma guide at one-third of "
-                               "Detail Guide strength. All AV modes "
+                               "steps for a softer handoff. Both AV modes "
                                "require video/head, context >= 5, "
                                "the Chain Context latent output wired to the "
                                "sampler, and native or compatible H3 AV-mask "
@@ -8807,9 +8793,9 @@ class MiniMaxH3ChainContext:
     FUNCTION = "apply"
     CATEGORY = "conditioning/minimax/contex_loop"
     DESCRIPTION = ("Apply each scene's inherited or overridden guide, hard "
-                   "masked AV, feathered AV, or experimental RGB-guided "
-                   "feathered AV continuation, including independent guide "
-                   "audio carry and scene 1 Existing Video Context.")
+                   "masked AV, or feathered AV continuation, including "
+                   "independent guide audio carry and scene 1 Existing Video "
+                   "Context.")
 
     def apply(self, state, conditioning, vae, latent, audio_vae=None):
         index = int(state["index"])
@@ -8859,39 +8845,8 @@ class MiniMaxH3ChainContext:
             from .masked_context import apply_masked_prefix
 
             previous_latent = state.get("previous_latent")
-            masked_conditioning = conditioning
-            preserve_prefix_guides = False
-            if continuation_mode == "feathered_av_rgb":
-                noise_seed = int(shot["seed"]) ^ 0x5A17
-                rgb_context = _tapered_guide_context(
-                    previous_frames, context_length, noise_seed,
-                    _TAPERED_AV_RGB_ALPHA)
-                masked_conditioning, _guide_trim = (
-                    MiniMaxH3MotionContext().apply(
-                        conditioning=conditioning,
-                        vae=vae,
-                        latent=latent,
-                        context_frames=rgb_context,
-                        context_length=context_length,
-                        encode_mode=cfg["encode_mode"],
-                        anchor_mode=cfg["anchor_mode"],
-                        crop=cfg["crop"],
-                        audio_context_length=0,
-                        audio_mode="timeline",
-                    )
-                )
-                preserve_prefix_guides = True
-                _LOG.info(
-                    "H3 Chain Feathered AV + RGB Guide: %d context frames; "
-                    "luma-preserving chroma alpha %.2f, final %d frames "
-                    "taper to %.2f; clean sampled AV prefix retained; "
-                    "noise seed %d",
-                    int(rgb_context.shape[0]), _TAPERED_AV_RGB_ALPHA,
-                    min(_TAPERED_GUIDE_RAMP_FRAMES,
-                        int(rgb_context.shape[0])),
-                    _TAPERED_GUIDE_ALPHA_END, noise_seed)
             out_conditioning, out_latent, trim = apply_masked_prefix(
-                conditioning=masked_conditioning,
+                conditioning=conditioning,
                 vae=vae,
                 latent=latent,
                 previous_frames=previous_frames,
@@ -8901,9 +8856,7 @@ class MiniMaxH3ChainContext:
                 audio_vae=audio_vae,
                 previous_audio=(state.get("previous_audio")
                                 if external_first else None),
-                temporal_feather=(
-                    continuation_mode in FEATHERED_CONTINUATION_MODES),
-                preserve_prefix_guides=preserve_prefix_guides,
+                temporal_feather=(continuation_mode == "feathered_av"),
             )
             return (out_conditioning, trim, True, out_latent)
         previous_latent = (state.get("previous_latent")

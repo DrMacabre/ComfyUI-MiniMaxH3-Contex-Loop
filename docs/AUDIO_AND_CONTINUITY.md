@@ -25,13 +25,10 @@ Saved 0.4 modes migrate without changing behavior:
 
 These descriptions apply to both `guide` and `tapered_guide`; the latter
 changes only the disposable video context passed to the Guide VAE. In the
-experimental `masked_av`, `feathered_av`, and `feathered_av_rgb` modes, Chain Context places a
+experimental `masked_av` and `feathered_av` modes, Chain Context places a
 matching video and audio prefix inside the target latent, including when final
 assembly uses `source_track`. `masked_av` protects the complete prefix;
-`feathered_av` progressively denoises its final latent steps.
-`feathered_av_rgb` keeps that same clean AV prefix and mask while retaining a
-weak luma-preserving tapered RGB Guide over the repeated span. It does not
-replace the sampled prefix or add a second audio guide. For recursive
+`feathered_av` progressively denoises its final latent steps. For recursive
 scenes it copies the previous sampler's audio latent directly. For scene 1
 after Existing Video Context, source audio and the H3 audio VAE must both be
 connected.
@@ -47,8 +44,7 @@ Guide uses 22 clean guide frames, Detail Guide uses the same span with an
 eight-frame chroma-noise exit taper, Hard AV uses a protected 39-frame prefix,
 and Soft AV uses the same prefix with a feathered denoise boundary. Advanced
 mode may pair `tapered_guide` with another Guide context length; 22 is the
-published baseline. Expert `feathered_av_rgb` adds the weak RGB Guide to Soft
-AV without changing its AV mask or audio prefix. Mixed plans must still use
+published baseline. Mixed plans must still use
 encode/anchor settings compatible with every AV-mask scene.
 
 ## Source Timeline wiring

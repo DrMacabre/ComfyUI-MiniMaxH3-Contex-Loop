@@ -233,19 +233,6 @@ def main():
     )
     assert torch.all(feathered_audio_mask[..., 65:] == 1.0)
     feathered_video, feathered_audio = feathered["samples"].unbind()
-    preserved_conditioning, _, _ = masked.apply_masked_prefix(
-        conditioning=conditioning,
-        vae=UnexpectedVideoVAE(),
-        latent=target,
-        previous_frames=frames,
-        context_length=39,
-        crop="disabled",
-        previous_latent=previous,
-        temporal_feather=True,
-        preserve_prefix_guides=True,
-    )
-    assert [item["name"] for item in preserved_conditioning[0][1][
-        "minimax_keyframes"]] == ["conflicting first", "retained last"]
     assert torch.equal(
         feathered_video[:, :, :prefix_video_steps],
         previous_video[:, :, -prefix_video_steps:],
@@ -405,18 +392,21 @@ def main():
     assert feathered_plan["compatibility"][
         "continuation_mode"] == "feathered_av"
     assert "context=39/feathered_av" in feathered_plan["summary"]
-    rgb_av_plan = chain._normalize_plan(
+    migrated_av_plan = chain._normalize_plan(
         json.dumps({"shots": [
             {"id": "one", "prompt": "first", "length": 192},
-            {"id": "two", "prompt": "second", "length": 192},
+            {"id": "two", "prompt": "second", "length": 192,
+             "continuation_mode": "feathered_av_rgb"},
         ]}),
-        "rgb_av_test", 64, 32, 39, "video", "head", "disabled",
+        "migrated_av_test", 64, 32, 39, "video", "head", "disabled",
         "generated_audio", 39, 8.0, 8, 1, 18, "model-stack-v1", 5,
         "feathered_av_rgb",
     )
-    assert rgb_av_plan["compatibility"][
-        "continuation_mode"] == "feathered_av_rgb"
-    assert "context=39/feathered_av_rgb" in rgb_av_plan["summary"]
+    assert migrated_av_plan["compatibility"][
+        "continuation_mode"] == "feathered_av"
+    assert migrated_av_plan["shots"][1][
+        "continuation_mode"] == "feathered_av"
+    assert "context=39/feathered_av" in migrated_av_plan["summary"]
     guide_plan = chain._normalize_plan(
         json.dumps({"shots": [
             {"id": "one", "prompt": "first", "length": 192},
@@ -645,24 +635,6 @@ def main():
         feathered_chain_audio_mask[0, 0, 0, 57:65],
         torch.linspace(0.85, 0.95, 8),
     )
-    rgb_av_state = dict(mixed_state)
-    rgb_av_state["plan"] = rgb_av_plan
-    rgb_video_vae = VideoVAE()
-    original_activate = nodes._activate_inline_patches
-    nodes._activate_inline_patches = lambda: "native"
-    try:
-        rgb_av_result = chain.MiniMaxH3ChainContext().apply(
-            rgb_av_state, conditioning, rgb_video_vae, target)
-    finally:
-        nodes._activate_inline_patches = original_activate
-    assert rgb_av_result[1:3] == (39, True)
-    assert "noise_mask" in rgb_av_result[3]
-    assert rgb_video_vae.calls == 1
-    rgb_keyframes = rgb_av_result[0][0][1]["minimax_keyframes"]
-    assert [item.get("name") for item in rgb_keyframes] == [
-        "retained last", None]
-    assert rgb_keyframes[-1]["resolved_frame_index"] == 0
-
     preflight_calls = []
     original_require = masked._require_h3_mask_support
     original_prepare = chain._prepare_native_guide_conditioning
@@ -732,7 +704,7 @@ def main():
         first_state, conditioning, VideoVAE(), target)
     assert first_result[:3] == (conditioning, 0, False)
     assert first_result[3] is target
-    for av_mode in ("masked_av", "feathered_av", "feathered_av_rgb"):
+    for av_mode in ("masked_av", "feathered_av"):
         for invalid_args, expected in (
             ((1, "video", "head"), "at least 5"),
             ((39, "frames", "head"), "encode_mode=video"),

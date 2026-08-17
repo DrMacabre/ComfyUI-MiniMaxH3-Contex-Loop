@@ -7,8 +7,10 @@ export const MAX_H3_FRAMES = 3592;
 export const MAX_SEED = 18446744073709551615n;
 export const CONTINUATION_MODES = Object.freeze([
     "guide", "tapered_guide", "masked_av", "feathered_av",
-    "feathered_av_rgb",
 ]);
+const RETIRED_CONTINUATION_MODES = Object.freeze({
+    feathered_av_rgb: "feathered_av",
+});
 export const H3_CONTEXT_LENGTHS = Object.freeze([
     1, 5, 22, 39, 56, 73, 90, 107, 124,
     141, 158, 175, 192, 209, 226, 243,
@@ -401,11 +403,13 @@ export function setShotLengthMode(shot, mode, fallbackSeconds = 15) {
 }
 
 export function sceneContinuationMode(shot, planDefault = "guide") {
-    const fallback = String(planDefault ?? "guide");
+    const rawFallback = String(planDefault ?? "guide");
+    const fallback = RETIRED_CONTINUATION_MODES[rawFallback] ?? rawFallback;
     if (!CONTINUATION_MODES.includes(fallback)) {
         throw new Error(`Unknown Plan continuation mode “${fallback}”.`);
     }
-    const mode = shot?.continuation_mode ?? fallback;
+    const rawMode = shot?.continuation_mode ?? fallback;
+    const mode = RETIRED_CONTINUATION_MODES[rawMode] ?? rawMode;
     if (!CONTINUATION_MODES.includes(mode)) {
         throw new Error(`Unknown scene continuation mode “${String(mode)}”.`);
     }
@@ -558,7 +562,7 @@ export function calculatePlanTiming(plan, settings = {}) {
                 shot, planContinuationMode,
             );
             if (sceneContext > 0 && [
-                "masked_av", "feathered_av", "feathered_av_rgb",
+                "masked_av", "feathered_av",
             ].includes(
                 continuationMode,
             )) {
@@ -606,9 +610,7 @@ export function calculatePlanTiming(plan, settings = {}) {
             deliveredSeconds: deliveredFrames / FPS,
             generationStartFrame,
             contextLength: sceneContext,
-            audioContextLength: [
-                "masked_av", "feathered_av", "feathered_av_rgb",
-            ].includes(
+            audioContextLength: ["masked_av", "feathered_av"].includes(
                 continuationMode,
             )
                 ? sceneContext : sceneAudioContext,

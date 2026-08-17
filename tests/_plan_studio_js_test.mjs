@@ -121,7 +121,7 @@ assert.match(source, /Guide · new shot/);
 assert.match(source, /Detail Guide · color injection/);
 assert.match(source, /Masked AV · same shot/);
 assert.match(source, /Feathered AV · softer handoff/);
-assert.match(source, /Feathered AV \+ RGB · experimental/);
+assert.doesNotMatch(source, /Feathered AV \+ RGB/);
 assert.match(source, /17n\+5 temporal latent grid/);
 assert.match(source, /Exact aligned choices are 39, 90, 141, 192/);
 assert.match(source, /Experimental only: nearest reported four-frame 17n−3 cut window/);

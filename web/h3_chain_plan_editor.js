@@ -22,7 +22,7 @@ import {
     setSharedPrompt,
     shotLengthMode,
     sharedPrompt,
-} from "./h3_chain_plan_core.mjs?v=0.5.0-rgbav1";
+} from "./h3_chain_plan_core.mjs?v=0.5.0-avclean1";
 import {availableReferenceRecords} from "./h3_reference_preview_core.mjs?v=0.5.0";
 import {resolveTransitionPolicy} from "./h3_socket_presentation_core.mjs?v=0.5.0";
 
@@ -870,7 +870,7 @@ function mountEditor(node) {
         audioContext.placeholder = planAudioContextLength
             ? String(planAudioContextLength)
             : `Follow video · ${planContextLength}`;
-        audioContext.title = "Generated-audio context entering this scene. Blank inherits the Plan audio default (whose 0 follows video context). An explicit 0 carries no prior generated sound. A positive value can continue audio when video context is 0. All AV mask modes ignore this override and keep audio synchronized to the video prefix; source_track uses its exact timeline slice instead.";
+        audioContext.title = "Generated-audio context entering this scene. Blank inherits the Plan audio default (whose 0 follows video context). An explicit 0 carries no prior generated sound. A positive value can continue audio when video context is 0. Both AV mask modes ignore this override and keep audio synchronized to the video prefix; source_track uses its exact timeline slice instead.";
         audioContext.addEventListener("input", () => {
             if (audioContext.value === "") delete shot.audio_context_length;
             else shot.audio_context_length = Number(audioContext.value);
@@ -884,17 +884,16 @@ function mountEditor(node) {
             ["tapered_guide", "Detail Guide · color injection"],
             ["masked_av", "Masked AV · same shot"],
             ["feathered_av", "Feathered AV · softer handoff"],
-            ["feathered_av_rgb", "Feathered AV + RGB · experimental"],
         ]) {
             const option = element("option", "", label);
             option.value = value;
             continuation.append(option);
         }
         continuation.value = Object.hasOwn(shot, "continuation_mode")
-            ? shot.continuation_mode : "";
+            ? sceneContinuationMode(shot, planContinuationMode) : "";
         continuation.title = index === 0
-            ? "Continuation into this scene. Scene 1 uses it only when Existing Video Context supplies a predecessor. Guide allows a new shot; Detail Guide adds a tapered chroma treatment; Masked AV protects an exact prefix; Feathered AV gradually denoises its end; Feathered AV + RGB also supplies a weak tapered chroma guide."
-            : "Continuation from the preceding scene. Guide provides persistent conditioning; Detail Guide applies luma-preserving tapered chroma injection; Masked AV protects an exact prefix; Feathered AV softens the prefix-to-generation handoff; Feathered AV + RGB keeps that prefix and adds a weak experimental chroma guide.";
+            ? "Continuation into this scene. Scene 1 uses it only when Existing Video Context supplies a predecessor. Guide allows a new shot; Detail Guide adds a tapered chroma treatment; Masked AV protects an exact prefix; Feathered AV gradually denoises its end."
+            : "Continuation from the preceding scene. Guide provides persistent conditioning; Detail Guide applies luma-preserving tapered chroma injection; Masked AV protects an exact prefix; Feathered AV softens the prefix-to-generation handoff.";
         continuation.addEventListener("change", () => {
             if (continuation.value) {
                 shot.continuation_mode = continuation.value;

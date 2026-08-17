@@ -110,9 +110,7 @@ export function h3StudioGridMarkers(
             : `${frames}f is off the 17n+5 grid`,
     };
 
-    const avMode = [
-        "masked_av", "feathered_av", "feathered_av_rgb",
-    ].includes(
+    const avMode = ["masked_av", "feathered_av"].includes(
         String(continuationMode ?? ""),
     );
     let av = null;
