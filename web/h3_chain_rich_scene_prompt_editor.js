@@ -798,7 +798,7 @@ function mount(node) {
         }
         tray.append(element("div", "h3rp-ref-help",
             state.referenceMode === "tagged"
-                ? "Click a registered @tag for a native reference. For a picture, type #tag[2.50s] for a Qwen-only semantic checkpoint. Hover for a media preview; audio never autoplays."
+                ? "Click a registered @tag for a native reference. For a picture, type #tag[2.50s] for a Qwen-only semantic checkpoint, or a Picture storyboard cue when that mode is selected on Tagged Ref2VA. Hover for a media preview; audio never autoplays."
                 : `Scene ${state.active + 1}: click an active reference to insert it. Hover for image, video, or audio preview. Audio never autoplays.`));
         for (const record of state.records) {
             const insertable = record.active || state.referenceMode === "tagged";

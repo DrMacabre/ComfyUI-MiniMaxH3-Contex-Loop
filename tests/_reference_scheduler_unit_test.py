@@ -420,6 +420,33 @@ assert semantic_face["timestamps"] == [
     chain.Fraction("0.00"), chain.Fraction("2.50")]
 assert "#face[0s,2.5s] -> <Video 1> Qwen-only semantic anchors" in (
     semantic_summary)
+
+storyboard_compiled, storyboard_summary, storyboard_bindings = (
+    chain._compile_tagged_reference_prompt(
+        tagged, 1, 1,
+        "Use #face[0.00s] then #face[2.50s] while @look remains native.",
+        semantic_anchor_mode="picture_storyboard"))
+assert storyboard_compiled == (
+    "For the target video, around 0 seconds into this scene, <Picture 2> "
+    "is an approximate visual storyboard reference.\n"
+    "For the target video, around 2.5 seconds into this scene, <Picture 2> "
+    "is an approximate visual storyboard reference.\n\n"
+    "Use <Picture 2> then <Picture 2> while <Picture 1> remains native.")
+assert storyboard_bindings["semantic_anchor_mode"] == "picture_storyboard"
+assert storyboard_bindings["semantic_anchors"][0]["label"] == "<Picture 2>"
+assert (
+    "#face[0s,2.5s] -> <Picture 2> Qwen-only approximate storyboard picture"
+    in storyboard_summary)
+chronological_storyboard, _summary, _bindings = (
+    chain._compile_tagged_reference_prompt(
+        tagged, 1, 1,
+        "Use #face[2.50s] after #look[0.25s].",
+        semantic_anchor_mode="picture_storyboard"))
+assert chronological_storyboard.startswith(
+    "For the target video, around 0.25 seconds into this scene, <Picture 2> "
+    "is an approximate visual storyboard reference.\n"
+    "For the target video, around 2.5 seconds into this scene, <Picture 1> "
+    "is an approximate visual storyboard reference.\n\n")
 assert chain._semantic_anchor_specs(
     "@look #face[0.00s] and #face[2.50]") == [
         {"tag": "face", "timestamp_seconds": 0.0},
@@ -525,6 +552,44 @@ try:
     assert semantic_result[0][1]["minimax_token_tags"] == "semantic-tags"
     assert semantic_status == "2 semantic checkpoints across 1 tagged pictures"
 
+    storyboard_clip = FakeSemanticClip()
+    storyboard_result, storyboard_status = (
+        chain._replace_conditioning_presentation(
+            base_conditioning, storyboard_clip, "storyboard prompt", {
+                "version": chain.SEMANTIC_PRESENTATION_VERSION,
+                "width": 64,
+                "height": 32,
+                "length": 22,
+                "ref_image_size": "match",
+                "semantic_anchor_size": "1024",
+                "semantic_anchor_mode": "picture_storyboard",
+                "pictures": [native_picture],
+                "videos": [{
+                    "video": native_video,
+                    "paired_audio": True,
+                }],
+                "standalone_audio_count": 1,
+                "anchors": [{
+                    "tag": "face",
+                    "image": anchor_picture,
+                    "timestamps": (
+                        chain.Fraction("0.00"), chain.Fraction("0.75")),
+                }],
+            }))
+    assert [item["type"] for item in storyboard_clip.items] == [
+        "image", "audio", "video", "audio", "image"]
+    storyboard_picture = storyboard_clip.items[-1]
+    assert tuple(storyboard_picture["data"].shape) == (1, 1440, 736, 3)
+    assert "timestamps" not in storyboard_picture
+    assert storyboard_result[0][1]["minimax_refs"] == [
+        "native-ref-payload"]
+    assert storyboard_status == (
+        "2 approximate storyboard cues across 1 tagged pictures")
+
+    high_resolution = chain._h3_semantic_anchor_image(
+        anchor_picture, "1280")
+    assert tuple(high_resolution.shape) == (1, 1824, 896, 3)
+
     try:
         chain._semantic_presentation_items({
             "version": chain.SEMANTIC_PRESENTATION_VERSION,
@@ -599,8 +664,27 @@ try:
         "Use <Picture 1> natively and <Video 1> semantically.")
     assert semantic_inputs["presentation"]["anchors"][0]["tag"] == "face"
     assert semantic_inputs["presentation"]["semantic_anchor_size"] == "384"
+    assert semantic_inputs["presentation"]["semantic_anchor_mode"] == (
+        "timestamped_video")
     assert semantic_expansion["result"][0] == ["SemanticAnchors", 0]
     assert semantic_expansion["result"][1] == ["TaggedRef2VA", 1]
+    assert semantic_expansion["result"][4] != tagged["fingerprint"]
+
+    storyboard_expansion = chain.MiniMaxH3TaggedReferenceToVideo().apply(
+        "clip", "video-vae", "audio-vae", tagged, 1, 1,
+        "Use @look natively and #face[0.00s] as a storyboard cue.",
+        64, 32, 22, "match", semantic_anchor_size="1024",
+        semantic_anchor_mode="picture_storyboard")
+    storyboard_inputs = storyboard_expansion["expand"][
+        "SemanticAnchors"]["inputs"]
+    assert storyboard_inputs["presentation"]["semantic_anchor_mode"] == (
+        "picture_storyboard")
+    assert storyboard_inputs["presentation"]["semantic_anchor_size"] == (
+        "1024")
+    assert storyboard_inputs["prompt"].startswith(
+        "For the target video, around 0 seconds into this scene, "
+        "<Picture 2> is an approximate visual storyboard reference.")
+    assert storyboard_expansion["result"][4] != semantic_expansion["result"][4]
 finally:
     chain.GraphBuilder = original_graph_builder
 
@@ -766,6 +850,17 @@ assert tuple(compact_motion["entries"][0]["value"].shape) == (
 
 assert "references" in chain.MiniMaxH3TaggedReferenceToVideo.INPUT_TYPES()[
     "required"]
+tagged_optional = chain.MiniMaxH3TaggedReferenceToVideo.INPUT_TYPES()["optional"]
+assert tagged_optional["semantic_anchor_mode"][0] == [
+    "timestamped_video", "picture_storyboard"]
+assert list(tagged_optional).index("semantic_anchor_size") < list(
+    tagged_optional).index("semantic_anchor_mode")
+assert chain.MiniMaxH3TaggedReferenceToVideo.VALIDATE_INPUTS(
+    semantic_anchor_mode="unsupported") == (
+        "Semantic anchor mode must be timestamped_video or "
+        "picture_storyboard; got 'unsupported'.")
+assert tagged_optional["semantic_anchor_size"][0] == [
+    "384", "512", "768", "1024", "1280", "source"]
 assert "reference_schedule" not in (
     chain.MiniMaxH3TaggedReferenceToVideo.INPUT_TYPES()["required"])
 conditioning = object()

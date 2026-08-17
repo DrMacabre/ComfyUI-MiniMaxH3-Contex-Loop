@@ -497,6 +497,8 @@ REFERENCE_VIDEO_TIMELINE_MODES = (
     "restart_each_scene",
     "sequential",
 )
+SEMANTIC_ANCHOR_MODES = ("timestamped_video", "picture_storyboard")
+SEMANTIC_ANCHOR_SIZES = ("384", "512", "768", "1024", "1280", "source")
 
 
 def _semantic_anchor_specs(text: Any) -> list[dict[str, Any]]:
@@ -507,6 +509,15 @@ def _semantic_anchor_specs(text: Any) -> list[dict[str, Any]]:
         }
         for match in _SEMANTIC_ANCHOR_RE.finditer(str(text or ""))
     ]
+
+
+def _semantic_anchor_mode(value: Any) -> str:
+    mode = str(value or "timestamped_video").strip().lower()
+    if mode not in SEMANTIC_ANCHOR_MODES:
+        raise ValueError(
+            "Semantic anchor mode must be timestamped_video or "
+            "picture_storyboard; got %r." % value)
+    return mode
 
 
 def _prompt_reference_tags(text: Any) -> set[str]:
@@ -2546,9 +2557,12 @@ def _compile_scheduled_reference_prompt(
 
 def _compile_tagged_reference_prompt(
         references: Any, scene: int, scene_count: int, prompt: Any,
-        compliance_mode: str = "strict") -> tuple[str, str, dict[str, Any]]:
+        compliance_mode: str = "strict",
+        semantic_anchor_mode: str = "timestamped_video"
+        ) -> tuple[str, str, dict[str, Any]]:
     """Activate prompt-used native references and Qwen-only image anchors."""
     mode = _reference_compliance_mode(compliance_mode)
+    anchor_mode = _semantic_anchor_mode(semantic_anchor_mode)
     warnings: list[str] = []
     normalized_prompt = str(prompt or "").replace(
         "\r\n", "\n").replace("\r", "\n").strip()
@@ -2614,12 +2628,17 @@ def _compile_tagged_reference_prompt(
                 "timestamps": [],
             })
             group["timestamps"].append(timestamp)
-        first_video_number = len(bindings["videos"]) + 1
+        label_kind = (
+            "Picture" if anchor_mode == "picture_storyboard" else "Video")
+        first_label_number = len(bindings[
+            "pictures" if label_kind == "Picture" else "videos"]) + 1
         for offset, group in enumerate(grouped.values()):
             group["timestamps"].sort()
-            group["label"] = "<Video %d>" % (first_video_number + offset)
+            group["label"] = "<%s %d>" % (
+                label_kind, first_label_number + offset)
             semantic_anchors.append(group)
     bindings["semantic_anchors"] = semantic_anchors
+    bindings["semantic_anchor_mode"] = anchor_mode
 
     aliases = bindings["aliases"]
     motion_definitions: list[str] = []
@@ -2671,6 +2690,20 @@ def _compile_tagged_reference_prompt(
             return semantic_labels.get(match.group(1), match.group(0))
 
         compiled = _SEMANTIC_ANCHOR_RE.sub(replace_semantic, compiled)
+    if semantic_anchors and anchor_mode == "picture_storyboard":
+        timing_lines = []
+        timed_anchors = sorted(
+            (timestamp, item_index, item)
+            for item_index, item in enumerate(semantic_anchors)
+            for timestamp in item["timestamps"])
+        for timestamp, _item_index, item in timed_anchors:
+            timestamp_text = ("%.3f" % float(timestamp)).rstrip(
+                "0").rstrip(".")
+            timing_lines.append(
+                "For the target video, around %s seconds into this "
+                "scene, %s is an approximate visual storyboard "
+                "reference." % (timestamp_text, item["label"]))
+        compiled = "\n".join(timing_lines) + "\n\n" + compiled
     if motion_definitions and mode != "disabled":
         block = "\n".join(motion_definitions)
         subject_header = re.search(
@@ -2698,9 +2731,12 @@ def _compile_tagged_reference_prompt(
     for item in semantic_anchors:
         timestamps = ",".join(
             "%gs" % float(value) for value in item["timestamps"])
-        mapping_lines.append(
-            "#%s[%s] -> %s Qwen-only semantic anchors" % (
-                item["tag"], timestamps, item["label"]))
+        anchor_description = (
+            "Qwen-only approximate storyboard picture"
+            if anchor_mode == "picture_storyboard"
+            else "Qwen-only semantic anchors")
+        mapping_lines.append("#%s[%s] -> %s %s" % (
+            item["tag"], timestamps, item["label"], anchor_description))
     summary = "scene %d/%d: %s" % (
         int(scene), int(scene_count),
         "; ".join(mapping_lines) if mapping_lines
@@ -2778,10 +2814,12 @@ def _h3_semantic_anchor_image(image: Any, target: Any) -> Any:
         target_area_edge = int(target_text)
     except (TypeError, ValueError) as exc:
         raise ValueError(
-            "Semantic anchor size must be 384, 512, 768, or source.") from exc
-    if target_area_edge not in (384, 512, 768):
+            "Semantic anchor size must be 384, 512, 768, 1024, 1280, "
+            "or source.") from exc
+    if str(target_area_edge) not in SEMANTIC_ANCHOR_SIZES:
         raise ValueError(
-            "Semantic anchor size must be 384, 512, 768, or source.")
+            "Semantic anchor size must be 384, 512, 768, 1024, 1280, "
+            "or source.")
     source_height, source_width = int(image.shape[1]), int(image.shape[2])
     scale = math.sqrt(
         (target_area_edge * target_area_edge) /
@@ -2801,6 +2839,7 @@ def _semantic_presentation_items(value: Any) -> tuple[list[dict[str, Any]], str]
     duration = Fraction(frame_count, FPS)
     ref_image_size = str(value.get("ref_image_size") or "match")
     anchor_size = str(value.get("semantic_anchor_size") or "512")
+    anchor_mode = _semantic_anchor_mode(value.get("semantic_anchor_mode"))
     items: list[dict[str, Any]] = []
 
     for image in value.get("pictures", ()):
@@ -2865,20 +2904,27 @@ def _semantic_presentation_items(value: Any) -> tuple[list[dict[str, Any]], str]
                 "scene's %.3fs output duration." % (
                     anchor.get("tag", "picture"), float(duration)))
         image = _h3_semantic_anchor_image(anchor.get("image"), anchor_size)
-        repeated = image.expand(len(exact_timestamps) * 2, -1, -1, -1)
-        paired_timestamps = [
-            float(timestamp)
-            for timestamp in exact_timestamps
-            for _copy in range(2)
-        ]
-        items.append({
-            "type": "video",
-            "data": repeated,
-            "timestamps": paired_timestamps,
-        })
+        if anchor_mode == "picture_storyboard":
+            items.append({"type": "image", "data": image})
+        else:
+            repeated = image.expand(
+                len(exact_timestamps) * 2, -1, -1, -1)
+            paired_timestamps = [
+                float(timestamp)
+                for timestamp in exact_timestamps
+                for _copy in range(2)
+            ]
+            items.append({
+                "type": "video",
+                "data": repeated,
+                "timestamps": paired_timestamps,
+            })
         anchor_count += len(exact_timestamps)
-    return items, "%d semantic checkpoints across %d tagged pictures" % (
-        anchor_count, len(value.get("anchors", ())))
+    if anchor_mode == "picture_storyboard":
+        status = "%d approximate storyboard cues across %d tagged pictures"
+    else:
+        status = "%d semantic checkpoints across %d tagged pictures"
+    return items, status % (anchor_count, len(value.get("anchors", ())))
 
 
 def _replace_conditioning_presentation(
@@ -6786,8 +6832,9 @@ class MiniMaxH3SemanticAnchorConditioning:
     CATEGORY = "conditioning/minimax/contex_loop/references/internal"
     DESCRIPTION = (
         "Internal Tagged Ref2VA stage. Re-encodes the complete Qwen media "
-        "presentation with timestamped semantic picture anchors, then "
-        "preserves the native Ref2VA VAE/audio payload.")
+        "presentation with timestamped semantic Video checkpoints or "
+        "Qwen-only Picture storyboard cues, then preserves the native "
+        "Ref2VA VAE/audio payload.")
 
     def apply(self, positive, clip, prompt, presentation):
         return _replace_conditioning_presentation(
@@ -6806,14 +6853,16 @@ class MiniMaxH3TaggedReferenceToVideo:
                        "@tag to activate that asset for this scene. Only "
                        "registered reference tags are replaced with native "
                        "H3 labels; unrelated @syntax remains unchanged. For "
-                       "a Tagged Picture, #tag[2.50s] creates an approximate "
-                       "Qwen-only semantic checkpoint at 2.50 seconds into "
-                       "this scene. It is not a hard frame or spatial lock."})
+                       "a Tagged Picture, #tag[2.50s] creates either a "
+                       "timestamped semantic checkpoint or an approximate "
+                       "Picture storyboard cue at 2.50 seconds into this "
+                       "scene. Neither is a hard frame or spatial lock."})
         required["references"] = (TAGGED_REFERENCE_TYPE, {
             "tooltip": "Final Tagged Picture/Video/Audio Ref chain. A source "
                        "is active when its registered @tag occurs in the "
                        "resolved prompt. Tagged Pictures can additionally be "
-                       "used through #tag[timestamp] semantic checkpoints."})
+                       "used through #tag[timestamp] semantic checkpoints or "
+                       "Picture storyboard cues."})
         # Preserve the natural graph order: model inputs, references, current
         # scene metadata, prompt, and generation settings.
         ordered = {}
@@ -6838,19 +6887,38 @@ class MiniMaxH3TaggedReferenceToVideo:
                            "skips missing/invalid tagged media, and passes @tags "
                            "unchanged. Unregistered @syntax is always preserved "
                            "because it may represent a subject or dialogue tag."}),
-            "semantic_anchor_size": (["384", "512", "768", "source"], {
+            "semantic_anchor_size": (list(SEMANTIC_ANCHOR_SIZES), {
                 "default": "512",
                 "tooltip": "Qwen-only #tag[timestamp] image resolution. "
-                           "512 is the balanced default. This affects only "
-                           "semantic visual tokens, never native Ref2VA VAE "
-                           "reference latents."}),
+                           "512 is the balanced default; 1024 and 1280 retain "
+                           "more visual detail but increase Qwen token cost. "
+                           "This affects only semantic visual tokens, never "
+                           "native Ref2VA VAE reference latents."}),
+            # Keep this after semantic_anchor_size so older serialized
+            # widgets_values continue to deserialize positionally.
+            "semantic_anchor_mode": (list(SEMANTIC_ANCHOR_MODES), {
+                "default": "timestamped_video",
+                "tooltip": "timestamped_video presents each #tag as a "
+                           "scene-local Qwen Video checkpoint. "
+                           "picture_storyboard keeps each tagged image as a "
+                           "separate Qwen-only <Picture N> and writes its "
+                           "timestamps as approximate prompt instructions. "
+                           "Neither mode creates a VAE reference."}),
         }
         return {"required": ordered, "optional": optional}
 
     @classmethod
-    def VALIDATE_INPUTS(cls, reference_policy="strict"):
+    def VALIDATE_INPUTS(
+            cls, reference_policy="strict",
+            semantic_anchor_mode="timestamped_video",
+            semantic_anchor_size="512"):
         try:
             _reference_compliance_mode(reference_policy)
+            _semantic_anchor_mode(semantic_anchor_mode)
+            if str(semantic_anchor_size) not in SEMANTIC_ANCHOR_SIZES:
+                raise ValueError(
+                    "Semantic anchor size must be one of %s." %
+                    (SEMANTIC_ANCHOR_SIZES,))
         except ValueError as exc:
             return str(exc)
         return True
@@ -6873,17 +6941,21 @@ class MiniMaxH3TaggedReferenceToVideo:
                    "resolved prompt, compactly renumbers those assets to native "
                    "H3 labels, and leaves unrelated @syntax untouched. A "
                    "Tagged Picture can also be written as #tag[2.50s] to add "
-                   "a Qwen-only semantic checkpoint without a VAE reference.")
+                   "either a timestamped Qwen semantic checkpoint or an "
+                   "approximate Qwen-only Picture storyboard cue without a "
+                   "VAE reference.")
 
     def apply(self, clip, vae, audio_vae, references, clip_index,
               clip_count, prompt, width, height, length,
               ref_image_size="match", state=None,
-              reference_policy="strict", semantic_anchor_size="512"):
+              reference_policy="strict", semantic_anchor_size="512",
+              semantic_anchor_mode="timestamped_video"):
         if GraphBuilder is None:
             raise RuntimeError(
                 "Tagged H3 Ref2VA requires ComfyUI GraphBuilder.")
         compiled, summary, bindings = _compile_tagged_reference_prompt(
-            references, clip_index, clip_count, prompt, reference_policy)
+            references, clip_index, clip_count, prompt, reference_policy,
+            semantic_anchor_mode)
         graph = GraphBuilder()
         ref2va = graph.node("MiniMaxH3ReferenceToVideo", "TaggedRef2VA")
         for key, value in (
@@ -6931,13 +7003,16 @@ class MiniMaxH3TaggedReferenceToVideo:
         positive = ref2va.out(0)
         semantic_anchors = bindings.get("semantic_anchors") or []
         if semantic_anchors:
+            anchor_mode = _semantic_anchor_mode(semantic_anchor_mode)
+            anchor_size = str(semantic_anchor_size)
             presentation = {
                 "version": SEMANTIC_PRESENTATION_VERSION,
                 "width": int(width),
                 "height": int(height),
                 "length": int(length),
                 "ref_image_size": str(ref_image_size),
-                "semantic_anchor_size": str(semantic_anchor_size),
+                "semantic_anchor_size": anchor_size,
+                "semantic_anchor_mode": anchor_mode,
                 "pictures": [
                     entry["value"] for entry in bindings["pictures"]],
                 "videos": presentation_videos,
@@ -6955,6 +7030,11 @@ class MiniMaxH3TaggedReferenceToVideo:
             semantic.set_input("prompt", compiled)
             semantic.set_input("presentation", presentation)
             positive = semantic.out(0)
+            fingerprint = _fingerprint({
+                "tagged_reference_fingerprint": fingerprint,
+                "semantic_anchor_mode": anchor_mode,
+                "semantic_anchor_size": anchor_size,
+            })
         if slice_details:
             summary += "; " + "; ".join(slice_details)
         return {

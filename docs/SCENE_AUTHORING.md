@@ -34,7 +34,9 @@ second prompt copy.
 - `@` opens Picture/Video/Audio references.
 - **Dialogue** wraps a selection in `<d>` tags.
 - `#picture[2.50s]` adds a scene-local Qwen semantic checkpoint when the
-  picture is registered through Tagged Ref2VA.
+  picture is registered through Tagged Ref2VA. With Tagged Ref2VA set to
+  `picture_storyboard`, it instead becomes a separate Qwen-only Picture plus
+  an approximate scene-relative timing instruction.
 - `A−` and `A+` change persistent type size.
 - The node may sit inline before Loop Start or on an editor-only branch.
 

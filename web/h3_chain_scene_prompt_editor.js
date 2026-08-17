@@ -1667,7 +1667,8 @@ function mount(node) {
             ? "Prompt-driven references. Hover to preview; click a @tag to insert it. " +
               "Writing the tag activates that asset for this scene and compiles it " +
               "to a compact native H3 label. For a picture, type #tag[2.50s] " +
-              "to add a Qwen-only semantic checkpoint. Audio never autoplays."
+              "to add a Qwen-only semantic checkpoint, or a Picture storyboard " +
+              "cue when that mode is selected on Tagged Ref2VA. Audio never autoplays."
             : mode === "scheduled"
             ? `Scheduled references for scene ${state.active + 1}. Hover to preview; ` +
               "click to insert the optional stable @alias. It compiles to a native label; " +

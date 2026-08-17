@@ -89,6 +89,25 @@ not an exact frame, pose, spatial mask, motion control, or continuation seam.
 Start with two or three sparse anchors—too many repeated pictures can resist
 the source video's changing pose.
 
+### Picture storyboard mode
+
+Set Tagged Ref2VA's `semantic_anchor_mode` to `picture_storyboard` to compile
+the same `#picture[time]` syntax differently. Each distinct tagged image is
+added once as a separate Qwen-only `<Picture N>`, and the compiler adds an
+approximate scene-relative timing sentence for every requested time. No image
+is VAE encoded, spatially fused, or inserted into a fixed generated frame.
+
+This mode gives Qwen a high-detail visual shot plan while H3 remains free to
+invent motion and transitions. `timestamped_video` remains the default and is
+better for sparse temporal reinforcement. Storyboard mode is useful for a
+sequence of compositions or appearances, but its textual timing is softer.
+
+`semantic_anchor_size` accepts 384, 512, 768, 1024, 1280, or source. Higher
+values preserve more face, wardrobe, prop, and environment detail at the cost
+of longer Qwen conditioning and greater VRAM/runtime pressure. Prefer 512 or
+768 generally, 1024 for important detailed anchors, and 1280 for a small number
+of critical stills.
+
 With core Ref2VA, the tray previews media and inserts native labels. With core
 Image to Video it exposes first and last frames as `<Picture N>` according to
 the active keyframes.

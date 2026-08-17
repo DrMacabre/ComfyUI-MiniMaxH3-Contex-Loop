@@ -292,6 +292,15 @@ approximate semantic checkpoints within the current scene—not hard frame,
 pose, spatial, or continuation locks. See
 [Scheduled references](docs/SCHEDULED_REFERENCES.md#tagged-semantic-picture-anchors).
 
+Tagged Ref2VA's **semantic anchor mode** can instead be set to
+`picture_storyboard`. In that mode, every referenced tag remains one separate
+Qwen-only `<Picture N>` and the compiler adds scene-relative approximate-time
+instructions for its `#tag[timestamp]` occurrences. It is useful when several
+high-detail stills describe a shot's visual progression. The Pictures are not
+VAE encoded, fused, or fixed to exact frames. Anchor resolution is independent
+from native `@` references and supports 384, 512, 768, 1024, 1280, or source;
+use 1024/1280 selectively because Qwen visual-token cost rises substantially.
+
 Use **Tagged Motion Ref**, rather than generic Tagged Video Ref, when a clip
 supplies action instead of appearance or whole-video structure. Its native
 media remains `<Video N>`, but its `@tag` compiles to a separate reusable
