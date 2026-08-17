@@ -223,13 +223,13 @@ def main():
     assert not torch.count_nonzero(feathered_video_mask[:, :, :8])
     assert torch.allclose(
         feathered_video_mask[0, 0, 8:12, 0, 0],
-        torch.tensor([0.2, 0.4, 0.6, 0.8]),
+        torch.linspace(0.85, 0.95, 4),
     )
     assert torch.all(feathered_video_mask[:, :, 12:] == 1.0)
-    assert not torch.count_nonzero(feathered_audio_mask[..., :42])
+    assert not torch.count_nonzero(feathered_audio_mask[..., :57])
     assert torch.allclose(
-        feathered_audio_mask[0, 0, 0, 42:65],
-        torch.arange(1, 24, dtype=torch.float32) / 24.0,
+        feathered_audio_mask[0, 0, 0, 57:65],
+        torch.linspace(0.85, 0.95, 8),
     )
     assert torch.all(feathered_audio_mask[..., 65:] == 1.0)
     feathered_video, feathered_audio = feathered["samples"].unbind()
@@ -271,13 +271,13 @@ def main():
     )
     assert torch.allclose(
         composed_video_mask[0, 0, 8:12, 0, 1],
-        torch.tensor([0.2, 0.4, 0.6, 0.8]),
+        torch.linspace(0.85, 0.95, 4),
     )
     assert torch.allclose(
-        composed_audio_mask[0, 0, 0, 42:65],
+        composed_audio_mask[0, 0, 0, 57:65],
         torch.minimum(
-            torch.arange(1, 24, dtype=torch.float32) / 24.0,
-            torch.full((23,), 0.25),
+            torch.linspace(0.85, 0.95, 8),
+            torch.full((8,), 0.25),
         ),
     )
 
@@ -292,8 +292,8 @@ def main():
         "streams cloned, generated AV latent tails copied directly, future "
         "generated, refs retained")
     print(
-        "feathered AV: first 8 video / 42 audio steps protected, final "
-        "4 video / 23 audio prefix steps ramp smoothly toward generation")
+        "feathered AV: first 8 video / 57 audio steps protected, final "
+        "4 video / 8 audio prefix steps use a 0.85..0.95 denoise handoff")
 
     class VideoVAE:
         def __init__(self):
@@ -614,11 +614,11 @@ def main():
         feathered_result[3]["noise_mask"].unbind())
     assert torch.allclose(
         feathered_chain_video_mask[0, 0, 8:12, 0, 0],
-        torch.tensor([0.2, 0.4, 0.6, 0.8]),
+        torch.linspace(0.85, 0.95, 4),
     )
     assert torch.allclose(
-        feathered_chain_audio_mask[0, 0, 0, 42:65],
-        torch.arange(1, 24, dtype=torch.float32) / 24.0,
+        feathered_chain_audio_mask[0, 0, 0, 57:65],
+        torch.linspace(0.85, 0.95, 8),
     )
 
     preflight_calls = []

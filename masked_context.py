@@ -274,7 +274,7 @@ def _existing_mask_streams(latent, video, audio):
 
 
 def _feather_preserved_prefix(video_mask, audio_mask, video_steps, audio_steps):
-    """Apply a short, time-aligned denoise ramp at a protected AV tail."""
+    """Apply a narrow, high-denoise handoff at a protected AV tail."""
     video_steps = int(video_steps)
     audio_steps = int(audio_steps)
     video_feather = min(4, max(0, video_steps - 1))
@@ -282,17 +282,17 @@ def _feather_preserved_prefix(video_mask, audio_mask, video_steps, audio_steps):
         video_mask[:, :, :video_steps] = 0.0
         audio_mask[..., :audio_steps] = 0.0
         return 0, 0
-    # H3 advances by five video-latent steps per seventeen picture frames.
-    # Converting that duration to the 40 Hz audio grid gives roughly 17/3
-    # audio steps for each video step.
-    audio_feather = min(
-        max(0, audio_steps - 1),
-        max(1, int(round(video_feather * 17.0 / 3.0))),
-    )
+    # Fractional H3 masks are most useful close to full denoise.  Keep the
+    # accepted prefix exact until the final four video-latent steps, then
+    # give the model a deliberately narrow 0.85..0.95 reconstruction band.
+    # Audio uses its own shorter 200 ms ramp instead of inheriting the much
+    # wider video-to-audio grid conversion, which used to start the audible
+    # handoff roughly 575 ms before the prefix boundary.
+    audio_feather = min(max(0, audio_steps - 1), 8)
     video_ramp = torch.linspace(
-        0.0, 1.0, video_feather + 2,
+        0.85, 0.95, video_feather,
         device=video_mask.device, dtype=video_mask.dtype,
-    )[1:-1]
+    )
     video_hard_steps = video_steps - video_feather
     video_mask[:, :, :video_hard_steps] = 0.0
     video_mask[:, :, video_hard_steps:video_steps] = torch.minimum(
@@ -301,9 +301,9 @@ def _feather_preserved_prefix(video_mask, audio_mask, video_steps, audio_steps):
     )
     if audio_feather:
         audio_ramp = torch.linspace(
-            0.0, 1.0, audio_feather + 2,
+            0.85, 0.95, audio_feather,
             device=audio_mask.device, dtype=audio_mask.dtype,
-        )[1:-1]
+        )
         audio_hard_steps = audio_steps - audio_feather
         audio_mask[..., :audio_hard_steps] = 0.0
         audio_mask[..., audio_hard_steps:audio_steps] = torch.minimum(
