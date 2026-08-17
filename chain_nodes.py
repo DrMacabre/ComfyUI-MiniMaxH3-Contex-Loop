@@ -125,9 +125,11 @@ H3_CONTEXT_LENGTHS = (
 )
 AUDIO_MODES = ("source_track", "generated_audio", "source_plus_timeline")
 CONTINUATION_MODES = (
-    "guide", "tapered_guide", "masked_av", "feathered_av")
+    "guide", "tapered_guide", "masked_av", "feathered_av",
+    "audio_feathered_av")
 GUIDE_CONTINUATION_MODES = frozenset(("guide", "tapered_guide"))
-MASKED_CONTINUATION_MODES = frozenset(("masked_av", "feathered_av"))
+MASKED_CONTINUATION_MODES = frozenset((
+    "masked_av", "feathered_av", "audio_feathered_av"))
 REFERENCE_AUDIO_TIMELINE_MODES = ("standalone", "source_timeline")
 MOTION_REFERENCE_SHORT_EDGES = ("384", "512", "768", "source")
 
@@ -269,7 +271,8 @@ def _resolved_transition_policy(value: Any) -> dict[str, Any]:
     context = int(compatibility.get("context_length", 0))
     preset = "legacy"
     for candidate in (
-            "cut", "guide", "detail_guide", "hard_av", "soft_av"):
+            "cut", "guide", "detail_guide", "hard_av", "soft_av",
+            "audio_feather_av"):
         resolved = _contract_transition_policy(candidate)
         if (resolved["continuation_mode"] == mode and
                 int(resolved["context_length"]) == context):
@@ -300,6 +303,7 @@ def _transition_policy_display(value: Any) -> str:
         "detail_guide": "Detail Guide",
         "hard_av": "Hard AV",
         "soft_av": "Soft AV",
+        "audio_feather_av": "Audio Feather AV",
         "legacy": "Legacy",
     }
     implementation_labels = {
@@ -307,6 +311,7 @@ def _transition_policy_display(value: Any) -> str:
         "tapered_guide": "Tapered Guide",
         "masked_av": "Masked AV",
         "feathered_av": "Feathered AV",
+        "audio_feathered_av": "Audio-Feathered AV",
     }
     preset = str(policy["preset"])
     implementation = str(policy["continuation_mode"])
@@ -7217,7 +7222,8 @@ class MiniMaxH3TransitionPolicy:
         return {
             "required": {
                 "preset": ((
-                        "cut", "guide", "detail_guide", "hard_av", "soft_av"
+                        "cut", "guide", "detail_guide", "hard_av", "soft_av",
+                        "audio_feather_av"
                 ), {
                     "default": "guide",
                     "tooltip": "Incoming-transition presets: Cut = "
@@ -7226,7 +7232,9 @@ class MiniMaxH3TransitionPolicy:
                                "22 frames (experimental outside its published "
                                "baseline); "
                                "Hard AV = Masked AV + 39 frames; Soft AV = "
-                               "Feathered AV + 39 frames. These are Plan "
+                               "Feathered AV + 39 frames; Audio Feather AV = "
+                               "hard picture + half-cosine audio release + "
+                               "39 frames. These are Plan "
                                "defaults; explicit per-scene settings still "
                                "win. Expert override ignores the selected "
                                "pair and uses the two expert widgets below."}),
@@ -7241,7 +7249,8 @@ class MiniMaxH3TransitionPolicy:
                         "tooltip": "Expert only. Low-level continuation "
                                    "implementation used when override is on. "
                                    "Hard AV resolves to masked_av; Soft AV "
-                                   "resolves to feathered_av."}),
+                                   "resolves to feathered_av; Audio Feather "
+                                   "AV resolves to audio_feathered_av."}),
                 "expert_context_length": (
                     list(TRANSITION_CONTEXT_LENGTHS), {
                         "default": 22,
@@ -7330,7 +7339,8 @@ class MiniMaxH3Legacy04PolicyAdapter:
         context = int(context_length)
         matched_preset = None
         for candidate in (
-                "cut", "guide", "detail_guide", "hard_av", "soft_av"):
+                "cut", "guide", "detail_guide", "hard_av", "soft_av",
+                "audio_feather_av"):
             resolved = _contract_transition_policy(candidate)
             if (resolved["continuation_mode"] == mode and
                     int(resolved["context_length"]) == context):
@@ -7454,7 +7464,8 @@ class MiniMaxH3ChainPlan:
                                "rebuilding an old control surface. Default "
                                "previous-scene video frames used to "
                                "continue motion. Use 22 for guide mode and 39 "
-                               "for masked_av or feathered_av so the AV clocks "
+                               "for masked_av, feathered_av, or "
+                               "audio_feathered_av so the AV clocks "
                                "meet exactly. "
                                "A scene's Advanced selector can override this; "
                                "blank inherits it and 0 starts a visually new scene. "
@@ -7579,7 +7590,11 @@ class MiniMaxH3ChainPlan:
                                "protects both with per-stream denoise masks. "
                                "feathered_av uses the same prefix but "
                                "progressively denoises its final temporal "
-                               "steps for a softer handoff. Both AV modes "
+                               "steps for a softer handoff. "
+                               "audio_feathered_av keeps the picture prefix "
+                               "hard while releasing only the last eight "
+                               "audio latent ticks with a half-cosine ramp. "
+                               "All AV modes "
                                "require video/head, context >= 5, "
                                "the Chain Context latent output wired to the "
                                "sampler, and native or compatible H3 AV-mask "
@@ -9168,7 +9183,7 @@ class MiniMaxH3ChainContext:
                     "tooltip": "The CURRENT scene's empty AV latent from the "
                                "stock H3 conditioning node. Chain Context "
                                "passes it through in guide mode or returns a "
-                               "masked preserved-prefix copy in either AV "
+                               "masked preserved-prefix copy in an AV "
                                "mask mode."}),
             },
             "optional": {
@@ -9193,14 +9208,15 @@ class MiniMaxH3ChainContext:
         "True when preceding video or generated audio is carried, including "
         "audio-only guide continuation; false for a fully independent scene.",
         "Sampler-ready target latent. In guide mode this is the input latent "
-        "unchanged. In either AV mask mode its preserved prefix and nested "
+        "unchanged. In an AV mask mode its preserved prefix and nested "
         "denoise mask carry the previous scene into the current target. Wire "
-        "this output to the sampler for both modes so Plan can switch safely.",
+        "this output to the sampler so Plan can switch safely.",
     )
     FUNCTION = "apply"
     CATEGORY = "conditioning/minimax/contex_loop"
     DESCRIPTION = ("Apply each scene's inherited or overridden guide, hard "
-                   "masked AV, or feathered AV continuation, including "
+                   "masked AV, full AV feather, or audio-only AV feather, "
+                   "including "
                    "independent guide audio carry and scene 1 Existing Video "
                    "Context.")
 
@@ -9264,6 +9280,8 @@ class MiniMaxH3ChainContext:
                 previous_audio=(state.get("previous_audio")
                                 if external_first else None),
                 temporal_feather=(continuation_mode == "feathered_av"),
+                audio_only_feather=(
+                    continuation_mode == "audio_feathered_av"),
             )
             return (out_conditioning, trim, True, out_latent)
         previous_latent = (state.get("previous_latent")

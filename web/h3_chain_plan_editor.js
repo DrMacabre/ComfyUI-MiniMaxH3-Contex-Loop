@@ -870,7 +870,7 @@ function mountEditor(node) {
         audioContext.placeholder = planAudioContextLength
             ? String(planAudioContextLength)
             : `Follow video · ${planContextLength}`;
-        audioContext.title = "Generated-audio context entering this scene. Blank inherits the Plan audio default (whose 0 follows video context). An explicit 0 carries no prior generated sound. A positive value can continue audio when video context is 0. Both AV mask modes ignore this override and keep audio synchronized to the video prefix; source_track uses its exact timeline slice instead.";
+        audioContext.title = "Generated-audio context entering this scene. Blank inherits the Plan audio default (whose 0 follows video context). An explicit 0 carries no prior generated sound. A positive value can continue audio when video context is 0. AV mask modes ignore this override and keep audio synchronized to the video prefix; source_track uses its exact timeline slice instead.";
         audioContext.addEventListener("input", () => {
             if (audioContext.value === "") delete shot.audio_context_length;
             else shot.audio_context_length = Number(audioContext.value);
@@ -884,6 +884,7 @@ function mountEditor(node) {
             ["tapered_guide", "Detail Guide · color injection"],
             ["masked_av", "Masked AV · same shot"],
             ["feathered_av", "Feathered AV · softer handoff"],
+            ["audio_feathered_av", "Audio Feather AV · hard picture, soft sound"],
         ]) {
             const option = element("option", "", label);
             option.value = value;
@@ -892,8 +893,8 @@ function mountEditor(node) {
         continuation.value = Object.hasOwn(shot, "continuation_mode")
             ? sceneContinuationMode(shot, planContinuationMode) : "";
         continuation.title = index === 0
-            ? "Continuation into this scene. Scene 1 uses it only when Existing Video Context supplies a predecessor. Guide allows a new shot; Detail Guide adds a tapered chroma treatment; Masked AV protects an exact prefix; Feathered AV gradually denoises its end."
-            : "Continuation from the preceding scene. Guide provides persistent conditioning; Detail Guide applies luma-preserving tapered chroma injection; Masked AV protects an exact prefix; Feathered AV softens the prefix-to-generation handoff.";
+            ? "Continuation into this scene. Scene 1 uses it only when Existing Video Context supplies a predecessor. Guide allows a new shot; Detail Guide adds a tapered chroma treatment; Masked AV protects an exact prefix; Feathered AV gradually denoises its end; Audio Feather AV keeps the picture exact and softens only the final audio ticks."
+            : "Continuation from the preceding scene. Guide provides persistent conditioning; Detail Guide applies luma-preserving tapered chroma injection; Masked AV protects an exact prefix; Feathered AV softens both streams; Audio Feather AV keeps the picture exact and softens only the final audio ticks.";
         continuation.addEventListener("change", () => {
             if (continuation.value) {
                 shot.continuation_mode = continuation.value;

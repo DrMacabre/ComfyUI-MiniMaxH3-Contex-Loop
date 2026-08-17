@@ -313,6 +313,30 @@ def _feather_preserved_prefix(video_mask, audio_mask, video_steps, audio_steps):
     return video_feather, audio_feather
 
 
+def _audio_feather_preserved_prefix(
+    video_mask, audio_mask, video_steps, audio_steps,
+):
+    """Keep picture exact and release only the final audio-prefix ticks."""
+    video_steps = int(video_steps)
+    audio_steps = int(audio_steps)
+    video_mask[:, :, :video_steps] = 0.0
+    audio_feather = min(8, max(0, audio_steps))
+    audio_hard_steps = audio_steps - audio_feather
+    audio_mask[..., :audio_hard_steps] = 0.0
+    if audio_feather:
+        indices = torch.arange(
+            1, audio_feather + 1,
+            device=audio_mask.device, dtype=audio_mask.dtype,
+        )
+        audio_ramp = 0.5 - 0.5 * torch.cos(
+            torch.pi * indices / float(audio_feather))
+        audio_mask[..., audio_hard_steps:audio_steps] = torch.minimum(
+            audio_mask[..., audio_hard_steps:audio_steps],
+            audio_ramp.view(1, 1, 1, audio_feather),
+        )
+    return audio_feather
+
+
 def _drop_prefix_guides(conditioning, prefix_frames):
     """Remove target guides that conflict with the preserved latent prefix."""
     out = []
@@ -350,6 +374,7 @@ def apply_masked_prefix(
     audio_vae=None,
     previous_audio=None,
     temporal_feather=False,
+    audio_only_feather=False,
 ):
     """Return conditioning, masked target latent, and repeated trim length."""
     _require_h3_mask_support()
@@ -436,7 +461,10 @@ def apply_masked_prefix(
     video_mask, audio_mask = _existing_mask_streams(
         latent, out_video, out_audio)
     video_feather_steps = audio_feather_steps = 0
-    if bool(temporal_feather):
+    if bool(audio_only_feather):
+        audio_feather_steps = _audio_feather_preserved_prefix(
+            video_mask, audio_mask, video_steps, audio_steps)
+    elif bool(temporal_feather):
         video_feather_steps, audio_feather_steps = _feather_preserved_prefix(
             video_mask, audio_mask, video_steps, audio_steps)
     else:
@@ -458,9 +486,12 @@ def apply_masked_prefix(
         "frames at %dx%d; trim %d",
         frames, video_steps, audio_steps, frames / float(FPS), video_source,
         audio_source,
-        ("temporal feather %d video / %d audio steps" %
-         (video_feather_steps, audio_feather_steps)
-         if temporal_feather else "hard prefix mask"),
+        ("audio-only half-cosine feather %d audio steps" %
+         audio_feather_steps
+         if audio_only_feather else
+         ("temporal feather %d video / %d audio steps" %
+          (video_feather_steps, audio_feather_steps)
+          if temporal_feather else "hard prefix mask")),
         target_frames, width, height, frames,
     )
     return out_conditioning, out_latent, frames

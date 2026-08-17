@@ -138,6 +138,16 @@ assert.deepEqual(resolveTransitionPolicy(plan), {
     source: "typed",
 });
 
+transition.widgets.find((item) => item.name === "preset").value = "audio_feather_av";
+assert.deepEqual(resolveTransitionPolicy(plan), {
+    known: true,
+    preset: "audio_feather_av",
+    continuationMode: "audio_feathered_av",
+    contextLength: 39,
+    expertOverride: false,
+    source: "typed",
+});
+
 transition.widgets.find((item) => item.name === "preset").value = "detail_guide";
 assert.deepEqual(resolveTransitionPolicy(plan), {
     known: true,

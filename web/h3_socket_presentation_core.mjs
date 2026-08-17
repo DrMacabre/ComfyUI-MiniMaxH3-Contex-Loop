@@ -15,6 +15,7 @@ const TRANSITION_PRESETS = Object.freeze({
     detail_guide: ["tapered_guide", 22],
     hard_av: ["masked_av", 39],
     soft_av: ["feathered_av", 39],
+    audio_feather_av: ["audio_feathered_av", 39],
 });
 
 const CONDITIONAL_SOURCE_AUDIO_NODES = new Set([

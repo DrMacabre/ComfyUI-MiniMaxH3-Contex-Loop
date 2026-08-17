@@ -242,6 +242,33 @@ def main():
         previous_audio[..., -prefix_audio_steps:],
     )
 
+    _, audio_feathered, audio_feathered_trim = masked.apply_masked_prefix(
+        conditioning=conditioning,
+        vae=UnexpectedVideoVAE(),
+        latent=target,
+        previous_frames=frames,
+        context_length=39,
+        crop="disabled",
+        previous_latent=previous,
+        audio_only_feather=True,
+    )
+    audio_feathered_video_mask, audio_feathered_audio_mask = (
+        audio_feathered["noise_mask"].unbind())
+    assert audio_feathered_trim == 39
+    assert not torch.count_nonzero(
+        audio_feathered_video_mask[:, :, :prefix_video_steps])
+    assert torch.all(
+        audio_feathered_video_mask[:, :, prefix_video_steps:] == 1.0)
+    assert not torch.count_nonzero(audio_feathered_audio_mask[..., :57])
+    indices = torch.arange(1, 9, dtype=torch.float32)
+    expected_audio_release = 0.5 - 0.5 * torch.cos(torch.pi * indices / 8.0)
+    assert torch.allclose(
+        audio_feathered_audio_mask[0, 0, 0, 57:65],
+        expected_audio_release,
+    )
+    assert audio_feathered_audio_mask[0, 0, 0, 64] == 1.0
+    assert torch.all(audio_feathered_audio_mask[..., 65:] == 1.0)
+
     existing_video_mask = torch.ones_like(target_video[:, :1])
     existing_video_mask[:, :, 8:12, 0, 0] = 0.1
     existing_audio_mask = torch.ones(
@@ -392,6 +419,18 @@ def main():
     assert feathered_plan["compatibility"][
         "continuation_mode"] == "feathered_av"
     assert "context=39/feathered_av" in feathered_plan["summary"]
+    audio_feathered_plan = chain._normalize_plan(
+        json.dumps({"shots": [
+            {"id": "one", "prompt": "first", "length": 192},
+            {"id": "two", "prompt": "second", "length": 192},
+        ]}),
+        "audio_feathered_test", 64, 32, 39, "video", "head", "disabled",
+        "generated_audio", 39, 8.0, 8, 1, 18, "model-stack-v1", 5,
+        "audio_feathered_av",
+    )
+    assert audio_feathered_plan["compatibility"][
+        "continuation_mode"] == "audio_feathered_av"
+    assert "context=39/audio_feathered_av" in audio_feathered_plan["summary"]
     migrated_av_plan = chain._normalize_plan(
         json.dumps({"shots": [
             {"id": "one", "prompt": "first", "length": 192},
@@ -704,7 +743,8 @@ def main():
         first_state, conditioning, VideoVAE(), target)
     assert first_result[:3] == (conditioning, 0, False)
     assert first_result[3] is target
-    for av_mode in ("masked_av", "feathered_av"):
+    for av_mode in (
+            "masked_av", "feathered_av", "audio_feathered_av"):
         for invalid_args, expected in (
             ((1, "video", "head"), "at least 5"),
             ((39, "frames", "head"), "encode_mode=video"),

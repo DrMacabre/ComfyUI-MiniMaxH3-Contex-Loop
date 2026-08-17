@@ -937,7 +937,7 @@ function mount(node) {
         audioContext.placeholder = planAudioContextLength
             ? String(planAudioContextLength)
             : `Video ${settings().contextLength}`;
-        audioContext.title = "Blank inherits the Plan audio context; an explicit 0 carries no prior generated audio. Positive audio context works with zero video context in guide generated-audio modes. Both AV mask modes remain synchronized to video.";
+        audioContext.title = "Blank inherits the Plan audio context; an explicit 0 carries no prior generated audio. Positive audio context works with zero video context in guide generated-audio modes. AV mask modes remain synchronized to video.";
         audioContext.addEventListener("change", () => {
             if (audioContext.value === "") delete shot.audio_context_length;
             else shot.audio_context_length = Number(audioContext.value);
@@ -953,6 +953,7 @@ function mount(node) {
             ["tapered_guide", "Detail Guide · color injection"],
             ["masked_av", "Masked AV · same shot"],
             ["feathered_av", "Feathered AV · softer handoff"],
+            ["audio_feathered_av", "Audio Feather AV · hard picture, soft sound"],
         ]) {
             const option = element("option", "", label);
             option.value = value;
@@ -962,7 +963,7 @@ function mount(node) {
             ? sceneContinuationMode(shot, settings().continuationMode) : "";
         continuation.title = state.active === 0
             ? "Continuation into this scene. Scene 1 uses it only with Existing Video Context. Detail Guide adds luma-preserving tapered chroma injection."
-            : "Guide provides persistent conditioning; Detail Guide applies luma-preserving tapered chroma injection; Masked AV preserves an exact prefix; Feathered AV progressively denoises its end.";
+            : "Guide provides persistent conditioning; Detail Guide applies luma-preserving tapered chroma injection; Masked AV preserves an exact prefix; Feathered AV softens both streams; Audio Feather AV keeps the picture exact and softens only the final audio ticks.";
         continuation.addEventListener("change", () => {
             if (continuation.value) shot.continuation_mode = continuation.value;
             else delete shot.continuation_mode;

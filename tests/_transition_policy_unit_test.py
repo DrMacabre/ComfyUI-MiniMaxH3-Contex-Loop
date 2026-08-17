@@ -63,6 +63,7 @@ expected = {
     "detail_guide": ("tapered_guide", 22),
     "hard_av": ("masked_av", 39),
     "soft_av": ("feathered_av", 39),
+    "audio_feather_av": ("audio_feathered_av", 39),
 }
 for preset, (mode, context) in expected.items():
     policy, output_mode, output_context, status = node.build(preset)
@@ -81,6 +82,9 @@ soft_status = node.build("soft_av")[3]
 assert soft_status.startswith("Soft AV -> Feathered AV + 39 frames")
 hard_status = node.build("hard_av")[3]
 assert hard_status.startswith("Hard AV -> Masked AV + 39 frames")
+audio_feather_status = node.build("audio_feather_av")[3]
+assert audio_feather_status.startswith(
+    "Audio Feather AV -> Audio-Feathered AV + 39 frames")
 
 legacy = make_plan(None, context_length=39, continuation_mode="masked_av")
 assert "transition_policy" not in legacy["compatibility"]
@@ -232,6 +236,10 @@ matched_audio, matched_transition, _ = legacy_adapter.build(
 assert matched_audio == chain.migrate_legacy_audio_mode("generated_audio")
 assert matched_transition["preset"] == "hard_av"
 assert matched_transition["expert_override"] is False
+matched_audio_feather = legacy_adapter.build(
+    "generated_audio", "audio_feathered_av", 39)[1]
+assert matched_audio_feather["preset"] == "audio_feather_av"
+assert matched_audio_feather["expert_override"] is False
 assert chain.CHAIN_NODE_CLASS_MAPPINGS[
     "MiniMaxH3Legacy04PolicyAdapter"] is (
         chain.MiniMaxH3Legacy04PolicyAdapter)
@@ -239,6 +247,7 @@ assert len(legacy_adapter.OUTPUT_TOOLTIPS) == len(legacy_adapter.RETURN_TYPES)
 assert all(legacy_adapter.OUTPUT_TOOLTIPS)
 
 print(
-    "transition policy: Cut/Guide/Detail Guide/Hard AV/Soft AV presets, expert "
+    "transition policy: Cut/Guide/Detail Guide/Hard AV/Soft AV/Audio Feather "
+    "AV presets, expert "
     "overrides, zero-context delivery, AV safety validation, legacy fallback "
     "and adapter, Plan resolution, and typed node registration pass")

@@ -29,7 +29,10 @@ import {
 assert.equal(AUTO_SCENE_COLORS.length, 12);
 assert.deepEqual(
     CONTINUATION_MODES,
-    ["guide", "tapered_guide", "masked_av", "feathered_av"],
+    [
+        "guide", "tapered_guide", "masked_av", "feathered_av",
+        "audio_feathered_av",
+    ],
 );
 assert.equal(H3_CONTEXT_LENGTHS.at(-1), 243);
 assert.equal(new Set(AUTO_SCENE_COLORS).size, AUTO_SCENE_COLORS.length);
@@ -83,6 +86,10 @@ assert.equal(
 assert.equal(
     sceneContinuationMode({continuation_mode: "feathered_av"}, "guide"),
     "feathered_av",
+);
+assert.equal(
+    sceneContinuationMode({continuation_mode: "audio_feathered_av"}, "guide"),
+    "audio_feathered_av",
 );
 assert.equal(
     sceneContinuationMode({continuation_mode: "feathered_av_rgb"}, "guide"),

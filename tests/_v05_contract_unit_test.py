@@ -123,6 +123,7 @@ def main():
         "detail_guide": ("tapered_guide", 22),
         "hard_av": ("masked_av", 39),
         "soft_av": ("feathered_av", 39),
+        "audio_feather_av": ("audio_feathered_av", 39),
     }
     for name, (mode, context) in expected_presets.items():
         resolved = contracts.transition_preset(name)
@@ -155,6 +156,14 @@ def main():
         assert "at least 5" in str(exc)
     else:
         raise AssertionError("one-frame AV transition was accepted")
+    try:
+        contracts.transition_policy(
+            "guide", expert_override=True,
+            continuation_mode="audio_feathered_av", context_length=1)
+    except ValueError as exc:
+        assert "at least 5" in str(exc)
+    else:
+        raise AssertionError("one-frame audio-feather AV transition was accepted")
     shape = contracts.source_timeline_shape()
     assert shape["version"] == contracts.SOURCE_TIMELINE_VERSION
     assert set(shape) == {
