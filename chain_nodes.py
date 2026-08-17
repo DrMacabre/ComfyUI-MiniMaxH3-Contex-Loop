@@ -12555,6 +12555,21 @@ async def _update_prompt_history(request):
                 store.activate,
                 body.get("run_name"), body.get("scene_id"),
                 body.get("revision"))
+        elif action == "label":
+            payload = await asyncio.to_thread(
+                store.set_label,
+                body.get("run_name"), body.get("scene_id"),
+                body.get("revision"), body.get("label", ""))
+        elif action == "archive":
+            payload = await asyncio.to_thread(
+                store.set_archived,
+                body.get("run_name"), body.get("scene_id"),
+                body.get("revision"), body.get("archived", True))
+        elif action == "delete":
+            payload = await asyncio.to_thread(
+                store.delete_draft,
+                body.get("run_name"), body.get("scene_id"),
+                body.get("revision"))
         else:
             return web.json_response(
                 {"error": "Unknown prompt-history action."}, status=400)

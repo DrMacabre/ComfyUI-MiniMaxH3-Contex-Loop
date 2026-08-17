@@ -23,6 +23,7 @@ import {
     promptRevisionHelp,
     promptRevisionLabel,
     promptRevisionNavigation,
+    promptRevisionTree,
 } from "./h3_prompt_history_core.mjs?v=0.5.0";
 import {availableReferenceRecords} from "./h3_reference_preview_core.mjs?v=0.5.0";
 import {tokenizeRichPrompt} from "./h3_rich_prompt_editor_core.mjs?v=0.5.0";
@@ -190,6 +191,34 @@ function injectStyles() {
         .h3sp-history-meta { min-width:0; max-width:280px; overflow:hidden;
             text-overflow:ellipsis; white-space:nowrap; font-size:11px; }
         .h3sp-history-error { color:#ffb3b3; }
+        .h3sp-history-tree { position:relative; flex:0 0 auto; }
+        .h3sp-history-tree > summary { list-style:none; cursor:pointer; padding:3px 7px;
+            border:1px solid color-mix(in srgb,var(--h3sp-border) 72%,transparent);
+            border-radius:999px; background:var(--comfy-input-bg,#11141a);
+            color:var(--h3sp-text); user-select:none; }
+        .h3sp-history-tree > summary::-webkit-details-marker { display:none; }
+        .h3sp-history-tree[open] > summary { border-color:var(--h3sp-accent); }
+        .h3sp-history-tree-panel { position:absolute; z-index:20; bottom:calc(100% + 7px);
+            left:50%; transform:translateX(-50%); width:min(440px,calc(100vw - 30px));
+            max-height:310px; overflow:auto; padding:7px; border:1px solid var(--h3sp-border);
+            border-radius:8px; background:var(--h3sp-bg); box-shadow:0 14px 36px rgba(0,0,0,.48); }
+        .h3sp-history-tree-row { display:flex; align-items:center; gap:4px; min-width:0;
+            margin:2px 0; border-radius:5px; }
+        .h3sp-history-tree-row.h3sp-history-active { background:rgba(132,170,255,.12); }
+        .h3sp-history-tree-row.h3sp-history-archived { opacity:.58; }
+        .h3sp-history-tree-select { flex:1 1 auto; min-width:0; justify-content:flex-start !important;
+            min-height:26px !important; padding:3px 6px !important; border-color:transparent !important;
+            background:transparent !important; text-align:left; }
+        .h3sp-history-branch { flex:0 0 auto; color:var(--h3sp-muted); }
+        .h3sp-history-tree-label { min-width:0; overflow:hidden; text-overflow:ellipsis;
+            white-space:nowrap; color:var(--h3sp-text); }
+        .h3sp-history-tree-badge { flex:0 0 auto; color:var(--h3sp-muted); font-size:10px; }
+        .h3sp-history-tree-action { min-width:25px !important; min-height:25px !important;
+            padding:2px 5px !important; }
+        .h3sp-history-tree-tools { display:flex; justify-content:space-between; align-items:center;
+            gap:8px; margin-top:6px; padding-top:6px; border-top:1px solid var(--h3sp-border);
+            color:var(--h3sp-muted); font-size:10px; }
+        .h3sp-history-tree-tools button { min-height:24px; padding:2px 6px; }
         .h3sp-error { padding:12px; border:1px solid #a76565; border-radius:6px;
             color:#ffb3b3; background:#351f24; white-space:pre-wrap; }
         .h3sp-assist { flex:0 0 auto; display:flex; flex-direction:column; gap:7px;
@@ -615,6 +644,8 @@ function mount(node) {
             pendingDraft: null,
             savePromise: null,
             error: "",
+            treeOpen: false,
+            showArchived: false,
         },
         pollTimer: null,
     };
@@ -756,11 +787,132 @@ function mount(node) {
         previous.disabled = !navigation.previous;
         next.disabled = !navigation.next;
         controls.append(previous, count, next);
+        const treeDetails = renderHistoryTree();
         const metadata = element(
             "span", "h3sp-history-meta", promptRevisionLabel(navigation),
         );
         metadata.title = promptRevisionHelp(navigation);
-        host.append(controls, metadata);
+        host.append(controls, treeDetails, metadata);
+    }
+
+    function renderHistoryTree() {
+        const history = state.history;
+        const details = element("details", "h3sp-history-tree");
+        details.open = history.treeOpen;
+        const tree = promptRevisionTree(history.data, {
+            includeArchived: history.showArchived,
+        });
+        const summary = element("summary", "", `History (${tree.rows.length})`);
+        summary.title = "Show prompt ancestry, labels, and revision actions";
+        const panel = element("div", "h3sp-history-tree-panel");
+        for (const row of tree.rows) {
+            const rowHost = element(
+                "div",
+                `h3sp-history-tree-row${row.isActive ? " h3sp-history-active" : ""}${row.isArchived ? " h3sp-history-archived" : ""}`,
+            );
+            rowHost.style.paddingLeft = `${row.depth * 15}px`;
+            const select = button("", `Activate ${row.displayLabel} in the Plan`, () => {
+                if (!row.isActive) void selectHistoryRevision(row.revision.id);
+            });
+            select.className = "h3sp-history-tree-select";
+            select.disabled = row.isActive;
+            select.append(
+                element("span", "h3sp-history-branch", row.depth ? "↳" : "●"),
+                element("span", "h3sp-history-tree-label", row.displayLabel),
+                element(
+                    "span", "h3sp-history-tree-badge",
+                    row.isArchived ? "Archived"
+                        : row.isActive ? "Active"
+                            : row.isExecuted ? "Executed" : "Draft",
+                ),
+            );
+            const rename = button("Label", `Label ${row.displayLabel}`, () => {
+                const label = window.prompt(
+                    "Short label for this prompt revision (leave blank to clear):",
+                    String(row.revision.label ?? ""),
+                );
+                if (label != null) void mutateHistoryRevision(
+                    "label", row.revision.id, {label});
+            });
+            rename.className = "h3sp-history-tree-action";
+            rowHost.append(select, rename);
+            if (row.canRestore) {
+                const restore = button("Restore", `Restore ${row.displayLabel} to visible history`, () => {
+                    void mutateHistoryRevision("archive", row.revision.id, {archived:false});
+                });
+                restore.className = "h3sp-history-tree-action";
+                rowHost.append(restore);
+            } else if (row.canArchive) {
+                const archive = button("Archive", `Archive ${row.displayLabel}`, () => {
+                    void mutateHistoryRevision("archive", row.revision.id, {archived:true});
+                });
+                archive.className = "h3sp-history-tree-action";
+                rowHost.append(archive);
+            }
+            if (row.canDelete) {
+                const remove = button("Delete", `Delete unexecuted leaf ${row.displayLabel}`, () => {
+                    if (window.confirm(`Delete ${row.displayLabel}? This cannot be undone.`)) {
+                        void mutateHistoryRevision("delete", row.revision.id);
+                    }
+                });
+                remove.className = "h3sp-history-tree-action";
+                rowHost.append(remove);
+            }
+            panel.append(rowHost);
+        }
+        if (!tree.rows.length) {
+            panel.append(element("div", "h3sp-history-tree-tools", "No visible revisions"));
+        }
+        const tools = element("div", "h3sp-history-tree-tools");
+        tools.append(element(
+            "span", "",
+            "↳ shows parent → child progression",
+        ));
+        if (tree.archivedCount) {
+            tools.append(button(
+                history.showArchived ? "Hide archived" : `Show archived (${tree.archivedCount})`,
+                "Toggle archived prompt revisions",
+                () => {
+                    history.showArchived = !history.showArchived;
+                    history.treeOpen = true;
+                    renderHistory();
+                },
+            ));
+        }
+        panel.append(tools);
+        details.append(summary, panel);
+        details.addEventListener("toggle", () => {
+            history.treeOpen = details.open;
+        });
+        return details;
+    }
+
+    async function mutateHistoryRevision(action, revisionId, fields = {}) {
+        await flushHistoryDraft();
+        const history = state.history;
+        const shot = state.plan?.shots?.[state.active];
+        if (!shot) return;
+        const shotId = String(shot.id || `clip_${String(state.active + 1).padStart(4, "0")}`);
+        const runName = planRunName();
+        const key = historySceneKey(runName, shotId);
+        try {
+            const payload = await historyRequest({}, {
+                action,
+                run_name: runName,
+                scene_id: shotId,
+                revision: revisionId,
+                ...fields,
+            });
+            if (history.sceneKey !== key) return;
+            history.data = payload.history;
+            history.revisionId = payload.history?.active_revision ?? history.revisionId;
+            history.error = "";
+            renderHistory();
+        } catch (error) {
+            if (history.sceneKey !== key) return;
+            history.error = error?.message || String(error);
+            renderHistory();
+        }
     }
 
     async function loadHistory(shotId, prompt, synchronize = true) {

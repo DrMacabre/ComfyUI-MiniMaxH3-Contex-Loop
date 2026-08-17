@@ -26,6 +26,7 @@ import {
     promptRevisionHelp,
     promptRevisionLabel,
     promptRevisionNavigation,
+    promptRevisionTree,
 } from "./h3_prompt_history_core.mjs?v=0.5.0";
 import {availableReferenceRecords} from "./h3_reference_preview_core.mjs?v=0.5.0";
 import {
@@ -143,6 +144,31 @@ function injectStyles() {
       .h3rp-history-nav button { min-width:25px; min-height:22px; padding:1px 5px; border:0; border-radius:999px; background:transparent; }
       .h3rp-history-count { min-width:43px; text-align:center; color:var(--h3rp-text); font-variant-numeric:tabular-nums; }
       .h3rp-history-meta { max-width:240px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:11px; }
+      .h3rp-history-tree { position:relative; flex:0 0 auto; }
+      .h3rp-history-tree > summary { list-style:none; cursor:pointer; padding:3px 7px;
+        border:1px solid var(--h3rp-border); border-radius:999px; background:var(--comfy-input-bg,#11141a);
+        color:var(--h3rp-text); user-select:none; }
+      .h3rp-history-tree > summary::-webkit-details-marker { display:none; }
+      .h3rp-history-tree[open] > summary { border-color:var(--h3rp-accent); }
+      .h3rp-history-tree-panel { position:absolute; z-index:20; bottom:calc(100% + 7px); left:50%;
+        transform:translateX(-50%); width:min(440px,calc(100vw - 30px)); max-height:310px; overflow:auto;
+        padding:7px; border:1px solid var(--h3rp-border); border-radius:8px; background:var(--h3rp-bg);
+        box-shadow:0 14px 36px rgba(0,0,0,.48); }
+      .h3rp-history-tree-row { display:flex; align-items:center; gap:4px; min-width:0; margin:2px 0; border-radius:5px; }
+      .h3rp-history-tree-row.h3rp-history-active { background:rgba(142,181,255,.12); }
+      .h3rp-history-tree-row.h3rp-history-archived { opacity:.58; }
+      .h3rp-history-tree-select { flex:1 1 auto; min-width:0; justify-content:flex-start !important;
+        min-height:26px !important; padding:3px 6px !important; border-color:transparent !important;
+        background:transparent !important; text-align:left; }
+      .h3rp-history-branch { flex:0 0 auto; color:var(--h3rp-muted); }
+      .h3rp-history-tree-label { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+        color:var(--h3rp-text); }
+      .h3rp-history-tree-badge { flex:0 0 auto; color:var(--h3rp-muted); font-size:10px; }
+      .h3rp-history-tree-action { min-width:25px !important; min-height:25px !important; padding:2px 5px !important; }
+      .h3rp-history-tree-tools { display:flex; justify-content:space-between; align-items:center; gap:8px;
+        margin-top:6px; padding-top:6px; border-top:1px solid var(--h3rp-border);
+        color:var(--h3rp-muted); font-size:10px; }
+      .h3rp-history-tree-tools button { min-height:24px; padding:2px 6px; }
       .h3rp-error { padding:12px; border:1px solid #a76565; border-radius:7px; color:#ffb3b3; background:#351f24; white-space:pre-wrap; }
       .h3rp-popover { position:fixed; z-index:100000; width:min(360px,calc(100vw - 24px)); padding:9px;
         border:1px solid #60718c; border-radius:9px; background:#171a20; color:#eef2f8;
@@ -458,7 +484,8 @@ function mount(node) {
         guide:normalizeRichGuide(node.properties[GUIDE_PROPERTY]),
         records:[], referenceMode:null, editor:null, refs:null, status:null, optimizerStatus:null,
         history:{sceneKey:"", data:null, revisionId:null, host:null, loadToken:0, loadPromise:null,
-            saveTimer:null, pendingDraft:null, savePromise:null, error:""},
+            saveTimer:null, pendingDraft:null, savePromise:null, error:"", treeOpen:false,
+            showArchived:false},
         optimizer:{client:null, preparing:false, requestId:null, meta:null, origins:new Map(), providers:null,
             abortController:null, activeBackend:null, error:"", message:"", pendingResult:null},
         popover:null, popoverTimer:null, pollTimer:null,
@@ -549,9 +576,112 @@ function mount(node) {
         previous.disabled = !navigation.previous;
         next.disabled = !navigation.next;
         controls.append(previous, count, next);
+        const treeDetails = renderHistoryTree();
         const metadata = element("span", "h3rp-history-meta", promptRevisionLabel(navigation));
         metadata.title = promptRevisionHelp(navigation);
-        history.host.append(controls, metadata);
+        history.host.append(controls, treeDetails, metadata);
+    }
+
+    function renderHistoryTree() {
+        const history = state.history;
+        const details = element("details", "h3rp-history-tree");
+        details.open = history.treeOpen;
+        const tree = promptRevisionTree(history.data, {includeArchived:history.showArchived});
+        const summary = element("summary", "", `History (${tree.rows.length})`);
+        summary.title = "Show prompt ancestry, labels, and revision actions";
+        const panel = element("div", "h3rp-history-tree-panel");
+        for (const row of tree.rows) {
+            const rowHost = element("div",
+                `h3rp-history-tree-row${row.isActive ? " h3rp-history-active" : ""}${row.isArchived ? " h3rp-history-archived" : ""}`);
+            rowHost.style.paddingLeft = `${row.depth * 15}px`;
+            const select = button("", `Activate ${row.displayLabel} in the Plan`, () => {
+                if (!row.isActive) void selectHistoryRevision(row.revision.id);
+            });
+            select.className = "h3rp-history-tree-select";
+            select.disabled = row.isActive;
+            select.append(
+                element("span", "h3rp-history-branch", row.depth ? "↳" : "●"),
+                element("span", "h3rp-history-tree-label", row.displayLabel),
+                element("span", "h3rp-history-tree-badge",
+                    row.isArchived ? "Archived"
+                        : row.isActive ? "Active"
+                            : row.isExecuted ? "Executed" : "Draft"),
+            );
+            const rename = button("Label", `Label ${row.displayLabel}`, () => {
+                const label = window.prompt(
+                    "Short label for this prompt revision (leave blank to clear):",
+                    String(row.revision.label ?? ""),
+                );
+                if (label != null) void mutateHistoryRevision("label", row.revision.id, {label});
+            });
+            rename.className = "h3rp-history-tree-action";
+            rowHost.append(select, rename);
+            if (row.canRestore) {
+                const restore = button("Restore", `Restore ${row.displayLabel} to visible history`, () => {
+                    void mutateHistoryRevision("archive", row.revision.id, {archived:false});
+                });
+                restore.className = "h3rp-history-tree-action";
+                rowHost.append(restore);
+            } else if (row.canArchive) {
+                const archive = button("Archive", `Archive ${row.displayLabel}`, () => {
+                    void mutateHistoryRevision("archive", row.revision.id, {archived:true});
+                });
+                archive.className = "h3rp-history-tree-action";
+                rowHost.append(archive);
+            }
+            if (row.canDelete) {
+                const remove = button("Delete", `Delete unexecuted leaf ${row.displayLabel}`, () => {
+                    if (window.confirm(`Delete ${row.displayLabel}? This cannot be undone.`)) {
+                        void mutateHistoryRevision("delete", row.revision.id);
+                    }
+                });
+                remove.className = "h3rp-history-tree-action";
+                rowHost.append(remove);
+            }
+            panel.append(rowHost);
+        }
+        if (!tree.rows.length) panel.append(element("div", "h3rp-history-tree-tools", "No visible revisions"));
+        const tools = element("div", "h3rp-history-tree-tools");
+        tools.append(element("span", "", "↳ shows parent → child progression"));
+        if (tree.archivedCount) {
+            tools.append(button(
+                history.showArchived ? "Hide archived" : `Show archived (${tree.archivedCount})`,
+                "Toggle archived prompt revisions",
+                () => {
+                    history.showArchived = !history.showArchived;
+                    history.treeOpen = true;
+                    renderHistory();
+                },
+            ));
+        }
+        panel.append(tools);
+        details.append(summary, panel);
+        details.addEventListener("toggle", () => { history.treeOpen = details.open; });
+        return details;
+    }
+
+    async function mutateHistoryRevision(action, revisionId, fields = {}) {
+        await flushHistoryDraft();
+        const history = state.history;
+        const shot = state.plan?.shots?.[state.active];
+        if (!shot) return;
+        const shotId = String(shot.id || `clip_${String(state.active + 1).padStart(4, "0")}`);
+        const runName = planRunName();
+        const key = historySceneKey(runName, shotId);
+        try {
+            const payload = await historyRequest({}, {
+                action, run_name:runName, scene_id:shotId, revision:revisionId, ...fields,
+            });
+            if (history.sceneKey !== key) return;
+            history.data = payload.history;
+            history.revisionId = payload.history?.active_revision ?? history.revisionId;
+            history.error = "";
+            renderHistory();
+        } catch (error) {
+            if (history.sceneKey !== key) return;
+            history.error = error?.message || String(error);
+            renderHistory();
+        }
     }
 
     async function loadHistory(shotId, prompt, synchronize = true) {

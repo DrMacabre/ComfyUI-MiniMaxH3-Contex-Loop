@@ -99,6 +99,12 @@ assert.match(source, /Optimize/);
 assert.match(source, /Apply changed result/);
 assert.match(source, /scheduleHistoryDraft/);
 assert.match(source, /flushHistoryDraft/);
+assert.match(source, /promptRevisionTree/);
+assert.match(source, /mutateHistoryRevision\(\s*"label"/);
+assert.match(source, /mutateHistoryRevision\(\s*"archive"/);
+assert.match(source, /mutateHistoryRevision\(\s*"delete"/);
+assert.match(source, /parent → child progression/);
+assert.match(source, /Delete unexecuted leaf/);
 assert.match(source, /serialize:false/);
 
 console.log("H3 Rich Scene Prompt Editor: tokens, guides, previews, optimizer, and history pass");

@@ -19,6 +19,7 @@ from typing import Any
 
 FORMAT = "h3_scene_prompt_history_v1"
 MAX_PROMPT_LENGTH = 200_000
+MAX_LABEL_LENGTH = 80
 _LOCK = threading.RLock()
 
 
@@ -37,6 +38,15 @@ def _normalized_prompt(value: Any) -> str:
     if len(prompt) > MAX_PROMPT_LENGTH:
         raise ValueError("The scene prompt is too large.")
     return prompt
+
+
+def _normalized_label(value: Any) -> str:
+    label = " ".join(str(value or "").split())
+    if len(label) > MAX_LABEL_LENGTH:
+        raise ValueError(
+            "The prompt revision label must be %d characters or fewer."
+            % MAX_LABEL_LENGTH)
+    return label
 
 
 def _prompt_hash(prompt: str) -> str:
@@ -97,6 +107,11 @@ class PromptHistoryStore:
             raise ValueError("The prompt-history index is invalid.")
         index["run_name"] = run
         index["scene_id"] = scene
+        for revision in index["revisions"]:
+            if not isinstance(revision, dict):
+                raise ValueError("The prompt-history index is invalid.")
+            revision.setdefault("label", "")
+            revision.setdefault("archived_at", None)
         return index
 
     @staticmethod
@@ -144,6 +159,8 @@ class PromptHistoryStore:
                 "draft" if active else "empty"),
             "latest_executed_revision": (
                 latest_executed.get("id") if latest_executed else None),
+            "archived_revision_count": sum(
+                1 for item in revisions if item.get("archived_at")),
             "revisions": revisions,
         }
 
@@ -185,6 +202,8 @@ class PromptHistoryStore:
         meta = {
             "id": uuid.uuid4().hex,
             "parent_id": parent_id,
+            "label": "",
+            "archived_at": None,
             "created_at": now,
             "updated_at": now,
             "executed_at": None,
@@ -207,6 +226,12 @@ class PromptHistoryStore:
             index = self._load_index(directory, run, scene)
             exact = self._find_prompt(directory, index, prompt)
             if exact is not None:
+                if exact.get("archived_at"):
+                    exact["archived_at"] = None
+                    revision = self._read_revision(directory, exact["id"])
+                    revision["archived_at"] = None
+                    _atomic_json(
+                        self._revision_path(directory, exact["id"]), revision)
                 index["active_revision"] = exact["id"]
                 self._write_index(directory, index)
                 return {
@@ -249,12 +274,96 @@ class PromptHistoryStore:
             directory, run, scene = self._scene_dir(run_name, scene_id)
             index = self._load_index(directory, run, scene)
             revision = str(revision_id or "")
-            if self._meta(index, revision) is None:
+            meta = self._meta(index, revision)
+            if meta is None:
                 raise ValueError("Unknown prompt revision.")
             value = self._read_revision(directory, revision)
+            if meta.get("archived_at"):
+                meta["archived_at"] = None
+                value["archived_at"] = None
+                _atomic_json(self._revision_path(directory, revision), value)
             index["active_revision"] = revision
             self._write_index(directory, index)
             return {"history": self._public_index(index), "revision": value}
+
+    def set_label(self, run_name: Any, scene_id: Any, revision_id: Any,
+                  label: Any) -> dict[str, Any]:
+        label = _normalized_label(label)
+        with _LOCK:
+            directory, run, scene = self._scene_dir(run_name, scene_id)
+            index = self._load_index(directory, run, scene)
+            revision_id = str(revision_id or "")
+            meta = self._meta(index, revision_id)
+            if meta is None:
+                raise ValueError("Unknown prompt revision.")
+            revision = self._read_revision(directory, revision_id)
+            meta["label"] = label
+            revision["label"] = label
+            _atomic_json(
+                self._revision_path(directory, revision_id), revision)
+            self._write_index(directory, index)
+            return {
+                "history": self._public_index(index),
+                "revision": revision,
+            }
+
+    def set_archived(self, run_name: Any, scene_id: Any, revision_id: Any,
+                     archived: Any = True) -> dict[str, Any]:
+        with _LOCK:
+            directory, run, scene = self._scene_dir(run_name, scene_id)
+            index = self._load_index(directory, run, scene)
+            revision_id = str(revision_id or "")
+            meta = self._meta(index, revision_id)
+            if meta is None:
+                raise ValueError("Unknown prompt revision.")
+            should_archive = bool(archived)
+            if should_archive and index.get("active_revision") == revision_id:
+                raise ValueError(
+                    "The active prompt revision cannot be archived. "
+                    "Activate another revision first.")
+            revision = self._read_revision(directory, revision_id)
+            archived_at = _timestamp() if should_archive else None
+            meta["archived_at"] = archived_at
+            revision["archived_at"] = archived_at
+            _atomic_json(
+                self._revision_path(directory, revision_id), revision)
+            self._write_index(directory, index)
+            return {
+                "history": self._public_index(index),
+                "revision": revision,
+            }
+
+    def delete_draft(self, run_name: Any, scene_id: Any,
+                     revision_id: Any) -> dict[str, Any]:
+        with _LOCK:
+            directory, run, scene = self._scene_dir(run_name, scene_id)
+            index = self._load_index(directory, run, scene)
+            revision_id = str(revision_id or "")
+            meta = self._meta(index, revision_id)
+            if meta is None:
+                raise ValueError("Unknown prompt revision.")
+            if index.get("active_revision") == revision_id:
+                raise ValueError(
+                    "The active prompt revision cannot be deleted. "
+                    "Activate another revision first.")
+            if meta.get("executed_at"):
+                raise ValueError(
+                    "Executed prompt history is protected. Archive it instead.")
+            if any(item.get("parent_id") == revision_id
+                   for item in index["revisions"]):
+                raise ValueError(
+                    "A prompt revision with descendants cannot be deleted. "
+                    "Archive it instead.")
+            index["revisions"] = [
+                item for item in index["revisions"]
+                if item.get("id") != revision_id
+            ]
+            self._write_index(directory, index)
+            try:
+                os.unlink(self._revision_path(directory, revision_id))
+            except FileNotFoundError:
+                pass
+            return {"history": self._public_index(index)}
 
     def mark_executed(self, run_name: Any, scene_id: Any,
                       prompt: Any) -> dict[str, Any]:
@@ -271,6 +380,10 @@ class PromptHistoryStore:
                 meta = self._meta(index, revision["id"])
             else:
                 revision = self._read_revision(directory, meta["id"])
+
+            if meta.get("archived_at"):
+                meta["archived_at"] = None
+                revision["archived_at"] = None
 
             now = _timestamp()
             if meta.get("executed_at") is None:
