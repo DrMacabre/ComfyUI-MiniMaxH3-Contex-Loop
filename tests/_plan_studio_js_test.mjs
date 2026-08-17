@@ -118,6 +118,7 @@ assert.match(source, /field\("Continuation", continuation\)/);
 assert.match(source, /field\("Context V \/ A", contextPair\)/);
 assert.match(source, /audio_context_length/);
 assert.match(source, /Guide · new shot/);
+assert.match(source, /Detail Guide · color injection/);
 assert.match(source, /Masked AV · same shot/);
 assert.match(source, /Feathered AV · softer handoff/);
 assert.match(source, /17n\+5 temporal latent grid/);

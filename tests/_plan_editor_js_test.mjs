@@ -340,6 +340,7 @@ assert.match(editorSource, /New random/);
 assert.match(editorSource, /Use derived/);
 assert.match(editorSource, /Continuation into scene/);
 assert.match(editorSource, /Guide · new shot/);
+assert.match(editorSource, /Detail Guide · color injection/);
 assert.match(editorSource, /Masked AV · same shot/);
 assert.match(editorSource, /Feathered AV · softer handoff/);
 assert.match(editorSource, /Video context/);

@@ -881,6 +881,7 @@ function mountEditor(node) {
         for (const [value, label] of [
             ["", `Plan default · ${planContinuationMode}`],
             ["guide", "Guide · new shot"],
+            ["tapered_guide", "Detail Guide · color injection"],
             ["masked_av", "Masked AV · same shot"],
             ["feathered_av", "Feathered AV · softer handoff"],
         ]) {
@@ -891,8 +892,8 @@ function mountEditor(node) {
         continuation.value = Object.hasOwn(shot, "continuation_mode")
             ? shot.continuation_mode : "";
         continuation.title = index === 0
-            ? "Continuation into this scene. Scene 1 uses it only when Existing Video Context supplies a predecessor. Guide allows a new shot; Masked AV protects an exact prefix; Feathered AV gradually denoises its end."
-            : "Continuation from the preceding scene. Guide provides persistent conditioning; Masked AV protects an exact prefix; Feathered AV softens the prefix-to-generation handoff.";
+            ? "Continuation into this scene. Scene 1 uses it only when Existing Video Context supplies a predecessor. Guide allows a new shot; Detail Guide adds a tapered chroma treatment; Masked AV protects an exact prefix; Feathered AV gradually denoises its end."
+            : "Continuation from the preceding scene. Guide provides persistent conditioning; Detail Guide applies luma-preserving tapered chroma injection; Masked AV protects an exact prefix; Feathered AV softens the prefix-to-generation handoff.";
         continuation.addEventListener("change", () => {
             if (continuation.value) {
                 shot.continuation_mode = continuation.value;

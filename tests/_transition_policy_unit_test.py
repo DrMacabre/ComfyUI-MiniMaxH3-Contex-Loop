@@ -124,19 +124,21 @@ tapered_expert, tapered_mode, tapered_context, _ = node.build(
 assert tapered_mode == "tapered_guide" and tapered_context == 39
 assert tapered_expert["expert_override"] is True
 
-# The published 22-frame recipe generalizes its three-frame exit taper to any
-# supported Guide span. The predecessor remains immutable and only the exact
-# requested tail is returned.
-assert chain._tapered_guide_alpha(0, 22) == 0.45
-assert chain._tapered_guide_alpha(18, 22) == 0.45
-assert abs(chain._tapered_guide_alpha(19, 22) - (1.0 / 3.0)) < 1e-9
-assert abs(chain._tapered_guide_alpha(20, 22) - (13.0 / 60.0)) < 1e-9
-assert abs(chain._tapered_guide_alpha(21, 22) - 0.10) < 1e-9
-assert chain._tapered_guide_alpha(35, 39) == 0.45
-assert abs(chain._tapered_guide_alpha(36, 39) - (1.0 / 3.0)) < 1e-9
-assert abs(chain._tapered_guide_alpha(38, 39) - 0.10) < 1e-9
+# The tuned 22-frame recipe keeps the Guide's luma/mouth structure intact,
+# uses a milder chroma treatment, and reaches a completely clean final frame.
+# The predecessor remains immutable and only the requested tail is returned.
+assert chain._tapered_guide_alpha(0, 22) == 0.30
+assert chain._tapered_guide_alpha(13, 22) == 0.30
+assert abs(chain._tapered_guide_alpha(14, 22) - 0.2625) < 1e-9
+assert abs(chain._tapered_guide_alpha(20, 22) - 0.0375) < 1e-9
+assert chain._tapered_guide_alpha(21, 22) == 0.0
+assert chain._tapered_guide_alpha(30, 39) == 0.30
+assert abs(chain._tapered_guide_alpha(31, 39) - 0.2625) < 1e-9
+assert chain._tapered_guide_alpha(38, 39) == 0.0
 
-source = torch.zeros((45, 19, 31, 3), dtype=torch.float32)
+source = torch.linspace(
+    0.08, 0.92, 45 * 19 * 31 * 3, dtype=torch.float32,
+).reshape(45, 19, 31, 3)
 source_copy = source.clone()
 noisy_39_a = chain._tapered_guide_context(source, 39, 730002)
 noisy_39_b = chain._tapered_guide_context(source, 39, 730002)
@@ -145,7 +147,14 @@ assert tuple(noisy_39_a.shape) == (39, 19, 31, 3)
 assert torch.equal(source, source_copy)
 assert torch.equal(noisy_39_a, noisy_39_b)
 assert not torch.equal(noisy_39_a, noisy_39_c)
-assert float(noisy_39_a[0].mean()) > float(noisy_39_a[-1].mean()) * 3.0
+weights = torch.tensor(chain._TAPERED_GUIDE_LUMA)
+assert torch.allclose(
+    torch.sum(noisy_39_a * weights, dim=-1),
+    torch.sum(source[-39:] * weights, dim=-1),
+    atol=2e-6,
+)
+assert not torch.equal(noisy_39_a[0], source[-39])
+assert torch.equal(noisy_39_a[-1], source[-1])
 assert float(noisy_39_a.min()) >= 0.0
 assert float(noisy_39_a.max()) <= 1.0
 

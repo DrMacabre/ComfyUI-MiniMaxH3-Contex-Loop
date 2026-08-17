@@ -4160,14 +4160,15 @@ _TAPERED_GUIDE_PALETTE = (
     (138, 182, 148),
     (160, 120, 175),
 )
-_TAPERED_GUIDE_ALPHA = 0.45
-_TAPERED_GUIDE_ALPHA_END = 0.10
-_TAPERED_GUIDE_RAMP_FRAMES = 3
+_TAPERED_GUIDE_ALPHA = 0.30
+_TAPERED_GUIDE_ALPHA_END = 0.0
+_TAPERED_GUIDE_RAMP_FRAMES = 8
 _TAPERED_GUIDE_BLOCK_PIXELS = 16
+_TAPERED_GUIDE_LUMA = (0.2126, 0.7152, 0.0722)
 
 
 def _tapered_guide_alpha(position: int, frame_count: int) -> float:
-    """Return MacroSony's validated chroma-noise taper for one frame."""
+    """Return the tuned chroma-noise taper for one Guide frame."""
     position = int(position)
     frame_count = int(frame_count)
     if frame_count < 1 or position < 0 or position >= frame_count:
@@ -4181,6 +4182,30 @@ def _tapered_guide_alpha(position: int, frame_count: int) -> float:
             * (ramp - from_end) / ramp)
 
 
+def _luma_preserving_chroma_target(source: Any, color: Any) -> Any:
+    """Move a block color onto source luma without clipping RGB gamut."""
+    weights = torch.tensor(
+        _TAPERED_GUIDE_LUMA, device=source.device, dtype=source.dtype)
+    source_luma = torch.sum(source * weights, dim=-1, keepdim=True)
+    color_luma = torch.sum(color * weights, dim=-1, keepdim=True)
+    chroma = color - color_luma
+
+    # A zero-luma chroma vector can leave RGB gamut when centered on a
+    # different luminance. Scale it uniformly so hue and source luminance are
+    # both retained without a clamp introducing new block-shaped edges.
+    positive = chroma > 0
+    negative = chroma < 0
+    upper = torch.where(
+        positive, (1.0 - source_luma) / torch.clamp(chroma, min=1e-8),
+        torch.full_like(chroma, float("inf")))
+    lower = torch.where(
+        negative, source_luma / torch.clamp(-chroma, min=1e-8),
+        torch.full_like(chroma, float("inf")))
+    scale = torch.minimum(upper, lower).amin(dim=-1, keepdim=True)
+    scale = torch.clamp(scale, min=0.0, max=1.0)
+    return source_luma + chroma * scale
+
+
 def _tapered_guide_context(
         frames: Any, context_length: int, seed: int) -> Any:
     """Build a disposable noisy tail for repair-biased Guide continuation.
@@ -4188,7 +4213,9 @@ def _tapered_guide_context(
     The accepted predecessor tensor remains untouched. Only the exact tail
     consumed by Motion Context is cloned and corrupted. Independent block
     patterns on each frame make the chroma damage temporally incoherent; the
-    final three frames taper toward the clean join.
+    final eight frames taper to a completely clean join. Corruption is
+    restricted to chroma so mouth shapes, lighting, and other luma structure
+    survive in the Guide context.
     """
     if torch is None or not torch.is_tensor(frames):
         raise ValueError("Tapered Guide requires a torch IMAGE tensor.")
@@ -4225,8 +4252,10 @@ def _tapered_guide_context(
             small, size=(height, width), mode="nearest")[0].permute(1, 2, 0)
         noisy = noisy.to(device=tail.device, dtype=tail.dtype)
         amount = _tapered_guide_alpha(position, count)
+        target = _luma_preserving_chroma_target(
+            tail[position, ..., :3], noisy)
         tail[position, ..., :3] = torch.lerp(
-            tail[position, ..., :3], noisy, amount)
+            tail[position, ..., :3], target, amount)
 
     return tail
 
