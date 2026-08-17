@@ -31,6 +31,7 @@ import {availableReferenceRecords} from "./h3_reference_preview_core.mjs?v=0.5.0
 import {resolveTransitionPolicy} from "./h3_socket_presentation_core.mjs?v=0.5.0";
 import {
     locateStudioTimelineSecond,
+    h3StudioGridMarkers,
     matchingStudioCheckpoint,
     matchingStudioSourceScene,
     studioCheckpointSignature,
@@ -118,6 +119,12 @@ function injectStyles() {
         .h3studio-panel { flex:1 1 auto; min-height:0; overflow:auto; padding:9px;
             border:1px solid var(--hs-border); border-radius:7px; background:var(--hs-panel); }
         .h3studio-scene-head { margin-bottom:7px; }
+        .h3studio-grid-markers { display:flex; align-items:center; gap:5px; flex-wrap:wrap; margin-left:auto; }
+        .h3studio-grid-marker { padding:2px 6px; border:1px solid var(--hs-border); border-radius:999px;
+            color:var(--hs-muted); background:color-mix(in srgb,var(--hs-panel) 82%,transparent); font-size:9px; }
+        .h3studio-grid-marker.h3studio-grid-exact { color:#91e5b5; border-color:#4c9c70; }
+        .h3studio-grid-marker.h3studio-grid-warning { color:#ffd08a; border-color:#a47738; }
+        .h3studio-grid-marker.h3studio-grid-experimental { border-style:dashed; }
         .h3studio-scene-label { color:var(--hs-muted); }
         .h3studio-form { align-items:end; display:grid;
             grid-template-columns:minmax(130px,1.3fr) minmax(175px,1.3fr) minmax(65px,.5fr) minmax(135px,1.1fr) minmax(120px,.85fr) minmax(140px,1fr); margin-bottom:8px; }
@@ -825,6 +832,42 @@ function mount(node) {
         const head = element("div", "h3studio-scene-head");
         head.append(element("strong", "", `Scene ${state.active + 1} of ${state.plan.shots.length}`),
             element("span", "h3studio-scene-label", `${row.rawFrames || "—"} raw · ${row.deliveredFrames || "—"} delivered · starts at ${formatClock(row.generationStartFrame / 24)}`));
+        const grid = h3StudioGridMarkers(
+            row.rawFrames, row.contextLength, row.continuationMode,
+        );
+        const gridMarkers = element("span", "h3studio-grid-markers");
+        const rawGrid = element(
+            "span",
+            `h3studio-grid-marker ${grid.raw.onGrid
+                ? "h3studio-grid-exact" : "h3studio-grid-warning"}`,
+            grid.raw.label,
+        );
+        rawGrid.title = grid.raw.onGrid
+            ? "Raw generation length is on H3's 17n+5 temporal latent grid."
+            : "Raw generation length is off H3's 17n+5 temporal latent grid.";
+        gridMarkers.append(rawGrid);
+        if (grid.av) {
+            const avGrid = element(
+                "span",
+                `h3studio-grid-marker ${grid.av.exact
+                    ? "h3studio-grid-exact" : "h3studio-grid-warning"}`,
+                grid.av.label,
+            );
+            avGrid.title = grid.av.exact
+                ? "The AV context ends on both H3's video latent grid and its 40 Hz audio grid."
+                : "The AV context is valid, but its duration ends between 40 Hz audio ticks. Exact aligned choices are 39, 90, 141, 192, … frames.";
+            gridMarkers.append(avGrid);
+        }
+        if (grid.cut) {
+            const cut = element(
+                "span",
+                "h3studio-grid-marker h3studio-grid-experimental",
+                grid.cut.label,
+            );
+            cut.title = "Experimental only: nearest reported four-frame 17n−3 cut window for generated-to-real joins. This does not change or validate the Plan.";
+            gridMarkers.append(cut);
+        }
+        head.append(gridMarkers);
 
         const id = element("input");
         id.value = shot.id ?? "";

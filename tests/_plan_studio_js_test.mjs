@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import {
     locateStudioTimelineSecond,
+    h3StudioGridMarkers,
     matchingStudioCheckpoint,
     matchingStudioSourceScene,
     studioCheckpointSignature,
@@ -58,6 +59,22 @@ assert.ok(Math.abs(studioSourceSecond(
     sourceTimeline.scenes[0].references[0], 1,
 ) - (22 / 24 + 1)) < 1e-9);
 
+const exactGrid = h3StudioGridMarkers(345, 39, "masked_av");
+assert.deepEqual(exactGrid.raw, {
+    frames:345, onGrid:true, index:20, label:"345f = 17×20+5",
+});
+assert.equal(exactGrid.av.exact, true);
+assert.equal(exactGrid.av.audioTicks, 65);
+assert.deepEqual(exactGrid.cut, {
+    start:337, end:340, experimental:true, label:"cut test 337–340f",
+});
+const fractionalGrid = h3StudioGridMarkers(362, 22, "feathered_av");
+assert.equal(fractionalGrid.raw.onGrid, true);
+assert.equal(fractionalGrid.av.exact, false);
+assert.equal(fractionalGrid.av.label, "22f AV = 36.667 audio ticks");
+assert.equal(h3StudioGridMarkers(344, 39, "guide").raw.onGrid, false);
+assert.equal(h3StudioGridMarkers(344, 39, "guide").av, null);
+
 const source = fs.readFileSync(
     new URL("../web/h3_chain_plan_studio.js", import.meta.url),
     "utf8",
@@ -103,5 +120,8 @@ assert.match(source, /audio_context_length/);
 assert.match(source, /Guide · new shot/);
 assert.match(source, /Masked AV · same shot/);
 assert.match(source, /Feathered AV · softer handoff/);
+assert.match(source, /17n\+5 temporal latent grid/);
+assert.match(source, /Exact aligned choices are 39, 90, 141, 192/);
+assert.match(source, /Experimental only: nearest reported four-frame 17n−3 cut window/);
 
 console.log("H3 Plan Studio: separate timeline editor contract passes");
