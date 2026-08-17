@@ -481,6 +481,10 @@ def _parse_scene_range(value: Any, total: int,
 _REFERENCE_TAG_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,63}")
 _REFERENCE_ALIAS_RE = re.compile(
     r"(?<![A-Za-z0-9_])@([A-Za-z][A-Za-z0-9_-]{0,63})")
+_SEMANTIC_ANCHOR_RE = re.compile(
+    r"(?<![A-Za-z0-9_])#([A-Za-z][A-Za-z0-9_-]{0,63})"
+    r"\[([0-9]+(?:\.[0-9]+)?)s?\]",
+    flags=re.IGNORECASE)
 REFERENCE_COMPLIANCE_MODES = ("strict", "soft", "disabled")
 REFERENCE_VIDEO_TIMELINE_MODES = (
     "restart_each_scene",
@@ -2518,12 +2522,13 @@ def _compile_scheduled_reference_prompt(
 def _compile_tagged_reference_prompt(
         references: Any, scene: int, scene_count: int, prompt: Any,
         compliance_mode: str = "strict") -> tuple[str, str, dict[str, Any]]:
-    """Activate only registered references mentioned by this scene prompt."""
+    """Activate prompt-used native references and Qwen-only image anchors."""
     mode = _reference_compliance_mode(compliance_mode)
     warnings: list[str] = []
     normalized_prompt = str(prompt or "").replace(
         "\r\n", "\n").replace("\r", "\n").strip()
     prompt_tags = set(_REFERENCE_ALIAS_RE.findall(normalized_prompt))
+    semantic_matches = list(_SEMANTIC_ANCHOR_RE.finditer(normalized_prompt))
     try:
         bindings = _active_reference_bindings(
             references, scene, scene_count, mode, warnings,
@@ -2538,6 +2543,58 @@ def _compile_tagged_reference_prompt(
             "pictures": [], "videos": [], "audios": [], "aliases": {},
             "presentation": [], "all_tags": set(),
         }
+
+    semantic_anchors: list[dict[str, Any]] = []
+    if mode != "disabled" and semantic_matches:
+        try:
+            tagged_entries = _tagged_reference_entries(references)
+        except (TypeError, ValueError) as exc:
+            if mode == "strict":
+                raise
+            tagged_entries = []
+            message = "Semantic anchors ignored: %s" % exc
+            warnings.append(message)
+            _LOG.warning("H3 tagged-reference warning: %s", message)
+        entries_by_tag = {
+            alias: entry for entry in tagged_entries
+            for alias in _reference_entry_tags(entry)
+        }
+        grouped: dict[str, dict[str, Any]] = {}
+        seen: set[tuple[str, Fraction]] = set()
+        for match in semantic_matches:
+            tag = match.group(1)
+            timestamp = Fraction(match.group(2))
+            entry = entries_by_tag.get(tag)
+            message = None
+            if entry is None:
+                message = "Prompt uses unknown semantic anchor #%s." % tag
+            elif entry.get("kind") != "picture":
+                message = (
+                    "Semantic anchor #%s must resolve to a Tagged Picture "
+                    "Ref, not %s." % (tag, entry.get("kind", "unknown")))
+            if message is not None:
+                if mode == "strict":
+                    raise ValueError(message)
+                if message not in warnings:
+                    warnings.append(message)
+                    _LOG.warning("H3 tagged-reference warning: %s", message)
+                continue
+            key = (tag, timestamp)
+            if key in seen:
+                continue
+            seen.add(key)
+            group = grouped.setdefault(tag, {
+                "tag": tag,
+                "entry": entry,
+                "timestamps": [],
+            })
+            group["timestamps"].append(timestamp)
+        first_video_number = len(bindings["videos"]) + 1
+        for offset, group in enumerate(grouped.values()):
+            group["timestamps"].sort()
+            group["label"] = "<Video %d>" % (first_video_number + offset)
+            semantic_anchors.append(group)
+    bindings["semantic_anchors"] = semantic_anchors
 
     aliases = bindings["aliases"]
     motion_definitions: list[str] = []
@@ -2580,6 +2637,15 @@ def _compile_tagged_reference_prompt(
 
     compiled = (_REFERENCE_ALIAS_RE.sub(replace_registered, normalized_prompt)
                 if mode != "disabled" else normalized_prompt)
+    if mode != "disabled" and semantic_matches:
+        semantic_labels = {
+            item["tag"]: item["label"] for item in semantic_anchors
+        }
+
+        def replace_semantic(match: re.Match[str]) -> str:
+            return semantic_labels.get(match.group(1), match.group(0))
+
+        compiled = _SEMANTIC_ANCHOR_RE.sub(replace_semantic, compiled)
     if motion_definitions and mode != "disabled":
         block = "\n".join(motion_definitions)
         subject_header = re.search(
@@ -2604,6 +2670,12 @@ def _compile_tagged_reference_prompt(
         if item.get("source_label"):
             mapping += " motion from %s" % item["source_label"]
         mapping_lines.append(mapping)
+    for item in semantic_anchors:
+        timestamps = ",".join(
+            "%gs" % float(value) for value in item["timestamps"])
+        mapping_lines.append(
+            "#%s[%s] -> %s Qwen-only semantic anchors" % (
+                item["tag"], timestamps, item["label"]))
     summary = "scene %d/%d: %s" % (
         int(scene), int(scene_count),
         "; ".join(mapping_lines) if mapping_lines
@@ -2611,7 +2683,8 @@ def _compile_tagged_reference_prompt(
     if warnings:
         summary += "; warning-only: %s" % " ".join(warnings)
     elif mode == "disabled":
-        summary += "; reference policy disabled; @tags passed unchanged"
+        summary += (
+            "; reference policy disabled; @tags and #anchors passed unchanged")
     bindings["compliance_mode"] = mode
     bindings["compliance_warnings"] = warnings
     return compiled, summary, bindings

@@ -403,6 +403,56 @@ assert tagged_summary == (
 assert [entry["tag"] for entry in tagged_bindings["pictures"]] == ["look"]
 assert "face" not in tagged_bindings["aliases"]
 
+semantic_compiled, semantic_summary, semantic_bindings = (
+    chain._compile_tagged_reference_prompt(
+        tagged, 1, 1,
+        "Use #face[0.00s], #face[2.50s], and #face[2.50s] while "
+        "@look remains native."))
+assert semantic_compiled == (
+    "Use <Video 1>, <Video 1>, and <Video 1> while <Picture 1> "
+    "remains native.")
+assert len(semantic_bindings["semantic_anchors"]) == 1
+semantic_face = semantic_bindings["semantic_anchors"][0]
+assert semantic_face["tag"] == "face"
+assert semantic_face["label"] == "<Video 1>"
+assert semantic_face["entry"]["value"] is tagged["entries"][0]["value"]
+assert semantic_face["timestamps"] == [
+    chain.Fraction("0.00"), chain.Fraction("2.50")]
+assert "#face[0s,2.5s] -> <Video 1> Qwen-only semantic anchors" in (
+    semantic_summary)
+
+try:
+    chain._compile_tagged_reference_prompt(
+        tagged, 1, 1, "Use #missing[1.00s].")
+except ValueError as exc:
+    assert "unknown semantic anchor #missing" in str(exc)
+else:
+    raise AssertionError("unknown semantic anchor was accepted in strict mode")
+
+soft_semantic, soft_semantic_summary, soft_semantic_bindings = (
+    chain._compile_tagged_reference_prompt(
+        tagged, 1, 1, "Keep #missing[1.00s].", compliance_mode="soft"))
+assert soft_semantic == "Keep #missing[1.00s]."
+assert soft_semantic_bindings["semantic_anchors"] == []
+assert "unknown semantic anchor #missing" in soft_semantic_summary
+
+disabled_semantic, disabled_semantic_summary, disabled_semantic_bindings = (
+    chain._compile_tagged_reference_prompt(
+        tagged, 1, 1, "Keep #face[1.00s].", compliance_mode="disabled"))
+assert disabled_semantic == "Keep #face[1.00s]."
+assert disabled_semantic_bindings["semantic_anchors"] == []
+assert "@tags and #anchors passed unchanged" in disabled_semantic_summary
+
+video_for_semantic = chain.MiniMaxH3TaggedVideoReference().add(
+    chain.torch.zeros((5, 4, 4, 3)), "motion", "", "restart_each_scene")[0]
+try:
+    chain._compile_tagged_reference_prompt(
+        video_for_semantic, 1, 1, "Use #motion[0.00s].")
+except ValueError as exc:
+    assert "must resolve to a Tagged Picture Ref" in str(exc)
+else:
+    raise AssertionError("semantic anchor accepted a tagged video")
+
 timeline_audio = {
     "waveform": chain.torch.arange(
         1000, dtype=chain.torch.float32).reshape(1, 1, 1000),
