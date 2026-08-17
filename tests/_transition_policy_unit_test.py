@@ -118,12 +118,25 @@ expert_plan = make_plan(expert)
 assert expert_plan["compatibility"]["context_length"] == 56
 assert expert_plan["compatibility"]["continuation_mode"] == "feathered_av"
 
+rgb_expert, rgb_mode, rgb_context, rgb_status = node.build(
+    "soft_av", True, "feathered_av_rgb", 39)
+assert rgb_mode == "feathered_av_rgb" and rgb_context == 39
+assert rgb_expert["expert_override"] is True
+assert "Feathered AV + RGB Guide" in rgb_status
+
 try:
     node.build("guide", True, "masked_av", 1)
 except ValueError as exc:
     assert "at least 5" in str(exc)
 else:
     raise AssertionError("one-frame hard AV expert override was accepted")
+
+try:
+    node.build("soft_av", True, "feathered_av_rgb", 1)
+except ValueError as exc:
+    assert "at least 5" in str(exc)
+else:
+    raise AssertionError("one-frame RGB-guided AV expert override was accepted")
 
 tapered_expert, tapered_mode, tapered_context, _ = node.build(
     "detail_guide", True, "tapered_guide", 39)
@@ -141,6 +154,10 @@ assert chain._tapered_guide_alpha(21, 22) == 0.0
 assert chain._tapered_guide_alpha(30, 39) == 0.30
 assert abs(chain._tapered_guide_alpha(31, 39) - 0.2625) < 1e-9
 assert chain._tapered_guide_alpha(38, 39) == 0.0
+assert chain._tapered_guide_alpha(
+    0, 39, chain._TAPERED_AV_RGB_ALPHA) == 0.10
+assert chain._tapered_guide_alpha(
+    38, 39, chain._TAPERED_AV_RGB_ALPHA) == 0.0
 
 source = torch.linspace(
     0.08, 0.92, 45 * 19 * 31 * 3, dtype=torch.float32,

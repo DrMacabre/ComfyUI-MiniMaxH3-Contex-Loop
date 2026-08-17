@@ -350,6 +350,7 @@ def apply_masked_prefix(
     audio_vae=None,
     previous_audio=None,
     temporal_feather=False,
+    preserve_prefix_guides=False,
 ):
     """Return conditioning, masked target latent, and repeated trim length."""
     _require_h3_mask_support()
@@ -450,7 +451,17 @@ def apply_masked_prefix(
         (out_video, out_audio))
     out_latent["noise_mask"] = comfy.nested_tensor.NestedTensor(
         (video_mask, audio_mask))
-    out_conditioning = _drop_prefix_guides(conditioning, frames)
+    # Ordinary AV continuation removes target guides inside the protected
+    # prefix because two owners for the same coordinates can fight.  The
+    # explicit RGB-guided AV experiment deliberately keeps the disposable
+    # tapered guide added by Chain Context: the clean sampled latent still
+    # owns the target prefix while the extra guide supplies weak chroma/detail
+    # evidence to the feathered handoff.
+    out_conditioning = (
+        conditioning
+        if bool(preserve_prefix_guides)
+        else _drop_prefix_guides(conditioning, frames)
+    )
 
     _LOG.info(
         "h3_masked_prefix: preserved %d target frames = %d video steps / %d "

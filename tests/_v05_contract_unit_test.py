@@ -142,6 +142,11 @@ def main():
     assert expert["continuation_mode"] == "feathered_av"
     assert expert["context_length"] == 56
     assert expert["expert_override"] is True
+    rgb_expert = contracts.transition_policy(
+        "soft_av", expert_override=True,
+        continuation_mode="feathered_av_rgb", context_length=39)
+    assert rgb_expert["continuation_mode"] == "feathered_av_rgb"
+    assert rgb_expert["context_length"] == 39
     try:
         contracts.transition_policy(
             "guide", expert_override=True,
@@ -150,6 +155,14 @@ def main():
         assert "at least 5" in str(exc)
     else:
         raise AssertionError("one-frame AV transition was accepted")
+    try:
+        contracts.transition_policy(
+            "soft_av", expert_override=True,
+            continuation_mode="feathered_av_rgb", context_length=1)
+    except ValueError as exc:
+        assert "at least 5" in str(exc)
+    else:
+        raise AssertionError("one-frame RGB-guided AV transition was accepted")
 
     shape = contracts.source_timeline_shape()
     assert shape["version"] == contracts.SOURCE_TIMELINE_VERSION

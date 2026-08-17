@@ -35,8 +35,8 @@ giant cumulative image tensor.
 
 In the default `guide` mode and opt-in `tapered_guide` variant, updated ComfyUI
 core owns guide placement and reference-payload merging; this pack does not
-patch H3. The experimental `masked_av` and `feathered_av` modes additionally
-need per-stream H3
+patch H3. The experimental `masked_av`, `feathered_av`, and expert-only
+`feathered_av_rgb` modes additionally need per-stream H3
 video/audio noise masks from PR #15375. They prefer native support and lazily
 enable the vendored runtime compatibility only when an AV mask mode executes.
 
@@ -161,13 +161,12 @@ removes it. This remains the default.
 
 `tapered_guide` uses the same guide placement and trim, but VAE-encodes a
 disposable noisy copy of the predecessor tail. Independent 16px chroma blocks
-are blended at 0.45 over every context frame except the final three, which
-taper to approximately 0.33, 0.22, and 0.10. The accepted predecessor and its
-checkpoint remain clean. **Detail Guide** selects the published 22-frame
-baseline. Expert override may pair `tapered_guide` with 39 frames (36 full-
-strength plus the same three-frame taper) or another supported Guide length,
-but those lengths are experimental and should be compared against clean Guide
-with the same seed.
+are blended at 0.30 while preserving source luma, then taper to zero over the
+final eight context frames so the last boundary frame remains clean. The
+accepted predecessor and its checkpoint remain clean. **Detail Guide** selects
+the published 22-frame baseline. Expert override may pair `tapered_guide` with
+39 frames or another supported Guide length, but those lengths are
+experimental and should be compared against clean Guide with the same seed.
 
 Incoming transition can be overridden per scene in **Show advanced** without
 adding another scene-card row. The choice describes the transition **into that
@@ -183,7 +182,7 @@ preceding generated sound. For scene 1, these control Existing Video Context;
 a zero-video-context imported original can still be prepended during assembly.
 Independent audio context applies to both Guide variants with generated-audio
 continuity.
-Both AV mask modes always keep their audio and video prefix lengths
+All AV mask modes always keep their audio and video prefix lengths
 synchronized, while `source_track` continues to use its exact timeline slice.
 
 `masked_av` writes the previous scene's decoded video tail into the beginning
@@ -199,7 +198,15 @@ video latent steps and 42 of 65 audio steps remain exact; the final 4 video and
 23 audio prefix steps ramp toward generation. This reduces a hard boundary,
 but does not add the persistent conditioning rows supplied by `guide`.
 
-Both AV mask continuations require `encode_mode=video`, `anchor_mode=head`,
+Expert implementation `feathered_av_rgb` keeps the same clean sampled AV
+prefix and denoise mask, then also retains one disposable tapered RGB Guide
+over that prefix. Its luma-preserving chroma strength is 0.10—one third of
+Detail Guide—and reaches zero on the final boundary frame. This is an
+experimental comparison mode, not a semantic preset; select it with Transition
+Policy's Expert override or as a per-scene advanced continuation. It adds one
+video-VAE guide encode but does not replace or re-encode the sampled AV prefix.
+
+All AV mask continuations require `encode_mode=video`, `anchor_mode=head`,
 and at least 5 context frames, on a ComfyUI build with native PR #15439
 guide/MultiRef support. Use **39 frames** for comparisons: at 24 fps it is
 exactly 1.625 seconds and exactly 65 audio-latent steps at H3's 40 Hz audio

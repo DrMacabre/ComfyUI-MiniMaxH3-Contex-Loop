@@ -76,6 +76,10 @@ the completed predecessor.
 | `hard_av` | protected AV prefix | 39 frames |
 | `soft_av` | temporally feathered AV prefix | 39 frames |
 
+The expert-only `feathered_av_rgb` implementation uses the Soft AV pair and
+adds a weak disposable tapered RGB Guide. It intentionally has no sixth
+semantic preset while its visual and lip-sync tradeoff is being evaluated.
+
 Advanced mode may override the implementation and context count explicitly.
 `tapered_guide` accepts the listed Guide context lengths; only the 22-frame
 preset has published validation, so other lengths remain experimental. The

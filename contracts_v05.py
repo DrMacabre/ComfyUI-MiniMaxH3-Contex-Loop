@@ -21,7 +21,8 @@ SOURCE_REFERENCE_POLICIES = ("off", "on")
 GENERATED_CONTINUITY_POLICIES = ("off", "on")
 PAIRED_AUDIO_POLICIES = ("off", "embedded")
 CONTINUATION_POLICIES = (
-    "guide", "tapered_guide", "masked_av", "feathered_av")
+    "guide", "tapered_guide", "masked_av", "feathered_av",
+    "feathered_av_rgb")
 TRANSITION_CONTEXT_LENGTHS = (
     0, 1, 5, 22, 39, 56, 73, 90, 107, 124,
     141, 158, 175, 192, 209, 226, 243,
@@ -161,7 +162,9 @@ def transition_policy(
             raise ValueError(
                 "H3 transition context must be 0 or one of %s." %
                 (TRANSITION_CONTEXT_LENGTHS,))
-        if mode in ("masked_av", "feathered_av") and context < 5:
+        if mode in (
+                "masked_av", "feathered_av", "feathered_av_rgb"
+        ) and context < 5:
             raise ValueError(
                 "H3 AV transition implementations require at least 5 context "
                 "frames.")

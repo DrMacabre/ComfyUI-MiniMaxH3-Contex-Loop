@@ -7,6 +7,7 @@ export const MAX_H3_FRAMES = 3592;
 export const MAX_SEED = 18446744073709551615n;
 export const CONTINUATION_MODES = Object.freeze([
     "guide", "tapered_guide", "masked_av", "feathered_av",
+    "feathered_av_rgb",
 ]);
 export const H3_CONTEXT_LENGTHS = Object.freeze([
     1, 5, 22, 39, 56, 73, 90, 107, 124,
@@ -556,7 +557,9 @@ export function calculatePlanTiming(plan, settings = {}) {
             continuationMode = sceneContinuationMode(
                 shot, planContinuationMode,
             );
-            if (sceneContext > 0 && ["masked_av", "feathered_av"].includes(
+            if (sceneContext > 0 && [
+                "masked_av", "feathered_av", "feathered_av_rgb",
+            ].includes(
                 continuationMode,
             )) {
                 if (sceneContext < 5) {
@@ -603,7 +606,9 @@ export function calculatePlanTiming(plan, settings = {}) {
             deliveredSeconds: deliveredFrames / FPS,
             generationStartFrame,
             contextLength: sceneContext,
-            audioContextLength: ["masked_av", "feathered_av"].includes(
+            audioContextLength: [
+                "masked_av", "feathered_av", "feathered_av_rgb",
+            ].includes(
                 continuationMode,
             )
                 ? sceneContext : sceneAudioContext,

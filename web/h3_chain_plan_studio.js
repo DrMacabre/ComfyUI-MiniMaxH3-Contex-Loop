@@ -21,7 +21,7 @@ import {
     setShotLengthMode,
     sharedPrompt,
     shotLengthMode,
-} from "./h3_chain_plan_core.mjs?v=0.5.0";
+} from "./h3_chain_plan_core.mjs?v=0.5.0-rgbav1";
 import {
     promptRevisionHelp,
     promptRevisionLabel,
@@ -37,7 +37,7 @@ import {
     studioCheckpointSignature,
     studioSceneStartSeconds,
     studioSourceSecond,
-} from "./h3_chain_plan_studio_core.mjs?v=0.5.0";
+} from "./h3_chain_plan_studio_core.mjs?v=0.5.0-rgbav1";
 import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.5.0";
 
 const {connectedPromptEditors, publishCompanionScene} = promptCompanionSync;
@@ -937,7 +937,7 @@ function mount(node) {
         audioContext.placeholder = planAudioContextLength
             ? String(planAudioContextLength)
             : `Video ${settings().contextLength}`;
-        audioContext.title = "Blank inherits the Plan audio context; an explicit 0 carries no prior generated audio. Positive audio context works with zero video context in guide generated-audio modes. Both AV mask modes remain synchronized to video.";
+        audioContext.title = "Blank inherits the Plan audio context; an explicit 0 carries no prior generated audio. Positive audio context works with zero video context in guide generated-audio modes. All AV mask modes remain synchronized to video.";
         audioContext.addEventListener("change", () => {
             if (audioContext.value === "") delete shot.audio_context_length;
             else shot.audio_context_length = Number(audioContext.value);
@@ -953,6 +953,7 @@ function mount(node) {
             ["tapered_guide", "Detail Guide · color injection"],
             ["masked_av", "Masked AV · same shot"],
             ["feathered_av", "Feathered AV · softer handoff"],
+            ["feathered_av_rgb", "Feathered AV + RGB · experimental"],
         ]) {
             const option = element("option", "", label);
             option.value = value;
@@ -961,8 +962,8 @@ function mount(node) {
         continuation.value = Object.hasOwn(shot, "continuation_mode")
             ? shot.continuation_mode : "";
         continuation.title = state.active === 0
-            ? "Continuation into this scene. Scene 1 uses it only with Existing Video Context. Detail Guide adds luma-preserving tapered chroma injection."
-            : "Guide provides persistent conditioning; Detail Guide applies luma-preserving tapered chroma injection; Masked AV preserves an exact prefix; Feathered AV progressively denoises its end.";
+            ? "Continuation into this scene. Scene 1 uses it only with Existing Video Context. Detail Guide adds luma-preserving tapered chroma injection; Feathered AV + RGB combines a clean AV prefix with a weak experimental chroma guide."
+            : "Guide provides persistent conditioning; Detail Guide applies luma-preserving tapered chroma injection; Masked AV preserves an exact prefix; Feathered AV progressively denoises its end; Feathered AV + RGB adds a weak tapered chroma guide while keeping the clean AV prefix.";
         continuation.addEventListener("change", () => {
             if (continuation.value) shot.continuation_mode = continuation.value;
             else delete shot.continuation_mode;
