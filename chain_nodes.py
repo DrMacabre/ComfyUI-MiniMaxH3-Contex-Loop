@@ -6183,11 +6183,18 @@ def _ffmpeg_blend_video(
         if blend < 1:
             raise ValueError(
                 "H3 cumulative blend input %d has no retained overlap." % index)
+        raw_output = "xfade%d" % index
         output = "blend%d" % index
         filters.append(
             "[%s][v%d]xfade=transition=fade:duration=%.9f:offset=%.9f[%s]" %
             (previous, index, blend / float(FPS),
-             (cumulative - blend) / float(FPS), output))
+             (cumulative - blend) / float(FPS), raw_output))
+        # xfade reports an unknown 1/0 frame rate on its output in some FFmpeg
+        # builds. Normalize every intermediate before feeding the next xfade;
+        # otherwise chains longer than two clips fail despite CFR inputs.
+        filters.append(
+            "[%s]fps=%d,settb=AVTB,setpts=N/(%d*TB)[%s]" %
+            (raw_output, FPS, FPS, output))
         previous = output
         cumulative += int(record["delivered_frames"])
     filters.append(
@@ -7141,6 +7148,19 @@ def _checkpoint_review_preview(
     return max(previews, key=lambda item: item[0])[1] if previews else None
 
 
+def _checkpoint_audio_sidecar(
+        segment: dict[str, Any]) -> dict[str, str] | None:
+    """Expose saved delivered audio without making Review Gate a dependency."""
+    value = segment.get("generated_audio")
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        path = _absolute_output_path(value)
+    except (OSError, TypeError, ValueError):
+        return None
+    return _video_output_item(path) if os.path.isfile(path) else None
+
+
 def _checkpoint_revision_owned_paths(
         metadata_path: str, segment: dict[str, Any],
         review_dir: str) -> list[str]:
@@ -7517,6 +7537,9 @@ async def _list_saved_checkpoints(request):
                 }
                 if os.path.isfile(segment_path):
                     item["video"] = _video_output_item(segment_path)
+                    audio = _checkpoint_audio_sidecar(segment)
+                    if audio is not None:
+                        item["audio"] = audio
                     preview = _checkpoint_review_preview(
                         index, segment, review_dir, review_filenames)
                     if preview is not None:

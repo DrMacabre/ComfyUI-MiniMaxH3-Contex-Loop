@@ -300,7 +300,8 @@ function mount(node) {
         checkpoints:new Map(), checkpointSignature:"", checkpointError:"", checkpointToken:0,
         pollTimer:null, checkpointTimer:null, timelineHost:null, panelHost:null,
         planNotifyTimer:null,
-        playhead:null, player:null, playerSlider:null, playerIndex:-1,
+        playhead:null, player:null, playerAudio:null, playerSlider:null,
+        playerIndex:-1,
         timelinePosition:null, pendingSeek:0,
         history:{sceneKey:"", data:null, revisionId:null, host:null, textarea:null,
             status:null, loadToken:0, loadPromise:null, saveTimer:null,
@@ -561,9 +562,12 @@ function mount(node) {
         }
         renderTimeline(); renderStatus();
         if (state.view === "player" && state.player?.paused) {
-            const source = playerCheckpoint(state.playerIndex);
-            const desired = source ? videoUrl(source) : "";
-            if (desired !== String(state.player.dataset.source ?? "")) renderPanel();
+            const media = playerCheckpoint(state.playerIndex);
+            const desired = media?.video ? videoUrl(media.video) : "";
+            const desiredAudio = media?.audio ? videoUrl(media.audio) : "";
+            if (desired !== String(state.player.dataset.source ?? "") ||
+                    desiredAudio !== String(
+                        state.playerAudio?.dataset.source ?? "")) renderPanel();
         }
     }
 
@@ -892,18 +896,28 @@ function mount(node) {
         const item = matchingStudioCheckpoint(
             state.checkpoints, index, timing().shots[index],
         );
-        return item ? (item.preview_video ?? item.video) : null;
+        if (!item) return null;
+        return {
+            video:item.preview_video ?? item.video,
+            // Review previews already contain synchronized audio. Raw saved
+            // segments do not, so pair those with their delivered WAV.
+            audio:item.preview_video ? null : (item.audio ?? null),
+        };
     }
 
     function disposePlayer() {
         const current = state.player;
+        const currentAudio = state.playerAudio;
         state.player = null;
+        state.playerAudio = null;
         state.playerSlider = null;
-        if (!current) return;
-        try { current.pause(); } catch (_error) {}
-        current.removeAttribute("src");
-        delete current.dataset.source;
-        try { current.load(); } catch (_error) {}
+        for (const media of [current, currentAudio]) {
+            if (!media) continue;
+            try { media.pause(); } catch (_error) {}
+            media.removeAttribute("src");
+            delete media.dataset.source;
+            try { media.load(); } catch (_error) {}
+        }
     }
 
     function seekTimeline(seconds, autoplay = false) {
@@ -911,7 +925,8 @@ function mount(node) {
         const location = locateStudioTimelineSecond(result.shots, seconds);
         if (location.index < 0) return;
         const {index, localSeconds, targetSeconds:target} = location;
-        const source = playerCheckpoint(index);
+        const media = playerCheckpoint(index);
+        const source = media?.video;
         state.playerIndex = index; state.pendingSeek = localSeconds;
         state.timelinePosition = target;
         if (state.active !== index) {
@@ -924,20 +939,51 @@ function mount(node) {
         if (!source) {
             delete state.player.dataset.source;
             state.player.removeAttribute("src"); state.player.load();
+            if (state.playerAudio) {
+                try { state.playerAudio.pause(); } catch (_error) {}
+                delete state.playerAudio.dataset.source;
+                state.playerAudio.removeAttribute("src");
+                state.playerAudio.load();
+            }
             const label = root.querySelector(".h3studio-player-label");
             if (label) label.textContent = `Scene ${index + 1} has no saved segment.`;
             return;
         }
         const url = videoUrl(source);
         const targetPlayer = state.player;
+        const targetAudio = state.playerAudio;
         const requestedSeek = state.pendingSeek;
+        const audioUrl = media?.audio ? videoUrl(media.audio) : "";
+        if (targetAudio && targetAudio.dataset.source !== audioUrl) {
+            try { targetAudio.pause(); } catch (_error) {}
+            if (audioUrl) {
+                targetAudio.dataset.source = audioUrl;
+                targetAudio.src = audioUrl;
+            } else {
+                delete targetAudio.dataset.source;
+                targetAudio.removeAttribute("src");
+            }
+            targetAudio.load();
+        }
+        const seekAudio = () => {
+            if (!targetAudio?.dataset.source) return;
+            const duration = Number.isFinite(targetAudio.duration)
+                ? targetAudio.duration : requestedSeek;
+            try { targetAudio.currentTime = Math.min(
+                requestedSeek, Math.max(0, duration - .02),
+            ); } catch (_error) {}
+        };
         const applySeek = () => {
             if (state.player !== targetPlayer || !targetPlayer?.isConnected) return;
             const duration = Number.isFinite(targetPlayer.duration) ? targetPlayer.duration : requestedSeek;
             try { targetPlayer.currentTime = Math.min(requestedSeek, Math.max(0, duration - .02)); }
             catch (_error) {}
+            seekAudio();
             if (autoplay) void targetPlayer.play().catch(() => {});
         };
+        if (targetAudio?.dataset.source) {
+            targetAudio.addEventListener("loadedmetadata", seekAudio, {once:true});
+        }
         if (targetPlayer.dataset.source !== url) {
             targetPlayer.dataset.source = url; targetPlayer.src = url; targetPlayer.load();
             targetPlayer.addEventListener("loadedmetadata", applySeek, {once:true});
@@ -950,6 +996,7 @@ function mount(node) {
         const wrapper = element("div", "h3studio-player");
         const label = element("div", "h3studio-player-label", "Saved scene preview");
         const video = element("video"); video.controls = true; video.playsInline = true; video.preload = "metadata";
+        const audio = element("audio"); audio.preload = "metadata"; audio.hidden = true;
         const controls = element("div", "h3studio-player-controls");
         const play = button("▶", "Play the delivered timeline from the current position", () => {
             void video.play().catch(() => {});
@@ -957,7 +1004,27 @@ function mount(node) {
         const slider = element("input"); slider.type = "range"; slider.min = "0"; slider.max = String(timing().totalSeconds); slider.step = String(1 / 24); slider.value = "0";
         const clock = element("span", "", `0 / ${formatClock(timing().totalSeconds)}`);
         slider.addEventListener("input", () => seekTimeline(Number(slider.value), false));
+        const synchronizeAudio = (play = false) => {
+            if (!audio.dataset.source) return;
+            audio.playbackRate = video.playbackRate;
+            if (Math.abs((Number(audio.currentTime) || 0) -
+                    (Number(video.currentTime) || 0)) > .12) {
+                try { audio.currentTime = video.currentTime; } catch (_error) {}
+            }
+            if (play) void audio.play().catch(() => {});
+        };
+        video.addEventListener("playing", () => synchronizeAudio(true));
+        video.addEventListener("pause", () => audio.pause());
+        video.addEventListener("waiting", () => audio.pause());
+        video.addEventListener("seeking", () => {
+            audio.pause(); synchronizeAudio(false);
+        });
+        video.addEventListener("seeked", () => {
+            synchronizeAudio(!video.paused);
+        });
+        video.addEventListener("ratechange", () => synchronizeAudio(false));
         video.addEventListener("timeupdate", () => {
+            synchronizeAudio(false);
             const result = timing();
             let prior = 0;
             for (let index = 0; index < state.playerIndex; index += 1) prior += result.shots[index].deliveredSeconds;
@@ -967,18 +1034,20 @@ function mount(node) {
             if (state.playhead) state.playhead.style.left = `${result.totalSeconds ? current / result.totalSeconds * 100 : 0}%`;
         });
         video.addEventListener("ended", () => {
+            audio.pause();
             const next = state.playerIndex + 1;
             if (next >= state.plan.shots.length) return;
             const result = timing();
             const start = studioSceneStartSeconds(result.shots, next);
             seekTimeline(start, true);
         });
-        state.player = video; state.playerSlider = slider;
+        state.player = video; state.playerAudio = audio;
+        state.playerSlider = slider;
         controls.append(play, slider, clock, button("Refresh", "Rescan saved checkpoints and segments", async () => {
             await refreshCheckpoints(); renderPanel();
         }));
-        wrapper.append(label, video, controls,
-            element("div", "h3studio-message", "Playback uses saved delivered segments. A scene is silent unless a synchronized Review preview exists."));
+        wrapper.append(label, video, audio, controls,
+            element("div", "h3studio-message", "Playback uses synchronized Review previews when available and otherwise pairs each saved segment with its delivered-audio sidecar."));
         setTimeout(() => {
             if (state.player !== video || !video.isConnected) return;
             const result = timing();

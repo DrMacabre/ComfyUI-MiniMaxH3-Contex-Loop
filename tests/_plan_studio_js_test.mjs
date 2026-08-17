@@ -24,7 +24,7 @@ assert.ok(Math.abs(
 
 const checkpoints = new Map([[1, {
     scene:1, scene_id:"one", ready:true, delivered_frames:362,
-    video:{filename:"one.mp4"},
+    video:{filename:"one.mp4"}, audio:{filename:"one.wav"},
 }]]);
 assert.equal(matchingStudioCheckpoint(checkpoints, 0, rows[0]).scene_id, "one");
 assert.equal(matchingStudioCheckpoint(checkpoints, 0, {...rows[0], id:"renamed"}), null);
@@ -32,6 +32,12 @@ assert.equal(matchingStudioCheckpoint(checkpoints, 0, {...rows[0], deliveredFram
 assert.notEqual(
     studioCheckpointSignature("run-a", [...checkpoints.values()]),
     studioCheckpointSignature("run-b", [...checkpoints.values()]),
+);
+assert.notEqual(
+    studioCheckpointSignature("run-a", [...checkpoints.values()]),
+    studioCheckpointSignature("run-a", [{
+        ...checkpoints.get(1), audio:{filename:"changed.wav"},
+    }]),
 );
 
 const source = fs.readFileSync(
@@ -46,13 +52,17 @@ assert.match(source, /state\.planWidget\.value = value/);
 assert.match(source, /h3studio-timeline/);
 assert.match(source, /Scene prompt/);
 assert.match(source, /Shared prompt/);
-assert.match(source, /Playback uses saved delivered segments/);
+assert.match(source, /Playback uses synchronized Review previews/);
 assert.match(source, /\/minimax_h3_context_loop\/checkpoints/);
 assert.match(source, /\/minimax_h3_context_loop\/prompt-history/);
 assert.match(source, /promptRevisionNavigation/);
 assert.match(source, /availableReferenceRecords/);
 assert.match(source, /state\.planNode \?\? node/);
 assert.match(source, /preview_video/);
+assert.match(source, /item\.preview_video \? null : \(item\.audio \?\? null\)/);
+assert.match(source, /playerAudio/);
+assert.match(source, /synchronizeAudio/);
+assert.match(source, /delivered-audio sidecar/);
 assert.match(source, /currentSettings === state\.lastSettingsSignature/);
 assert.match(source, /state\.timelinePosition = target/);
 assert.match(source, /h3_chain_active_scene/);

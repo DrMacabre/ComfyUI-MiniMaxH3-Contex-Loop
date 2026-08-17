@@ -7,6 +7,7 @@ export function studioCheckpointSignature(runName, records) {
             ready: item?.ready,
             delivered_frames: item?.delivered_frames,
             video: item?.video,
+            audio: item?.audio,
             preview_video: item?.preview_video,
             partial_video: item?.partial_video,
         })),

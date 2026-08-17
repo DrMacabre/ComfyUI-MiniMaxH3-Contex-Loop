@@ -122,6 +122,14 @@ def main():
             chain._ffmpeg_blend_video(
                 ffmpeg, records, str(ffmpeg_output), str(metadata), 9, 0)
             assert len(decode(ffmpeg_output)) == 9
+            # A first xfade may advertise 1/0 FPS. The second xfade used to
+            # reject that intermediate even though every source was CFR.
+            chained_output = root / "ffmpeg_three_segments.mp4"
+            chained_records = records + [{**records[1]}]
+            chain._ffmpeg_blend_video(
+                ffmpeg, chained_records, str(chained_output), str(metadata),
+                13, 0)
+            assert len(decode(chained_output)) == 13
 
         checkpoint_one = root / "one.safetensors"
         checkpoint_two = root / "two.safetensors"
@@ -185,8 +193,8 @@ def main():
             hard_manifest, "none", "final", 128)["result"][0]
         assert len(decode(hard)) == 9
 
-    print("H3 video blend: extended context validation and frame-exact "
-          "cumulative PyAV/ffmpeg assembly pass")
+    print("H3 video blend: extended context validation, chained xfade CFR, "
+          "and frame-exact cumulative PyAV/ffmpeg assembly pass")
 
 
 if __name__ == "__main__":

@@ -61,14 +61,18 @@ async def check():
 
         video_hash = "abcdef1234567890"
         segment = segments / "clip_0001.revision.mp4"
+        generated_audio = run / "generated_audio" / "clip_0001.revision.wav"
         checkpoint = checkpoints / "clip_0001.revision.safetensors"
         segment.write_bytes(b"video")
+        generated_audio.parent.mkdir(parents=True)
+        generated_audio.write_bytes(b"audio")
         checkpoint.write_bytes(b"checkpoint")
         (checkpoints / "clip_0001.json").write_text(json.dumps({
             "segment": {
                 "index": 1,
                 "id": "intro",
                 "segment": str(segment.relative_to(temporary)),
+                "generated_audio": str(generated_audio.relative_to(temporary)),
                 "checkpoint": str(checkpoint.relative_to(temporary)),
                 "segment_sha256": video_hash,
                 "raw_frames": 362,
@@ -80,6 +84,8 @@ async def check():
         first_payload = json.loads(first.text)
         assert first_payload["checkpoints"][0]["ready"] is True
         assert first_payload["checkpoints"][0]["delivered_frames"] == 340
+        assert first_payload["checkpoints"][0]["audio"]["filename"] == (
+            generated_audio.name)
         assert "preview_video" not in first_payload["checkpoints"][0]
 
         preview = reviews / (
@@ -88,6 +94,7 @@ async def check():
         second = await chain._list_saved_checkpoints(Request())
         item = json.loads(second.text)["checkpoints"][0]
         assert item["video"]["filename"] == segment.name
+        assert item["audio"]["filename"] == generated_audio.name
         assert item["preview_video"]["filename"] == preview.name
 
 
