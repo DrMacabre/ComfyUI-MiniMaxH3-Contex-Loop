@@ -3,7 +3,8 @@
 This is the timeline-audio specialization of the general H3 masked-target
 path: the target audio stream is replaced with one exact master-audio interval
 and protected for the complete raw clip. Continuations may additionally
-protect the final native H3 run from the preceding decoded video.
+protect the final native H3 run from either the preceding sampled AV latent or
+the legacy decoded-video path.
 
 The design is adapted from seitanism's GPL-3.0
 ComfyUI-H3-Motion-Context-MultiRef Update 4 implementation, including Update
@@ -21,11 +22,12 @@ import torch
 
 from .masked_context import (
     _existing_mask_streams,
+    _generated_video_tail,
     _snap_prefix_length,
     _validate_target_streams,
 )
 from .masking_support import require_h3_mask_support
-from .nodes import AUDIO_HZ, FPS, _pixel_frames, _resize
+from .nodes import AUDIO_HZ, FPS, _pixel_frames, _resize, _streams_from_latent
 from .av_timing import sample_boundary_from_seconds
 
 
@@ -125,11 +127,15 @@ class MiniMaxH3ContexMasterAudioMaskedAV:
                     "default": 39, "min": 0, "max": 9999,
                     "tooltip": "Previous-video prefix request. Native runs "
                                "such as 5, 22, 39, 56... are used; 0 disables "
-                               "video prefixing when source_frames is absent.",
+                               "video prefixing when neither source input is "
+                               "connected.",
                 }),
                 "source_fps": ("FLOAT", {
                     "default": 24.0, "min": 1.0, "max": 240.0,
                     "step": 0.001,
+                    "tooltip": "Frame rate of the legacy decoded "
+                               "source_frames path. It is ignored when "
+                               "source_latent is used.",
                 }),
                 "crop": (["disabled", "center"], {"default": "disabled"}),
             },
@@ -139,8 +145,17 @@ class MiniMaxH3ContexMasterAudioMaskedAV:
                                "source_frames are connected.",
                 }),
                 "source_frames": ("IMAGE", {
-                    "tooltip": "Previous decoded clip. Its final native H3 "
-                               "context run becomes the protected video prefix.",
+                    "tooltip": "Legacy decoded continuation path. Its final "
+                               "native H3 context run is VAE-encoded into the "
+                               "protected video prefix. Prefer source_latent "
+                               "for live H3 chaining.",
+                }),
+                "source_latent": ("LATENT", {
+                    "tooltip": "Preferred live continuation path. The "
+                               "phase-aligned tail of the previous sampled H3 "
+                               "video latent is copied directly; its audio is "
+                               "ignored because master_audio remains "
+                               "authoritative.",
                 }),
             },
         }
@@ -158,7 +173,8 @@ class MiniMaxH3ContexMasterAudioMaskedAV:
     DESCRIPTION = (
         "Insert an exact master-audio interval into the complete H3 audio "
         "target and protect it from denoising; optionally preserve a previous "
-        "decoded-video prefix while generating only future video rows."
+        "sampled-latent or decoded-video prefix while generating only future "
+        "video rows."
     )
 
     def prepare(
@@ -172,10 +188,15 @@ class MiniMaxH3ContexMasterAudioMaskedAV:
         crop="disabled",
         vae=None,
         source_frames=None,
+        source_latent=None,
     ):
         require_h3_mask_support("exact master-audio latent masking")
         target_video, target_audio, target_frames = _validate_target_streams(
             latent, strict_audio_grid=False)
+        if source_latent is not None and source_frames is not None:
+            raise ValueError(
+                "h3_master_audio_mask: connect either source_latent or "
+                "source_frames, not both.")
 
         # The stock H3 target owns the audio-grid length. It can round up one
         # 40 Hz step beyond what a floor-style audio VAE produces from the
@@ -286,7 +307,35 @@ class MiniMaxH3ContexMasterAudioMaskedAV:
 
         prefix_frames = 0
         video_steps = 0
-        if source_frames is not None:
+        if source_latent is not None:
+            if int(context_length) <= 0:
+                raise ValueError(
+                    "h3_master_audio_mask: context_length must be positive "
+                    "when source_latent is connected.")
+            source_parts = _streams_from_latent(source_latent)
+            if len(source_parts) < 2:
+                raise ValueError(
+                    "h3_master_audio_mask: source_latent must be a joint H3 "
+                    "video/audio latent.")
+            source_video = source_parts[0]
+            if source_video.ndim == 4:
+                source_video = source_video.unsqueeze(0)
+            if source_video.ndim != 5:
+                raise ValueError(
+                    "h3_master_audio_mask: source video latent must be "
+                    "[B,C,T,H,W].")
+            available = _pixel_frames(int(source_video.shape[2]))
+            prefix_frames = _snap_prefix_length(
+                context_length, available, target_frames)
+            prefix, video_steps = _generated_video_tail(
+                source_latent, prefix_frames, target_video)
+            if video_steps >= int(out_video.shape[2]):
+                raise ValueError(
+                    "h3_master_audio_mask: video prefix consumes the complete "
+                    "target.")
+            out_video[:, :, :video_steps] = prefix.to(
+                device=out_video.device, dtype=out_video.dtype)
+        elif source_frames is not None:
             if vae is None:
                 raise ValueError(
                     "h3_master_audio_mask: connect the video VAE when source_frames "
@@ -341,8 +390,8 @@ class MiniMaxH3ContexMasterAudioMaskedAV:
         # Compose with an upstream masked target instead of replacing it. This
         # is what lets Chain Context own the protected continuation-video
         # prefix while this node replaces and protects the complete current
-        # master-audio interval. It also keeps the standalone source_frames
-        # path composable with any future spatial/video mask.
+        # master-audio interval. It also keeps both standalone video-prefix
+        # paths composable with any future spatial/video mask.
         video_mask, _ = _existing_mask_streams(
             latent, out_video, out_audio)
         if video_steps:

@@ -60,7 +60,8 @@ Adapted source files and integration:
   MultiRef existing-video implementation, including Update 6's audio-only
   eight-tick half-cosine handoff as a distinct continuation mode.
 - `master_audio_context.py` — exact master-audio target replacement and
-  optional protected video-prefix construction adapted from MultiRef Update 4.
+  optional protected video-prefix construction adapted from MultiRef Update 4,
+  plus Update 6's direct sampled-latent video continuation path.
 - `av_timing.py` and `nodes.py` — Update 6's exact absolute PCM-boundary and
   small decoded-audio time-conformance approach, adapted to the recursive
   checkpointed trim path.

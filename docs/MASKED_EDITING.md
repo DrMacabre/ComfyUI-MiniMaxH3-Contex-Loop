@@ -131,11 +131,17 @@ timeline audio so a floor-style audio VAE fills every target step, then crops
 the latent to the target length. Its `clip_audio` output remains exactly the
 picture duration; it never invents or repeats a latent token.
 
-When `source_frames` is connected, the node also converts the previous clip to
-24 fps, selects the final native H3 context run, VAE-encodes it into the target
-video prefix, and protects only those video rows. Future video rows remain `1`
-and are generated normally. The returned `trim_frames` is authoritative for
-the Loop Trim node and visual overlap assembly.
+For live H3 chaining, connect the preceding sampler output to `source_latent`.
+The node copies its phase-aligned video-latent tail directly into the protected
+target prefix without decoding or re-encoding it. The source latent's audio is
+ignored: the selected `master_audio` interval remains authoritative.
+
+`source_frames` remains the legacy fallback for imported or decoded media. The
+node converts it to 24 fps, selects the final native H3 context run, VAE-encodes
+it into the target video prefix, and protects only those video rows. Connect
+either `source_latent` or `source_frames`, never both. Future video rows remain
+`1` and are generated normally. The returned `trim_frames` is authoritative
+for Loop Trim and visual overlap assembly.
 
 The master audio is target content, not a Ref2VA audio reference. Keep every
 `ref_audio_*` input disconnected, and mux the untouched full master audio onto

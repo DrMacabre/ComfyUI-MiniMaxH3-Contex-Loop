@@ -81,6 +81,53 @@ def main():
     assert int(clip_audio["waveform"].shape[-1]) == round(
         target_frames / 24 * 32_000)
 
+    # Preferred live chaining copies the sampled H3 video tail directly. The
+    # source latent's audio stream must not replace the authoritative master.
+    source_video = torch.arange(
+        video_steps, dtype=torch.float32).reshape(
+            1, 1, video_steps, 1, 1).expand_as(target_video).clone()
+    source_audio = torch.full_like(target_audio, 0.9)
+    source_latent = {
+        "samples": harness.NestedTensor((source_video, source_audio)),
+    }
+    live, live_prefix, _ = (
+        audio_context.MiniMaxH3ContexMasterAudioMaskedAV().prepare(
+            latent,
+            AudioVAE(),
+            master_audio,
+            clip_start_seconds=3.25,
+            context_length=39,
+            source_latent=source_latent,
+        ))
+    live_video, live_audio = live["samples"].unbind()
+    live_video_mask, live_audio_mask = live["noise_mask"].unbind()
+    assert live_prefix == 39
+    assert torch.equal(live_video[:, :, :12], source_video[:, :, -12:])
+    assert not torch.count_nonzero(live_video[:, :, 12:])
+    assert torch.allclose(live_audio, torch.full_like(live_audio, 0.5))
+    assert not torch.count_nonzero(live_video_mask[:, :, :12])
+    assert torch.all(live_video_mask[:, :, 12:] == 1.0)
+    assert not torch.count_nonzero(live_audio_mask)
+
+    try:
+        audio_context.MiniMaxH3ContexMasterAudioMaskedAV().prepare(
+            latent,
+            AudioVAE(),
+            master_audio,
+            context_length=39,
+            vae=VideoVAE(),
+            source_frames=previous_frames,
+            source_latent=source_latent,
+        )
+    except ValueError as exc:
+        assert "either source_latent or source_frames" in str(exc)
+    else:
+        raise AssertionError("both master-audio video sources were accepted")
+
+    assert "source_latent" in (
+        audio_context.MiniMaxH3ContexMasterAudioMaskedAV.INPUT_TYPES()[
+            "optional"])
+
     # Chain Context may already own the protected visual prefix. Replacing
     # the audio target must retain that video mask while making the complete
     # current master-audio stream protected.
@@ -217,7 +264,8 @@ def main():
         not in audio_context.NODE_CLASS_MAPPINGS)
     print(
         "master-audio masking: absolute-endpoint timeline slice, complete protected audio, "
-        "40 Hz target-grid lookahead, 39-frame protected video continuation, "
+        "40 Hz target-grid lookahead, decoded and direct-latent 39-frame "
+        "protected video continuation, "
         "and clip-1 video generation pass")
 
 
