@@ -152,6 +152,23 @@ assert.doesNotMatch(
 assert.match(reviewSource, /"pointerdown", "pointerup", "mousedown", "mouseup", "click"/);
 assert.match(reviewSource, /preview_revision/);
 assert.match(reviewSource, /sameToken/);
+assert.match(
+    reviewSource,
+    /if \(!sameToken\)[\s\S]*setTimeout\(refreshResumeOptions, 0\)/,
+    "a newly persisted review scene must refresh checkpoint history",
+);
+assert.match(
+    reviewSource,
+    /data\.action === "approve" \|\| data\.action === "stop"[\s\S]*setTimeout\(refreshResumeOptions, 0\)/,
+    "final approval must refresh checkpoint history",
+);
+assert.match(reviewSource, /Checkpoint history/);
+assert.match(
+    reviewSource,
+    /checkpointRevisionChain\(\s*checkpointRevisions, planClipCount \+ 1/,
+    "checkpoint history must include the final scene, even though it cannot be a resume predecessor",
+);
+assert.match(reviewSource, /revision\.scene < selectedResumeScene/);
 assert.match(reviewSource, /data\.final_video \?\? data\.partial_video/);
 assert.match(reviewSource, /final assembled video/);
 assert.match(reviewSource, /Duration \(s\)/);

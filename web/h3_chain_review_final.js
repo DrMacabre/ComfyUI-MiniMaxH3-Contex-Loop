@@ -713,10 +713,10 @@ function mount(node) {
     revisionsPanel.hidden = true;
     const revisionsTitle = document.createElement("div");
     revisionsTitle.className = "h3r-revisions-title";
-    revisionsTitle.textContent = "Checkpoint revisions";
+    revisionsTitle.textContent = "Checkpoint history";
     const revisionsHint = document.createElement("div");
     revisionsHint.className = "h3r-resume-status";
-    revisionsHint.textContent = "Choose the saved version of each predecessor scene.";
+    revisionsHint.textContent = "All saved scenes are listed. Only scenes before the selected resume position are restored.";
     const revisionsRows = document.createElement("div");
     revisionsRows.className = "h3r-revision-rows";
     revisionsPanel.append(revisionsTitle, revisionsHint, revisionsRows);
@@ -737,6 +737,10 @@ function mount(node) {
     }
 
     function selectedRevisionChain() {
+        const selectedResumeScene = Number(resumeSelect.value);
+        if (!Number.isInteger(selectedResumeScene) || selectedResumeScene < 2) {
+            return [];
+        }
         return revisionChain.map((group) => {
             const select = revisionsRows.querySelector(
                 `select[data-scene="${group.scene}"]`,
@@ -745,7 +749,7 @@ function mount(node) {
                 (item) => item.revision === select?.value,
             );
             return revision ?? group.revisions[0];
-        });
+        }).filter((revision) => revision.scene < selectedResumeScene);
     }
 
     function showRevisionPreview(revision) {
@@ -788,18 +792,12 @@ function mount(node) {
 
     function renderRevisionChoices() {
         revisionsRows.replaceChildren();
-        const selectedResumeScene = Number(resumeSelect.value);
-        const resumeScene = Number.isInteger(selectedResumeScene)
-                && selectedResumeScene >= 2
-            ? selectedResumeScene : planClipCount + 1;
         revisionChain = checkpointRevisionChain(
-            checkpointRevisions, resumeScene,
+            checkpointRevisions, planClipCount + 1,
         );
-        const hasAlternatives = revisionChain.some(
-            (group) => group.revisions.length > 1,
-        );
-        revisionsPanel.hidden = !hasAlternatives;
-        if (!hasAlternatives) {
+        const hasHistory = revisionChain.length > 0;
+        revisionsPanel.hidden = !hasHistory;
+        if (!hasHistory) {
             loadResume.textContent = "Load checkpoint";
             return;
         }
@@ -823,7 +821,7 @@ function mount(node) {
             remove.className = "h3r-button h3r-delete";
             remove.textContent = "Delete";
             remove.title = "Permanently delete the selected inactive revision and only its owned files.";
-            const update = () => {
+            const update = (preview = false) => {
                 const revision = group.revisions.find(
                     (item) => item.revision === select.value,
                 );
@@ -831,9 +829,9 @@ function mount(node) {
                 loadResume.textContent = selectedRevisionChain().some(
                     (item) => !item.active,
                 ) ? "Restore & load" : "Load checkpoint";
-                showRevisionPreview(revision);
+                if (preview) showRevisionPreview(revision);
             };
-            select.addEventListener("change", update);
+            select.addEventListener("change", () => update(true));
             remove.addEventListener("click", () => {
                 const revision = group.revisions.find(
                     (item) => item.revision === select.value,
@@ -847,6 +845,7 @@ function mount(node) {
     }
 
     async function refreshResumeOptions() {
+        const previousResumeScene = Number(resumeSelect.value);
         resumeSelect.replaceChildren();
         resumeChoices = [];
         checkpointRevisions = [];
@@ -871,6 +870,10 @@ function mount(node) {
                 element.value = String(option.resumeScene);
                 element.textContent = `Resume scene ${option.resumeScene} — checkpoint ${option.savedScene} · ${option.sceneId}`;
                 resumeSelect.append(element);
+            }
+            if (resumeChoices.some(
+                    (option) => option.resumeScene === previousResumeScene)) {
+                resumeSelect.value = String(previousResumeScene);
             }
             renderRevisionChoices();
             loadResume.disabled = resumeChoices.length === 0;
@@ -1108,6 +1111,10 @@ function mount(node) {
         if (!sameToken) {
             root.classList.remove("h3r-busy");
             setActionsEnabled(true);
+            // The scene is persisted before Review Gate receives its token.
+            // Refresh here so the current (including final) checkpoint appears
+            // in history without requiring the user to press Refresh.
+            setTimeout(refreshResumeOptions, 0);
         }
         badge.textContent = `clip ${data.clip_index}/${data.clip_count} · ${data.shot_id}`;
         video.src = videoUrl(data.video);
@@ -1162,7 +1169,9 @@ function mount(node) {
                 ? "final assembled video"
                 : "partial joined video";
         }
-        if (data.action === "stop") setTimeout(refreshResumeOptions, 0);
+        if (data.action === "approve" || data.action === "stop") {
+            setTimeout(refreshResumeOptions, 0);
+        }
     };
 
     const widget = node.addDOMWidget("h3_chain_review", "h3-chain-review", root, {
