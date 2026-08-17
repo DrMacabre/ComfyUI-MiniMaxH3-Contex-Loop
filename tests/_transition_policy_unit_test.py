@@ -71,10 +71,16 @@ for preset, (mode, context) in expected.items():
     assert policy["context_length"] == context
     assert policy["expert_override"] is False
     assert output_mode == mode and output_context == context
+    assert " -> " in status
     if preset == "detail_guide":
         assert "experimental preset" in status
     else:
         assert "tested preset" in status
+
+soft_status = node.build("soft_av")[3]
+assert soft_status.startswith("Soft AV -> Feathered AV + 39 frames")
+hard_status = node.build("hard_av")[3]
+assert hard_status.startswith("Hard AV -> Masked AV + 39 frames")
 
 legacy = make_plan(None, context_length=39, continuation_mode="masked_av")
 assert "transition_policy" not in legacy["compatibility"]
@@ -228,6 +234,6 @@ assert len(legacy_adapter.OUTPUT_TOOLTIPS) == len(legacy_adapter.RETURN_TYPES)
 assert all(legacy_adapter.OUTPUT_TOOLTIPS)
 
 print(
-    "transition policy: Cut/Guide/Detail Guide/Hard AV/Feathered AV presets, expert "
+    "transition policy: Cut/Guide/Detail Guide/Hard AV/Soft AV presets, expert "
     "overrides, zero-context delivery, AV safety validation, legacy fallback "
     "and adapter, Plan resolution, and typed node registration pass")

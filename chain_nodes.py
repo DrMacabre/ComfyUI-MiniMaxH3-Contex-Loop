@@ -287,6 +287,31 @@ def _transition_policy_summary(value: Any) -> str:
         int(policy["context_length"]))
 
 
+def _transition_policy_display(value: Any) -> str:
+    """Return the human-facing preset -> implementation mapping."""
+    policy = _resolved_transition_policy(value)
+    preset_labels = {
+        "cut": "Cut",
+        "guide": "Guide",
+        "detail_guide": "Detail Guide",
+        "hard_av": "Hard AV",
+        "soft_av": "Soft AV",
+        "legacy": "Legacy",
+    }
+    implementation_labels = {
+        "guide": "Guide",
+        "tapered_guide": "Tapered Guide",
+        "masked_av": "Masked AV",
+        "feathered_av": "Feathered AV",
+    }
+    preset = str(policy["preset"])
+    implementation = str(policy["continuation_mode"])
+    return "%s -> %s + %d frames" % (
+        preset_labels.get(preset, preset),
+        implementation_labels.get(implementation, implementation),
+        int(policy["context_length"]))
+
+
 def _safe_name(value: str, fallback: str = "chain") -> str:
     text = re.sub(r"[^A-Za-z0-9._-]+", "_", str(value or "").strip())
     text = text.strip("._-")
@@ -6808,7 +6833,9 @@ class MiniMaxH3TransitionPolicy:
                     list(CONTINUATION_POLICIES), {
                         "default": "guide",
                         "tooltip": "Expert only. Low-level continuation "
-                                   "implementation used when override is on."}),
+                                   "implementation used when override is on. "
+                                   "Hard AV resolves to masked_av; Soft AV "
+                                   "resolves to feathered_av."}),
                 "expert_context_length": (
                     list(TRANSITION_CONTEXT_LENGTHS), {
                         "default": 22,
@@ -6838,7 +6865,7 @@ class MiniMaxH3TransitionPolicy:
             preset, expert_override=expert_override,
             continuation_mode=expert_continuation_mode,
             context_length=expert_context_length)
-        status = _transition_policy_summary({"transition_policy": policy})
+        status = _transition_policy_display({"transition_policy": policy})
         if policy["expert_override"]:
             status += "; expert override"
         elif policy["preset"] == "detail_guide":
