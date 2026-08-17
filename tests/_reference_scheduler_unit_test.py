@@ -453,6 +453,150 @@ except ValueError as exc:
 else:
     raise AssertionError("semantic anchor accepted a tagged video")
 
+
+class FakeSemanticClip:
+    def __init__(self):
+        self.items = None
+        self.prompt = None
+
+    def tokenize(self, prompt, minimax_ref_items=None):
+        self.prompt = prompt
+        self.items = minimax_ref_items
+        return {"tokens": "semantic"}
+
+    def encode_from_tokens_scheduled(self, tokens):
+        assert tokens == {"tokens": "semantic"}
+        return [["semantic-conditioning", {
+            "minimax_token_tags": "semantic-tags",
+            "pooled_output": "semantic-pooled",
+        }]]
+
+
+original_resize = chain._resize
+chain._resize = lambda image, width, height, _crop: chain.torch.zeros(
+    (int(image.shape[0]), int(height), int(width), 3),
+    dtype=image.dtype)
+try:
+    semantic_clip = FakeSemanticClip()
+    base_conditioning = [["native-conditioning", {
+        "minimax_refs": ["native-ref-payload"],
+        "minimax_token_tags": "native-tags",
+    }]]
+    anchor_picture = chain.torch.zeros((1, 64, 32, 3))
+    native_picture = chain.torch.zeros((1, 32, 64, 3))
+    native_video = chain.torch.zeros((5, 32, 64, 3))
+    semantic_result, semantic_status = (
+        chain._replace_conditioning_presentation(
+            base_conditioning, semantic_clip, "compiled prompt", {
+                "version": chain.SEMANTIC_PRESENTATION_VERSION,
+                "width": 64,
+                "height": 32,
+                "length": 22,
+                "ref_image_size": "match",
+                "semantic_anchor_size": "384",
+                "pictures": [native_picture],
+                "videos": [{
+                    "video": native_video,
+                    "paired_audio": True,
+                }],
+                "standalone_audio_count": 1,
+                "anchors": [{
+                    "tag": "face",
+                    "image": anchor_picture,
+                    "timestamps": (
+                        chain.Fraction("0.00"), chain.Fraction("0.75")),
+                }],
+            }))
+    assert semantic_clip.prompt == "compiled prompt"
+    assert [item["type"] for item in semantic_clip.items] == [
+        "image", "audio", "video", "audio", "video"]
+    semantic_video = semantic_clip.items[-1]
+    assert tuple(semantic_video["data"].shape) == (4, 544, 256, 3)
+    assert semantic_video["timestamps"] == [0.0, 0.0, 0.75, 0.75]
+    assert semantic_result[0][0] == "semantic-conditioning"
+    assert semantic_result[0][1]["minimax_refs"] == ["native-ref-payload"]
+    assert semantic_result[0][1]["minimax_token_tags"] == "semantic-tags"
+    assert semantic_status == "2 semantic checkpoints across 1 tagged pictures"
+
+    try:
+        chain._semantic_presentation_items({
+            "version": chain.SEMANTIC_PRESENTATION_VERSION,
+            "width": 64,
+            "height": 32,
+            "length": 22,
+            "ref_image_size": "match",
+            "semantic_anchor_size": "384",
+            "pictures": [],
+            "videos": [],
+            "standalone_audio_count": 0,
+            "anchors": [{
+                "tag": "face",
+                "image": anchor_picture,
+                "timestamps": (chain.Fraction("1.00"),),
+            }],
+        })
+    except ValueError as exc:
+        assert "scene's 0.917s output duration" in str(exc)
+    else:
+        raise AssertionError("out-of-scene semantic timestamp was accepted")
+finally:
+    chain._resize = original_resize
+
+
+class FakeExpansionNode:
+    def __init__(self, class_type, name):
+        self.class_type = class_type
+        self.name = name
+        self.inputs = {}
+
+    def set_input(self, name, value):
+        self.inputs[name] = value
+
+    def out(self, index):
+        return [self.name, int(index)]
+
+
+class FakeExpansionGraph:
+    def __init__(self):
+        self.nodes = []
+
+    def node(self, class_type, name):
+        node = FakeExpansionNode(class_type, name)
+        self.nodes.append(node)
+        return node
+
+    def finalize(self):
+        return {
+            node.name: {
+                "class_type": node.class_type,
+                "inputs": node.inputs,
+            }
+            for node in self.nodes
+        }
+
+
+original_graph_builder = chain.GraphBuilder
+chain.GraphBuilder = FakeExpansionGraph
+try:
+    semantic_expansion = chain.MiniMaxH3TaggedReferenceToVideo().apply(
+        "clip", "video-vae", "audio-vae", tagged, 1, 1,
+        "Use @look natively and #face[0.00s] semantically.",
+        64, 32, 22, "match", semantic_anchor_size="384")
+    expanded = semantic_expansion["expand"]
+    assert set(expanded) == {"TaggedRef2VA", "SemanticAnchors"}
+    assert expanded["TaggedRef2VA"]["inputs"][
+        "ref_images.ref_image_0"] is tagged["entries"][1]["value"]
+    semantic_inputs = expanded["SemanticAnchors"]["inputs"]
+    assert semantic_inputs["positive"] == ["TaggedRef2VA", 0]
+    assert semantic_inputs["prompt"] == (
+        "Use <Picture 1> natively and <Video 1> semantically.")
+    assert semantic_inputs["presentation"]["anchors"][0]["tag"] == "face"
+    assert semantic_inputs["presentation"]["semantic_anchor_size"] == "384"
+    assert semantic_expansion["result"][0] == ["SemanticAnchors", 0]
+    assert semantic_expansion["result"][1] == ["TaggedRef2VA", 1]
+finally:
+    chain.GraphBuilder = original_graph_builder
+
 timeline_audio = {
     "waveform": chain.torch.arange(
         1000, dtype=chain.torch.float32).reshape(1, 1, 1000),

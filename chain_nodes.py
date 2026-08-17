@@ -148,6 +148,7 @@ MANIFEST_TYPE = "H3_CHAIN_MANIFEST"
 EXTERNAL_CONTEXT_TYPE = "H3_CHAIN_EXTERNAL_CONTEXT"
 REFERENCE_SCHEDULE_TYPE = "H3_REFERENCE_SCHEDULE"
 TAGGED_REFERENCE_TYPE = "H3_TAGGED_REFERENCES"
+SEMANTIC_PRESENTATION_TYPE = "H3_SEMANTIC_PRESENTATION"
 LAZY_MOTION_SOURCE_TYPE = "H3_LAZY_MOTION_SOURCE"
 SOURCE_TIMELINE_TYPE = "H3_SOURCE_TIMELINE"
 AUDIO_POLICY_TYPE = "H3_AUDIO_POLICY"
@@ -155,6 +156,7 @@ TRANSITION_POLICY_TYPE = "H3_TRANSITION_POLICY"
 PREFLIGHT_TYPE = "H3_PREFLIGHT_REPORT"
 REFERENCE_SCHEDULE_VERSION = 1
 LAZY_MOTION_SOURCE_VERSION = 3
+SEMANTIC_PRESENTATION_VERSION = 1
 
 _PENDING_REVIEWS: dict[str, dict[str, Any]] = {}
 _PENDING_FINAL_REVIEW_PREVIEWS: dict[
@@ -2688,6 +2690,196 @@ def _compile_tagged_reference_prompt(
     bindings["compliance_mode"] = mode
     bindings["compliance_warnings"] = warnings
     return compiled, summary, bindings
+
+
+def _h3_aligned_frame_count(length: int) -> int:
+    frame_count = max(5, int(length))
+    while frame_count % 17 != 5:
+        frame_count += 1
+    return frame_count
+
+
+def _h3_reference_canvas(width: int, height: int) -> tuple[int, int]:
+    """Match Core H3's 768-short-edge, area-capped video-ref canvas."""
+    width, height = int(width), int(height)
+    ratio = width / float(height)
+    if ratio >= 1.0:
+        nominal_width, nominal_height = 768 * ratio, 768
+    else:
+        nominal_width, nominal_height = 768, 768 / ratio
+    maximum_pixels = 768 * 1344
+    if nominal_width * nominal_height > maximum_pixels:
+        scale = math.sqrt(
+            maximum_pixels / (nominal_width * nominal_height))
+        nominal_width *= scale
+        nominal_height *= scale
+    return (
+        max(32, round(nominal_width / 32) * 32),
+        max(32, round(nominal_height / 32) * 32),
+    )
+
+
+def _h3_picture_presentation(
+        image: Any, width: int, height: int,
+        ref_image_size: str) -> Any:
+    if (torch is None or not torch.is_tensor(image) or image.ndim != 4 or
+            int(image.shape[0]) < 1 or int(image.shape[-1]) < 3):
+        raise ValueError(
+            "Semantic-anchor presentation received an invalid native picture.")
+    source_height, source_width = int(image.shape[1]), int(image.shape[2])
+    if ref_image_size == "match":
+        scale = min(
+            1.0,
+            math.sqrt(
+                (int(width) * int(height)) /
+                float(source_width * source_height)))
+    elif ref_image_size == "max":
+        scale = min(1.0, 2048.0 / min(source_width, source_height))
+    else:
+        raise ValueError(
+            "Semantic-anchor presentation ref_image_size must be match or max.")
+    target_width = max(32, round(source_width * scale / 32) * 32)
+    target_height = max(32, round(source_height * scale / 32) * 32)
+    return _resize(image[:1], target_width, target_height, "disabled")
+
+
+def _h3_semantic_anchor_image(image: Any, target: Any) -> Any:
+    if (torch is None or not torch.is_tensor(image) or image.ndim != 4 or
+            int(image.shape[0]) < 1 or int(image.shape[-1]) < 3):
+        raise ValueError(
+            "Each semantic anchor must resolve to one Tagged Picture Ref.")
+    target_text = str(target or "512").strip().lower()
+    if target_text == "source":
+        return image[:1, ..., :3]
+    try:
+        target_area_edge = int(target_text)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "Semantic anchor size must be 384, 512, 768, or source.") from exc
+    if target_area_edge not in (384, 512, 768):
+        raise ValueError(
+            "Semantic anchor size must be 384, 512, 768, or source.")
+    source_height, source_width = int(image.shape[1]), int(image.shape[2])
+    scale = math.sqrt(
+        (target_area_edge * target_area_edge) /
+        float(source_width * source_height))
+    target_width = max(32, round(source_width * scale / 32) * 32)
+    target_height = max(32, round(source_height * scale / 32) * 32)
+    return _resize(image[:1], target_width, target_height, "disabled")
+
+
+def _semantic_presentation_items(value: Any) -> tuple[list[dict[str, Any]], str]:
+    if (not isinstance(value, dict) or
+            value.get("version") != SEMANTIC_PRESENTATION_VERSION):
+        raise ValueError(
+            "Semantic anchor conditioning requires its Tagged Ref2VA payload.")
+    width, height = int(value["width"]), int(value["height"])
+    frame_count = _h3_aligned_frame_count(int(value["length"]))
+    duration = Fraction(frame_count, FPS)
+    ref_image_size = str(value.get("ref_image_size") or "match")
+    anchor_size = str(value.get("semantic_anchor_size") or "512")
+    items: list[dict[str, Any]] = []
+
+    for image in value.get("pictures", ()):
+        items.append({
+            "type": "image",
+            "data": _h3_picture_presentation(
+                image, width, height, ref_image_size),
+        })
+
+    for source in value.get("videos", ()):
+        if not isinstance(source, dict):
+            raise ValueError("Semantic anchor video presentation is malformed.")
+        video = source.get("video")
+        if (torch is None or not torch.is_tensor(video) or video.ndim != 4 or
+                int(video.shape[0]) < 5 or int(video.shape[-1]) < 3):
+            raise ValueError(
+                "Semantic anchor presentation received an invalid native video.")
+        source_height, source_width = int(video.shape[1]), int(video.shape[2])
+        canvas_width, canvas_height = _h3_reference_canvas(
+            source_width, source_height)
+        if source_width * source_height < canvas_width * canvas_height:
+            canvas_width = max(32, round(source_width / 32) * 32)
+            canvas_height = max(32, round(source_height / 32) * 32)
+        frames = _resize(
+            video, canvas_width, canvas_height, "disabled")[:frame_count]
+        usable = int(frames.shape[0])
+        while usable >= 5 and usable % 17 != 5:
+            usable -= 1
+        if usable < 5:
+            raise ValueError(
+                "Semantic anchor presentation native videos need at least "
+                "5 usable frames.")
+        frames = frames[:usable]
+        if bool(source.get("paired_audio")):
+            items.append({"type": "audio"})
+        sample_indices = list(range(0, usable, FPS // 2))
+        items.append({
+            "type": "video",
+            "data": frames[sample_indices],
+            "timestamps": [index / 2.0 for index in range(
+                len(sample_indices))],
+        })
+
+    for _index in range(int(value.get("standalone_audio_count", 0))):
+        items.append({"type": "audio"})
+
+    anchor_count = 0
+    for anchor in value.get("anchors", ()):
+        if not isinstance(anchor, dict):
+            raise ValueError("Semantic anchor presentation is malformed.")
+        timestamps = list(anchor.get("timestamps") or ())
+        if not timestamps:
+            raise ValueError("Semantic anchor presentation has no timestamps.")
+        exact_timestamps = [
+            timestamp if isinstance(timestamp, Fraction)
+            else Fraction(str(timestamp)) for timestamp in timestamps
+        ]
+        if any(timestamp < 0 or timestamp > duration
+               for timestamp in exact_timestamps):
+            raise ValueError(
+                "Semantic anchor #%s timestamps must stay within this "
+                "scene's %.3fs output duration." % (
+                    anchor.get("tag", "picture"), float(duration)))
+        image = _h3_semantic_anchor_image(anchor.get("image"), anchor_size)
+        repeated = image.expand(len(exact_timestamps) * 2, -1, -1, -1)
+        paired_timestamps = [
+            float(timestamp)
+            for timestamp in exact_timestamps
+            for _copy in range(2)
+        ]
+        items.append({
+            "type": "video",
+            "data": repeated,
+            "timestamps": paired_timestamps,
+        })
+        anchor_count += len(exact_timestamps)
+    return items, "%d semantic checkpoints across %d tagged pictures" % (
+        anchor_count, len(value.get("anchors", ())))
+
+
+def _replace_conditioning_presentation(
+        positive: Any, clip: Any, prompt: str,
+        presentation: Any) -> tuple[Any, str]:
+    items, status = _semantic_presentation_items(presentation)
+    tokens = clip.tokenize(str(prompt), minimax_ref_items=items)
+    encoded = clip.encode_from_tokens_scheduled(tokens)
+    if (not isinstance(positive, list) or not isinstance(encoded, list) or
+            len(positive) != len(encoded)):
+        raise ValueError(
+            "Semantic anchor conditioning could not preserve the native "
+            "Ref2VA schedule.")
+    merged = []
+    for base, replacement in zip(positive, encoded):
+        if (not isinstance(base, (list, tuple)) or len(base) != 2 or
+                not isinstance(replacement, (list, tuple)) or
+                len(replacement) != 2):
+            raise ValueError(
+                "Semantic anchor conditioning received malformed conditioning.")
+        metadata = dict(base[1])
+        metadata.update(dict(replacement[1]))
+        merged.append([replacement[0], metadata])
+    return merged, status
 
 
 def _derived_seed(base_seed: int, index: int, shot_id: str) -> int:
@@ -6549,6 +6741,34 @@ class MiniMaxH3ScheduledReferenceToVideo:
         }
 
 
+class MiniMaxH3SemanticAnchorConditioning:
+    """Internal presentation replacement used by Tagged Ref2VA expansion."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "positive": ("CONDITIONING",),
+                "clip": ("CLIP",),
+                "prompt": ("STRING", {"multiline": True}),
+                "presentation": (SEMANTIC_PRESENTATION_TYPE,),
+            },
+        }
+
+    RETURN_TYPES = ("CONDITIONING", "STRING")
+    RETURN_NAMES = ("positive", "status")
+    FUNCTION = "apply"
+    CATEGORY = "conditioning/minimax/contex_loop/references/internal"
+    DESCRIPTION = (
+        "Internal Tagged Ref2VA stage. Re-encodes the complete Qwen media "
+        "presentation with timestamped semantic picture anchors, then "
+        "preserves the native Ref2VA VAE/audio payload.")
+
+    def apply(self, positive, clip, prompt, presentation):
+        return _replace_conditioning_presentation(
+            positive, clip, prompt, presentation)
+
+
 class MiniMaxH3TaggedReferenceToVideo:
     @classmethod
     def INPUT_TYPES(cls):
@@ -6591,6 +6811,12 @@ class MiniMaxH3TaggedReferenceToVideo:
                            "skips missing/invalid tagged media, and passes @tags "
                            "unchanged. Unregistered @syntax is always preserved "
                            "because it may represent a subject or dialogue tag."}),
+            "semantic_anchor_size": (["384", "512", "768", "source"], {
+                "default": "512",
+                "tooltip": "Qwen-only #tag[timestamp] image resolution. "
+                           "512 is the balanced default. This affects only "
+                           "semantic visual tokens, never native Ref2VA VAE "
+                           "reference latents."}),
         }
         return {"required": ordered, "optional": optional}
 
@@ -6618,12 +6844,14 @@ class MiniMaxH3TaggedReferenceToVideo:
     DESCRIPTION = ("Prompt-driven Ref2VA with no numeric reference schedule. "
                    "Each scene activates only registered @tags present in its "
                    "resolved prompt, compactly renumbers those assets to native "
-                   "H3 labels, and leaves unrelated @syntax untouched.")
+                   "H3 labels, and leaves unrelated @syntax untouched. A "
+                   "Tagged Picture can also be written as #tag[2.50s] to add "
+                   "a Qwen-only semantic checkpoint without a VAE reference.")
 
     def apply(self, clip, vae, audio_vae, references, clip_index,
               clip_count, prompt, width, height, length,
               ref_image_size="match", state=None,
-              reference_policy="strict"):
+              reference_policy="strict", semantic_anchor_size="512"):
         if GraphBuilder is None:
             raise RuntimeError(
                 "Tagged H3 Ref2VA requires ComfyUI GraphBuilder.")
@@ -6641,6 +6869,7 @@ class MiniMaxH3TaggedReferenceToVideo:
             ref2va.set_input(
                 "ref_images.ref_image_%d" % index, entry["value"])
         slice_details = []
+        presentation_videos = []
         for index, entry in enumerate(bindings["videos"]):
             video, paired_audio, detail = _scheduled_video_reference_slice(
                 entry, state, clip_index, clip_count, length)
@@ -6649,6 +6878,10 @@ class MiniMaxH3TaggedReferenceToVideo:
                 ref2va.set_input(
                     "ref_video_audios.ref_video_audio_%d" % index,
                     paired_audio)
+            presentation_videos.append({
+                "video": video,
+                "paired_audio": paired_audio is not None,
+            })
             if detail:
                 slice_details.append(detail)
         for index, entry in enumerate(bindings["audios"]):
@@ -6668,11 +6901,38 @@ class MiniMaxH3TaggedReferenceToVideo:
         else:
             raise ValueError(
                 "Tagged references have no valid reference fingerprint.")
+        positive = ref2va.out(0)
+        semantic_anchors = bindings.get("semantic_anchors") or []
+        if semantic_anchors:
+            presentation = {
+                "version": SEMANTIC_PRESENTATION_VERSION,
+                "width": int(width),
+                "height": int(height),
+                "length": int(length),
+                "ref_image_size": str(ref_image_size),
+                "semantic_anchor_size": str(semantic_anchor_size),
+                "pictures": [
+                    entry["value"] for entry in bindings["pictures"]],
+                "videos": presentation_videos,
+                "standalone_audio_count": len(bindings["audios"]),
+                "anchors": [{
+                    "tag": anchor["tag"],
+                    "image": anchor["entry"]["value"],
+                    "timestamps": tuple(anchor["timestamps"]),
+                } for anchor in semantic_anchors],
+            }
+            semantic = graph.node(
+                "MiniMaxH3SemanticAnchorConditioning", "SemanticAnchors")
+            semantic.set_input("positive", positive)
+            semantic.set_input("clip", clip)
+            semantic.set_input("prompt", compiled)
+            semantic.set_input("presentation", presentation)
+            positive = semantic.out(0)
         if slice_details:
             summary += "; " + "; ".join(slice_details)
         return {
             "result": (
-                ref2va.out(0), ref2va.out(1), compiled, summary, fingerprint),
+                positive, ref2va.out(1), compiled, summary, fingerprint),
             "expand": graph.finalize(),
         }
 
@@ -12373,6 +12633,8 @@ CHAIN_NODE_CLASS_MAPPINGS = {
     "MiniMaxH3SourceTimelineScenePreview": (
         MiniMaxH3SourceTimelineScenePreview),
     "MiniMaxH3TaggedAudioReference": MiniMaxH3TaggedAudioReference,
+    "MiniMaxH3SemanticAnchorConditioning": (
+        MiniMaxH3SemanticAnchorConditioning),
     "MiniMaxH3TaggedReferenceToVideo": MiniMaxH3TaggedReferenceToVideo,
     "MiniMaxH3ChainExternalVideo": MiniMaxH3ChainExternalVideo,
     "MiniMaxH3ChainLoopStart": MiniMaxH3ChainLoopStart,
@@ -12420,6 +12682,8 @@ CHAIN_NODE_DISPLAY_NAME_MAPPINGS = {
     "MiniMaxH3SourceTimelineScenePreview": (
         "MiniMax H3 Source Timeline Scene Preview"),
     "MiniMaxH3TaggedAudioReference": "MiniMax H3 Tagged Audio Ref",
+    "MiniMaxH3SemanticAnchorConditioning": (
+        "MiniMax H3 Semantic Anchors (Internal)"),
     "MiniMaxH3TaggedReferenceToVideo": "MiniMax H3 Tagged Ref2VA",
     "MiniMaxH3ChainExternalVideo": "MiniMax H3 Existing Video Context",
     "MiniMaxH3ChainLoopStart": "MiniMax H3 Contex Loop Start",
