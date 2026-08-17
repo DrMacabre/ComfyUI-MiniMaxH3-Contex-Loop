@@ -37,6 +37,8 @@ import folder_paths
 import node_helpers
 import torch
 
+from .av_timing import conform_waveform_length
+
 try:
     from safetensors.torch import load_file as _st_load, save_file as _st_save
 except ImportError:  # ComfyUI always ships safetensors; belt and braces
@@ -632,8 +634,8 @@ class MiniMaxH3LoopTrim:
     ComfyUI rounds the required audio steps to the nearest integer, so some
     valid H3 lengths decode about 8.3 ms long (124 frames) and others about
     8.3 ms short (260 frames). Either error accumulates down a chain. Match
-    Tail truncates excess samples or zero-pads a short decode so every
-    delivered stream is exactly frames/fps long.
+    Tail time-conforms these small grid mismatches so every delivered stream
+    is exactly frames/fps long without inserting a silence tail.
     """
 
     @classmethod
@@ -661,10 +663,10 @@ class MiniMaxH3LoopTrim:
                                "Create Video."}),
                 "match_tail": ("BOOLEAN", {
                     "default": True,
-                    "tooltip": "Truncate or zero-pad audio so its duration "
-                               "equals frames/fps exactly. H3 rounds its 40 Hz "
-                               "audio grid to the nearest step, producing about "
-                               "8ms of excess or shortage on some lengths."}),
+                    "tooltip": "Time-conform small H3 audio-grid mismatches so "
+                               "duration equals frames/fps exactly without a "
+                               "silence tail. H3's rounded 40 Hz grid can differ "
+                               "from picture duration by about 8ms."}),
                 "retain_overlap_frames": ("INT", {
                     "default": 0, "min": 0, "max": 4096,
                     "tooltip": "Optional visual-only overlap for an external "
@@ -724,18 +726,11 @@ class MiniMaxH3LoopTrim:
                 frames_left = total - n
                 want = int(round(frames_left / float(fps) * sr))
                 have = int(waveform.shape[-1])
-                if have > want:
-                    over = have - want
-                    waveform = waveform[..., :want]
-                    _LOG.info("h3_motion_context: tail trimmed %d samples "
-                              "(%.2fms) so audio matches %d frames exactly",
-                              over, over / sr * 1000.0, frames_left)
-                elif have < want:
-                    missing = want - have
-                    waveform = torch.nn.functional.pad(waveform, (0, missing))
-                    _LOG.info("h3_motion_context: tail padded %d zero samples "
-                              "(%.2fms) so audio matches %d frames exactly",
-                              missing, missing / sr * 1000.0, frames_left)
+                if have != want:
+                    waveform = conform_waveform_length(
+                        waveform, want,
+                        "h3_motion_context: decoded %d-frame audio" %
+                        frames_left)
 
             out_audio = {"waveform": waveform, "sample_rate": sr}
             _LOG.info("h3_motion_context: %d frames / %.4fs picture, %.4fs sound, "

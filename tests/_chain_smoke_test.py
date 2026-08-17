@@ -895,7 +895,8 @@ def main():
 
     # ComfyUI rounds H3's 40 Hz audio grid to the nearest step. Depending on
     # frame length, the decoded stream can land 1/3 step above or below the
-    # exact 24 fps picture duration. Match Tail must frame-lock both cases.
+    # exact 24 fps picture duration. Match Tail must frame-lock both cases by
+    # tiny time-conformance rather than inserting a silence tail.
     trim_node = package.NODE_CLASS_MAPPINGS["MiniMaxH3LoopTrim"]()
     short_images = torch.zeros((260, 1, 1, 3), dtype=torch.float32)
     short_samples = 346400  # 433 audio steps; exact 260f target is 346667
@@ -907,7 +908,7 @@ def main():
         short_images, 0, short_audio, 24.0, True)
     assert retained == 0
     assert int(padded["waveform"].shape[-1]) == 346667
-    assert torch.count_nonzero(padded["waveform"][..., short_samples:]) == 0
+    assert torch.all(padded["waveform"] > 0.99)
     chain._validate_audio(padded, "260-frame regression", expected_frames=260)
 
     long_images = torch.zeros((124, 1, 1, 3), dtype=torch.float32)
@@ -920,6 +921,7 @@ def main():
         long_images, 0, long_audio, 24.0, True)
     assert retained == 0
     assert int(truncated["waveform"].shape[-1]) == 165333
+    assert torch.all(truncated["waveform"] > 0.99)
     numbered = torch.arange(10, dtype=torch.float32).reshape(10, 1, 1, 1)
     delivered, _, with_overlap, retained = trim_node.trim(
         numbered, 4, retain_overlap_frames=2)

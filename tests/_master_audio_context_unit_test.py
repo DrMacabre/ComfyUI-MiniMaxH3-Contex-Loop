@@ -165,6 +165,23 @@ def main():
     assert rounded_prefix == 0
     assert int(rounded_clip_audio["waveform"].shape[-1]) == picture_samples
 
+    # Absolute endpoints avoid the occasional one-sample error caused by
+    # rounding a relative duration and adding it to an already-rounded start.
+    awkward_start = 0.3 / 32_000.0
+    absolute_start = round(awkward_start * 32_000)
+    absolute_end = round(
+        (awkward_start + rounding_frames / 24.0) * 32_000)
+    _, _, absolute_clip_audio = (
+        audio_context.MiniMaxH3ContexMasterAudioMaskedAV().prepare(
+            rounding_latent,
+            FloorAudioVAE(),
+            master_audio,
+            clip_start_seconds=awkward_start,
+            context_length=0,
+        ))
+    assert int(absolute_clip_audio["waveform"].shape[-1]) == (
+        absolute_end - absolute_start)
+
     class ShortFirstAudioVAE(FloorAudioVAE):
         def encode(self, waveform):
             encoded = super().encode(waveform)
@@ -199,7 +216,7 @@ def main():
         "MiniMaxH3SongMaskedAVContext"
         not in audio_context.NODE_CLASS_MAPPINGS)
     print(
-        "master-audio masking: exact timeline slice, complete protected audio, "
+        "master-audio masking: absolute-endpoint timeline slice, complete protected audio, "
         "40 Hz target-grid lookahead, 39-frame protected video continuation, "
         "and clip-1 video generation pass")
 

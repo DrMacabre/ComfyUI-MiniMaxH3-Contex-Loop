@@ -60,6 +60,9 @@ Adapted source files and integration:
   MultiRef existing-video implementation.
 - `master_audio_context.py` — exact master-audio target replacement and
   optional protected video-prefix construction adapted from MultiRef Update 4.
+- `av_timing.py` and `nodes.py` — Update 6's exact absolute PCM-boundary and
+  small decoded-audio time-conformance approach, adapted to the recursive
+  checkpointed trim path.
 - `masked_bridge.py` — two-ended protected AV target construction adapted
   from MultiRef Update 5's masked bridge.
 
@@ -70,7 +73,9 @@ only recognized older blend/payload wrappers whose semantics changed.
 
 The master-audio node adapts MultiRef Update 4 at merged revision `9118251`
 (2026-08-14) and its Update 5 target-audio-grid boundary correction at merged
-revision `31e6cb7` (2026-08-15).
+revision `31e6cb7` (2026-08-15). Absolute master-audio slice endpoints and
+small decoded-audio time-conformance follow Update 6 revision
+`56f7586597929c43a6373ef28f6f84f26411b223` (2026-08-17).
 
 The two-ended masked bridge adapts MultiRef Update 5 at merged revision
 `31e6cb7` (2026-08-15).

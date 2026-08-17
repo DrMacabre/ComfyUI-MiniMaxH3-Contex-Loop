@@ -26,6 +26,7 @@ from .masked_context import (
 )
 from .masking_support import require_h3_mask_support
 from .nodes import AUDIO_HZ, FPS, _pixel_frames, _resize
+from .av_timing import sample_boundary_from_seconds
 
 
 _LOG = logging.getLogger("minimax_h3_context_loop.master_audio_context")
@@ -201,11 +202,15 @@ class MiniMaxH3ContexMasterAudioMaskedAV:
         if start_seconds < 0.0:
             raise ValueError(
                 "h3_master_audio_mask: clip_start_seconds must be >= 0.")
-        start_sample = int(round(start_seconds * vae_rate))
-        picture_samples = int(round(
-            target_frames / float(FPS) * vae_rate))
+        start_sample = sample_boundary_from_seconds(start_seconds, vae_rate)
+        picture_end_sample = sample_boundary_from_seconds(
+            start_seconds + target_frames / float(FPS), vae_rate)
+        picture_samples = picture_end_sample - start_sample
+        if picture_samples < 1:
+            raise RuntimeError(
+                "h3_master_audio_mask: computed an empty master-audio slice.")
         audio_slice = _fit_audio_slice(
-            waveform[..., start_sample:start_sample + picture_samples],
+            waveform[..., start_sample:picture_end_sample],
             picture_samples,
         )
 
