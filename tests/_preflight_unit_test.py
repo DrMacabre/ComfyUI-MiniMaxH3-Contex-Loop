@@ -82,6 +82,19 @@ def deferred_timeline(frames):
     }
 
 
+def semantic_plan(prompt):
+    policy = chain._contract_audio_policy("generated", "off", "on")
+    transition = chain.MiniMaxH3TransitionPolicy().build(
+        "cut", False, "guide", 0)[0]
+    return chain._normalize_plan(
+        json.dumps({"shots": [{
+            "id": "semantic", "prompt": prompt, "length": 124,
+        }]}),
+        "semantic_preflight", 64, 64, 1, "video", "head", "disabled",
+        "generated_audio", 0, 5.0, 8, 7, 18, "stack:auto:v1", 0,
+        "guide", policy, transition)
+
+
 with tempfile.TemporaryDirectory() as temporary:
     root = pathlib.Path(temporary)
     chain._output_root = lambda: str(root)
@@ -132,4 +145,30 @@ with tempfile.TemporaryDirectory() as temporary:
         chain._materialize_source_timeline_audio = original
     assert materialized == []
 
-print("H3 preflight: exact timing, source shortfall, Studio report, and early Loop Start block pass")
+    tagged_picture = chain.MiniMaxH3TaggedPictureReference().add(
+        torch.zeros((1, 32, 32, 3)), "replacement")[0]
+    _prepared, semantic = chain._preflight_chain(
+        semantic_plan(
+            "Use @replacement and #replacement[0.00s] plus "
+            "#replacement[4.75s]."),
+        tagged_references=tagged_picture)
+    assert semantic["ok"] is True
+    assert semantic["scenes"][0]["semantic_anchors"] == [
+        {"tag": "replacement", "timestamp_seconds": 0.0},
+        {"tag": "replacement", "timestamp_seconds": 4.75},
+    ]
+    assert semantic["scenes"][0]["references"][0]["tag"] == "replacement"
+
+    _prepared, unknown_anchor = chain._preflight_chain(
+        semantic_plan("Use #missing[1.00s]."),
+        tagged_references=tagged_picture)
+    assert any(item["code"] == "unresolved_semantic_anchor"
+               for item in unknown_anchor["errors"])
+
+    _prepared, late_anchor = chain._preflight_chain(
+        semantic_plan("Use #replacement[9.00s]."),
+        tagged_references=tagged_picture)
+    assert any(item["code"] == "semantic_anchor_out_of_range"
+               for item in late_anchor["errors"])
+
+print("H3 preflight: exact timing, source shortfall, semantic anchors, Studio report, and early Loop Start block pass")
