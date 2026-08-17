@@ -420,6 +420,13 @@ assert semantic_face["timestamps"] == [
     chain.Fraction("0.00"), chain.Fraction("2.50")]
 assert "#face[0s,2.5s] -> <Video 1> Qwen-only semantic anchors" in (
     semantic_summary)
+assert chain._semantic_anchor_specs(
+    "@look #face[0.00s] and #face[2.50]") == [
+        {"tag": "face", "timestamp_seconds": 0.0},
+        {"tag": "face", "timestamp_seconds": 2.5},
+    ]
+assert chain._prompt_reference_tags(
+    "@look #face[2.50s]") == {"look", "face"}
 
 try:
     chain._compile_tagged_reference_prompt(

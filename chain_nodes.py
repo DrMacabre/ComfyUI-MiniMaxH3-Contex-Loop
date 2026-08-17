@@ -494,6 +494,24 @@ REFERENCE_VIDEO_TIMELINE_MODES = (
 )
 
 
+def _semantic_anchor_specs(text: Any) -> list[dict[str, Any]]:
+    return [
+        {
+            "tag": match.group(1),
+            "timestamp_seconds": float(Fraction(match.group(2))),
+        }
+        for match in _SEMANTIC_ANCHOR_RE.finditer(str(text or ""))
+    ]
+
+
+def _prompt_reference_tags(text: Any) -> set[str]:
+    source = str(text or "")
+    return (
+        set(_REFERENCE_ALIAS_RE.findall(source)) |
+        {item["tag"] for item in _semantic_anchor_specs(source)}
+    )
+
+
 def _reference_compliance_mode(value: Any) -> str:
     # Compatibility with the short-lived BOOLEAN form: True was strict and
     # False was the warning-only behavior now named soft.
@@ -3132,8 +3150,8 @@ def _scene_dependency_record(
             "raw_frames": int(shot["raw_frames"]),
             "delivered_frames": int(shot["delivered_frames"]),
             "generation_start_frame": int(shot["generation_start_frame"]),
-            "active_reference_tags": sorted(set(
-                _REFERENCE_ALIAS_RE.findall(str(shot.get("prompt") or "")))),
+            "active_reference_tags": sorted(
+                _prompt_reference_tags(shot.get("prompt"))),
             "source_reference_window": source_reference,
         },
         "incoming_boundary": {
@@ -5590,9 +5608,10 @@ class MiniMaxH3TaggedPictureReference:
                                "first image when a batch is connected."}),
                 "tag": ("STRING", {
                     "default": "hero_face",
-                    "tooltip": "Stable alias used as @tag in scene prompts. "
-                               "This picture is sent to H3 only in scenes "
-                               "whose resolved prompt contains that tag."}),
+                    "tooltip": "Stable picture alias. Write @hero_face for "
+                               "a native Ref2VA picture, #hero_face[2.50s] "
+                               "for a Qwen-only semantic checkpoint, or both. "
+                               "Semantic timestamps are local to the scene."}),
             },
             "optional": {
                 "previous": (TAGGED_REFERENCE_TYPE, {
@@ -5607,10 +5626,11 @@ class MiniMaxH3TaggedPictureReference:
     RETURN_NAMES = ("references", "reference_fingerprint", "status")
     FUNCTION = "add"
     CATEGORY = "conditioning/minimax/contex_loop/references/prompt_driven"
-    DESCRIPTION = ("Register one picture under a stable @tag. No numeric "
-                   "schedule is needed: Tagged Ref2VA activates it only when "
-                   "the current scene prompt contains that tag, then assigns "
-                   "the compact native <Picture N> label.")
+    DESCRIPTION = ("Register one picture under a stable tag. @tag activates "
+                   "a native Ref2VA picture and assigns compact <Picture N> "
+                   "numbering. #tag[2.50s] presents that picture to Qwen at "
+                   "an approximate scene-local semantic checkpoint without "
+                   "adding a VAE reference. Both forms may be used together.")
 
     def add(self, image, tag, previous=None, dynprompt=None, unique_id=None):
         mode = _downstream_reference_compliance(dynprompt, unique_id)
@@ -6780,13 +6800,15 @@ class MiniMaxH3TaggedReferenceToVideo:
             "tooltip": "Resolved current-scene prompt. Mention a registered "
                        "@tag to activate that asset for this scene. Only "
                        "registered reference tags are replaced with native "
-                       "H3 labels; unrelated @syntax remains unchanged. The "
-                       "node never inserts reference definitions or other "
-                       "semantic prompt text."})
+                       "H3 labels; unrelated @syntax remains unchanged. For "
+                       "a Tagged Picture, #tag[2.50s] creates an approximate "
+                       "Qwen-only semantic checkpoint at 2.50 seconds into "
+                       "this scene. It is not a hard frame or spatial lock."})
         required["references"] = (TAGGED_REFERENCE_TYPE, {
             "tooltip": "Final Tagged Picture/Video/Audio Ref chain. A source "
-                       "is active only when its registered @tag occurs in the "
-                       "resolved prompt for the current scene."})
+                       "is active when its registered @tag occurs in the "
+                       "resolved prompt. Tagged Pictures can additionally be "
+                       "used through #tag[timestamp] semantic checkpoints."})
         # Preserve the natural graph order: model inputs, references, current
         # scene metadata, prompt, and generation settings.
         ordered = {}
@@ -6835,8 +6857,8 @@ class MiniMaxH3TaggedReferenceToVideo:
     OUTPUT_TOOLTIPS = (
         "Positive conditioning produced by stock MiniMax H3 Ref2VA.",
         "Empty MiniMax H3 AV latent produced by stock Ref2VA.",
-        "Exact prompt sent to H3 after used registered tags become native labels.",
-        "Scene-local mapping of prompt-used tags to native reference labels.",
+        "Exact prompt sent to H3 after native @tags and semantic #anchors compile.",
+        "Scene-local mapping of native references and Qwen-only semantic anchors.",
         "Fingerprint of the complete registered source set for Plan checkpoint safety.",
     )
     FUNCTION = "apply"
@@ -7394,8 +7416,9 @@ class MiniMaxH3ChainPlan:
                                "editor for normal work and Raw JSON only for "
                                "import, export, or advanced editing. Reference "
                                "media is connected elsewhere; this JSON only "
-                               "mentions its @tags or native <Picture/Video/Audio "
-                               "N> labels."}),
+                               "mentions native @tags, Tagged Picture semantic "
+                               "anchors such as #hero[2.50s], or native "
+                               "<Picture/Video/Audio N> labels."}),
                 "run_name": ("STRING", {
                     "default": "h3_chain",
                     "tooltip": "Identity of one render history and its folder "
@@ -8110,6 +8133,8 @@ def _preflight_chain(
                 "transition": mode,
                 "prompt_tags": sorted(set(_REFERENCE_ALIAS_RE.findall(
                     str(shot.get("prompt") or "")))),
+                "semantic_anchors": _semantic_anchor_specs(
+                    shot.get("prompt")),
                 "references": [],
             }
             if (not any(issue["code"].startswith("source_")
@@ -8145,12 +8170,60 @@ def _preflight_chain(
             })
             for scene_record, shot in zip(report["scenes"], prepared["shots"]):
                 prompt_tags = set(scene_record["prompt_tags"])
+                semantic_anchors = list(scene_record["semantic_anchors"])
+                semantic_tags = {item["tag"] for item in semantic_anchors}
                 if route == "tagged":
-                    active = [entry for entry in entries if prompt_tags.intersection(
+                    active_tags = prompt_tags | semantic_tags
+                    active = [entry for entry in entries if active_tags.intersection(
                         _reference_entry_tags(entry))]
+                    entries_by_tag = {
+                        tag: entry for entry in entries
+                        for tag in _reference_entry_tags(entry)
+                    }
+                    for anchor in semantic_anchors:
+                        tag = anchor["tag"]
+                        entry = entries_by_tag.get(tag)
+                        if entry is None:
+                            _preflight_issue(
+                                report, "errors", "unresolved_semantic_anchor",
+                                "Scene %d uses unresolved semantic anchor #%s." %
+                                (int(shot["index"]), tag),
+                                "Register a Tagged Picture with that tag or "
+                                "remove the semantic anchor.",
+                                scene=int(shot["index"]), tag=tag)
+                        elif entry.get("kind") != "picture":
+                            _preflight_issue(
+                                report, "errors", "invalid_semantic_anchor_kind",
+                                "Scene %d semantic anchor #%s resolves to %s, "
+                                "not a Tagged Picture." % (
+                                    int(shot["index"]), tag,
+                                    str(entry.get("kind") or "unknown")),
+                                "Semantic anchors accept Tagged Picture refs only.",
+                                scene=int(shot["index"]), tag=tag)
+                        if float(anchor["timestamp_seconds"]) > (
+                                int(shot["raw_frames"]) / float(FPS)):
+                            _preflight_issue(
+                                report, "errors", "semantic_anchor_out_of_range",
+                                "Scene %d semantic anchor #%s[%.3fs] exceeds "
+                                "the %.3fs scene duration." % (
+                                    int(shot["index"]), tag,
+                                    float(anchor["timestamp_seconds"]),
+                                    int(shot["raw_frames"]) / float(FPS)),
+                                "Use a scene-local timestamp inside this scene.",
+                                scene=int(shot["index"]), tag=tag)
                 else:
                     active = [entry for entry in entries if _reference_is_active(
                         entry, int(shot["index"]))]
+                    for anchor in semantic_anchors:
+                        _preflight_issue(
+                            report, "errors", "semantic_anchor_requires_tagged",
+                            "Scene %d uses #%s[%.3fs], but semantic anchors "
+                            "require the Tagged reference route." % (
+                                int(shot["index"]), anchor["tag"],
+                                float(anchor["timestamp_seconds"])),
+                            "Use Tagged Picture Ref + Tagged Ref2VA, or remove "
+                            "the #anchor from this scheduled workflow.",
+                            scene=int(shot["index"]), tag=anchor["tag"])
                     unresolved = sorted(prompt_tags - set(registered))
                     for tag in unresolved:
                         _preflight_issue(
@@ -8190,11 +8263,12 @@ def _preflight_chain(
                                 "Provide a longer reference or change its timeline mode.",
                                 scene=int(shot["index"]), tag=detail["tag"])
                     scene_record["references"].append(detail)
-        elif any(item["prompt_tags"] for item in report["scenes"]):
+        elif any(item["prompt_tags"] or item["semantic_anchors"]
+                 for item in report["scenes"]):
             _preflight_issue(
                 report, "warnings", "reference_registry_not_connected",
-                "Scene prompts contain @tags, but no reference registry is "
-                "connected to preflight.",
+                "Scene prompts contain @tags or #semantic anchors, but no "
+                "reference registry is connected to preflight.",
                 "Connect the active Tagged or Scheduled reference output to "
                 "preflight for scene-window validation.")
 

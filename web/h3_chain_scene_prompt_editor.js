@@ -33,8 +33,8 @@ function publishCompanionPrompt(...args) {
     return promptCompanionSync.publishCompanionPrompt?.(...args) ?? 0;
 }
 
-// The compact @ reference and # dialogue authoring interactions are inspired
-// by nkxx188/ComfyUI-MiniMaxH3-Easy (MIT); see THIRD_PARTY_NOTICES.md.
+// The compact reference and dialogue authoring interactions are inspired by
+// nkxx188/ComfyUI-MiniMaxH3-Easy (MIT); see THIRD_PARTY_NOTICES.md.
 
 const NODE_NAME = "MiniMaxH3ChainScenePromptEditor";
 const PLAN_NAME = "MiniMaxH3ChainPlan";
@@ -1666,7 +1666,8 @@ function mount(node) {
         const help = mode === "tagged"
             ? "Prompt-driven references. Hover to preview; click a @tag to insert it. " +
               "Writing the tag activates that asset for this scene and compiles it " +
-              "to a compact native H3 label. Audio never autoplays."
+              "to a compact native H3 label. For a picture, type #tag[2.50s] " +
+              "to add a Qwen-only semantic checkpoint. Audio never autoplays."
             : mode === "scheduled"
             ? `Scheduled references for scene ${state.active + 1}. Hover to preview; ` +
               "click to insert the optional stable @alias. It compiles to a native label; " +
@@ -1791,7 +1792,7 @@ function mount(node) {
             if (opening) renderReferenceTray(refs);
             refs.classList.toggle("h3sp-open", opening);
         });
-        const dialogueButton = button("# Dialogue", "Wrap selection in <d> dialogue tags (#)", () => {
+        const dialogueButton = button("Dialogue", "Wrap selection in <d> dialogue tags", () => {
             insertPromptDialogue();
         });
         const presentationButton = button(
@@ -1814,7 +1815,7 @@ function mount(node) {
             referenceButton,
             dialogueButton,
             presentationButton,
-            element("span", "h3sp-hint", "Alt+←/→ scenes · @ refs · # dialogue"),
+            element("span", "h3sp-hint", "Alt+←/→ scenes · @ native ref · #picture[2.50s] semantic"),
         );
         const footer = element("div", "h3sp-footer");
         const identity = element(
@@ -1846,9 +1847,6 @@ function mount(node) {
                 renderReferenceTray(refs);
                 refs.classList.add("h3sp-open");
                 refs.querySelector(".h3sp-ref-chip, button")?.focus();
-            } else if (!event.ctrlKey && !event.metaKey && !event.altKey && event.key === "#") {
-                event.preventDefault();
-                insertPromptDialogue();
             }
         });
 
@@ -1879,9 +1877,6 @@ function mount(node) {
                 event.preventDefault();
                 renderReferenceTray(refs);
                 refs.classList.add("h3sp-open");
-            } else if (!event.ctrlKey && !event.metaKey && !event.altKey && event.key === "#") {
-                event.preventDefault();
-                insertPromptDialogue();
             } else if (event.key === "Escape") {
                 refs.classList.remove("h3sp-open");
             }

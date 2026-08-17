@@ -283,6 +283,15 @@ sources and compiles their aliases to compact native `<Picture N>`, `<Video N>`,
 and `<Audio N>` labels. Generic Picture, Video, and Audio refs do not insert
 semantic prompt text; the user remains responsible for their definitions.
 
+Tagged pictures also support scene-local semantic anchors such as
+`#hero[2.50s]`. The `#` form repeats that picture in Qwen's timed media
+presentation without creating another native VAE reference. Use `@hero` for
+native Ref2VA identity conditioning, `#hero[...]` for sparse semantic
+reinforcement, or both for a character-swap A/B test. Timestamps are
+approximate semantic checkpoints within the current scene—not hard frame,
+pose, spatial, or continuation locks. See
+[Scheduled references](docs/SCHEDULED_REFERENCES.md#tagged-semantic-picture-anchors).
+
 Use **Tagged Motion Ref**, rather than generic Tagged Video Ref, when a clip
 supplies action instead of appearance or whole-video structure. Its native
 media remains `<Video N>`, but its `@tag` compiles to a separate reusable

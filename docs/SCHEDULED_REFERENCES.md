@@ -69,6 +69,26 @@ The Scene Prompt Editor's **@ Reference** tray shows only sources active for
 the selected scene. Hover a loader-backed tag to preview image, video, or audio,
 then click to insert it. Audio never autoplays.
 
+## Tagged semantic picture anchors
+
+The prompt-driven **Tagged** route also accepts `#picture[2.50s]`. This presents
+the registered Tagged Picture to Qwen at an approximate scene-local timestamp
+without adding another native VAE reference. It is useful for reinforcing a
+replacement character's identity later in a shot:
+
+```text
+<Subject 1> is the replacement performer defined by @replacement.
+#replacement[0.00s] #replacement[2.50s] #replacement[4.75s]
+```
+
+`@replacement` and `#replacement[...]` have distinct jobs and may be used
+together. The `@` form is a native Ref2VA picture. The `#` form is Qwen-only
+semantic reinforcement. A `#` anchor accepts a Tagged Picture only; its time
+must fall inside the current scene. It is an approximate semantic checkpoint,
+not an exact frame, pose, spatial mask, motion control, or continuation seam.
+Start with two or three sparse anchors—too many repeated pictures can resist
+the source video's changing pose.
+
 With core Ref2VA, the tray previews media and inserts native labels. With core
 Image to Video it exposes first and last frames as `<Picture N>` according to
 the active keyframes.

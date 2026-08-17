@@ -37,7 +37,7 @@ export function richGuideInstruction(guide, generationMode) {
     const selected = normalizeRichGuide(guide);
     const mode = String(generationMode || "H3 chain scene");
     const schema = mode === "Ref2VA"
-        ? "If the source already uses the Ref2VA six-section format, preserve its order: subject_definitions, summary, retention_analysis, detailed_description, overall_soundscape, non_diegetic_music. Introduce that complete format only when the user explicitly asks for a full H3 rewrite. Keep every reference label or @alias stable."
+        ? "If the source already uses the Ref2VA six-section format, preserve its order: subject_definitions, summary, retention_analysis, detailed_description, overall_soundscape, non_diegetic_music. Introduce that complete format only when the user explicitly asks for a full H3 rewrite. Keep every reference label, @alias, and #picture[timestamp] semantic anchor stable."
         : "If the source already uses the base H3 format, preserve integrated_multimodal_description, overall_soundscape, and non_diegetic_music. Introduce the complete format or keyframe-alignment sentence only when the user explicitly asks for a full H3 rewrite; do not force headings onto a compact prompt.";
     return [
         `Return a complete replacement string for the current MiniMax H3 ${mode} scene, but change only what the request requires.`,
@@ -67,7 +67,7 @@ export function referenceRecordMap(records) {
 // Keep this alias grammar aligned with chain_nodes.py's reference compiler.
 // In particular, sentence punctuation such as the period in "Use @hero."
 // belongs to the surrounding prompt, not to the decorated reference token.
-const RICH_TOKEN_PATTERN = /((?<![A-Za-z0-9_])@[A-Za-z][A-Za-z0-9_-]{0,63}(?![A-Za-z0-9_-])|<(?:Picture|Video|Audio|Subject)\s+\d+>|<\/?d>)/gi;
+const RICH_TOKEN_PATTERN = /((?<![A-Za-z0-9_])#[A-Za-z][A-Za-z0-9_-]{0,63}\[[0-9]+(?:\.[0-9]+)?s?\]|(?<![A-Za-z0-9_])@[A-Za-z][A-Za-z0-9_-]{0,63}(?![A-Za-z0-9_-])|<(?:Picture|Video|Audio|Subject)\s+\d+>|<\/?d>)/gi;
 
 export function tokenizeRichPrompt(text, records = []) {
     const source = String(text ?? "");
@@ -79,17 +79,22 @@ export function tokenizeRichPrompt(text, records = []) {
         if (index > offset) parts.push({type: "text", text: source.slice(offset, index)});
         const token = match[0];
         const lower = token.toLowerCase();
-        const record = recordMap.get(lower) ?? null;
-        if (record || lower.startsWith("@") || /^<(?:picture|video|audio)\s/i.test(lower)) {
+        const semanticMatch = /^#([a-z][a-z0-9_-]{0,63})\[([0-9]+(?:\.[0-9]+)?)s?\]$/i.exec(token);
+        const recordKey = semanticMatch ? `@${semanticMatch[1]}`.toLowerCase() : lower;
+        const record = recordMap.get(recordKey) ?? null;
+        if (record || lower.startsWith("@") || semanticMatch || /^<(?:picture|video|audio)\s/i.test(lower)) {
             const namedKind = lower.startsWith("<picture") ? "picture"
                 : lower.startsWith("<video") ? "video"
                     : lower.startsWith("<audio") ? "audio" : null;
+            const semanticValid = !semanticMatch || record?.kind === "picture";
             parts.push({
                 type: "reference",
                 text: token,
                 kind: record?.kind ?? namedKind ?? "unknown",
                 record,
-                unresolved: !record,
+                unresolved: !record || !semanticValid,
+                semantic: Boolean(semanticMatch),
+                timestamp: semanticMatch ? Number(semanticMatch[2]) : null,
             });
         } else if (lower.startsWith("<subject")) {
             parts.push({type: "subject", text: token});

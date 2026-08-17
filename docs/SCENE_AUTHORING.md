@@ -32,7 +32,9 @@ second prompt copy.
 
 - Arrow buttons or `Alt+Left/Right` change scenes.
 - `@` opens Picture/Video/Audio references.
-- `#` opens dialogue helpers.
+- **Dialogue** wraps a selection in `<d>` tags.
+- `#picture[2.50s]` adds a scene-local Qwen semantic checkpoint when the
+  picture is registered through Tagged Ref2VA.
 - `A−` and `A+` change persistent type size.
 - The node may sit inline before Loop Start or on an editor-only branch.
 
