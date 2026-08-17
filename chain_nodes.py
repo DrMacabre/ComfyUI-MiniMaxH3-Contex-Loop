@@ -123,7 +123,9 @@ H3_CONTEXT_LENGTHS = (
     141, 158, 175, 192, 209, 226, 243,
 )
 AUDIO_MODES = ("source_track", "generated_audio", "source_plus_timeline")
-CONTINUATION_MODES = ("guide", "masked_av", "feathered_av")
+CONTINUATION_MODES = (
+    "guide", "tapered_guide", "masked_av", "feathered_av")
+GUIDE_CONTINUATION_MODES = frozenset(("guide", "tapered_guide"))
 MASKED_CONTINUATION_MODES = frozenset(("masked_av", "feathered_av"))
 REFERENCE_AUDIO_TIMELINE_MODES = ("standalone", "source_timeline")
 MOTION_REFERENCE_SHORT_EDGES = ("384", "512", "768", "source")
@@ -262,7 +264,8 @@ def _resolved_transition_policy(value: Any) -> dict[str, Any]:
     mode = str(compatibility.get("continuation_mode", "guide"))
     context = int(compatibility.get("context_length", 0))
     preset = "legacy"
-    for candidate in ("cut", "guide", "hard_av", "soft_av"):
+    for candidate in (
+            "cut", "guide", "detail_guide", "hard_av", "soft_av"):
         resolved = _contract_transition_policy(candidate)
         if (resolved["continuation_mode"] == mode and
                 int(resolved["context_length"]) == context):
@@ -4149,6 +4152,85 @@ def _tensor_cpu_clone(value: Any) -> Any:
     return value
 
 
+_TAPERED_GUIDE_PALETTE = (
+    (185, 115, 215),
+    (115, 195, 140),
+    (150, 148, 162),
+    (205, 150, 192),
+    (138, 182, 148),
+    (160, 120, 175),
+)
+_TAPERED_GUIDE_ALPHA = 0.45
+_TAPERED_GUIDE_ALPHA_END = 0.10
+_TAPERED_GUIDE_RAMP_FRAMES = 3
+_TAPERED_GUIDE_BLOCK_PIXELS = 16
+
+
+def _tapered_guide_alpha(position: int, frame_count: int) -> float:
+    """Return MacroSony's validated chroma-noise taper for one frame."""
+    position = int(position)
+    frame_count = int(frame_count)
+    if frame_count < 1 or position < 0 or position >= frame_count:
+        raise ValueError("Tapered Guide position is outside its context span.")
+    ramp = min(_TAPERED_GUIDE_RAMP_FRAMES, frame_count)
+    from_end = frame_count - 1 - position
+    if from_end >= ramp:
+        return _TAPERED_GUIDE_ALPHA
+    return (_TAPERED_GUIDE_ALPHA
+            + (_TAPERED_GUIDE_ALPHA_END - _TAPERED_GUIDE_ALPHA)
+            * (ramp - from_end) / ramp)
+
+
+def _tapered_guide_context(
+        frames: Any, context_length: int, seed: int) -> Any:
+    """Build a disposable noisy tail for repair-biased Guide continuation.
+
+    The accepted predecessor tensor remains untouched. Only the exact tail
+    consumed by Motion Context is cloned and corrupted. Independent block
+    patterns on each frame make the chroma damage temporally incoherent; the
+    final three frames taper toward the clean join.
+    """
+    if torch is None or not torch.is_tensor(frames):
+        raise ValueError("Tapered Guide requires a torch IMAGE tensor.")
+    if frames.ndim != 4 or int(frames.shape[-1]) < 3:
+        raise ValueError(
+            "Tapered Guide expects [frames,height,width,channels] RGB images; "
+            "received %s." % (tuple(frames.shape),))
+    if not frames.is_floating_point():
+        raise ValueError("Tapered Guide requires floating-point IMAGE values.")
+    requested = int(context_length)
+    if requested <= 0:
+        return frames
+    count = min(requested, int(frames.shape[0]))
+    if count < 1:
+        raise ValueError("Tapered Guide received an empty context tensor.")
+
+    tail = frames[-count:].detach().contiguous().clone()
+    height, width = int(tail.shape[1]), int(tail.shape[2])
+    grid_height = max(1, int(math.ceil(
+        height / float(_TAPERED_GUIDE_BLOCK_PIXELS))))
+    grid_width = max(1, int(math.ceil(
+        width / float(_TAPERED_GUIDE_BLOCK_PIXELS))))
+    generator = torch.Generator(device="cpu")
+    generator.manual_seed(int(seed) & MAX_SEED)
+    palette = torch.tensor(
+        _TAPERED_GUIDE_PALETTE, dtype=torch.float32) / 255.0
+
+    for position in range(count):
+        indices = torch.randint(
+            0, len(_TAPERED_GUIDE_PALETTE),
+            (grid_height, grid_width), generator=generator, device="cpu")
+        small = palette[indices].permute(2, 0, 1).unsqueeze(0)
+        noisy = torch.nn.functional.interpolate(
+            small, size=(height, width), mode="nearest")[0].permute(1, 2, 0)
+        noisy = noisy.to(device=tail.device, dtype=tail.dtype)
+        amount = _tapered_guide_alpha(position, count)
+        tail[position, ..., :3] = torch.lerp(
+            tail[position, ..., :3], noisy, amount)
+
+    return tail
+
+
 def _compact_latent(latent: dict[str, Any]) -> dict[str, Any]:
     parts = _streams_from_latent(latent)
     if len(parts) < 2:
@@ -6674,10 +6756,15 @@ class MiniMaxH3TransitionPolicy:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "preset": (("cut", "guide", "hard_av", "soft_av"), {
+                "preset": ((
+                        "cut", "guide", "detail_guide", "hard_av", "soft_av"
+                ), {
                     "default": "guide",
-                    "tooltip": "Tested incoming-transition pairs: Cut = "
+                    "tooltip": "Incoming-transition presets: Cut = "
                                "Guide + 0 frames; Guide = Guide + 22 frames; "
+                               "Detail Guide = tapered chroma-noise Guide + "
+                               "22 frames (experimental outside its published "
+                               "baseline); "
                                "Hard AV = Masked AV + 39 frames; Soft AV = "
                                "Feathered AV + 39 frames. These are Plan "
                                "defaults; explicit per-scene settings still "
@@ -6698,7 +6785,10 @@ class MiniMaxH3TransitionPolicy:
                         "default": 22,
                         "tooltip": "Expert only. Incoming visual context in "
                                    "frames. 0 creates an independent cut; AV "
-                                   "mask implementations require at least 5."}),
+                                   "mask implementations require at least 5. "
+                                   "Tapered Guide accepts any listed Guide "
+                                   "length, but only 22 frames has published "
+                                   "validation."}),
             },
         }
 
@@ -6722,6 +6812,8 @@ class MiniMaxH3TransitionPolicy:
         status = _transition_policy_summary({"transition_policy": policy})
         if policy["expert_override"]:
             status += "; expert override"
+        elif policy["preset"] == "detail_guide":
+            status += "; experimental preset; published baseline 22f"
         else:
             status += "; tested preset"
         return (policy, policy["continuation_mode"],
@@ -6775,7 +6867,8 @@ class MiniMaxH3Legacy04PolicyAdapter:
         mode = str(continuation_mode)
         context = int(context_length)
         matched_preset = None
-        for candidate in ("cut", "guide", "hard_av", "soft_av"):
+        for candidate in (
+                "cut", "guide", "detail_guide", "hard_av", "soft_av"):
             resolved = _contract_transition_policy(candidate)
             if (resolved["continuation_mode"] == mode and
                     int(resolved["context_length"]) == context):
@@ -8610,7 +8703,7 @@ class MiniMaxH3ChainContext:
             "continuation_mode", cfg.get("continuation_mode", "guide"))
         external_first = index == 1 and bool(state.get("external_context"))
         generated_audio_context = (
-            continuation_mode == "guide"
+            continuation_mode in GUIDE_CONTINUATION_MODES
             and _audio_policy_uses_generated_continuity(cfg)
             and audio_context_length > 0)
         has_context = context_length > 0 or generated_audio_context
@@ -8666,6 +8759,17 @@ class MiniMaxH3ChainContext:
         if (generated_audio_context and previous_latent is None
                 and previous_audio is None and not external_first):
             raise ValueError("H3 chain continuation has no previous AV latent.")
+        if continuation_mode == "tapered_guide" and context_length > 0:
+            noise_seed = int(shot["seed"]) ^ 0x5A17
+            previous_frames = _tapered_guide_context(
+                previous_frames, context_length, noise_seed)
+            _LOG.info(
+                "H3 Chain Tapered Guide: %d context frames; block chroma "
+                "alpha %.2f, final %d frames taper to %.2f; noise seed %d",
+                int(previous_frames.shape[0]), _TAPERED_GUIDE_ALPHA,
+                min(_TAPERED_GUIDE_RAMP_FRAMES,
+                    int(previous_frames.shape[0])),
+                _TAPERED_GUIDE_ALPHA_END, noise_seed)
         out, trim = MiniMaxH3MotionContext().apply(
             conditioning=conditioning,
             vae=vae,

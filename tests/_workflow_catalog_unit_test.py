@@ -96,6 +96,8 @@ def validate_v05_topology(workflow):
     expected = {
         ("guide", 0): ["cut", False, "guide", 0],
         ("guide", 22): ["guide", False, "guide", 22],
+        ("tapered_guide", 22): [
+            "detail_guide", False, "tapered_guide", 22],
         ("masked_av", 39): ["hard_av", False, "masked_av", 39],
         ("feathered_av", 39): [
             "soft_av", False, "feathered_av", 39],

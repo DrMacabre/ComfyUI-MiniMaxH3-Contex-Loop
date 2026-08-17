@@ -39,6 +39,8 @@ H3_CONTEXT_LENGTHS = (
     1, 5, 22, 39, 56, 73, 90, 107, 124,
     141, 158, 175, 192, 209, 226, 243,
 )
+CONTINUATION_MODES = (
+    "guide", "tapered_guide", "masked_av", "feathered_av")
 
 
 def _safe_name(value: Any, fallback: str = "") -> str:
@@ -135,7 +137,7 @@ def _workflow_inputs(document: Any, run_name: str) -> dict[str, Any]:
             or selected[9] not in (
                 "source_track", "generated_audio", "source_plus_timeline")):
         return {}
-    if len(selected) > 16 and selected[16] not in ("guide", "masked_av"):
+    if len(selected) > 16 and selected[16] not in CONTINUATION_MODES:
         return {}
     restored = {}
     for name, value in zip(PLAN_WIDGET_NAMES, selected):
@@ -167,7 +169,7 @@ def _editor_plan(archive: dict[str, Any]) -> dict[str, Any]:
             value["steps"] = int(shot["steps"])
         if shot.get("seed") is not None:
             value["seed"] = str(shot["seed"])
-        if shot.get("continuation_mode") in ("guide", "masked_av"):
+        if shot.get("continuation_mode") in CONTINUATION_MODES:
             value["continuation_mode"] = shot["continuation_mode"]
         if (shot.get("context_length") == 0
                 or shot.get("context_length") in H3_CONTEXT_LENGTHS):

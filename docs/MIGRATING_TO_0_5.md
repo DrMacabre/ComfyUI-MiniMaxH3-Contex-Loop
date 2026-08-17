@@ -19,11 +19,13 @@ Version 0.5 replaces combined low-level choices with two explicit policies:
 |---|---|---:|
 | guide with zero context | Cut | 0 frames |
 | `guide` | Guide | 22 frames |
+| new `tapered_guide` | Detail Guide | 22 frames |
 | `masked_av` | Hard AV | 39 frames |
 | `feathered_av` | Soft AV | 39 frames |
 
 Advanced mode retains the old implementation and context fields for custom
-values. The semantic choice always describes the boundary entering a scene.
+values. Detail Guide is opt-in and does not alter migrated workflows. The
+semantic choice always describes the boundary entering a scene.
 
 ## Automatic migration
 

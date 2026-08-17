@@ -110,6 +110,43 @@ and audio guides plus native keyframe/reference payload merging in ComfyUI.
 This repository does not copy its node implementation; it detects the exposed
 core layout API and emits compatible guide records from Loop Context.
 
+## MiniMax H3 Chained Character Swap
+
+The opt-in `tapered_guide` continuation adapts the tapered chroma-noise context
+recipe, palette, validated default strengths, and deterministic-noise design
+from [minimax-h3-chained-character-swap](https://github.com/MacroSony/minimax-h3-chained-character-swap)
+by **MacroSony**. This integration applies the transformation in memory to an
+immutable clone of the exact recursive context tail, derives its noise seed
+from the scene seed, and generalizes the published 22-frame baseline to other
+explicit Guide lengths as an experimental option.
+
+The referenced revision is `609e74233445067afa06bd5a3428bc645d555a01`
+(2026-08-16), distributed under the MIT License:
+
+```text
+MIT License
+
+Copyright (c) 2026 MacroSony
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
 ## ComfyUI-MiniMaxH3-Easy
 
 The H3 Chain Plan editors' quick `@` reference-tag and `#` dialogue-tag

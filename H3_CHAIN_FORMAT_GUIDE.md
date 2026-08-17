@@ -222,7 +222,7 @@ Shot = string | {
   "seed"?: integer | digit string,
   "context_length"?: 0 | 1 | 5 | 22 | 39 | ... | 243,
   "audio_context_length"?: integer, // 0..240
-  "continuation_mode"?: "guide" | "masked_av"
+  "continuation_mode"?: "guide" | "tapered_guide" | "masked_av" | "feathered_av"
 }
 ```
 
@@ -512,9 +512,9 @@ advanced**; Plan Studio keeps them in the existing scene-properties row.
 | `run_name` | Filename-safe text; normalized to at most 96 characters | Give each independent render a unique name. Keep it unchanged only when resuming. |
 | `generation_fingerprint` | Any stable version string | Include model, VAE, LoRA, global-reference, CFG, sampler, and scheduler versions. Change it when any external generation dependency changes. |
 | `width`, `height` | Positive multiples of 32, UI range 32–4096 | `960 × 544` is the supplied long-form workflow setting. |
-| `transition_policy` | Cut, Guide, Hard AV, Soft AV policy wire | Preferred 0.5 incoming-boundary control. |
+| `transition_policy` | Cut, Guide, Detail Guide, Hard AV, Soft AV policy wire | Preferred 0.5 incoming-boundary control. |
 | `audio_policy` | Independent final/reference/continuity policy wire | Preferred 0.5 audio-intent control. |
-| `continuation_mode` | `guide`, `masked_av`, or `feathered_av` | Legacy/advanced implementation override for scenes without `shots[n].continuation_mode`. |
+| `continuation_mode` | `guide`, `tapered_guide`, `masked_av`, or `feathered_av` | Legacy/advanced implementation override for scenes without `shots[n].continuation_mode`. `tapered_guide` accepts normal Guide context lengths; 22 is its published baseline. |
 | `context_length` | `0`, `1`, then native runs `5`, `22`, `39`, ... `243` | Legacy/advanced exact context. Use 22 for Guide and 39 for AV so picture and audio meet on an exact boundary. |
 | `encode_mode` | `video` or `frames` | Use `video`. It preserves motion inside the VAE latent and is more efficient. |
 | `anchor_mode` | `head` or `before` | Use `head`; wire `trim_frames` into MiniMax H3 Contex Loop Trim. |

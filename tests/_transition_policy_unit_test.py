@@ -7,6 +7,8 @@ import pathlib
 import sys
 import types
 
+import torch
+
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 PACKAGE = "h3_transition_policy_unit"
@@ -58,6 +60,7 @@ node = chain.MiniMaxH3TransitionPolicy()
 expected = {
     "cut": ("guide", 0),
     "guide": ("guide", 22),
+    "detail_guide": ("tapered_guide", 22),
     "hard_av": ("masked_av", 39),
     "soft_av": ("feathered_av", 39),
 }
@@ -68,7 +71,10 @@ for preset, (mode, context) in expected.items():
     assert policy["context_length"] == context
     assert policy["expert_override"] is False
     assert output_mode == mode and output_context == context
-    assert "tested preset" in status
+    if preset == "detail_guide":
+        assert "experimental preset" in status
+    else:
+        assert "tested preset" in status
 
 legacy = make_plan(None, context_length=39, continuation_mode="masked_av")
 assert "transition_policy" not in legacy["compatibility"]
@@ -113,6 +119,71 @@ except ValueError as exc:
 else:
     raise AssertionError("one-frame hard AV expert override was accepted")
 
+tapered_expert, tapered_mode, tapered_context, _ = node.build(
+    "detail_guide", True, "tapered_guide", 39)
+assert tapered_mode == "tapered_guide" and tapered_context == 39
+assert tapered_expert["expert_override"] is True
+
+# The published 22-frame recipe generalizes its three-frame exit taper to any
+# supported Guide span. The predecessor remains immutable and only the exact
+# requested tail is returned.
+assert chain._tapered_guide_alpha(0, 22) == 0.45
+assert chain._tapered_guide_alpha(18, 22) == 0.45
+assert abs(chain._tapered_guide_alpha(19, 22) - (1.0 / 3.0)) < 1e-9
+assert abs(chain._tapered_guide_alpha(20, 22) - (13.0 / 60.0)) < 1e-9
+assert abs(chain._tapered_guide_alpha(21, 22) - 0.10) < 1e-9
+assert chain._tapered_guide_alpha(35, 39) == 0.45
+assert abs(chain._tapered_guide_alpha(36, 39) - (1.0 / 3.0)) < 1e-9
+assert abs(chain._tapered_guide_alpha(38, 39) - 0.10) < 1e-9
+
+source = torch.zeros((45, 19, 31, 3), dtype=torch.float32)
+source_copy = source.clone()
+noisy_39_a = chain._tapered_guide_context(source, 39, 730002)
+noisy_39_b = chain._tapered_guide_context(source, 39, 730002)
+noisy_39_c = chain._tapered_guide_context(source, 39, 730003)
+assert tuple(noisy_39_a.shape) == (39, 19, 31, 3)
+assert torch.equal(source, source_copy)
+assert torch.equal(noisy_39_a, noisy_39_b)
+assert not torch.equal(noisy_39_a, noisy_39_c)
+assert float(noisy_39_a[0].mean()) > float(noisy_39_a[-1].mean()) * 3.0
+assert float(noisy_39_a.min()) >= 0.0
+assert float(noisy_39_a.max()) <= 1.0
+
+captured = {}
+
+
+class CapturingMotionContext:
+    def apply(self, **kwargs):
+        captured.update(kwargs)
+        return ("tapered-conditioning", int(kwargs["context_length"]))
+
+
+original_motion_context = chain.MiniMaxH3MotionContext
+chain.MiniMaxH3MotionContext = CapturingMotionContext
+try:
+    tapered_plan = make_plan(tapered_expert)
+    original_latent = {"samples": [torch.zeros(1), torch.zeros(1)]}
+    result = chain.MiniMaxH3ChainContext().apply(
+        state={
+            "index": 2,
+            "plan": tapered_plan,
+            "previous_frames": source,
+            "previous_latent": original_latent,
+            "segments": [],
+        },
+        conditioning="stock-conditioning",
+        vae=object(),
+        latent="target-latent",
+    )
+finally:
+    chain.MiniMaxH3MotionContext = original_motion_context
+
+assert result == ("tapered-conditioning", 39, True, "target-latent")
+assert captured["context_length"] == 39
+assert tuple(captured["context_frames"].shape) == (39, 19, 31, 3)
+assert not torch.equal(captured["context_frames"], source[-39:])
+assert captured["context_latent"] is original_latent
+
 try:
     make_plan(hard_policy, anchor_mode="before")
 except ValueError as exc:
@@ -148,6 +219,6 @@ assert len(legacy_adapter.OUTPUT_TOOLTIPS) == len(legacy_adapter.RETURN_TYPES)
 assert all(legacy_adapter.OUTPUT_TOOLTIPS)
 
 print(
-    "transition policy: Cut/Guide/Hard AV/Feathered AV presets, expert "
+    "transition policy: Cut/Guide/Detail Guide/Hard AV/Feathered AV presets, expert "
     "overrides, zero-context delivery, AV safety validation, legacy fallback "
     "and adapter, Plan resolution, and typed node registration pass")

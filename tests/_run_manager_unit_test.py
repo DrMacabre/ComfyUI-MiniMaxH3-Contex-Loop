@@ -27,6 +27,13 @@ def main():
     assert old_restore["video_blend_frames"] == 0
     assert old_restore["continuation_mode"] == "guide"
 
+    tapered_widgets = old_widgets + [0, "tapered_guide"]
+    tapered_restore = _workflow_inputs({
+        "nodes": [{"type": "MiniMaxH3ChainPlan",
+                   "widgets_values": tapered_widgets}],
+    }, "old_run")
+    assert tapered_restore["continuation_mode"] == "tapered_guide"
+
     with tempfile.TemporaryDirectory() as temporary:
         root = pathlib.Path(temporary)
         exact = root / "h3_chains" / "variant_exact"

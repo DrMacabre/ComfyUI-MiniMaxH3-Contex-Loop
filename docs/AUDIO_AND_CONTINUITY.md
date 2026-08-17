@@ -23,7 +23,8 @@ Saved 0.4 modes migrate without changing behavior:
 | `source_track` | source | on | off |
 | `source_plus_timeline` | source | on | on |
 
-These descriptions are for the default `guide` continuation mode. In the
+These descriptions apply to both `guide` and `tapered_guide`; the latter
+changes only the disposable video context passed to the Guide VAE. In the
 experimental `masked_av` and `feathered_av` modes, Chain Context places a
 matching video and audio prefix inside the target latent, including when final
 assembly uses `source_track`. `masked_av` protects the complete prefix;
@@ -39,10 +40,13 @@ first 8 video / 42 audio steps and ramps the final 4 video / 23 audio prefix
 steps.
 
 Transition Policy controls the incoming boundary: Cut carries no picture,
-Guide uses 22 guide frames, Hard AV uses a protected 39-frame prefix, and Soft
-AV uses the same prefix with a feathered denoise boundary. Advanced mode keeps
-the exact legacy implementation and context controls. Mixed plans must still
-use encode/anchor settings compatible with every AV-mask scene.
+Guide uses 22 clean guide frames, Detail Guide uses the same span with a
+three-frame chroma-noise exit taper, Hard AV uses a protected 39-frame prefix,
+and Soft AV uses the same prefix with a feathered denoise boundary. Advanced
+mode may pair `tapered_guide` with another Guide context length; 22 is the
+published baseline, while 39 uses 36 full-strength frames plus the same final
+three-frame taper and remains experimental. Mixed plans must still use
+encode/anchor settings compatible with every AV-mask scene.
 
 ## Source Timeline wiring
 

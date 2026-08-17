@@ -29,7 +29,7 @@ import {
 assert.equal(AUTO_SCENE_COLORS.length, 12);
 assert.deepEqual(
     CONTINUATION_MODES,
-    ["guide", "masked_av", "feathered_av"],
+    ["guide", "tapered_guide", "masked_av", "feathered_av"],
 );
 assert.equal(H3_CONTEXT_LENGTHS.at(-1), 243);
 assert.equal(new Set(AUTO_SCENE_COLORS).size, AUTO_SCENE_COLORS.length);
@@ -72,6 +72,10 @@ setShotLengthMode(inheritedLengthShot, "default", 15);
 assert.deepEqual(inheritedLengthShot, {});
 
 assert.equal(sceneContinuationMode({}, "guide"), "guide");
+assert.equal(
+    sceneContinuationMode({continuation_mode: "tapered_guide"}, "guide"),
+    "tapered_guide",
+);
 assert.equal(
     sceneContinuationMode({continuation_mode: "masked_av"}, "guide"),
     "masked_av",

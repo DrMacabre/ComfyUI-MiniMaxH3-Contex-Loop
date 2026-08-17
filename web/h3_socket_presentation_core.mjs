@@ -12,6 +12,7 @@ const LEGACY_AUDIO_POLICIES = Object.freeze({
 const TRANSITION_PRESETS = Object.freeze({
     cut: ["guide", 0],
     guide: ["guide", 22],
+    detail_guide: ["tapered_guide", 22],
     hard_av: ["masked_av", 39],
     soft_av: ["feathered_av", 39],
 });

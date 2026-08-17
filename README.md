@@ -33,9 +33,10 @@ giant cumulative image tensor.
 | 🔬 | In-graph audio-seam diagnostics |
 | 🧭 | Model-free preflight with scene-level dependency diffs |
 
-In the default `guide` mode, updated ComfyUI core owns guide placement and
-reference-payload merging; this pack does not patch H3. The experimental
-`masked_av` and `feathered_av` modes additionally need per-stream H3
+In the default `guide` mode and opt-in `tapered_guide` variant, updated ComfyUI
+core owns guide placement and reference-payload merging; this pack does not
+patch H3. The experimental `masked_av` and `feathered_av` modes additionally
+need per-stream H3
 video/audio noise masks from PR #15375. They prefer native support and lazily
 enable the vendored runtime compatibility only when an AV mask mode executes.
 
@@ -128,7 +129,7 @@ instead of overwriting an MP4 with the same requested name.
 | Setting | Good starting point | Meaning |
 |---|---:|---|
 | `width × height` | `960 × 544` | Multiples of 32 |
-| Incoming Transition | `Guide (22f)` | Semantic choice into each scene: Cut, Guide, Hard AV, or Soft AV |
+| Incoming Transition | `Guide (22f)` | Semantic choice into each scene: Cut, Guide, Detail Guide, Hard AV, or Soft AV |
 | Context | preset-controlled | Advanced overrides can set the exact repeated motion history |
 | `encode_mode` | `video` | Preserves motion in the VAE latent |
 | `anchor_mode` | `head` | Regenerates then trims the repeated opening context |
@@ -141,11 +142,12 @@ Use `generation_fingerprint` to record model, VAE, LoRA, references, CFG,
 sampler, and scheduler choices that live outside the Plan. Change it when those
 dependencies change so incompatible checkpoints cannot be resumed silently.
 
-### Cut, Guide, Hard AV, and Soft AV transitions
+### Cut, Guide, Detail Guide, Hard AV, and Soft AV transitions
 
 The semantic Transition Policy maps `Cut` to no carried picture, `Guide` to
-22 guide frames, `Hard AV` to a protected 39-frame AV prefix, and `Soft AV` to
-a temporally feathered 39-frame AV prefix. The old Plan `continuation_mode`,
+22 guide frames, experimental `Detail Guide` to a tapered chroma-noise
+22-frame guide, `Hard AV` to a protected 39-frame AV prefix, and `Soft AV` to a
+temporally feathered 39-frame AV prefix. The old Plan `continuation_mode`,
 `context_length`, and combined `audio_mode` widgets are hidden from the normal
 0.5 interface so they do not compete with the policy nodes. Existing 0.4
 workflows still deserialize and execute those saved values unchanged. For a
@@ -156,6 +158,16 @@ them a second set of controls on Plan.
 `guide` leaves the target latent noisy and supplies the previous scene as
 fixed conditioning rows. H3 regenerates the repeated head, and Loop Trim
 removes it. This remains the default.
+
+`tapered_guide` uses the same guide placement and trim, but VAE-encodes a
+disposable noisy copy of the predecessor tail. Independent 16px chroma blocks
+are blended at 0.45 over every context frame except the final three, which
+taper to approximately 0.33, 0.22, and 0.10. The accepted predecessor and its
+checkpoint remain clean. **Detail Guide** selects the published 22-frame
+baseline. Expert override may pair `tapered_guide` with 39 frames (36 full-
+strength plus the same three-frame taper) or another supported Guide length,
+but those lengths are experimental and should be compared against clean Guide
+with the same seed.
 
 Incoming transition can be overridden per scene in **Show advanced** without
 adding another scene-card row. The choice describes the transition **into that
@@ -169,7 +181,8 @@ starts a visually independent scene; a positive audio value can still carry
 dialogue, ambience, or music into that new shot. Explicit audio `0` carries no
 preceding generated sound. For scene 1, these control Existing Video Context;
 a zero-video-context imported original can still be prepended during assembly.
-Independent audio context applies to guide mode with generated-audio continuity.
+Independent audio context applies to both Guide variants with generated-audio
+continuity.
 Both AV mask modes always keep their audio and video prefix lengths
 synchronized, while `source_track` continues to use its exact timeline slice.
 
@@ -178,7 +191,7 @@ of the current target video latent, copies the matching tail from the previous
 sampled audio latent, and protects both streams with `0 = preserve`,
 `1 = generate` denoise masks. Wire the new **Chain Context latent** output to
 the sampler's `latent_image`; the output passes the original target through on
-scene 1 and in `guide` mode, so that one wire supports both modes.
+scene 1 and in either Guide mode, so that one wire supports every mode.
 
 `feathered_av` uses the same target content and trim interval, but gradually
 raises the mask over the end of the protected prefix. With 39 frames, 8 of 12

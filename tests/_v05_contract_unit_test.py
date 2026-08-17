@@ -120,6 +120,7 @@ def main():
     expected_presets = {
         "cut": ("guide", 0),
         "guide": ("guide", 22),
+        "detail_guide": ("tapered_guide", 22),
         "hard_av": ("masked_av", 39),
         "soft_av": ("feathered_av", 39),
     }
