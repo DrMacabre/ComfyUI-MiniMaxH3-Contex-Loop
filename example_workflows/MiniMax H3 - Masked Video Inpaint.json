@@ -1645,7 +1645,7 @@
       "widgets_values": [
         "{\n  \"defaults\": {\n    \"length\": 175,\n    \"steps\": 8\n  },\n  \"shots\": [\n    {\n      \"id\": \"source_inpaint_a\",\n      \"prompt\": \"integrated_multimodal_description:\\n[Shot 1] Edit the supplied wildlife source video in place. Preserve the original camera trajectory, cloudy coastal lighting, sand, water, distant shoreline, depth of field, motion timing, and every pixel outside the white mask. Inside the masked lower-central beach region only, replace the moving soldier crabs with small polished red metal crab sculptures that occupy the corresponding positions and follow the original animals' grounded lateral motion. Maintain correct perspective, contact shadows, sand interaction, occlusion, scale, and motion blur at the mask boundary. Do not alter the duration, frame rate, camera, background, or unmasked crabs.\\n\\noverall_soundscape:\\nPreserve the source audio exactly, including coastal wind, distant surf, water movement, and all location ambience. Generate no replacement sound.\\n\\nnon_diegetic_music:\\nN/A\",\n      \"length\": 175,\n      \"steps\": 8,\n      \"seed\": \"24051521\"\n    },\n    {\n      \"id\": \"source_inpaint_b\",\n      \"prompt\": \"integrated_multimodal_description:\\n[Shot 1] Edit the supplied wildlife source video in place. Preserve the original camera trajectory, cloudy coastal lighting, sand, water, distant shoreline, depth of field, motion timing, and every pixel outside the white mask. Inside the masked lower-central beach region only, replace the moving soldier crabs with small polished red metal crab sculptures that occupy the corresponding positions and follow the original animals' grounded lateral motion. Maintain correct perspective, contact shadows, sand interaction, occlusion, scale, and motion blur at the mask boundary. Do not alter the duration, frame rate, camera, background, or unmasked crabs.\\n\\noverall_soundscape:\\nPreserve the source audio exactly, including coastal wind, distant surf, water movement, and all location ambience. Generate no replacement sound.\\n\\nnon_diegetic_music:\\nN/A\",\n      \"length\": 175,\n      \"steps\": 8,\n      \"seed\": \"24051522\"\n    }\n  ]\n}",
         "cc0_soldier_crabs_loop_inpaint",
-        "cc0-crab-source-av-v1+static-mask-v1",
+        "cc0-crab-source-av-v1+static-mask-h3-exact-v2",
         960,
         544,
         39,
@@ -2185,7 +2185,7 @@
       ],
       "size": [
         400,
-        250
+        280
       ],
       "flags": {},
       "order": 15,
@@ -2221,7 +2221,8 @@
       },
       "widgets_values": [
         "white = generate",
-        "preserve source audio"
+        "preserve source audio",
+        "H3 exact (causal/token max)"
       ],
       "title": "APPLY SPATIAL MASK — SOURCE AUDIO PRESERVED"
     },
@@ -2270,7 +2271,7 @@
       ],
       "size": [
         370,
-        300
+        330
       ],
       "flags": {},
       "order": 10,
@@ -2317,7 +2318,8 @@
         0,
         0.38,
         true,
-        true
+        true,
+        "white = generate"
       ],
       "title": "PREVIEW EXACT H3 32PX MASK CELLS"
     },

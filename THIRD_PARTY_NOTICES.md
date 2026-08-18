@@ -1,5 +1,9 @@
 # Third-party notices
 
+For a user-facing map from features to upstream sources and local
+implementation files, see [Feature traceability](docs/FEATURE_TRACEABILITY.md).
+This file remains the authoritative attribution, revision, and license record.
+
 ## ComfyUI-LegacyWidgetWidthFix
 
 The canvas-wide LiteGraph widget-width compatibility layer is adapted with
@@ -92,6 +96,19 @@ operations, prefers native equivalent behavior automatically, and is not
 activated by ordinary guide-mode chains. It tracks the post-review mask-blend
 design through upstream commit `989e7a9bb79a370d20f63674b54dead993f6f4a1`
 (2026-08-15).
+
+## MaskVidExperiments causal mask conversion
+
+The exact H3 pixel-mask conversion in `masking_ops.py` adapts the causal
+frame-group derivation, conservative max reduction, and 2×2 latent-token
+snapping from
+[MaskVidExperiments](https://github.com/drozbay/MaskVidExperiments) by
+**drozbay**. This integration specializes that general VAE-aware algorithm to
+MiniMax H3's fixed `1,4,4,4,4` frame cycle and existing joint-AV masked target;
+it does not copy the upstream crop, uncrop, or workflow nodes.
+
+The referenced revision is
+`d98cc899c1fac718acf81cde1735bf57281097cf` (2026-08-17), GPL-3.0.
 
 ## ComfyUI-MiniMaxH3-PerRowMasking
 

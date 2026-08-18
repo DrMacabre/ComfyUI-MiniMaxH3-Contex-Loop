@@ -4,6 +4,17 @@ Newest first. This file keeps release history out of the onboarding README.
 
 ## v0.5.0 — Source Timeline and workflow clarity
 
+- Reworked the README as a task-oriented quick start and workflow chooser,
+  moving implementation detail into focused guides. Added a feature
+  traceability matrix that distinguishes original, adapted, inspired,
+  integrated, and compatibility work with upstream, code, and commit links.
+- Added exact H3 causal/token mask conversion to Apply Target Mask. Static or
+  correctly sliced tracked masks now max-reduce through the VAE's repeating
+  `1,4,4,4,4` source-frame groups and the model's 2×2 latent-token cells,
+  avoiding temporal interpolation drift and loss of thin moving regions. The
+  bundled inpaint workflow uses the exact mode; legacy trilinear conversion
+  remains selectable for controlled compatibility comparisons. Ordinary AV
+  extension remains unchanged and needs no user-supplied mask.
 - Revised experimental Detail AV to a clean-boundary v2 taper. Video-latent
   noise now starts at 0.30 and falls through 0.225, 0.15, and 0.075 to an exact
   zero on the boundary-adjacent step, reducing seam displacement while keeping

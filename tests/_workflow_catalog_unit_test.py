@@ -864,7 +864,8 @@ def main():
     assert socket(chain_context["outputs"], "latent")["links"] == [
         socket(masked_target["inputs"], "target_latent")["link"]]
     assert masked_target["widgets_values"] == [
-        "white = generate", "preserve source audio"]
+        "white = generate", "preserve source audio",
+        "H3 exact (causal/token max)"]
     masked_sampler = node(masked_inpaint, "SamplerCustomAdvanced")
     assert socket(masked_target["outputs"], "masked_target")["links"] == [
         socket(masked_sampler["inputs"], "latent_image")["link"]]
@@ -878,6 +879,7 @@ def main():
     assert socket(mask_slice["outputs"], "scene_mask")["links"] == [
         socket(grid_preview["inputs"], "mask")["link"]]
     assert mask_slice["widgets_values"] == [24.0]
+    assert grid_preview["widgets_values"][-1] == "white = generate"
     masked_plan_node = node(masked_inpaint, "MiniMaxH3ChainPlan")
     masked_plan = json.loads(masked_plan_node["widgets_values"][0])
     assert [shot["length"] for shot in masked_plan["shots"]] == [175, 175]

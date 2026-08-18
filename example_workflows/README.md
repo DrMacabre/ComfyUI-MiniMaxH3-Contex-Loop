@@ -96,6 +96,11 @@ or LTX AV concat/separate node.
 3. Verify the effective 32×32 H3 cells in Grid Preview.
 4. Edit the scene prompt or Plan, then run the loop normally.
 
+Apply Target Mask uses **H3 exact (causal/token max)** in this workflow. It
+reduces tracked masks through H3's real causal frame groups and 2×2 latent
+tokens rather than interpolating across time. The legacy trilinear choice is
+kept only for controlled comparisons with older renders.
+
 The two-scene demo edits 311 frames from the 313-frame source. Each generation
 is 175 frames; scene 2 repeats and protects a 39-frame edited prefix, so it
 delivers 136 new frames. The workflow preserves source audio. **Loop Mask

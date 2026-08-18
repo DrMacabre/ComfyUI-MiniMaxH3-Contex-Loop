@@ -9,9 +9,11 @@ from .masking_ops import (
     GRID_MODES,
     H3_PIXEL_CELL,
     H3_VIDEO_FPS,
+    MASK_CONVERSION_MODES,
     floor_h3_frame_count,
     normalize_comfy_mask,
     quantize_h3_pixel_mask,
+    reduce_h3_mask_to_video_latent,
     resize_mask_to_video_latent,
     temporal_audio_mask,
     trim_audio_to_frames,
@@ -205,8 +207,9 @@ class MiniMaxH3ContexMaskedTarget:
                 }),
                 "mask": ("MASK", {
                     "tooltip": "Static or per-frame video-space mask. It is "
-                               "resized to the target latent and snapped by "
-                               "H3 to its 2x2 latent patch rows.",
+                               "mapped to H3's causal video-latent frames and "
+                               "2x2 latent-token cells. Exact mode accepts "
+                               "one static mask or one mask per source frame.",
                 }),
                 "mask_meaning": (list(MASK_MEANINGS), {
                     "default": MASK_MEANINGS[0],
@@ -226,6 +229,16 @@ class MiniMaxH3ContexMaskedTarget:
                                "dimensions are reduced; white time regions "
                                "generate and black regions remain protected.",
                 }),
+                "mask_conversion": (list(MASK_CONVERSION_MODES), {
+                    "default": MASK_CONVERSION_MODES[0],
+                    "tooltip": "H3 exact maps pixel masks with the video "
+                               "VAE's causal 1/4/4/4/4 frame groups and "
+                               "2x2 latent-token max coverage. Legacy "
+                               "trilinear retains the older interpolated "
+                               "conversion for workflow comparison. Changing "
+                               "this changes generation; update the Plan's "
+                               "generation fingerprint before resuming.",
+                }),
             },
         }
 
@@ -239,8 +252,9 @@ class MiniMaxH3ContexMaskedTarget:
     )
     FUNCTION = "apply"
     CATEGORY = "conditioning/minimax/contex_loop/masking"
-    DESCRIPTION = ("Attach arbitrary per-row H3 video/audio denoise masks to "
-                   "a real source AV target for inpainting and temporal edits.")
+    DESCRIPTION = ("Attach causal, token-aligned H3 video/audio denoise masks "
+                   "to a real source AV target for inpainting and temporal "
+                   "edits. Ordinary AV extension needs no user mask.")
 
     def apply(
         self,
@@ -249,6 +263,7 @@ class MiniMaxH3ContexMaskedTarget:
         mask_meaning,
         audio_mode,
         audio_mask=None,
+        mask_conversion=MASK_CONVERSION_MODES[0],
     ):
         require_h3_mask_support("general masked-target generation")
         video, audio = _target_streams(target_latent)
@@ -258,7 +273,16 @@ class MiniMaxH3ContexMaskedTarget:
             generation_mask = 1.0 - generation_mask
         elif mask_meaning != "white = generate":
             raise ValueError("Unknown H3 mask meaning %r." % mask_meaning)
-        video_mask = resize_mask_to_video_latent(generation_mask, video)
+        if mask_conversion == MASK_CONVERSION_MODES[0]:
+            video_mask = reduce_h3_mask_to_video_latent(
+                generation_mask, video)
+            conversion_summary = "H3 exact causal/token max"
+        elif mask_conversion == MASK_CONVERSION_MODES[1]:
+            video_mask = resize_mask_to_video_latent(generation_mask, video)
+            conversion_summary = "legacy trilinear"
+        else:
+            raise ValueError(
+                "Unknown H3 mask conversion mode %r." % mask_conversion)
 
         if audio_mode == "preserve source audio":
             out_audio_mask = torch.zeros(
@@ -301,7 +325,7 @@ class MiniMaxH3ContexMaskedTarget:
         audio_percent = 100.0 * float(out_audio_mask.mean().item())
         info = (
             "H3 masked target: latent video %dx%dx%d, generate %.2f%%; "
-            "audio %d steps, generate %.2f%%; %s; existing mask %s."
+            "audio %d steps, generate %.2f%%; %s; mask %s; existing mask %s."
             % (
                 int(video.shape[4]),
                 int(video.shape[3]),
@@ -310,6 +334,7 @@ class MiniMaxH3ContexMaskedTarget:
                 int(audio.shape[-1]),
                 audio_percent,
                 audio_mode,
+                conversion_summary,
                 "intersected" if composed else "none",
             )
         )
@@ -326,8 +351,8 @@ class MiniMaxH3ContexMaskGridPreview:
                                "VAE. Width and height must be divisible by 32.",
                 }),
                 "mask": ("MASK", {
-                    "tooltip": "Static or tracked ComfyUI mask. White is the "
-                               "requested generation area in this preview.",
+                    "tooltip": "Static or tracked ComfyUI mask interpreted "
+                               "using mask_meaning.",
                 }),
                 "cell_selection": (list(GRID_MODES), {
                     "default": GRID_MODES[0],
@@ -360,13 +385,21 @@ class MiniMaxH3ContexMaskGridPreview:
                                "difference from the effective mask is visible.",
                 }),
             },
+            "optional": {
+                "mask_meaning": (list(MASK_MEANINGS), {
+                    "default": MASK_MEANINGS[0],
+                    "tooltip": "Use the same white-pixel convention here "
+                               "and on Apply Target Mask. The overlay always "
+                               "shows the effective generation region.",
+                }),
+            },
         }
 
     RETURN_TYPES = ("MASK", "IMAGE", "STRING")
     RETURN_NAMES = ("snapped_mask", "grid_preview", "grid_info")
     OUTPUT_TOOLTIPS = (
-        "Complete mask batch snapped to H3's effective 32x32 source-pixel "
-        "generation cells.",
+        "Complete mask batch snapped to H3's effective causal 32x32 "
+        "source-pixel cells, using the selected white-pixel convention.",
         "Selected source frame with the snapped mask and optional grid or "
         "source outline overlaid.",
         "Summary of the selected frame, grid dimensions, and snapped-mask "
@@ -387,6 +420,7 @@ class MiniMaxH3ContexMaskGridPreview:
         overlay_opacity,
         show_grid,
         show_source_outline,
+        mask_meaning=MASK_MEANINGS[0],
     ):
         if not isinstance(image, torch.Tensor) or image.ndim != 4:
             raise ValueError(
@@ -394,8 +428,13 @@ class MiniMaxH3ContexMaskGridPreview:
                 (list(getattr(image, "shape", ())),)
             )
         frames, height, width = (int(v) for v in image.shape[:3])
-        raw, snapped, cells = quantize_h3_pixel_mask(
-            mask,
+        generation_mask = normalize_comfy_mask(mask)
+        if mask_meaning == "white = preserve":
+            generation_mask = 1.0 - generation_mask
+        elif mask_meaning != "white = generate":
+            raise ValueError("Unknown H3 mask meaning %r." % mask_meaning)
+        raw, snapped_generation, cells = quantize_h3_pixel_mask(
+            generation_mask,
             frames,
             height,
             width,
@@ -405,7 +444,7 @@ class MiniMaxH3ContexMaskGridPreview:
         selected_frame = min(max(0, int(preview_frame)), frames - 1)
         preview = image[selected_frame:selected_frame + 1, ..., :3].to(
             torch.float32).clamp(0.0, 1.0).clone()
-        selected = snapped[selected_frame].to(
+        selected = snapped_generation[selected_frame].to(
             device=preview.device, dtype=preview.dtype)[None, ..., None]
         orange = torch.tensor(
             [1.0, 0.18, 0.0], device=preview.device, dtype=preview.dtype)
@@ -435,7 +474,8 @@ class MiniMaxH3ContexMaskGridPreview:
             outline = ((dilated - eroded) > 0).movedim(1, -1)
             preview = torch.where(outline, torch.ones_like(preview), preview)
 
-        counts = cells.sum(dim=(1, 2, 3)).to(torch.int64).cpu().tolist()
+        counts = (cells > 0).sum(
+            dim=(1, 2, 3)).to(torch.int64).cpu().tolist()
         cells_per_frame = int(cells.shape[-2]) * int(cells.shape[-1])
         if len(counts) <= 8:
             count_text = ", ".join(str(value) for value in counts)
@@ -444,19 +484,25 @@ class MiniMaxH3ContexMaskGridPreview:
                 min(counts), max(counts), sum(counts))
         info = (
             "H3 grid: %dx%d cells at 32x32 pixels; selected/frame %s / %d; "
-            "mode %s; adjust %+d; preview frame %d/%d."
+            "mode %s; %s; adjust %+d; preview frame %d/%d."
             % (
                 int(cells.shape[-1]),
                 int(cells.shape[-2]),
                 count_text,
                 cells_per_frame,
                 cell_selection,
+                mask_meaning,
                 int(cell_adjust),
                 selected_frame,
                 frames - 1,
             )
         )
-        return snapped, preview, info
+        snapped = (
+            1.0 - snapped_generation
+            if mask_meaning == "white = preserve"
+            else snapped_generation
+        )
+        return snapped.contiguous(), preview, info
 
 
 NODE_CLASS_MAPPINGS = {

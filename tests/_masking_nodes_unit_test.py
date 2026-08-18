@@ -54,6 +54,18 @@ def main():
         operation)
 
     assert ops.floor_h3_frame_count(140) == 124
+    assert ops.h3_pixel_frames_for_video_latents(1) == 1
+    assert ops.h3_pixel_frames_for_video_latents(2) == 5
+    assert ops.h3_pixel_frames_for_video_latents(7) == 22
+    assert ops.h3_pixel_frames_for_video_latents(12) == 39
+    assert ops.h3_pixel_frames_for_video_latents(102) == 345
+    assert ops.h3_video_latents_for_pixel_frames(1) == 1
+    assert ops.h3_video_latents_for_pixel_frames(5) == 2
+    assert ops.h3_video_latents_for_pixel_frames(22) == 7
+    assert ops.h3_video_latent_frame_groups(7) == (
+        (0, 1), (1, 5), (5, 9), (9, 13),
+        (13, 17), (17, 18), (18, 22),
+    )
     frames = torch.zeros((140, 32, 64, 3))
     audio = {
         "waveform": torch.zeros((1, 2, 300_000)),
@@ -71,6 +83,14 @@ def main():
         pixel_mask, 1, 64, 64)
     assert cells[0, 0].tolist() == [[1.0, 0.0], [0.0, 0.0]]
     assert torch.all(snapped[:, :32, :32] == 1.0)
+
+    moving_preview_mask = torch.zeros((5, 64, 64))
+    moving_preview_mask[4, 0, 0] = 1.0
+    _raw, causal_preview, _cells = ops.quantize_h3_pixel_mask(
+        moving_preview_mask, 5, 64, 64)
+    assert not torch.count_nonzero(causal_preview[0])
+    assert torch.all(causal_preview[1:, :32, :32] == 1.0)
+    assert not torch.count_nonzero(causal_preview[1:, 32:, :])
 
     video = torch.zeros((1, 16, 2, 4, 4))
     source_audio = torch.zeros((1, 32, 2, 6))
@@ -91,6 +111,47 @@ def main():
     assert not torch.count_nonzero(audio_mask)
     assert "existing mask none" in mask_info
     assert support_calls == ["general masked-target generation"]
+    assert "H3 exact causal/token max" in mask_info
+
+    tracked = torch.zeros((22, 64, 64))
+    tracked[4, 0, 0] = 1.0
+    tracked[5, -1, -1] = 0.5
+    tracked[21, 0, -1] = 1.0
+    exact_video = torch.zeros((1, 16, 7, 4, 4))
+    exact = ops.reduce_h3_mask_to_video_latent(tracked, exact_video)
+    assert exact.shape == (1, 1, 7, 4, 4)
+    assert not torch.count_nonzero(exact[:, :, 0])
+    assert torch.all(exact[:, :, 1, :2, :2] == 1.0)
+    assert torch.all(exact[:, :, 2, 2:, 2:] == 0.5)
+    assert not torch.count_nonzero(exact[:, :, 3:6])
+    assert torch.all(exact[:, :, 6, :2, 2:] == 1.0)
+
+    static = ops.reduce_h3_mask_to_video_latent(
+        torch.ones((1, 64, 64)), exact_video)
+    assert torch.all(static == 1.0)
+    try:
+        ops.reduce_h3_mask_to_video_latent(
+            torch.ones((21, 64, 64)), exact_video)
+    except ValueError as exc:
+        assert "exactly 22 tracked masks" in str(exc)
+        assert "Loop Mask Slice" in str(exc)
+    else:
+        raise AssertionError("off-grid tracked mask batch was accepted")
+    legacy = ops.resize_mask_to_video_latent(
+        torch.stack((torch.zeros((8, 8)), torch.ones((8, 8)))),
+        exact_video,
+    )
+    assert legacy.shape == (1, 1, 7, 4, 4)
+    legacy_target, legacy_info = nodes.MiniMaxH3ContexMaskedTarget().apply(
+        target,
+        torch.stack((torch.zeros((8, 8)), torch.ones((8, 8)))),
+        "white = generate",
+        "preserve source audio",
+        mask_conversion="legacy trilinear",
+    )
+    assert legacy_target["noise_mask"].unbind()[0].shape == (
+        1, 1, 2, 4, 4)
+    assert "mask legacy trilinear" in legacy_info
 
     old_video_mask = torch.ones((1, 1, 2, 4, 4))
     old_video_mask[:, :, :1] = 0.0
@@ -113,9 +174,9 @@ def main():
     assert torch.all(combined_audio[..., 2:] == 1.0)
     assert "existing mask intersected" in combined_info
 
-    temporal = torch.stack((
-        torch.zeros((8, 8)),
-        torch.ones((8, 8)),
+    temporal = torch.cat((
+        torch.zeros((1, 8, 8)),
+        torch.ones((4, 8, 8)),
     ))
     followed, _ = nodes.MiniMaxH3ContexMaskedTarget().apply(
         target,
@@ -141,7 +202,7 @@ def main():
 
     preview_mask, preview, preview_info = (
         nodes.MiniMaxH3ContexMaskGridPreview().preview(
-            torch.zeros((3, 64, 64, 3)),
+            torch.zeros((5, 64, 64, 3)),
             edit_mask,
             "runtime exact (latent max)",
             0,
@@ -150,9 +211,32 @@ def main():
             True,
             True,
         ))
-    assert preview_mask.shape == (3, 64, 64)
+    assert preview_mask.shape == (5, 64, 64)
     assert preview.shape == (1, 64, 64, 3)
-    assert "preview frame 2/2" in preview_info
+    assert "preview frame 2/4" in preview_info
+
+    preserve_input = torch.ones((5, 64, 64))
+    preserve_input[:, :16, :16] = 0.0
+    preserve_snapped, _preview, preserve_info = (
+        nodes.MiniMaxH3ContexMaskGridPreview().preview(
+            torch.zeros((5, 64, 64, 3)),
+            preserve_input,
+            "runtime exact (latent max)",
+            0,
+            0,
+            0.38,
+            False,
+            False,
+            "white = preserve",
+        ))
+    assert torch.all(preserve_snapped[:, :32, :32] == 0.0)
+    assert torch.all(preserve_snapped[:, 32:, :] == 1.0)
+    assert "white = preserve" in preserve_info
+
+    mask_schema = nodes.MiniMaxH3ContexMaskedTarget.INPUT_TYPES()
+    conversion = mask_schema["optional"]["mask_conversion"]
+    assert conversion[0] == list(ops.MASK_CONVERSION_MODES)
+    assert conversion[1]["default"] == ops.MASK_CONVERSION_MODES[0]
 
     expected_ids = {
         "MiniMaxH3ContexTrimSourceAV",

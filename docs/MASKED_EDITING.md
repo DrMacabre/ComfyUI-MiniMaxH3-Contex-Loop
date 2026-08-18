@@ -57,7 +57,9 @@ Set `source_fps` to the rate represented by the tracked mask batch. For a
 0..174 for scene 1 and 136..310 for scene 2. The repeated 136..174 interval is
 therefore identical to the source AV continuation overlap. Connect
 `scene_mask` to Grid Preview; its existing spatial snapping then operates only
-on the correct current interval.
+on the correct current interval. Apply Target Mask's exact mode validates that
+the returned tracked batch has the complete raw scene length; it never
+stretches a short tracked batch silently.
 
 ### Masking · Trim Source AV
 
@@ -77,8 +79,10 @@ into 2×2 latent patches. One independently masked H3 row therefore covers
 roughly **32×32 source pixels**.
 
 **MiniMax H3 Masking · Grid Preview** shows those cells and returns a snapped
-MASK suitable for Apply Target Mask. Its canvas must match the encoded source
-and be divisible by 32.
+MASK suitable for Apply Target Mask. Its canvas must match the encoded source,
+be divisible by 32, and contain a valid one-frame or `17k+5` H3 run. Runtime
+exact mode also unions every source-frame group that feeds one causal video
+latent, then paints that effective selection back over the grouped frames.
 
 - `runtime exact (latent max)` reproduces the spatial reduction used by H3;
 - `any pixel coverage` selects a whole cell for any marked source pixel;
@@ -106,8 +110,20 @@ The main mask may use either convention:
 - `white = generate` for conventional inpainting;
 - `white = preserve` when the supplied artwork describes protected content.
 
-The node resizes static or per-frame masks to the target video latent. H3 then
-snaps spatial values to its patch rows. Batch size is currently one.
+The default **H3 exact (causal/token max)** conversion follows the video VAE's
+repeating `1,4,4,4,4` pixel-frame groups and max-reduces each group to its real
+latent step. It then max-reduces spatially and unifies every 2×2 latent block
+read by one H3 token. This preserves thin details and moving-mask coverage that
+trilinear interpolation can weaken or shift. One mask is broadcast; a tracked
+mask must contain exactly the pixel-frame span represented by the target. In a
+loop, connect Loop Mask Slice to supply it. **legacy trilinear** remains
+available for reproducing earlier workflows. Switching conversion modes changes
+generation, so also change the Plan generation fingerprint and regenerate the
+affected scene history. Batch size is currently one.
+
+This conversion is for inpainting, replacement, removal, outpainting, and
+other masked edits. It does not add a mask input to ordinary AV extension; the
+chain continues to create its own temporal AV-prefix mask automatically.
 
 ## Audio modes
 

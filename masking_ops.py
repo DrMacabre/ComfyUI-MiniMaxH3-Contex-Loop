@@ -17,6 +17,11 @@ H3_FRAME_STRIDE = 17
 H3_VIDEO_FPS = 24
 H3_VAE_SCALE = 16
 H3_PIXEL_CELL = 32
+H3_FRAMES_PER_VIDEO_LATENT = (1, 4, 4, 4, 4)
+MASK_CONVERSION_MODES = (
+    "H3 exact (causal/token max)",
+    "legacy trilinear",
+)
 GRID_MODES = (
     "runtime exact (latent max)",
     "any pixel coverage",
@@ -111,7 +116,7 @@ def resize_mask_to_video_latent(
     mask: torch.Tensor,
     video: torch.Tensor,
 ) -> torch.Tensor:
-    """Convert a generate mask to the target H3 video latent dimensions."""
+    """Legacy trilinear conversion to the target H3 video latent dimensions."""
     if video.ndim != 5:
         raise ValueError(
             "H3 target video latent must be [B,C,T,H,W], got %s." %
@@ -127,6 +132,112 @@ def resize_mask_to_video_latent(
         align_corners=False,
     )
     return work.to(torch.float32).contiguous()
+
+
+def h3_pixel_frames_for_video_latents(latent_steps: int) -> int:
+    """Return the pixel-frame span represented by H3 video latent steps."""
+    steps = int(latent_steps)
+    if steps < 1:
+        raise ValueError("H3 video latent length must be positive.")
+    pattern = H3_FRAMES_PER_VIDEO_LATENT
+    complete, trailing = divmod(steps, len(pattern))
+    return complete * sum(pattern) + sum(pattern[:trailing])
+
+
+def h3_video_latents_for_pixel_frames(pixel_frames: int) -> int:
+    """Return H3 video steps for an exact 1-frame or 17k+5 pixel run."""
+    frames = int(pixel_frames)
+    if frames == 1:
+        return 1
+    if frames < H3_FRAME_OFFSET or (
+            frames - H3_FRAME_OFFSET) % H3_FRAME_STRIDE:
+        raise ValueError(
+            "H3 exact mask conversion needs a 1-frame image or a 17k+5 "
+            "video run; received %d frames." % frames)
+    return 2 + 5 * ((frames - H3_FRAME_OFFSET) // H3_FRAME_STRIDE)
+
+
+def h3_video_latent_frame_groups(
+    latent_steps: int,
+) -> tuple[tuple[int, int], ...]:
+    """Return the exact causal pixel-frame range feeding each H3 latent step."""
+    groups = []
+    start = 0
+    pattern = H3_FRAMES_PER_VIDEO_LATENT
+    for index in range(int(latent_steps)):
+        end = start + pattern[index % len(pattern)]
+        groups.append((start, end))
+        start = end
+    if not groups:
+        raise ValueError("H3 video latent length must be positive.")
+    return tuple(groups)
+
+
+def _h3_token_snap_max(mask: torch.Tensor) -> torch.Tensor:
+    """Unify each 2x2 H3 latent-pixel token using conservative max coverage."""
+    if mask.ndim != 3:
+        raise ValueError(
+            "H3 token snapping expects [frames,H,W], got %s." %
+            (list(mask.shape),)
+        )
+    height, width = int(mask.shape[-2]), int(mask.shape[-1])
+    work = F.pad(
+        mask[:, None],
+        (0, -width % 2, 0, -height % 2),
+        mode="replicate",
+    )
+    work = F.max_pool2d(work, kernel_size=2, stride=2)
+    work = work.repeat_interleave(2, dim=-2).repeat_interleave(2, dim=-1)
+    return work[:, 0, :height, :width].contiguous()
+
+
+def reduce_h3_mask_to_video_latent(
+    mask: torch.Tensor,
+    video: torch.Tensor,
+) -> torch.Tensor:
+    """Map a pixel mask to H3's causal VAE groups and 2x2 token grid.
+
+    A tracked mask must contain exactly the pixel-frame span represented by
+    the target latent. A single mask is broadcast over that span. Spatial,
+    temporal, and token reduction all use max coverage so a moving or thin
+    selected region cannot disappear between causal frames or token rows.
+    """
+    if video.ndim != 5:
+        raise ValueError(
+            "H3 target video latent must be [B,C,T,H,W], got %s." %
+            (list(video.shape),)
+        )
+    if int(video.shape[0]) != 1:
+        raise ValueError("H3 masked targets currently support batch size 1.")
+
+    latent_steps = int(video.shape[2])
+    expected_frames = h3_pixel_frames_for_video_latents(latent_steps)
+    source = normalize_comfy_mask(mask).to(device=video.device)
+    source_frames = int(source.shape[0])
+    static = source_frames == 1
+    if not static and source_frames != expected_frames:
+        raise ValueError(
+            "H3 exact mask conversion needs one static mask or exactly %d "
+            "tracked masks for this %d-step target; received %d. In a loop, "
+            "connect Loop Mask Slice. Choose legacy trilinear only to retain "
+            "the older interpolated behavior." %
+            (expected_frames, latent_steps, source_frames)
+        )
+
+    reduced = F.adaptive_max_pool2d(
+        source[:, None],
+        (int(video.shape[3]), int(video.shape[4])),
+    )[:, 0]
+    reduced = _h3_token_snap_max(reduced)
+    if static:
+        return reduced[None, None].expand(
+            1, 1, latent_steps,
+            int(reduced.shape[-2]), int(reduced.shape[-1]),
+        ).to(torch.float32).contiguous()
+    groups = h3_video_latent_frame_groups(latent_steps)
+    reduced = torch.stack(
+        [reduced[start:end].amax(dim=0) for start, end in groups], dim=0)
+    return reduced[None, None].to(torch.float32).contiguous()
 
 
 def temporal_audio_mask(
@@ -194,21 +305,19 @@ def quantize_h3_pixel_mask(
     grid_w = width // H3_PIXEL_CELL
 
     if mode == "runtime exact (latent max)":
-        latent = F.interpolate(
+        latent = F.adaptive_max_pool2d(
             raw,
-            size=(height // H3_VAE_SCALE, width // H3_VAE_SCALE),
-            mode="bilinear",
-            align_corners=False,
-        )
-        cells = latent.reshape(
-            frames,
-            1,
-            grid_h,
-            H3_PIXEL_CELL // H3_VAE_SCALE,
-            grid_w,
-            H3_PIXEL_CELL // H3_VAE_SCALE,
-        ).amax(dim=(-3, -1))
-        cells = (cells >= 0.5).to(raw.dtype)
+            (height // H3_VAE_SCALE, width // H3_VAE_SCALE),
+        )[:, 0]
+        latent = _h3_token_snap_max(latent)
+        latent_steps = h3_video_latents_for_pixel_frames(frames)
+        groups = h3_video_latent_frame_groups(latent_steps)
+        latent = torch.cat([
+            latent[start:end].amax(dim=0, keepdim=True).expand(
+                end - start, int(latent.shape[1]), int(latent.shape[2]))
+            for start, end in groups
+        ], dim=0)
+        cells = latent[:, None, ::2, ::2]
     else:
         pixels = raw.reshape(
             frames, 1, grid_h, H3_PIXEL_CELL, grid_w, H3_PIXEL_CELL)
