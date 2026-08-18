@@ -85,7 +85,8 @@ Start with the maintained v0.5 example for your generation mode:
   the selected 32px video cells.
 - [Masked AV extension — single clip](<example_workflows/MiniMax H3 - Masked AV Extension - Single Clip.json>)
   and [looped Ref2VA chain](<example_workflows/MiniMax H3 - Masked AV Extension - Chain + Reference Image.json>)
-  continue the bundled modern CC0 soldier-crab footage.
+  continue the bundled modern CC0 soldier-crab footage with the 0.5 Soft AV
+  policy and a full 39-frame visual seam blend.
 - [Two-clip masked AV bridge](<example_workflows/MiniMax H3 - Masked AV Bridge - Two Clips.json>)
   protects both source endpoints and generates only the missing interval.
 

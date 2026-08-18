@@ -99,8 +99,8 @@ def validate_v05_topology(workflow):
         ("tapered_guide", 22): [
             "detail_guide", False, "tapered_guide", 22],
         ("masked_av", 39): ["hard_av", False, "masked_av", 39],
-        ("feathered_av", 39): [
-            "soft_av", False, "feathered_av", 39],
+        ("audio_feathered_av", 39): [
+            "soft_av", False, "audio_feathered_av", 39],
     }.get((mode, context), ["guide", True, mode, context])
     assert transition["widgets_values"] == expected
     assert origin_for_input(
@@ -189,7 +189,8 @@ def validate_crab_extension(path, expected_shots, tagged):
     assert [shot["length"] for shot in plan["shots"]] == [192] * expected_shots
     assert plan_node["widgets_values"][3:6] == [960, 544, 39]
     assert plan_node["widgets_values"][9:11] == ["generated_audio", 39]
-    assert plan_node["widgets_values"][16] == "masked_av"
+    assert plan_node["widgets_values"][15:17] == [
+        39, "audio_feathered_av"]
     for shot in plan["shots"]:
         prompt = prompt_text(shot["prompt"])
         if tagged:

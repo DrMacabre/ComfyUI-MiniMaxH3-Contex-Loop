@@ -35,6 +35,9 @@ Newest first. This file keeps release history out of the onboarding README.
   incoming AV scene ownership of that overlap at both generated-scene and
   external-prelude boundaries, so Soft AV's audio feather reaches the final
   track; older checkpoints retain delivered-only fallback behavior.
+- Updated both maintained soldier-crab extension workflows to the 0.5 Soft AV
+  policy with a full 39-frame visual seam blend, matching the tested upstream
+  extension topology while retaining recursive Plan/Run Manager operation.
 - Added opt-in Latent Guide continuation. Generated boundaries reuse the
   phase-aligned tail of the accepted predecessor's sampled video latent as
   persistent Guide conditioning without an RGB/VAE round trip; imported or

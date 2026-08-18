@@ -1374,7 +1374,7 @@
           "links": null
         }
       ],
-      "title": "TRIM 39 MASKED PREFIX FRAMES / RETAIN 5 FOR BLEND",
+      "title": "TRIM 39 AV PREFIX FRAMES / RETAIN 39 FOR BLEND",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -1385,7 +1385,7 @@
         0,
         24,
         true,
-        5
+        39
       ],
       "color": "#1f1f48",
       "bgcolor": "rgba(24,24,27,.9)"
@@ -1657,7 +1657,7 @@
         "Node name for S&R": "Note"
       },
       "widgets_values": [
-        "MASKED AV EXTENSION — THREE-SCENE LOOP + REFERENCE IMAGE\n\nThe source video's last 39 frames/65 audio steps protect scene 1. Each accepted generated scene then supplies the protected prefix for the next loop iteration. @crabs is active in all three prompts only as identity/appearance guidance; the incoming latent prefix remains authoritative for pose, motion, camera, light, and audio timing. The original source is prepended once during final assembly."
+        "SOFT AV EXTENSION — THREE-SCENE LOOP + REFERENCE IMAGE\n\nThe source video's last 39 frames/65 audio steps protect scene 1. Soft AV keeps each picture prefix hard while releasing only the final eight audio ticks with a half-cosine feather. Each accepted generated scene then supplies the protected prefix for the next loop iteration. @crabs is active in all three prompts only as identity/appearance guidance; the incoming latent prefix remains authoritative for pose, motion, camera, light, and audio timing. Loop Trim retains all 39 repeated visual frames for linear seam blending, and the original source is prepended once during final assembly."
       ],
       "color": "#432f66",
       "bgcolor": "rgba(24,24,27,.9)"
@@ -2226,8 +2226,8 @@
         8,
         0,
         20,
-        5,
-        "masked_av"
+        39,
+        "audio_feathered_av"
       ],
       "color": "#1f1f48",
       "bgcolor": "rgba(24,24,27,.9)"
@@ -2471,9 +2471,9 @@
         "Node name for S&R": "MiniMaxH3TransitionPolicy"
       },
       "widgets_values": [
-        "hard_av",
+        "soft_av",
         false,
-        "masked_av",
+        "audio_feathered_av",
         39
       ]
     }

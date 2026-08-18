@@ -1355,7 +1355,7 @@
           "links": null
         }
       ],
-      "title": "TRIM 22 CONTEXT FRAMES / RETAIN 5 FOR BLEND",
+      "title": "TRIM 39 AV PREFIX FRAMES / RETAIN 39 FOR BLEND",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -1366,7 +1366,7 @@
         0,
         24,
         true,
-        5
+        39
       ],
       "color": "#1f1f48",
       "bgcolor": "rgba(24,24,27,.9)"
@@ -1630,7 +1630,7 @@
           "links": null
         }
       ],
-      "title": "ONE-SCENE MASKED AV EXTENSION PLAN",
+      "title": "ONE-SCENE SOFT AV EXTENSION PLAN",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -1654,8 +1654,8 @@
         8,
         0,
         20,
-        5,
-        "masked_av"
+        39,
+        "audio_feathered_av"
       ],
       "color": "#1f1f48",
       "bgcolor": "rgba(24,24,27,.9)"
@@ -1992,7 +1992,7 @@
         "Node name for S&R": "Note"
       },
       "widgets_values": [
-        "MASKED AV EXTENSION — SINGLE LOOP ITERATION\n\nThe complete CC0 source is normalized to 24 fps and persisted as the prelude. Its last 39 frames and matching 65 audio latent steps become scene 1's clean protected target prefix. H3 generates 153 new frames (6.375s); Loop Trim removes the repeated prefix and Assemble prepends the original 13-second source.\n\nThis intentionally uses the same recursive loop as long chains, with a one-scene Plan rather than a separate one-off extension stack."
+        "SOFT AV EXTENSION — SINGLE LOOP ITERATION\n\nThe complete CC0 source is normalized to 24 fps and persisted as the prelude. Its last 39 frames and matching 65 audio latent steps become scene 1's clean protected target prefix. Soft AV keeps the picture prefix hard while releasing the last eight audio ticks with a half-cosine feather. H3 generates 153 new frames (6.375s); Loop Trim removes the repeated prefix, retains all 39 visual overlap frames for the final linear blend, and Assemble prepends the original 13-second source.\n\nThis intentionally uses the same recursive loop as long chains, with a one-scene Plan rather than a separate one-off extension stack."
       ],
       "color": "#432f66",
       "bgcolor": "rgba(24,24,27,.9)"
@@ -2235,9 +2235,9 @@
         "Node name for S&R": "MiniMaxH3TransitionPolicy"
       },
       "widgets_values": [
-        "hard_av",
+        "soft_av",
         false,
-        "masked_av",
+        "audio_feathered_av",
         39
       ]
     }
