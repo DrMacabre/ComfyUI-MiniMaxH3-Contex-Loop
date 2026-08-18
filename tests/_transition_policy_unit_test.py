@@ -91,7 +91,7 @@ hard_status = node.build("hard_av")[3]
 assert hard_status.startswith("Hard AV -> Masked AV + 39 frames")
 detail_av_status = node.build("detail_av")[3]
 assert detail_av_status.startswith("Detail AV -> Tapered AV + 39 frames")
-assert "latent taper v1" in detail_av_status
+assert "clean-boundary latent taper v2" in detail_av_status
 audio_feather_status = node.build("audio_feather_av")[3]
 assert audio_feather_status.startswith(
     "Audio Feather AV (legacy alias) -> Audio-Feathered AV + 39 frames")
@@ -159,7 +159,7 @@ try:
 except ValueError as exc:
     assert "exactly 39" in str(exc)
 else:
-    raise AssertionError("Detail AV accepted a non-v1 90-frame context")
+    raise AssertionError("Detail AV accepted a non-v2 90-frame context")
 
 tapered_expert, tapered_mode, tapered_context, _ = node.build(
     "detail_guide", True, "tapered_guide", 39)

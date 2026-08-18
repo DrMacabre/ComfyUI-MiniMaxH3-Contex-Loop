@@ -86,10 +86,11 @@ experimental. The resolved values, not merely the preset name, enter scene
 metadata.
 
 Detail AV is deliberately narrower than the generic AV implementations. Its
-v1 recipe requires exactly 39 frames / 12 video-latent steps, applies
+v2 recipe requires exactly 39 frames / 12 video-latent steps, applies
 matched-standard-deviation Gaussian noise only to a disposable copy of the
-carried video prefix, and tapers 0.45 -> 0.275 -> 0.10 over the final two
-steps. Audio and masks retain Hard AV semantics. The recipe version,
+carried video prefix, and tapers 0.30 -> 0.225 -> 0.15 -> 0.075 -> 0.00 over
+the final four steps. Audio and masks retain Hard AV semantics. The recipe
+version,
 parameters, and deterministic seed rule are part of `incoming_boundary`, so a
 resume cannot silently cross an implementation change.
 

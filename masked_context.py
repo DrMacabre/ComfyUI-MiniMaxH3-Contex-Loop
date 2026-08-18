@@ -68,7 +68,7 @@ def _detail_av_video_prefix(video_prefix, seed):
     expected_steps = int(DETAIL_AV_RECIPE["video_steps"])
     if steps != expected_steps:
         raise ValueError(
-            "h3_detail_av: the v1 recipe requires %d video steps, got %d." %
+            "h3_detail_av: the v2 recipe requires %d video steps, got %d." %
             (expected_steps, steps)
         )
 
@@ -486,7 +486,7 @@ def apply_masked_prefix(
     if bool(detail_video_taper):
         if int(frames) != int(DETAIL_AV_RECIPE["context_frames"]):
             raise ValueError(
-                "h3_detail_av: the experimental v1 recipe requires exactly "
+                "h3_detail_av: the experimental v2 recipe requires exactly "
                 "%d context frames, got %d." %
                 (int(DETAIL_AV_RECIPE["context_frames"]), int(frames))
             )

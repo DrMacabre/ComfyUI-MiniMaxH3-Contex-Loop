@@ -34,12 +34,12 @@ AV_TRANSITION_CONTEXT_LENGTHS = (39, 90, 141, 192, 243)
 # scene dependency contract so changing the recipe cannot silently resume a
 # scene rendered with an older taper.
 DETAIL_AV_RECIPE = {
-    "version": "h3_detail_av_latent_taper_v1",
+    "version": "h3_detail_av_latent_taper_v2",
     "context_frames": 39,
     "video_steps": 12,
-    "alpha": 0.45,
-    "alpha_end": 0.10,
-    "ramp_steps": 2,
+    "alpha": 0.30,
+    "alpha_end": 0.00,
+    "ramp_steps": 4,
     "noise_scale": "match_latent_std",
     "seed_xor": 0xD37A11,
 }

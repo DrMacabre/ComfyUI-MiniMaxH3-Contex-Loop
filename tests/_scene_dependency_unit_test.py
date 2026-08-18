@@ -161,7 +161,7 @@ assert detail_diffs == [{
     "scene": 2,
     "field": "detail_av_recipe.alpha",
     "saved": 0.4,
-    "current": 0.45,
+    "current": 0.30,
     "regeneration_required": True,
 }]
 

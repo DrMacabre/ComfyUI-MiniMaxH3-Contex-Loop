@@ -223,8 +223,9 @@ scene 1 and in every Guide mode, so that one wire supports every mode.
 
 `tapered_av`, selected by experimental **Detail AV**, starts from the same
 39-frame hard AV prefix, but first makes a disposable copy of its 12 video
-latent steps. It blends matched-standard-deviation Gaussian noise at 0.45,
-tapering through 0.275 to 0.10 over the last two steps. The carried audio
+latent steps. It blends matched-standard-deviation Gaussian noise at 0.30,
+tapering through 0.225, 0.15, and 0.075 to a completely clean final step over
+the last four steps. The carried audio
 latent and both denoise masks are byte-for-byte the Hard AV path; audio is
 never noised. The accepted predecessor checkpoint remains clean, and Loop
 Trim removes the complete treated prefix. When assembly blending is enabled,
@@ -248,7 +249,7 @@ All AV mask continuations require `encode_mode=video`, `anchor_mode=head`,
 and an exact shared video/audio boundary: **39, 90, 141, 192, or 243 context
 frames**. The shortest and normal choice is 39 frames: at 24 fps it is exactly
 1.625 seconds and exactly 65 audio-latent steps at H3's 40 Hz audio grid. A
-Detail AV v1 transition specifically requires 39 frames. A
+Detail AV v2 transition specifically requires 39 frames. A
 per-scene override participates in the Plan/history hashes from that
 scene onward, so a checkpoint cannot silently resume under the wrong method.
 When modes are mixed, use settings compatible with masked AV for the whole

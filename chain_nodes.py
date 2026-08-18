@@ -7744,7 +7744,7 @@ class MiniMaxH3TransitionPolicy:
                                    "mask implementations require an exact "
                                    "shared AV boundary: 39, 90, 141, 192, or "
                                    "243 frames. "
-                                   "Detail AV v1 requires exactly 39 frames. "
+                                   "Detail AV v2 requires exactly 39 frames. "
                                    "Tapered Guide accepts any listed Guide "
                                    "length, but only 22 frames has published "
                                    "validation."}),
@@ -7781,7 +7781,8 @@ class MiniMaxH3TransitionPolicy:
         elif policy["preset"] in ("tone_guide", "detail_guide"):
             status += "; experimental preset; published baseline 22f"
         elif policy["preset"] == "detail_av":
-            status += "; experimental preset; latent taper v1 at 39f"
+            status += (
+                "; experimental preset; clean-boundary latent taper v2 at 39f")
         else:
             status += "; tested preset"
         return (policy, policy["continuation_mode"],

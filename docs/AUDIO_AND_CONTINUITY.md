@@ -66,10 +66,11 @@ span with the predecessor's detected tone correction, Latent Guide uses the
 same span from the saved sampled video latent, Detail Guide uses the same span with an
 eight-frame chroma-noise exit taper, Detail AV uses a protected disposable
 39-frame video-latent copy with matched-variance Gaussian noise tapering from
-0.45 to 0.10 while leaving audio exact, Hard AV uses a protected 39-frame prefix,
+0.30 to a completely clean boundary while leaving audio exact, Hard AV uses a
+protected 39-frame prefix,
 and Soft AV keeps the picture exact while feathering only a carried-audio exit.
 With Generated continuity off, both AV presets carry picture only.
-Detail AV v1 is fixed to 39 frames. Its seed and complete recipe enter the
+Detail AV v2 is fixed to 39 frames. Its seed and complete recipe enter the
 incoming-boundary dependency fingerprint, its predecessor checkpoint is never
 mutated, and the entire treated prefix is trimmed before delivery. Advanced
 mode may pair either experimental Guide with another Guide context length; 22

@@ -4,6 +4,10 @@ Newest first. This file keeps release history out of the onboarding README.
 
 ## v0.5.0 — Source Timeline and workflow clarity
 
+- Revised experimental Detail AV to a clean-boundary v2 taper. Video-latent
+  noise now starts at 0.30 and falls through 0.225, 0.15, and 0.075 to an exact
+  zero on the boundary-adjacent step, reducing seam displacement while keeping
+  the predecessor, carried audio, denoise masks, and final overlap clean.
 - Recognized the final merged ComfyUI PR #15375 helper-based mask API and left
   it fully native. The old-build fallback now mirrors merge-time commit
   `c676536`, including pooled token-grid masks and ceil-quantized 8-bit mask
@@ -49,8 +53,8 @@ Newest first. This file keeps release history out of the onboarding README.
 - Added experimental Detail AV continuation, adapting beijinren's latent
   context-noise recipe to the recursive hard-AV path. It treats a disposable
   copy of the 39-frame / 12-step video prefix with matched-variance Gaussian
-  noise tapering from 0.45 to 0.10, leaves audio and masks unchanged, trims the
-  complete treated overlap, and fingerprints the exact recipe for resume.
+  noise using a boundary-clean taper, leaves audio and masks unchanged, trims
+  the complete treated overlap, and fingerprints the exact recipe for resume.
 - Added model-free Chain Preflight and shared Plan Studio validation for source
   duration, scene windows, references, runtime compatibility, and resume
   eligibility.

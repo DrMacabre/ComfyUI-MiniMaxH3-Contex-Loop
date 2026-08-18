@@ -250,10 +250,11 @@ def main():
     detail_video_c, _ = detail_c["samples"].unbind()
     detail_video_mask, detail_audio_mask = detail_a["noise_mask"].unbind()
     assert detail_trim == 39
-    assert masked._detail_av_alpha(0, 12) == 0.45
-    assert masked._detail_av_alpha(9, 12) == 0.45
-    assert abs(masked._detail_av_alpha(10, 12) - 0.275) < 1e-9
-    assert masked._detail_av_alpha(11, 12) == 0.10
+    assert masked._detail_av_alpha(0, 12) == 0.30
+    assert abs(masked._detail_av_alpha(8, 12) - 0.225) < 1e-9
+    assert abs(masked._detail_av_alpha(9, 12) - 0.15) < 1e-9
+    assert abs(masked._detail_av_alpha(10, 12) - 0.075) < 1e-9
+    assert masked._detail_av_alpha(11, 12) == 0.0
     assert torch.equal(detail_video_a, detail_video_b)
     assert not torch.equal(detail_video_a, detail_video_c)
     assert not torch.equal(
@@ -410,7 +411,7 @@ def main():
         "feathered AV: first 8 video / 57 audio steps protected, final "
         "4 video / 8 audio prefix steps use a 0.85..0.95 denoise handoff")
     print(
-        "Detail AV: deterministic 0.45 -> 0.10 video-only latent taper; "
+        "Detail AV: deterministic 0.30 -> 0.00 video-only latent taper; "
         "audio, masks, target, and predecessor remain exact")
 
     class VideoVAE:
