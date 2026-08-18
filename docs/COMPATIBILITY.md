@@ -11,13 +11,15 @@ The two continuation engines are capability-gated independently:
 - `guide` prefers native Add Guide / MultiRef behavior from ComfyUI PR #15439
   and uses the existing guarded guide fallback only on older builds;
 - `masked_av` prefers native per-token H3 AV masks from PR #15375 and lazily
-  installs only missing mask-engine, payload, preprocessing, and inpaint-scale
-  behavior when the masked path executes. It still requires the native #15439
-  Add Guide / MultiRef core baseline; masked mode is not enabled on the older
-  guide-fallback architecture.
+  installs only missing mask-engine, payload, token-grid helpers,
+  inpaint-scale, and legacy sampler-bridge behavior when the masked path
+  executes. The merged helper API remains authoritative and is not wrapped.
+  Masked mode still requires the native #15439 Add Guide / MultiRef core
+  baseline and is not enabled on the older guide-fallback architecture.
 
 Importing the node pack or running a guide-only workflow does not activate the
-masked runtime compatibility. A partially updated native mask engine is
+masked runtime compatibility. Recognized pre-merge compatibility wrappers are
+upgraded to the final merged contract; unknown partial mask engines are
 rejected rather than mixed with the vendored snapshot.
 
 After updating ComfyUI or H3 optimization packs, restart the process fully so

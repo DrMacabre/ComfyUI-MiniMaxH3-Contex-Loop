@@ -23,9 +23,17 @@ import comfy.utils as utils
 
 
 _LOG = logging.getLogger("minimax_h3_context_loop.masked_prefix")
-# Shared with seitanism's source pack. Ownership remains path-specific through
-# `_is_ours`, while `_is_compatible_wrapper` lets a sibling copy stand down.
-_MARKER = "_h3_existing_video_av_mask_payload_compat_v2"
+# Version 4 matches the final merged #15375 helper-based payload path. Version
+# 3 predates merge commit c676536 and rounds before token-grid pooling; it must
+# not wrap or overwrite the native merged result.
+_MARKER = "_h3_existing_video_av_mask_payload_compat_v4"
+_LEGACY_MARKERS = (
+    "_h3_existing_video_av_mask_payload_compat_v2",
+    "_h3_existing_video_av_mask_payload_compat_v3",
+)
+# Kept as an internal compatibility alias for focused third-party tests that
+# marked the immediately preceding wrapper directly.
+_LEGACY_MARKER = _LEGACY_MARKERS[-1]
 
 
 def _walk_wrapped(fn):
@@ -50,6 +58,15 @@ def _is_compatible_wrapper(fn):
     code = getattr(fn, "__code__", None)
     return bool(
         getattr(fn, _MARKER, False)
+        and code is not None
+        and code.co_name == "wrapper"
+    )
+
+
+def _is_legacy_wrapper(fn):
+    code = getattr(fn, "__code__", None)
+    return bool(
+        any(getattr(fn, marker, False) for marker in _LEGACY_MARKERS)
         and code is not None
         and code.co_name == "wrapper"
     )
@@ -84,7 +101,7 @@ def _code_strings(code):
 
 def _function_mentions_native_payload(fn):
     for item in _walk_wrapped(fn):
-        if _is_ours(item):
+        if _is_ours(item) or _is_legacy_wrapper(item):
             continue
         strings = set(_code_strings(getattr(item, "__code__", None)) or ())
         if "denoise_mask" in strings and "audio_denoise_mask" in strings:
@@ -92,35 +109,47 @@ def _function_mentions_native_payload(fn):
     return False
 
 
-def _native_h3_mask_hooks(cls):
+def _function_calls_native_helper(fn):
+    for item in _walk_wrapped(fn):
+        if _is_ours(item) or _is_legacy_wrapper(item):
+            continue
+        strings = set(_code_strings(getattr(item, "__code__", None)) or ())
+        if "denoise_mask" in strings and "_denoise_mask_conds" in strings:
+            return True
+    return False
+
+
+def _native_h3_mask_hooks(cls, fn):
     if cls is None:
         return False
-    process_step = cls.__dict__.get("process_timestep")
-    process_mask = cls.__dict__.get("process_denoise_mask")
     scale = cls.__dict__.get("scale_latent_inpaint")
+    merged_helpers = all(callable(cls.__dict__.get(name)) for name in (
+        "_pool_masks_to_token_grid",
+        "_token_grid_masks",
+        "_denoise_mask_values",
+        "_denoise_mask_conds",
+    ))
+    merged_path = bool(
+        merged_helpers
+        and _function_calls_native_helper(fn)
+    )
     return bool(
-        callable(process_step)
-        and _signature_has(process_step, "denoise_mask", "audio_denoise_mask")
-        and callable(process_mask)
+        merged_path
         and callable(scale)
+        and _signature_has(scale, "x", "denoise_mask")
     )
 
 
 def _native_av_mask_payload(cls, fn):
-    return bool(
-        fn and (
-            _function_mentions_native_payload(fn)
-            or _native_h3_mask_hooks(cls)
-        )
-    )
+    return bool(fn and _native_h3_mask_hooks(cls, fn))
 
 
 def capability_status():
     cls = getattr(model_base, "MiniMaxH3", None)
     fn = getattr(cls, "extra_conds", None) if cls is not None else None
     direct = bool(fn and _function_mentions_native_payload(fn))
-    native_hooks = _native_h3_mask_hooks(cls)
-    native = bool(fn and (direct or native_hooks))
+    native_hooks = _native_h3_mask_hooks(cls, fn)
+    native = bool(fn and native_hooks)
     return {
         "available": fn is not None,
         "native_av_mask_payload": native,
@@ -132,35 +161,42 @@ def capability_status():
     }
 
 
-def _add_av_mask_conditions(out, kwargs):
+def _add_av_mask_conditions(owner, out, kwargs):
     if not isinstance(out, dict):
         return
-    have_video = "denoise_mask" in out
-    have_audio = "audio_denoise_mask" in out
-    if have_video and have_audio:
-        return
-
     denoise_mask = kwargs.get("denoise_mask")
     latent_shapes = kwargs.get("latent_shapes")
     if denoise_mask is None or latent_shapes is None or len(latent_shapes) < 2:
         return
 
+    native_helper = getattr(owner, "_denoise_mask_conds", None)
+    if callable(native_helper):
+        out.update(native_helper(denoise_mask, latent_shapes))
+        return
+
+    # Last-resort compatibility when this module is used without the engine
+    # gate. The normal pack path installs the exact helper set first. Ceil to
+    # the merged 8-bit token strength rather than the pre-merge nearest value.
     masks = utils.unpack_latents(denoise_mask, latent_shapes)
     if len(masks) < 2:
         return
-    if not have_video and torch.amin(masks[0]).item() < 1.0 - 1e-3:
+    pool = getattr(owner, "_pool_masks_to_token_grid", None)
+    if callable(pool):
+        masks = pool(masks)
+    masks = [torch.ceil(mask * 256.0) / 256.0 for mask in masks]
+    if torch.amin(masks[0]).item() < 1.0 - 1e-3:
         out["denoise_mask"] = comfy.conds.CONDRegular(
-            masks[0][:, :1].clone())
-    if not have_audio and torch.amin(masks[1]).item() < 1.0 - 1e-3:
+            masks[0][:1, :1].clone())
+    if torch.amin(masks[1]).item() < 1.0 - 1e-3:
         out["audio_denoise_mask"] = comfy.conds.CONDRegular(
-            masks[1][:, :1].clone())
+            masks[1][:1].amax(dim=1, keepdim=True))
 
 
 def _make_wrapper(base):
     @functools.wraps(base, updated=())
     def wrapper(self, **kwargs):
         out = base(self, **kwargs)
-        _add_av_mask_conditions(out, kwargs)
+        _add_av_mask_conditions(self, out, kwargs)
         return out
 
     setattr(wrapper, _MARKER, True)
@@ -173,10 +209,21 @@ def ensure_av_mask_payload_compat():
         raise RuntimeError(
             "h3_masked_prefix: MiniMaxH3.extra_conds not found.")
     current = cls.extra_conds
+    original = current
+    # Strip only obsolete top-level versions before probing native support.
+    # Otherwise their wrapped native function can make the chain look healthy
+    # while the outer v3 wrapper overwrites the merged token-grid conditions.
+    while _is_legacy_wrapper(current) and callable(
+            getattr(current, "__wrapped__", None)):
+        current = current.__wrapped__
+    if current is not original:
+        cls.extra_conds = current
     if _native_av_mask_payload(cls, current):
         return True
     if any(_is_compatible_wrapper(item) for item in _walk_wrapped(current)):
         return True
+    # Unknown third-party wrappers remain in the chain; the v4 layer only
+    # replaces the two mask conditions after their base result is produced.
     cls.extra_conds = _make_wrapper(current)
     _LOG.info(
         "h3_masked_prefix: PR #15375 AV-mask payload compatibility enabled")

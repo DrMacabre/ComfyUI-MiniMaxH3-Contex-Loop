@@ -53,15 +53,16 @@ and both target prefixes receive `0 = preserve`, `1 = generate` masks.
 
 Adapted source files and integration:
 
-- `h3_mask_compat.py` — model-level PR #15375 capability detection/fallback;
+- `h3_mask_compat.py` — PR #15375 model/sampler capability detection and
+  fallback;
 - `h3_mask_payload_compat.py` — native-first AV mask payload extraction;
 - `masked_context.py` — recursive target-prefix construction derived from the
   MultiRef existing-video implementation.
 
-The referenced MultiRef revision is `4b484a3` (2026-08-14), GPL-3.0.
-Its mask-engine and mask-payload compatibility marker names are retained as a
-shared runtime ABI, so installing both packs does not stack equivalent
-PR #15375 wrappers.
+The referenced MultiRef revision is `4b484a3` (2026-08-14), GPL-3.0. Its v2
+mask-engine and mask-payload markers are recognized for safe migration. This
+pack uses a v4 ABI matching the final merged PR #15375 helper contract and
+replaces only recognized older wrappers whose semantics changed.
 
 ## ComfyUI MiniMax H3 per-token AV masks
 
@@ -70,7 +71,8 @@ implementation are from
 [ComfyUI PR #15375](https://github.com/Comfy-Org/ComfyUI/pull/15375), authored
 by **drozbay**. The vendored fallback is scoped to masked target-latent
 operations, prefers native equivalent behavior automatically, and is not
-activated by ordinary guide-mode chains.
+activated by ordinary guide-mode chains. The fallback tracks the final merged
+helper design through upstream commit `c676536` (2026-08-18).
 
 ## ComfyUI MiniMax H3 Add Guide
 

@@ -2,6 +2,13 @@
 
 Newest first. This file keeps release history out of the onboarding README.
 
+## v0.4.12 — Merged H3 mask API compatibility
+
+- Recognized the final helper-based API merged by ComfyUI PR #15375 and left
+  current ComfyUI fully native. The old-build fallback now mirrors merge-time
+  commit `c676536`, including pooled token-grid masks and ceil-quantized mask
+  strengths, while recognized pre-merge wrappers are upgraded safely.
+
 ## v0.4.10 — Final-output publishing
 
 - Fixed scene and final MP4 publication in ComfyUI's global Media Assets panel

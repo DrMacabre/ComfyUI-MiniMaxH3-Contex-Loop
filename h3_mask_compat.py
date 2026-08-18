@@ -1,27 +1,40 @@
 """Capability-aware runtime compatibility for ComfyUI PR #15375.
 
-This module contains only the model-level H3 AV-mask behavior required by
-masked target-prefix continuation. It does not touch ``MiniMaxH3.extra_conds``;
-payload extraction lives in :mod:`h3_mask_payload_compat`.
+This module contains the H3 AV-mask diffusion behavior and the narrow legacy
+sampler bridge required by masked target-prefix continuation. It does not
+touch ``MiniMaxH3.extra_conds``; payload extraction lives in
+:mod:`h3_mask_payload_compat`.
 
 Every capability is checked against the live ComfyUI implementation. Native
 support wins; compatibility is installed only for missing pieces. Restarting
 ComfyUI reverts all runtime modifications.
 
-Adapted from seitanism/ComfyUI-H3-Motion-Context-MultiRef (GPL-3.0), whose
-compatibility snapshot tracks ComfyUI PR #15375 as reviewed on 2026-08-11.
+Originally adapted from seitanism/ComfyUI-H3-Motion-Context-MultiRef
+(GPL-3.0). This compatibility snapshot tracks the merged ComfyUI PR #15375,
+including final refactor commit c676536, reviewed on 2026-08-18.
 """
 
 from __future__ import annotations
 
+import functools
 import inspect
 import logging
+import types
 
 
 _LOG = logging.getLogger("minimax_h3_context_loop.masked_prefix")
-# Shared with seitanism's source pack so two installed copies recognize the
-# same already-active runtime engine instead of replacing it.
-_MARKER = "_h3_motion_context_pr15375_compat_v2"
+# Version 4 follows the final merged PR #15375 token-grid helper design.
+# Version 3 follows the pre-merge post-review mask-blend design. Version 2 used
+# ``process_denoise_mask`` to replace the user's mask with its pooled token
+# mask. The diffusion engine itself remains compatible, but the v2/v3 model
+# hooks must be replaced to match the final merged ceil-quantized token grid.
+_MARKER = "_h3_motion_context_pr15375_compat_v4"
+_LEGACY_MARKERS = (
+    "_h3_motion_context_pr15375_compat_v2",
+    "_h3_motion_context_pr15375_compat_v3",
+)
+_SAMPLER_MARKER = "_h3_motion_context_pr15375_sampler_blend_v3"
+_ACTIVE_MASK_ATTR = "_h3_motion_context_active_denoise_mask_v3"
 
 
 def _exec_into(module, source, name):
@@ -30,9 +43,9 @@ def _exec_into(module, source, name):
     return namespace[name]
 
 
-def _mark(fn):
+def _mark(fn, marker=_MARKER):
     try:
-        setattr(fn, _MARKER, True)
+        setattr(fn, marker, True)
     except Exception:
         pass
     return fn
@@ -42,12 +55,84 @@ def _is_ours(fn):
     return bool(getattr(fn, _MARKER, False))
 
 
+def _is_legacy_compat(fn):
+    return any(getattr(fn, marker, False) for marker in _LEGACY_MARKERS)
+
+
+def _is_known_engine_compat(fn):
+    return bool(_is_ours(fn) or _is_legacy_compat(fn))
+
+
+def _is_sampler_compat(fn):
+    return bool(getattr(fn, _SAMPLER_MARKER, False))
+
+
 def _signature_has(fn, *names):
     try:
         params = inspect.signature(fn).parameters
     except (TypeError, ValueError):
         return False
     return all(name in params for name in names)
+
+
+def _walk_code(value):
+    if not isinstance(value, types.CodeType):
+        return
+    yield value
+    for item in value.co_consts:
+        if isinstance(item, types.CodeType):
+            yield from _walk_code(item)
+
+
+def _function_has_keyword_group(fn, *names):
+    """Detect a Python call carrying a specific keyword-name tuple."""
+    current = fn
+    seen = set()
+    while callable(current) and id(current) not in seen:
+        seen.add(id(current))
+        for code in _walk_code(getattr(current, "__code__", None)) or ():
+            for item in code.co_consts:
+                if (isinstance(item, tuple)
+                        and all(name in item for name in names)):
+                    return True
+        current = getattr(current, "__wrapped__", None)
+    return False
+
+
+def _sampler_call():
+    try:
+        import comfy.samplers as samplers
+    except Exception:
+        return None
+    cls = getattr(samplers, "KSamplerX0Inpaint", None)
+    return getattr(cls, "__call__", None) if cls is not None else None
+
+
+def _sampler_passes_mask_to_scale(fn):
+    return bool(
+        callable(fn)
+        and _function_has_keyword_group(
+            fn, "sigma", "noise", "latent_image", "denoise_mask")
+    )
+
+
+def _model_mask_helpers(cls):
+    names = (
+        "_pool_masks_to_token_grid",
+        "_token_grid_masks",
+        "_denoise_mask_values",
+        "_denoise_mask_conds",
+    )
+    methods = [cls.__dict__.get(name) for name in names] if cls else []
+    complete = bool(methods and all(callable(item) for item in methods))
+    return {
+        "complete": complete,
+        "native": bool(
+            complete and not any(_is_known_engine_compat(item)
+                                 for item in methods)),
+        "compat": bool(
+            complete and all(_is_ours(item) for item in methods)),
+    }
 
 
 def capability_status():
@@ -62,13 +147,19 @@ def capability_status():
         cls
         and "process_denoise_mask" in cls.__dict__
         and callable(process)
-        and not _is_ours(process)
+        and not _is_known_engine_compat(process)
     )
     scale_native = bool(
         cls
         and "scale_latent_inpaint" in cls.__dict__
         and callable(scale)
-        and not _is_ours(scale)
+        and _signature_has(scale, "x", "denoise_mask")
+        and not _is_known_engine_compat(scale)
+    )
+    sampler_call = _sampler_call()
+    sampler_native = bool(
+        _sampler_passes_mask_to_scale(sampler_call)
+        and not _is_sampler_compat(sampler_call)
     )
 
     forward = getattr(getattr(h3m, "MiniMaxH3Model", None), "forward", None)
@@ -87,9 +178,10 @@ def capability_status():
     engine_ours = bool(
         callable(forward)
         and callable(inner)
-        and _is_ours(forward)
-        and _is_ours(inner)
+        and _is_known_engine_compat(forward)
+        and _is_known_engine_compat(inner)
     )
+    helpers = _model_mask_helpers(cls)
 
     return {
         "process_denoise_mask_native": process_native,
@@ -98,10 +190,16 @@ def capability_status():
         "scale_latent_inpaint_native": scale_native,
         "scale_latent_inpaint_compat": bool(
             callable(scale) and _is_ours(scale)),
+        "sampler_mask_blend_native": sampler_native,
+        "sampler_mask_blend_compat": bool(
+            callable(sampler_call) and _is_sampler_compat(sampler_call)),
         "mask_engine_complete": engine_complete,
         "mask_engine_native": bool(engine_complete and not engine_ours),
         "mask_engine_compat": engine_ours,
         "mask_engine_indicators": engine_indicators,
+        "mask_helpers_complete": helpers["complete"],
+        "mask_helpers_native": helpers["native"],
+        "mask_helpers_compat": helpers["compat"],
     }
 
 
@@ -379,30 +477,66 @@ def _install_engine_compat(h3m):
 
 
 def _install_model_base_hooks(model_base):
+    """Build the final merged #15375 H3 model hooks.
+
+    The identity preprocessing hook is only used on intermediate #15375
+    builds whose sampler still calls it. Returning the original mask is
+    essential: final pixel blending must retain the user's mask while H3's
+    internal timestep labels use the pooled token grid.
+    """
     process_denoise_mask = _exec_into(
         model_base,
         '''def process_denoise_mask(self, denoise_masks):
-    video_mask = denoise_masks[0]
+    return denoise_masks''',
+        "process_denoise_mask",
+    )
+    pool_masks_to_token_grid = _exec_into(
+        model_base,
+        '''def _pool_masks_to_token_grid(self, masks):
+    video_mask = masks[0]
     h, w = video_mask.shape[-2:]
     ph, pw = self.diffusion_model.patch_size[1:]
     lead = video_mask.shape[:-2]
     video_mask = torch.nn.functional.pad(video_mask.reshape((-1,) + video_mask.shape[-3:]), (0, -w % pw, 0, -h % ph), mode="replicate")
     video_mask = video_mask.reshape(lead + video_mask.shape[-2:])
     video_mask = video_mask.reshape(video_mask.shape[:-2] + (video_mask.shape[-2] // ph, ph, video_mask.shape[-1] // pw, pw)).amax(dim=(-3, -1))
-    video_mask = torch.round(video_mask * 256.0) / 256.0
-    video_mask = video_mask.masked_fill(video_mask >= 0.995, 1.0).masked_fill(video_mask <= 0.05, 0.0)
-    denoise_masks[0] = video_mask.repeat_interleave(ph, dim=-2).repeat_interleave(pw, dim=-1)[..., :h, :w]
-    if len(denoise_masks) > 1:
-        audio_mask = denoise_masks[1].amax(dim=1, keepdim=True)
-        audio_mask = torch.round(audio_mask * 256.0) / 256.0
-        audio_mask = audio_mask.masked_fill(audio_mask >= 0.995, 1.0).masked_fill(audio_mask <= 0.05, 0.0)
-        denoise_masks[1] = audio_mask.expand_as(denoise_masks[1]).contiguous()
-    return denoise_masks''',
-        "process_denoise_mask",
+    pooled = [video_mask.repeat_interleave(ph, dim=-2).repeat_interleave(pw, dim=-1)[..., :h, :w]]
+    if len(masks) > 1:
+        audio_mask = masks[1].amax(dim=1, keepdim=True)
+        pooled.append(audio_mask.expand_as(masks[1]).contiguous())
+    return pooled''',
+        "_pool_masks_to_token_grid",
+    )
+    token_grid_masks = _exec_into(
+        model_base,
+        '''def _token_grid_masks(self, denoise_mask, latent_shapes):
+    masks = utils.unpack_latents(denoise_mask, latent_shapes)
+    return [torch.ceil(mask * 256.0) / 256.0 for mask in self._pool_masks_to_token_grid(masks)]''',
+        "_token_grid_masks",
+    )
+    denoise_mask_values = _exec_into(
+        model_base,
+        '''def _denoise_mask_values(self, denoise_mask, latent_shapes):
+    if latent_shapes is None or len(latent_shapes) < 2:
+        return {}
+    masks = self._token_grid_masks(denoise_mask, latent_shapes)
+    out = {}
+    if torch.amin(masks[0]).item() < 1.0 - 1e-3:
+        out["denoise_mask"] = masks[0][:1, :1].clone()
+    if torch.amin(masks[1]).item() < 1.0 - 1e-3:
+        out["audio_denoise_mask"] = masks[1][:1].amax(dim=1, keepdim=True)
+    return out''',
+        "_denoise_mask_values",
+    )
+    denoise_mask_conds = _exec_into(
+        model_base,
+        '''def _denoise_mask_conds(self, denoise_mask, latent_shapes):
+    return {name: comfy.conds.CONDRegular(value) for name, value in self._denoise_mask_values(denoise_mask, latent_shapes).items()}''',
+        "_denoise_mask_conds",
     )
     scale_latent_inpaint = _exec_into(
         model_base,
-        '''def scale_latent_inpaint(self, sigma, noise, latent_image, **kwargs):
+        '''def scale_latent_inpaint(self, sigma, noise, latent_image, x=None, denoise_mask=None, **kwargs):
     shapes = self.latent_shapes
     if shapes is None or len(shapes) < 2:
         return super(MiniMaxH3, self).scale_latent_inpaint(sigma=sigma, noise=noise, latent_image=latent_image, **kwargs)
@@ -417,16 +551,94 @@ def _install_model_base_hooks(model_base):
         sigma_a = comfy.ldm.minimax.model.time_shift_sigma(sigma_v, model_sampling.shift, model_sampling.audio_shift)
         factor = (sigma_v / sigma_a) / scale
         cleans[1] = cleans[1] * factor.view(factor.shape[:1] + (1,) * (cleans[1].ndim - 1)).to(cleans[1].dtype)
-    return utils.pack_latents(cleans)[0]''',
+    injected = utils.pack_latents(cleans)[0]
+    if denoise_mask is None:
+        denoise_mask = getattr(self, "_h3_motion_context_active_denoise_mask_v3", None)
+    if x is None or denoise_mask is None:
+        return injected
+    token_grid_mask = utils.pack_latents(self._token_grid_masks(denoise_mask, shapes))[0]
+    x_blend_weight = (token_grid_mask - denoise_mask) / (1.0 - denoise_mask).clamp(min=1e-6)
+    x_blend_weight = torch.where(denoise_mask < 1.0, x_blend_weight.clamp(0.0, 1.0), torch.zeros_like(x_blend_weight))
+    return injected + x_blend_weight.to(injected.dtype) * (x - injected)''',
         "scale_latent_inpaint",
     )
-    _mark(process_denoise_mask)
-    _mark(scale_latent_inpaint)
-    return process_denoise_mask, scale_latent_inpaint
+    for fn in (
+        process_denoise_mask,
+        pool_masks_to_token_grid,
+        token_grid_masks,
+        denoise_mask_values,
+        denoise_mask_conds,
+        scale_latent_inpaint,
+    ):
+        _mark(fn)
+    return (
+        process_denoise_mask,
+        pool_masks_to_token_grid,
+        token_grid_masks,
+        denoise_mask_values,
+        denoise_mask_conds,
+        scale_latent_inpaint,
+    )
+
+
+def _install_sampler_mask_bridge(model_base):
+    """Give pre-989e7a9 samplers the mask argument added by that commit."""
+    import comfy.samplers as samplers
+
+    sampler_cls = getattr(samplers, "KSamplerX0Inpaint", None)
+    if sampler_cls is None or not callable(getattr(sampler_cls, "__call__", None)):
+        raise RuntimeError(
+            "h3_masked_prefix: ComfyUI KSamplerX0Inpaint was not found.")
+    current = sampler_cls.__call__
+    if _sampler_passes_mask_to_scale(current) or _is_sampler_compat(current):
+        return current
+
+    @functools.wraps(current)
+    def wrapper(self, x, sigma, denoise_mask, model_options=None, seed=None):
+        target = getattr(getattr(self, "inner_model", None),
+                         "inner_model", None)
+        h3_cls = getattr(model_base, "MiniMaxH3", None)
+        if h3_cls is None or not isinstance(target, h3_cls):
+            return current(
+                self, x, sigma, denoise_mask,
+                model_options={} if model_options is None else model_options,
+                seed=seed)
+
+        missing = object()
+        previous = getattr(target, _ACTIVE_MASK_ATTR, missing)
+        setattr(target, _ACTIVE_MASK_ATTR, denoise_mask)
+        options = {} if model_options is None else model_options
+        mask_function = options.get("denoise_mask_function")
+        if callable(mask_function):
+            options = dict(options)
+
+            @functools.wraps(mask_function)
+            def track_mask(*args, **kwargs):
+                result = mask_function(*args, **kwargs)
+                setattr(target, _ACTIVE_MASK_ATTR, result)
+                return result
+
+            options["denoise_mask_function"] = track_mask
+        try:
+            return current(
+                self, x, sigma, denoise_mask,
+                model_options=options, seed=seed)
+        finally:
+            if previous is missing:
+                try:
+                    delattr(target, _ACTIVE_MASK_ATTR)
+                except AttributeError:
+                    pass
+            else:
+                setattr(target, _ACTIVE_MASK_ATTR, previous)
+
+    _mark(wrapper, _SAMPLER_MARKER)
+    sampler_cls.__call__ = wrapper
+    return wrapper
 
 
 def ensure_h3_mask_compat():
-    """Install only #15375 capabilities missing from the live build."""
+    """Install only current #15375 capabilities missing from the live build."""
     import comfy.model_base as model_base
     import comfy.ldm.minimax.model as h3m
 
@@ -455,35 +667,60 @@ def ensure_h3_mask_compat():
         _LOG.info(
             "h3_masked_prefix: PR #15375 diffusion-mask compatibility enabled")
 
-    need_process = not (
-        "process_denoise_mask" in cls.__dict__
-        and callable(getattr(cls, "process_denoise_mask", None))
-    )
+    # The current PR passes denoise_mask directly into scale_latent_inpaint.
+    # Older cores need a narrow sampler wrapper which exposes the same value
+    # through a temporary model attribute. This avoids copying ComfyUI's whole
+    # sampler implementation and preserves custom denoise_mask_function hooks.
+    sampler_ready = bool(
+        before["sampler_mask_blend_native"]
+        or before["sampler_mask_blend_compat"])
+    if not sampler_ready:
+        _install_sampler_mask_bridge(model_base)
+        _LOG.info(
+            "h3_masked_prefix: PR #15375 sampler mask-blend compatibility "
+            "enabled")
+
+    status = capability_status()
     need_scale = not (
-        "scale_latent_inpaint" in cls.__dict__
-        and callable(getattr(cls, "scale_latent_inpaint", None))
-    )
-    if need_process or need_scale:
-        process_fn, scale_fn = _install_model_base_hooks(model_base)
-        if need_process:
+        status["scale_latent_inpaint_native"]
+        or status["scale_latent_inpaint_compat"])
+    need_helpers = not status["mask_helpers_complete"]
+    legacy_scale = _is_legacy_compat(
+        getattr(cls, "scale_latent_inpaint", None))
+    needs_attribute_bridge = not before["sampler_mask_blend_native"]
+    # A v2 compatibility scale has the old preprocessing contract even though
+    # it is callable, so replace it deliberately.
+    if need_scale or need_helpers or legacy_scale or (
+            needs_attribute_bridge
+            and not status["scale_latent_inpaint_compat"]):
+        (process_fn, pool_fn, token_fn, values_fn, conds_fn,
+         scale_fn) = _install_model_base_hooks(model_base)
+        cls._pool_masks_to_token_grid = pool_fn
+        cls._token_grid_masks = token_fn
+        cls._denoise_mask_values = values_fn
+        cls._denoise_mask_conds = conds_fn
+        cls.scale_latent_inpaint = scale_fn
+        _LOG.info(
+            "h3_masked_prefix: PR #15375 token-aligned inpaint scaling "
+            "enabled")
+        # Intermediate PR builds still invoke this method. It must be an
+        # identity under the new design so final pixel blending retains the
+        # original user mask.
+        if not capability_status()["sampler_mask_blend_native"]:
             cls.process_denoise_mask = process_fn
             _LOG.info(
-                "h3_masked_prefix: PR #15375 mask preprocessing enabled")
-        if need_scale:
-            cls.scale_latent_inpaint = scale_fn
-            _LOG.info(
-                "h3_masked_prefix: PR #15375 inpaint scaling enabled")
+                "h3_masked_prefix: legacy mask preprocessing neutralized")
 
     after = capability_status()
     ready = (
         after["mask_engine_complete"]
         and (
-            after["process_denoise_mask_native"]
-            or after["process_denoise_mask_compat"]
-        )
-        and (
             after["scale_latent_inpaint_native"]
             or after["scale_latent_inpaint_compat"]
+        )
+        and (
+            after["sampler_mask_blend_native"]
+            or after["sampler_mask_blend_compat"]
         )
     )
     if not ready:
@@ -502,11 +739,11 @@ def is_ready():
     return bool(
         status["mask_engine_complete"]
         and (
-            status["process_denoise_mask_native"]
-            or status["process_denoise_mask_compat"]
-        )
-        and (
             status["scale_latent_inpaint_native"]
             or status["scale_latent_inpaint_compat"]
+        )
+        and (
+            status["sampler_mask_blend_native"]
+            or status["sampler_mask_blend_compat"]
         )
     )
