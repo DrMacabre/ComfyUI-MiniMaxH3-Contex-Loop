@@ -174,12 +174,21 @@ Generated WAV assembly budgets samples from cumulative delivered-video frame
 boundaries, preventing per-scene rounding from accumulating into drift. This
 approach was inspired by **seitanism's**
 [MultiRef implementation](https://github.com/seitanism/ComfyUI-H3-Motion-Context-MultiRef).
+For masked AV, Loop Trim also carries the complete decoded overlap privately
+inside its normal AUDIO output. Segment Save checkpoints it, and the later
+scene owns that interval during combined generated-audio assembly. This keeps
+Soft AV's half-cosine audio release instead of throwing it away at the trim.
+The same ownership rule applies when scene 1 continues an Existing Video
+Context prelude. Legacy checkpoints without the extra tensor keep
+delivered-only assembly.
 
 ## Continuation trimming
 
 Use **MiniMax H3 Contex Loop Trim** after decoding. In head mode it removes the
-repeated visual prefix. With `match_tail=true`, it also truncates or zero-pads
-the decoded audio tail to the exact delivered-frame duration.
+repeated visual prefix. With `match_tail=true`, it time-conforms the small H3
+grid mismatch to the exact delivered-frame duration and carries the
+full AV overlap privately to Segment Save. Connect Trim's AUDIO output directly;
+there is no second overlap-audio socket.
 
 `images_with_overlap` exposes an additional visual stream containing the
 retained repeated context selected by `retain_overlap_frames`. In 0.5 chains,

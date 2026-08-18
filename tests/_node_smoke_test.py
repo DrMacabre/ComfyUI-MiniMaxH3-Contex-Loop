@@ -196,8 +196,21 @@ def main():
     assert delivered.a[:, 0, 0, 0].tolist() == list(range(4, 10))
     assert with_overlap.a[:, 0, 0, 0].tolist() == list(range(10))
     assert retained == 4
+    exact_audio = {
+        "waveform": T(np.arange(10, dtype=np.float32).reshape(1, 1, 10)),
+        "sample_rate": 24,
+    }
+    _, trimmed_audio, _, _ = trim.trim(
+        numbered, 4, exact_audio, 24.0, True)
+    assert trimmed_audio["waveform"].a.reshape(-1).tolist() == list(range(4, 10))
+    assert trimmed_audio[
+        nodes.AUDIO_WITH_OVERLAP_WAVEFORM_KEY
+    ].a.reshape(-1).tolist() == list(range(10))
+    assert trimmed_audio[nodes.AUDIO_WITH_OVERLAP_FRAMES_KEY] == 10
+    assert trimmed_audio[nodes.AUDIO_TRIM_FRAMES_KEY] == 4
     print("trim overlap: hard output unchanged; optional prefix retained and "
-          "clamped to repeated context")
+          "clamped to repeated context; full decoded audio rides privately "
+          "with the delivered AUDIO value")
 
     # a 124-frame clip: latent_t 37 (7 full 17-frame groups + 1 + 4),
     # audio grid ceil(124 * 5/3) = 207 steps, overhang exactly 1/3

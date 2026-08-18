@@ -37,7 +37,12 @@ import folder_paths
 import node_helpers
 import torch
 
-from .av_timing import conform_waveform_length
+from .av_timing import (
+    AUDIO_TRIM_FRAMES_KEY,
+    AUDIO_WITH_OVERLAP_FRAMES_KEY,
+    AUDIO_WITH_OVERLAP_WAVEFORM_KEY,
+    conform_waveform_length,
+)
 
 try:
     from safetensors.torch import load_file as _st_load, save_file as _st_save
@@ -752,7 +757,9 @@ class MiniMaxH3LoopTrim:
     OUTPUT_TOOLTIPS = (
         "Delivered frames with the repeated leading context removed.",
         "Audio trimmed by the same duration and, when match_tail is enabled, "
-        "fitted exactly to the delivered image duration.",
+        "fitted exactly to the delivered image duration. The same AUDIO value "
+        "privately carries the full decoded overlap to Segment Save so AV "
+        "audio feathers survive final assembly; no extra wire is needed.",
         "Optional blend-ready image stream. When overlap_frames is positive, "
         "this retains only the final requested part of the repeated visual "
         "context before the delivered frames. Audio remains fully trimmed.",
@@ -788,9 +795,15 @@ class MiniMaxH3LoopTrim:
                     "h3_motion_context: trimming %.3fs from %.3fs of audio would "
                     "leave nothing. Check that fps matches the clip."
                     % (seconds, length / sr))
-            waveform = waveform[..., cut:]
-
             if match_tail:
+                full_want = int(round(total / float(fps) * sr))
+                if length != full_want:
+                    waveform = conform_waveform_length(
+                        waveform, full_want,
+                        "h3_motion_context: decoded %d-frame full audio" %
+                        total)
+                full_waveform = waveform
+                waveform = full_waveform[..., cut:]
                 frames_left = total - n
                 want = int(round(frames_left / float(fps) * sr))
                 have = int(waveform.shape[-1])
@@ -799,8 +812,17 @@ class MiniMaxH3LoopTrim:
                         waveform, want,
                         "h3_motion_context: decoded %d-frame audio" %
                         frames_left)
+            else:
+                full_waveform = None
+                waveform = waveform[..., cut:]
 
             out_audio = {"waveform": waveform, "sample_rate": sr}
+            if full_waveform is not None:
+                out_audio.update({
+                    AUDIO_WITH_OVERLAP_WAVEFORM_KEY: full_waveform,
+                    AUDIO_WITH_OVERLAP_FRAMES_KEY: total,
+                    AUDIO_TRIM_FRAMES_KEY: n,
+                })
             _LOG.info("h3_motion_context: %d frames / %.4fs picture, %.4fs sound, "
                       "drift %.2fms",
                       total - n, (total - n) / float(fps),

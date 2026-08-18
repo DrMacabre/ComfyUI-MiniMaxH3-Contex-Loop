@@ -60,7 +60,10 @@ def main():
         chain._write_run_archives = lambda *_args, **_kwargs: {}
         chain._archive_media_metadata = lambda _archives: {}
 
+        saved_tensors = []
+
         def save_checkpoint(_tensors, path, metadata=None):
+            saved_tensors.append(dict(_tensors))
             pathlib.Path(path).write_bytes(
                 json.dumps(metadata or {}, sort_keys=True).encode("utf-8"))
 
@@ -79,6 +82,7 @@ def main():
             "compatibility": {
                 "audio_mode": "source_track",
                 "context_length": 2,
+                "continuation_mode": "masked_av",
                 "video_blend_frames": 2,
             },
             "shots": [{
@@ -98,6 +102,10 @@ def main():
             "waveform": torch.zeros(
                 (1, 2, round(5 / chain.FPS * 8000)), dtype=torch.float32),
             "sample_rate": 8000,
+            chain.AUDIO_WITH_OVERLAP_WAVEFORM_KEY: torch.zeros(
+                (1, 2, round(7 / chain.FPS * 8000)), dtype=torch.float32),
+            chain.AUDIO_WITH_OVERLAP_FRAMES_KEY: 7,
+            chain.AUDIO_TRIM_FRAMES_KEY: 2,
         }
         saver = chain.MiniMaxH3ChainSegmentSave()
         try:
@@ -110,6 +118,9 @@ def main():
             state, FakeImages(), object(), generated_audio,
             FakeBlendImages())
         first = first_result["result"][0]
+        assert "audio_with_overlap" in saved_tensors[-1]
+        assert saved_tensors[-1]["audio_with_overlap"].shape[-1] == round(
+            7 / chain.FPS * 8000)
         first_paths = {
             key: pathlib.Path(chain._absolute_output_path(first[key]))
             for key in ("segment", "checkpoint", "prompt_file",

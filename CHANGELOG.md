@@ -30,6 +30,11 @@ Newest first. This file keeps release history out of the onboarding README.
 - AV continuation now validates the shared 24 fps picture / 40 Hz audio clock
   before model loading. Only 39, 90, 141, 192, or 243 context frames are
   accepted, eliminating silently rounded prefixes such as 22 or 56 frames.
+- Preserved masked-AV decoded overlap audio through Loop Trim and Segment Save
+  without adding a public socket. Generated-audio assembly now gives the
+  incoming AV scene ownership of that overlap at both generated-scene and
+  external-prelude boundaries, so Soft AV's audio feather reaches the final
+  track; older checkpoints retain delivered-only fallback behavior.
 - Added opt-in Latent Guide continuation. Generated boundaries reuse the
   phase-aligned tail of the accepted predecessor's sampled video latent as
   persistent Guide conditioning without an RGB/VAE round trip; imported or

@@ -353,13 +353,18 @@ later delivered frames  = raw_frames - that scene's effective context_length
 The Trim node's optional `images_with_overlap` output can retain the requested
 number of repeated visual frames for an external stitcher. Its standard
 `images` output remains fully trimmed, and audio always removes the complete
-overlap. The built-in recursive assembly therefore keeps its existing hard-cut
-behavior unless a separate visual stitcher is connected explicitly.
+overlap from its public waveform. With `match_tail` enabled, that same AUDIO
+value privately carries the full decoded overlap directly to Segment Save.
+Generated-audio assembly lets a later masked-AV scene own that interval, so a
+Soft AV audio release is not discarded. No additional audio socket or wire is
+needed. Visual assembly remains independent and uses its configured overlap.
 
 Generated-audio assembly derives each scene's sample budget from cumulative
 delivered frame boundaries. This distributes fractional samples across the run
 instead of independently rounding every scene, preventing boundary rounding
-from accumulating into long-run A/V drift.
+from accumulating into long-run A/V drift. New masked-AV checkpoints also save
+the current scene's decoded overlap; old checkpoints without it retain the
+legacy delivered-only hard-cut fallback.
 
 For `context_length: 22`, a later scene with `length: 362` contributes 340 new
 frames, or 14.167 seconds, to the final video. The source-audio window still
@@ -828,7 +833,8 @@ Recommended for a music video driven by one song.
 - No source track is required.
 - Chain Context carries the preceding H3 audio latent on the timeline.
 - Wire trimmed decoded audio into Segment Save.
-- Assemble concatenates the checkpointed generated audio.
+- Assemble uses cumulative frame boundaries and lets every later masked-AV
+  scene own its saved decoded overlap, preserving hard or feathered AV sound.
 - The same generated track is also preserved as WAV sidecars for later editing.
 - MiniMax H3 Contex Loop Trim must keep `match_tail` enabled for exact sample counts.
 

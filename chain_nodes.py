@@ -87,6 +87,12 @@ from .prompt_history import PromptHistoryStore
 from .prompt_optimizer import optimize_prompt_payload
 from .run_manager import RunArchiveManager, archive_policy_inputs
 from .asset_store import MAX_ASSET_BINDINGS, RunAssetStore
+from .av_timing import (
+    AUDIO_TRIM_FRAMES_KEY,
+    AUDIO_WITH_OVERLAP_FRAMES_KEY,
+    AUDIO_WITH_OVERLAP_WAVEFORM_KEY,
+    sample_boundary_from_frames,
+)
 from .contracts_v05 import (
     AV_TRANSITION_CONTEXT_LENGTHS,
     AUDIO_POLICY_VERSION,
@@ -9708,6 +9714,8 @@ class MiniMaxH3ChainSegmentSave:
                 "audio": ("AUDIO", {
                     "tooltip": "Delivered decoded audio AFTER MiniMax H3 "
                                "Contex Loop Trim with match_tail enabled. "
+                               "Connect Trim's audio output directly so its "
+                               "private AV overlap can also be checkpointed. "
                                "Connect it in every audio mode to preserve "
                                "H3's generated sound as WAV sidecars. Required "
                                "for generated_audio and synchronized review."}),
@@ -9827,6 +9835,69 @@ class MiniMaxH3ChainSegmentSave:
                 audio, "H3 chain clip %d delivered audio" % index,
                 expected_frames=expected_frames)
             tensors["delivered_audio"] = _tensor_cpu_clone(waveform)
+            overlap_keys = (
+                AUDIO_WITH_OVERLAP_WAVEFORM_KEY,
+                AUDIO_WITH_OVERLAP_FRAMES_KEY,
+                AUDIO_TRIM_FRAMES_KEY,
+            )
+            overlap_present = [key in audio for key in overlap_keys]
+            if any(overlap_present) and not all(overlap_present):
+                raise ValueError(
+                    "H3 chain clip %d received incomplete private Loop Trim "
+                    "AV overlap audio metadata." % index)
+            overlap_waveform = None
+            if all(overlap_present):
+                overlap_waveform = audio[AUDIO_WITH_OVERLAP_WAVEFORM_KEY]
+                try:
+                    overlap_frames = int(audio[AUDIO_WITH_OVERLAP_FRAMES_KEY])
+                    overlap_trim = int(audio[AUDIO_TRIM_FRAMES_KEY])
+                except (TypeError, ValueError, OverflowError) as exc:
+                    raise ValueError(
+                        "H3 chain clip %d received invalid private Loop Trim "
+                        "AV overlap audio metadata." % index) from exc
+            if (overlap_waveform is not None and repeated_frames > 0
+                    and continuation_mode in MASKED_CONTINUATION_MODES):
+                if not torch.is_tensor(overlap_waveform) or (
+                        overlap_waveform.ndim not in (1, 2, 3)):
+                    raise ValueError(
+                        "H3 chain clip %d Loop Trim overlap audio has invalid "
+                        "shape %r." %
+                        (index, getattr(overlap_waveform, "shape", None)))
+                if overlap_frames != int(shot["raw_frames"]):
+                    raise ValueError(
+                        "H3 chain clip %d Loop Trim overlap audio describes "
+                        "%d frames; expected %d raw frames." %
+                        (index, overlap_frames, int(shot["raw_frames"])))
+                if overlap_trim != repeated_frames:
+                    raise ValueError(
+                        "H3 chain clip %d Loop Trim overlap audio removed %d "
+                        "frames; expected %d." %
+                        (index, overlap_trim, repeated_frames))
+                expected_overlap_samples = sample_boundary_from_frames(
+                    overlap_frames, sample_rate, FPS)
+                if int(overlap_waveform.shape[-1]) != expected_overlap_samples:
+                    raise ValueError(
+                        "H3 chain clip %d Loop Trim overlap audio has %d "
+                        "samples; expected %d for %d raw frames." %
+                        (index, int(overlap_waveform.shape[-1]),
+                         expected_overlap_samples, overlap_frames))
+                if tuple(overlap_waveform.shape[:-1]) != tuple(
+                        waveform.shape[:-1]):
+                    raise ValueError(
+                        "H3 chain clip %d delivered and overlap audio channel "
+                        "shapes differ: %s vs %s." %
+                        (index, tuple(waveform.shape[:-1]),
+                         tuple(overlap_waveform.shape[:-1])))
+                tensors["audio_with_overlap"] = _tensor_cpu_clone(
+                    overlap_waveform)
+            elif (repeated_frames > 0
+                  and continuation_mode in MASKED_CONTINUATION_MODES
+                  and _audio_policy_final(plan) == "generated"):
+                _LOG.warning(
+                    "H3 Chain clip %d uses %s with generated final audio, but "
+                    "Segment Save did not receive Loop Trim's private overlap "
+                    "audio. Final assembly will use the legacy hard-cut audio "
+                    "path for this boundary.", index, continuation_mode)
 
         paths = _artifact_paths(plan, index)
         os.makedirs(os.path.dirname(paths["segment"]), exist_ok=True)
@@ -9903,6 +9974,8 @@ class MiniMaxH3ChainSegmentSave:
                 "prompt_hash": str(shot["prompt_hash"]),
                 "seed": str(shot["seed"]),
                 "sample_rate": str(sample_rate),
+                "audio_with_overlap": str(
+                    "audio_with_overlap" in tensors).lower(),
             })
             os.replace(checkpoint_tmp, published_checkpoint)
 
@@ -10805,14 +10878,15 @@ class MiniMaxH3ChainManifestLoad:
 def _generated_audio(manifest: dict[str, Any]) -> dict[str, Any]:
     if _st_load is None or torch is None:
         raise RuntimeError("Generated-audio assembly requires safetensors and torch.")
-    waveforms = []
+    segments = list(manifest["segments"])
+    if not segments:
+        raise ValueError("Generated-audio assembly requires at least one scene.")
     sample_rate = None
-    # Cumulative boundary budgeting was inspired by seitanism's
-    # ComfyUI-H3-Motion-Context-MultiRef. Reconcile each saved scene against
-    # the full delivered timeline so independent rounding cannot accumulate.
-    cumulative_frames = 0
-    cumulative_samples = 0
-    for segment in manifest["segments"]:
+    records = []
+    compatibility = manifest.get("compatibility") or {}
+    default_mode = migrate_continuation_mode(
+        compatibility.get("continuation_mode", "guide"))
+    for segment in segments:
         checkpoint = _absolute_output_path(segment["checkpoint"])
         tensors = _st_load(checkpoint)
         if "delivered_audio" not in tensors:
@@ -10828,27 +10902,126 @@ def _generated_audio(manifest: dict[str, Any]) -> dict[str, Any]:
         elif current_rate != sample_rate:
             raise ValueError("Generated segment audio sample rates do not match.")
         waveform = tensors["delivered_audio"]
-        expected = int(round(
-            int(segment["delivered_frames"]) / float(FPS) * current_rate))
+        delivered_frames = int(segment["delivered_frames"])
+        expected = sample_boundary_from_frames(
+            delivered_frames, current_rate, FPS)
         if int(waveform.shape[-1]) != expected:
             raise ValueError(
                 "Checkpoint for clip %d has %d delivered audio samples; expected "
                 "%d for %d frames." %
                 (segment["index"], int(waveform.shape[-1]), expected,
-                 int(segment["delivered_frames"])))
-        cumulative_frames += int(segment["delivered_frames"])
-        next_boundary = int(round(
-            cumulative_frames / float(FPS) * current_rate))
-        budget = next_boundary - cumulative_samples
-        have = int(waveform.shape[-1])
+                 delivered_frames))
+        mode = migrate_continuation_mode(segment.get(
+            "continuation_mode", default_mode))
+        raw_frames = int(segment.get("raw_frames", delivered_frames))
+        repeated_frames = raw_frames - delivered_frames
+        if repeated_frames < 0:
+            raise ValueError(
+                "Clip %d has %d raw frames but %d delivered frames." %
+                (int(segment["index"]), raw_frames, delivered_frames))
+        overlap = tensors.get("audio_with_overlap")
+        if overlap is not None:
+            overlap_expected = sample_boundary_from_frames(
+                raw_frames, current_rate, FPS)
+            if int(overlap.shape[-1]) != overlap_expected:
+                raise ValueError(
+                    "Checkpoint for clip %d has %d overlap-audio samples; "
+                    "expected %d for %d raw frames." %
+                    (segment["index"], int(overlap.shape[-1]),
+                     overlap_expected, raw_frames))
+            if tuple(overlap.shape[:-1]) != tuple(waveform.shape[:-1]):
+                raise ValueError(
+                    "Checkpoint for clip %d has mismatched delivered/overlap "
+                    "audio channel shapes %s and %s." %
+                    (segment["index"], tuple(waveform.shape[:-1]),
+                     tuple(overlap.shape[:-1])))
+        records.append({
+            "segment": segment,
+            "delivered": waveform,
+            "overlap": overlap,
+            "delivered_frames": delivered_frames,
+            "raw_frames": raw_frames,
+            "repeated_frames": repeated_frames,
+            "mode": mode,
+        })
+
+    total_frames = sum(record["delivered_frames"] for record in records)
+    total_samples = sample_boundary_from_frames(
+        total_frames, int(sample_rate), FPS)
+    first = records[0]["delivered"]
+    assembled = torch.zeros(
+        (*tuple(first.shape[:-1]), total_samples),
+        dtype=first.dtype, device=first.device)
+
+    # Reconcile every write against absolute video-frame boundaries so
+    # independent PCM rounding never accumulates. For AV continuation, the
+    # later scene owns its complete decoded overlap: this preserves the actual
+    # hard/feathered audio prefix heard by the sampler instead of discarding it
+    # in Loop Trim and hard-cutting two independently decoded waveforms.
+    cumulative_frames = 0
+    for ordinal, record in enumerate(records):
+        segment = record["segment"]
+        source = record["delivered"]
+        start_frame = cumulative_frames
+        use_overlap = (
+            ordinal > 0
+            and record["mode"] in MASKED_CONTINUATION_MODES
+            and record["repeated_frames"] > 0
+            and record["overlap"] is not None)
+        if use_overlap:
+            source = record["overlap"]
+            start_frame -= record["repeated_frames"]
+            if start_frame < 0:
+                raise ValueError(
+                    "Clip %d AV overlap begins before the generated timeline."
+                    % int(segment["index"]))
+            _LOG.info(
+                "H3 generated audio: clip %d owns its %d-frame AV overlap at "
+                "the incoming boundary.", int(segment["index"]),
+                int(record["repeated_frames"]))
+        elif (ordinal > 0
+              and record["mode"] in MASKED_CONTINUATION_MODES
+              and record["repeated_frames"] > 0):
+            _LOG.warning(
+                "H3 generated audio: legacy clip %d has no saved overlap "
+                "audio; using delivered-only hard-cut assembly.",
+                int(segment["index"]))
+
+        end_frame = cumulative_frames + record["delivered_frames"]
+        start_sample = sample_boundary_from_frames(
+            start_frame, int(sample_rate), FPS)
+        end_sample = sample_boundary_from_frames(
+            end_frame, int(sample_rate), FPS)
+        budget = end_sample - start_sample
+        have = int(source.shape[-1])
         if have > budget:
-            waveform = waveform[..., :budget]
+            source = source[..., :budget]
         elif have < budget:
-            waveform = torch.nn.functional.pad(waveform, (0, budget - have))
-        waveforms.append(waveform)
-        cumulative_samples = next_boundary
-    return {"waveform": torch.cat(waveforms, dim=-1),
-            "sample_rate": int(sample_rate)}
+            source = torch.nn.functional.pad(source, (0, budget - have))
+        if tuple(source.shape[:-1]) != tuple(assembled.shape[:-1]):
+            raise ValueError(
+                "Generated clip %d audio channel shape %s does not match %s."
+                % (int(segment["index"]), tuple(source.shape[:-1]),
+                   tuple(assembled.shape[:-1])))
+        assembled[..., start_sample:end_sample] = source.to(
+            device=assembled.device, dtype=assembled.dtype)
+        cumulative_frames = end_frame
+
+    result = {"waveform": assembled, "sample_rate": int(sample_rate)}
+    first_record = records[0]
+    if (first_record["mode"] in MASKED_CONTINUATION_MODES
+            and first_record["repeated_frames"] > 0
+            and first_record["overlap"] is not None):
+        # Preserve scene 1's complete decoded AV window until an optional
+        # external prelude is joined.  _audio_with_prelude then gives this
+        # later generated scene ownership of the incoming audio overlap just
+        # as the loop assembly above does at generated scene boundaries.
+        result.update({
+            AUDIO_WITH_OVERLAP_WAVEFORM_KEY: first_record["overlap"],
+            AUDIO_WITH_OVERLAP_FRAMES_KEY: first_record["raw_frames"],
+            AUDIO_TRIM_FRAMES_KEY: first_record["repeated_frames"],
+        })
+    return result
 
 
 def _validate_prelude(manifest: dict[str, Any]) -> dict[str, Any] | None:
@@ -10935,11 +11108,83 @@ def _audio_with_prelude(
         prefix = _resample_audio_exact(
             saved, sample_rate, prelude_samples, channels,
             "H3 chain prelude audio")["waveform"]
-    return {
-        "waveform": torch.cat(
-            (prefix, normalized_extension["waveform"]), dim=-1),
-        "sample_rate": sample_rate,
-    }
+    assembled = torch.cat(
+        (prefix, normalized_extension["waveform"]), dim=-1)
+
+    # When scene 1 is an AV continuation of Existing Video Context, its
+    # decoded raw audio includes the repeated incoming prefix.  Give the
+    # generated scene ownership of that overlap so Soft AV's audio feather is
+    # not replaced by a hard splice at the prelude boundary.
+    overlap = audio.get(AUDIO_WITH_OVERLAP_WAVEFORM_KEY)
+    if overlap is not None:
+        try:
+            overlap_frames = int(audio[AUDIO_WITH_OVERLAP_FRAMES_KEY])
+            trim_frames = int(audio[AUDIO_TRIM_FRAMES_KEY])
+        except (KeyError, TypeError, ValueError, OverflowError) as exc:
+            raise ValueError(
+                "H3 extension assembly audio has invalid private AV overlap "
+                "metadata.") from exc
+        delivered_frames = overlap_frames - trim_frames
+        if overlap_frames < 1 or trim_frames < 1 or delivered_frames < 1:
+            raise ValueError(
+                "H3 extension assembly audio has invalid AV overlap frame "
+                "counts %d raw / %d trimmed." %
+                (overlap_frames, trim_frames))
+        if delivered_frames > int(extension_frames):
+            raise ValueError(
+                "H3 extension assembly first scene delivers %d frames, but "
+                "the complete extension contains only %d." %
+                (delivered_frames, int(extension_frames)))
+        if trim_frames > prelude_frames:
+            raise ValueError(
+                "H3 extension assembly needs %d incoming AV overlap frames, "
+                "but the prelude contains only %d." %
+                (trim_frames, prelude_frames))
+
+        overlap_waveform, overlap_rate = _audio_waveform_3d({
+            "waveform": overlap,
+            "sample_rate": sample_rate,
+        }, "H3 extension assembly AV overlap audio")
+        if (overlap_rate != sample_rate or
+                int(overlap_waveform.shape[1]) != channels):
+            raise ValueError(
+                "H3 extension assembly AV overlap audio format does not "
+                "match the generated extension audio.")
+        relative_samples = sample_boundary_from_frames(
+            overlap_frames, sample_rate, FPS)
+        if int(overlap_waveform.shape[-1]) != relative_samples:
+            raise ValueError(
+                "H3 extension assembly AV overlap audio has %d samples; "
+                "expected %d for %d raw frames." %
+                (int(overlap_waveform.shape[-1]), relative_samples,
+                 overlap_frames))
+
+        start_frame = prelude_frames - trim_frames
+        end_frame = prelude_frames + delivered_frames
+        start_sample = sample_boundary_from_frames(
+            start_frame, sample_rate, FPS)
+        end_sample = sample_boundary_from_frames(
+            end_frame, sample_rate, FPS)
+        absolute_samples = end_sample - start_sample
+        overlap_waveform = overlap_waveform.to(
+            dtype=assembled.dtype, device=assembled.device)
+        if int(overlap_waveform.shape[-1]) != absolute_samples:
+            # Absolute boundary rounding can differ by one sample from a
+            # zero-based raw-window budget. Interpolate that residual rather
+            # than introducing a silent sample at the join.
+            shape = tuple(overlap_waveform.shape)
+            overlap_waveform = torch.nn.functional.interpolate(
+                overlap_waveform.reshape(-1, 1, shape[-1]),
+                size=absolute_samples,
+                mode="linear",
+                align_corners=False,
+            ).reshape(*shape[:-1], absolute_samples)
+        assembled[..., start_sample:end_sample] = overlap_waveform
+        _LOG.info(
+            "H3 generated audio: scene 1 owns its %d-frame AV overlap at "
+            "the external-prelude boundary.", trim_frames)
+
+    return {"waveform": assembled, "sample_rate": sample_rate}
 
 
 def _validate_manifest(manifest: dict[str, Any]) -> list[dict[str, Any]]:
@@ -12221,8 +12466,10 @@ class MiniMaxH3ChainAssemble:
                                      "tooltip": "plan follows the Plan Audio "
                                                 "Policy's Final audio choice; "
                                                 "source muxes the external "
-                                                "track; generated joins saved "
-                                                "delivered scene audio; none "
+                                                "track; generated assembles "
+                                                "saved scene audio and lets "
+                                                "later AV scenes own their "
+                                                "decoded overlap; none "
                                                 "creates a silent MP4."}),
                 "filename": ("STRING", {
                     "default": "final",
