@@ -23,8 +23,11 @@ Saved 0.4 modes migrate without changing behavior:
 | `source_track` | source | on | off |
 | `source_plus_timeline` | source | on | on |
 
-These descriptions apply to both `guide` and `tapered_guide`; the latter
-changes only the disposable video context passed to the Guide VAE. In the
+These descriptions apply to `guide`, `latent_guide`, and `tapered_guide`.
+Latent Guide reuses the generated predecessor's sampled video-latent tail
+directly, while imported or incompatible context falls back to the normal
+RGB/VAE Guide route. Tapered Guide changes only the disposable video context
+passed to the Guide VAE. In the
 experimental `masked_av` and `feathered_av` modes, Chain Context places a
 matching video and audio prefix inside the target latent, including when final
 assembly uses `source_track`. `masked_av` protects the complete prefix;
@@ -40,7 +43,8 @@ first 8 video / 42 audio steps and ramps the final 4 video / 23 audio prefix
 steps.
 
 Transition Policy controls the incoming boundary: Cut carries no picture,
-Guide uses 22 clean guide frames, Detail Guide uses the same span with an
+Guide uses 22 clean RGB/VAE guide frames, Latent Guide uses the same span from
+the saved sampled video latent, Detail Guide uses the same span with an
 eight-frame chroma-noise exit taper, Hard AV uses a protected 39-frame prefix,
 and Soft AV uses the same prefix with a feathered denoise boundary. Advanced
 mode may pair `tapered_guide` with another Guide context length; 22 is the

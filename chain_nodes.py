@@ -125,9 +125,10 @@ H3_CONTEXT_LENGTHS = (
 )
 AUDIO_MODES = ("source_track", "generated_audio", "source_plus_timeline")
 CONTINUATION_MODES = (
-    "guide", "tapered_guide", "masked_av", "feathered_av",
+    "guide", "latent_guide", "tapered_guide", "masked_av", "feathered_av",
     "audio_feathered_av")
-GUIDE_CONTINUATION_MODES = frozenset(("guide", "tapered_guide"))
+GUIDE_CONTINUATION_MODES = frozenset((
+    "guide", "latent_guide", "tapered_guide"))
 MASKED_CONTINUATION_MODES = frozenset((
     "masked_av", "feathered_av", "audio_feathered_av"))
 REFERENCE_AUDIO_TIMELINE_MODES = ("standalone", "source_timeline")
@@ -271,7 +272,8 @@ def _resolved_transition_policy(value: Any) -> dict[str, Any]:
     context = int(compatibility.get("context_length", 0))
     preset = "legacy"
     for candidate in (
-            "cut", "guide", "detail_guide", "hard_av", "soft_av",
+            "cut", "guide", "latent_guide", "detail_guide", "hard_av",
+            "soft_av",
             "audio_feather_av"):
         resolved = _contract_transition_policy(candidate)
         if (resolved["continuation_mode"] == mode and
@@ -300,6 +302,7 @@ def _transition_policy_display(value: Any) -> str:
     preset_labels = {
         "cut": "Cut",
         "guide": "Guide",
+        "latent_guide": "Latent Guide",
         "detail_guide": "Detail Guide",
         "hard_av": "Hard AV",
         "soft_av": "Soft AV",
@@ -308,6 +311,7 @@ def _transition_policy_display(value: Any) -> str:
     }
     implementation_labels = {
         "guide": "Guide",
+        "latent_guide": "Latent Guide",
         "tapered_guide": "Tapered Guide",
         "masked_av": "Masked AV",
         "feathered_av": "Feathered AV",
@@ -3986,6 +3990,16 @@ def _normalize_plan(
                     "H3 AV mask continuation requires anchor_mode=head "
                     "because it preserves a real target-latent prefix that "
                     "Loop Trim must remove (shot %d)." % index)
+        if (shot_context_length and
+                shot_continuation_mode == "latent_guide"):
+            if shot_context_length < 5:
+                raise ValueError(
+                    "H3 Latent Guide requires context_length of at least 5 "
+                    "frames (shot %d)." % index)
+            if encode_mode != "video":
+                raise ValueError(
+                    "H3 Latent Guide requires encode_mode=video (shot %d)." %
+                    index)
         resolved_continuation_modes.append(shot_continuation_mode)
 
         shot_id = _safe_name(item.get("id", "clip_%04d" % index),
@@ -7359,12 +7373,16 @@ class MiniMaxH3TransitionPolicy:
         return {
             "required": {
                 "preset": ((
-                        "cut", "guide", "detail_guide", "hard_av", "soft_av",
+                        "cut", "guide", "latent_guide", "detail_guide",
+                        "hard_av", "soft_av",
                         "audio_feather_av"
                 ), {
                     "default": "guide",
                     "tooltip": "Incoming-transition presets: Cut = "
                                "Guide + 0 frames; Guide = Guide + 22 frames; "
+                               "Latent Guide = direct sampled-latent Guide + "
+                               "22 frames, with RGB fallback for imported "
+                               "context; "
                                "Detail Guide = tapered chroma-noise Guide + "
                                "22 frames (experimental outside its published "
                                "baseline); "
@@ -7476,7 +7494,8 @@ class MiniMaxH3Legacy04PolicyAdapter:
         context = int(context_length)
         matched_preset = None
         for candidate in (
-                "cut", "guide", "detail_guide", "hard_av", "soft_av",
+                "cut", "guide", "latent_guide", "detail_guide", "hard_av",
+                "soft_av",
                 "audio_feather_av"):
             resolved = _contract_transition_policy(candidate)
             if (resolved["continuation_mode"] == mode and
@@ -9367,8 +9386,9 @@ class MiniMaxH3ChainContext:
     )
     FUNCTION = "apply"
     CATEGORY = "conditioning/minimax/contex_loop"
-    DESCRIPTION = ("Apply each scene's inherited or overridden guide, hard "
-                   "masked AV, full AV feather, or audio-only AV feather, "
+    DESCRIPTION = ("Apply each scene's inherited or overridden RGB guide, "
+                   "latent guide, masked AV, full AV feather, or audio-only "
+                   "AV feather, "
                    "including "
                    "independent guide audio carry and scene 1 Existing Video "
                    "Context.")
@@ -9439,6 +9459,10 @@ class MiniMaxH3ChainContext:
             return (out_conditioning, trim, True, out_latent)
         previous_latent = (state.get("previous_latent")
                            if generated_audio_context else None)
+        video_context_latent = (
+            state.get("previous_latent")
+            if continuation_mode == "latent_guide" and not external_first
+            else None)
         previous_audio = (state.get("previous_audio")
                           if generated_audio_context and external_first else None)
         if (generated_audio_context and previous_latent is None
@@ -9470,6 +9494,7 @@ class MiniMaxH3ChainContext:
             context_latent=previous_latent,
             audio_vae=audio_vae,
             context_audio=previous_audio,
+            video_context_latent=video_context_latent,
         )
         return (out, trim, True, latent)
 

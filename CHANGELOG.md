@@ -21,8 +21,12 @@ Newest first. This file keeps release history out of the onboarding README.
   AUDIO fan-out.
 - Split audio intent into final soundtrack, source-reference, and generated-
   continuity axes while preserving the exact behavior of saved 0.4 modes.
-- Added Cut, Guide, Detail Guide, Hard AV, and Soft AV incoming-transition
-  policies with advanced access to the existing low-level controls.
+- Added Cut, Guide, Latent Guide, Detail Guide, Hard AV, and Soft AV incoming-
+  transition policies with advanced access to the existing low-level controls.
+- Added opt-in Latent Guide continuation. Generated boundaries reuse the
+  phase-aligned tail of the accepted predecessor's sampled video latent as
+  persistent Guide conditioning without an RGB/VAE round trip; imported or
+  incompatible context retains the original Guide fallback.
 - Added opt-in Detail Guide continuation, adapting MacroSony's deterministic
   tapered chroma-noise context recipe. The 22-frame preset uses 19 frames at
   0.45 and a three-frame taper to 0.10; expert mode supports other Guide

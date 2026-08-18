@@ -31,7 +31,8 @@ assert.equal(AUTO_SCENE_COLORS.length, 12);
 assert.deepEqual(
     CONTINUATION_MODES,
     [
-        "guide", "tapered_guide", "masked_av", "feathered_av",
+        "guide", "latent_guide", "tapered_guide", "masked_av",
+        "feathered_av",
         "audio_feathered_av",
     ],
 );
@@ -268,6 +269,29 @@ assert.equal(
 assert.equal(featheredContinuationTiming.shots[1].audioContextLength, 39);
 assert.deepEqual(featheredContinuationTiming.errors, []);
 
+const latentGuideTiming = calculatePlanTiming({shots: [
+    {id: "one", prompt: "Opening."},
+    {id: "two", prompt: "Continue.", continuation_mode: "latent_guide"},
+]}, {
+    contextLength: 22,
+    encodeMode: "video",
+    anchorMode: "head",
+    continuationMode: "guide",
+    defaultDurationSeconds: 5,
+});
+assert.equal(latentGuideTiming.shots[1].continuationMode, "latent_guide");
+assert.deepEqual(latentGuideTiming.errors, []);
+assert.match(calculatePlanTiming({shots: [
+    {id: "one", prompt: "Opening."},
+    {id: "two", prompt: "Continue.", continuation_mode: "latent_guide"},
+]}, {
+    contextLength: 1,
+    encodeMode: "video",
+    anchorMode: "head",
+    continuationMode: "guide",
+    defaultDurationSeconds: 5,
+}).errors.join("\n"), /Latent Guide requires/);
+
 const mixedContextTiming = calculatePlanTiming({shots: [
     {id: "one", prompt: "One.", length: 192},
     {id: "clean", prompt: "Clean.", length: 192, context_length: 0,
@@ -382,6 +406,7 @@ assert.match(editorSource, /New random/);
 assert.match(editorSource, /Use derived/);
 assert.match(editorSource, /Continuation into scene/);
 assert.match(editorSource, /Guide · new shot/);
+assert.match(editorSource, /Latent Guide · direct generated latent/);
 assert.match(editorSource, /Detail Guide · color injection/);
 assert.match(editorSource, /Masked AV · same shot/);
 assert.match(editorSource, /Feathered AV · softer handoff/);

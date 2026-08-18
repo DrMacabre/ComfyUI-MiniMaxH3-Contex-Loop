@@ -120,6 +120,7 @@ def main():
     expected_presets = {
         "cut": ("guide", 0),
         "guide": ("guide", 22),
+        "latent_guide": ("latent_guide", 22),
         "detail_guide": ("tapered_guide", 22),
         "hard_av": ("masked_av", 39),
         "soft_av": ("feathered_av", 39),
@@ -164,6 +165,14 @@ def main():
         assert "at least 5" in str(exc)
     else:
         raise AssertionError("one-frame audio-feather AV transition was accepted")
+    try:
+        contracts.transition_policy(
+            "guide", expert_override=True,
+            continuation_mode="latent_guide", context_length=1)
+    except ValueError as exc:
+        assert "at least 5" in str(exc)
+    else:
+        raise AssertionError("one-frame Latent Guide transition was accepted")
     shape = contracts.source_timeline_shape()
     assert shape["version"] == contracts.SOURCE_TIMELINE_VERSION
     assert set(shape) == {

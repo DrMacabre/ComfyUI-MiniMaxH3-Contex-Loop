@@ -22,14 +22,14 @@ import {
     setShotLengthMode,
     sharedPrompt,
     shotLengthMode,
-} from "./h3_chain_plan_core.mjs?v=0.5.0-blend1";
+} from "./h3_chain_plan_core.mjs?v=0.5.0-latentguide1";
 import {
     promptRevisionHelp,
     promptRevisionLabel,
     promptRevisionNavigation,
 } from "./h3_prompt_history_core.mjs?v=0.5.0";
 import {availableReferenceRecords} from "./h3_reference_preview_core.mjs?v=0.5.0";
-import {resolveTransitionPolicy} from "./h3_socket_presentation_core.mjs?v=0.5.0";
+import {resolveTransitionPolicy} from "./h3_socket_presentation_core.mjs?v=0.5.0-latentguide1";
 import {
     locateStudioTimelineSecond,
     h3StudioGridMarkers,
@@ -982,6 +982,7 @@ function mount(node) {
         for (const [value, label] of [
             ["", `Plan default · ${settings().continuationMode}`],
             ["guide", "Guide · new shot"],
+            ["latent_guide", "Latent Guide · direct generated latent"],
             ["tapered_guide", "Detail Guide · color injection"],
             ["masked_av", "Masked AV · same shot"],
             ["feathered_av", "Feathered AV · softer handoff"],
@@ -994,8 +995,8 @@ function mount(node) {
         continuation.value = Object.hasOwn(shot, "continuation_mode")
             ? sceneContinuationMode(shot, settings().continuationMode) : "";
         continuation.title = state.active === 0
-            ? "Continuation into this scene. Scene 1 uses it only with Existing Video Context. Detail Guide adds luma-preserving tapered chroma injection."
-            : "Guide provides persistent conditioning; Detail Guide applies luma-preserving tapered chroma injection; Masked AV preserves an exact prefix; Feathered AV softens both streams; Audio Feather AV keeps the picture exact and softens only the final audio ticks.";
+            ? "Continuation into this scene. Scene 1 uses it only with Existing Video Context. Guide re-encodes RGB; Latent Guide reuses generated latent context and falls back to RGB for imported context; Detail Guide adds luma-preserving tapered chroma injection."
+            : "Guide re-encodes RGB into persistent conditioning; Latent Guide directly conditions on the saved sampled-latent tail; Detail Guide applies luma-preserving tapered chroma injection; Masked AV preserves an exact prefix; Feathered AV softens both streams; Audio Feather AV keeps the picture exact and softens only the final audio ticks.";
         continuation.addEventListener("change", () => {
             if (continuation.value) shot.continuation_mode = continuation.value;
             else delete shot.continuation_mode;

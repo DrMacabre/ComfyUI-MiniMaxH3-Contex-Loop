@@ -169,6 +169,16 @@ assert.deepEqual(resolveTransitionPolicy(plan), {
     source: "typed",
 });
 
+transition.widgets.find((item) => item.name === "preset").value = "latent_guide";
+assert.deepEqual(resolveTransitionPolicy(plan), {
+    known: true,
+    preset: "latent_guide",
+    continuationMode: "latent_guide",
+    contextLength: 22,
+    expertOverride: false,
+    source: "typed",
+});
+
 const legacyAdapter = node(8, "MiniMaxH3Legacy04PolicyAdapter", [], [
     ["audio_policy", null], ["transition_policy", null], ["status", null],
 ], [

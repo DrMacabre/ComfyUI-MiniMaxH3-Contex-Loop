@@ -276,6 +276,41 @@ def _audio_tail_from_latent(latent, a_frames):
     return tail, rt, float(overhang)
 
 
+def _video_guide_tail_from_latent(latent, frames, target_video):
+    """Slice a phase-aligned generated-video tail for Guide conditioning.
+
+    Full H3 clips and native context runs of 5/22/39/... frames both contain
+    2 mod 5 temporal steps.  Their difference therefore begins on phase zero
+    of H3's 1/4/4/4/4 frame-per-token cycle, so the tail can be repositioned
+    at the start of a new Guide timeline without a VAE round trip.
+    """
+    source = _video_from_latent(latent)
+    frames = int(frames)
+    steps = next((value for value in range(1, int(source.shape[2]) + 1)
+                  if _pixel_frames(value) == frames), None)
+    if steps is None:
+        raise ValueError(
+            "h3_motion_context: %d Guide frames do not map to an exact H3 "
+            "video-latent run." % frames)
+    if (int(source.shape[2]) - steps) % 5:
+        raise ValueError(
+            "h3_motion_context: the saved video latent's temporal phase does "
+            "not align with a %d-frame Guide tail." % frames)
+    source_geometry = (
+        int(source.shape[1]), int(source.shape[3]), int(source.shape[4]))
+    target_geometry = (
+        int(target_video.shape[1]), int(target_video.shape[3]),
+        int(target_video.shape[4]))
+    if source_geometry != target_geometry:
+        raise ValueError(
+            "h3_motion_context: saved/target video latent geometry differs: "
+            "%s vs %s." % (tuple(source.shape), tuple(target_video.shape)))
+    tail = source[:1, :, -steps:].clone()
+    if hasattr(tail, "to") and hasattr(target_video, "device"):
+        tail = tail.to(target_video.device, target_video.dtype)
+    return tail
+
+
 class MiniMaxH3MotionContext:
     @classmethod
     def INPUT_TYPES(cls):
@@ -361,6 +396,13 @@ class MiniMaxH3MotionContext:
                     "tooltip": "Audio of the previous clip. The tail matching the "
                                "pinned frames is encoded and pinned alongside "
                                "them. Ignored when context_latent is wired."}),
+                "video_context_latent": ("LATENT", {
+                    "tooltip": "Previous clip's sampler-output H3 latent. "
+                               "When supplied in video encode mode, its "
+                               "phase-aligned video tail becomes the Guide "
+                               "block directly, avoiding RGB decode and VAE "
+                               "re-encode. Incompatible or imported context "
+                               "falls back to context_frames."}),
             },
         }
 
@@ -382,7 +424,7 @@ class MiniMaxH3MotionContext:
     def apply(self, conditioning, vae, latent, context_frames, context_length,
               encode_mode, anchor_mode, crop, audio_context_length=22,
               audio_mode="timeline", context_latent=None, audio_vae=None,
-              context_audio=None):
+              context_audio=None, video_context_latent=None):
         guide_api = _activate_inline_patches()
         native_guides = guide_api == "native"
 
@@ -425,13 +467,27 @@ class MiniMaxH3MotionContext:
         blocks = []
         offsets = []
         span = 0
-        if n > 0:
+        direct_video = None
+        if (n > 0 and encode_mode == "video"
+                and video_context_latent is not None):
+            try:
+                direct_video = _video_guide_tail_from_latent(
+                    video_context_latent, n, video)
+            except ValueError as exc:
+                _LOG.warning(
+                    "h3_motion_context: latent Guide could not reuse the "
+                    "saved video tail (%s); falling back to decoded RGB + "
+                    "video VAE.", exc)
+
+        if n > 0 and direct_video is None:
             # the LAST n frames of the incoming clip become the pinned run
             tail = _resize(context_frames[available - n:], width, height, crop)
 
         if n > 0 and encode_mode == "video":
-            # one call; the VAE reads the batch axis as time and compresses
-            enc = vae.encode(tail)
+            # Direct generated-latent Guide avoids a lossy VAE round trip.
+            # Imported/incompatible context retains the original RGB path.
+            enc = (direct_video if direct_video is not None
+                   else vae.encode(tail))
             if getattr(enc, "ndim", 0) != 5:
                 raise ValueError(
                     "h3_motion_context: video-mode encode returned shape %s, "
@@ -459,6 +515,11 @@ class MiniMaxH3MotionContext:
             else:
                 blocks = [enc[:, :, k:k + 1] for k in range(steps)]
             span = covered
+            if direct_video is not None:
+                _LOG.info(
+                    "h3_motion_context: latent Guide reused %d frames / %d "
+                    "video steps directly from the previous sampled latent",
+                    n, steps)
         elif n > 0:
             for i in range(n):
                 blocks.append(vae.encode(tail[i:i + 1]))

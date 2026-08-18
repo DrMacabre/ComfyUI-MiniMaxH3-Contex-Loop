@@ -21,7 +21,7 @@ SOURCE_REFERENCE_POLICIES = ("off", "on")
 GENERATED_CONTINUITY_POLICIES = ("off", "on")
 PAIRED_AUDIO_POLICIES = ("off", "embedded")
 CONTINUATION_POLICIES = (
-    "guide", "tapered_guide", "masked_av", "feathered_av",
+    "guide", "latent_guide", "tapered_guide", "masked_av", "feathered_av",
     "audio_feathered_av")
 TRANSITION_CONTEXT_LENGTHS = (
     0, 1, 5, 22, 39, 56, 73, 90, 107, 124,
@@ -56,6 +56,11 @@ TRANSITION_PRESETS = {
         "continuation_mode": "guide",
         "context_length": 22,
         "label": "Guided transition",
+    },
+    "latent_guide": {
+        "continuation_mode": "latent_guide",
+        "context_length": 22,
+        "label": "Latent-guided transition",
     },
     "detail_guide": {
         "continuation_mode": "tapered_guide",
@@ -175,6 +180,9 @@ def transition_policy(
             raise ValueError(
                 "H3 transition context must be 0 or one of %s." %
                 (TRANSITION_CONTEXT_LENGTHS,))
+        if mode == "latent_guide" and 0 < context < 5:
+            raise ValueError(
+                "H3 Latent Guide requires at least 5 context frames.")
         if mode in (
                 "masked_av", "feathered_av", "audio_feathered_av"
         ) and context < 5:

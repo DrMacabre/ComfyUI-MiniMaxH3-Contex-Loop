@@ -72,14 +72,17 @@ the completed predecessor.
 |---|---|---:|
 | `cut` | guide with no carried picture | 0 frames |
 | `guide` | guide rows | 22 frames |
+| `latent_guide` | direct sampled-latent guide rows; RGB fallback | 22 frames |
 | `detail_guide` | tapered chroma-noise guide rows | 22 frames |
 | `hard_av` | protected AV prefix | 39 frames |
 | `soft_av` | temporally feathered AV prefix | 39 frames |
 
 Advanced mode may override the implementation and context count explicitly.
-`tapered_guide` accepts the listed Guide context lengths; only the 22-frame
-preset has published validation, so other lengths remain experimental. The
-resolved values, not merely the preset name, enter scene metadata.
+`latent_guide` requires video encode mode and at least five positive context
+frames. `tapered_guide` accepts the listed Guide context lengths; only the
+22-frame preset has published validation, so other lengths remain
+experimental. The resolved values, not merely the preset name, enter scene
+metadata.
 
 ## Scene dependency contract
 

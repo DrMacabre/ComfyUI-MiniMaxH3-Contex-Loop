@@ -60,6 +60,7 @@ node = chain.MiniMaxH3TransitionPolicy()
 expected = {
     "cut": ("guide", 0),
     "guide": ("guide", 22),
+    "latent_guide": ("latent_guide", 22),
     "detail_guide": ("tapered_guide", 22),
     "hard_av": ("masked_av", 39),
     "soft_av": ("feathered_av", 39),
@@ -207,6 +208,46 @@ assert captured["context_length"] == 39
 assert tuple(captured["context_frames"].shape) == (39, 19, 31, 3)
 assert not torch.equal(captured["context_frames"], source[-39:])
 assert captured["context_latent"] is original_latent
+assert captured["video_context_latent"] is None
+
+latent_policy = node.build("latent_guide")[0]
+captured.clear()
+chain.MiniMaxH3MotionContext = CapturingMotionContext
+try:
+    latent_plan = make_plan(latent_policy)
+    latent_result = chain.MiniMaxH3ChainContext().apply(
+        state={
+            "index": 2,
+            "plan": latent_plan,
+            "previous_frames": source,
+            "previous_latent": original_latent,
+            "segments": [],
+        },
+        conditioning="stock-conditioning",
+        vae=object(),
+        latent="target-latent",
+    )
+finally:
+    chain.MiniMaxH3MotionContext = original_motion_context
+
+assert latent_result == (
+    "tapered-conditioning", 22, True, "target-latent")
+assert captured["video_context_latent"] is original_latent
+assert captured["context_latent"] is original_latent
+
+for invalid_context, invalid_encode, expected_message in (
+        (1, "video", "at least 5"),
+        (22, "frames", "encode_mode=video")):
+    try:
+        make_plan(
+            None, context_length=invalid_context,
+            encode_mode=invalid_encode, continuation_mode="latent_guide")
+    except ValueError as exc:
+        assert expected_message in str(exc)
+    else:
+        raise AssertionError(
+            "Latent Guide accepted invalid %s-frame/%s configuration" %
+            (invalid_context, invalid_encode))
 
 try:
     make_plan(hard_policy, anchor_mode="before")
@@ -247,7 +288,7 @@ assert len(legacy_adapter.OUTPUT_TOOLTIPS) == len(legacy_adapter.RETURN_TYPES)
 assert all(legacy_adapter.OUTPUT_TOOLTIPS)
 
 print(
-    "transition policy: Cut/Guide/Detail Guide/Hard AV/Soft AV/Audio Feather "
-    "AV presets, expert "
+    "transition policy: Cut/Guide/Latent Guide/Detail Guide/Hard AV/Soft "
+    "AV/Audio Feather AV presets, expert "
     "overrides, zero-context delivery, AV safety validation, legacy fallback "
     "and adapter, Plan resolution, and typed node registration pass")

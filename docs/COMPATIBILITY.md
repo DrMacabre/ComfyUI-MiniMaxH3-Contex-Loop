@@ -8,10 +8,12 @@ self-check the live model/layout assumptions before use.
 
 The two continuation engines and public masking path are capability-gated:
 
-- `guide` and `tapered_guide` prefer native Add Guide / MultiRef behavior from
-  ComfyUI PR #15439 and use the existing guarded guide fallback only on older
-  builds. Tapered Guide alters only its disposable RGB context before VAE
-  encoding;
+- `guide`, `latent_guide`, and `tapered_guide` prefer native Add Guide /
+  MultiRef behavior from ComfyUI PR #15439 and use the existing guarded guide
+  fallback only on older builds. Latent Guide directly slices a compatible
+  generated predecessor's saved video latent and otherwise falls back to the
+  RGB/VAE route. Tapered Guide alters only its disposable RGB context before
+  VAE encoding;
 - `masked_av` and `feathered_av` prefer native per-token H3 AV masks from PR
   #15375 and lazily install only missing mask-engine, payload, token-aligned
   inpaint-scale, and legacy sampler-bridge behavior when the masked path
