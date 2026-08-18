@@ -75,6 +75,9 @@ assert.equal(fractionalGrid.av.label, "22f AV = 36.667 audio ticks");
 const audioFeatherGrid = h3StudioGridMarkers(345, 39, "audio_feathered_av");
 assert.equal(audioFeatherGrid.av.exact, true);
 assert.equal(audioFeatherGrid.av.audioTicks, 65);
+const detailAvGrid = h3StudioGridMarkers(345, 39, "tapered_av");
+assert.equal(detailAvGrid.av.exact, true);
+assert.equal(detailAvGrid.av.audioTicks, 65);
 assert.equal(h3StudioGridMarkers(344, 39, "guide").raw.onGrid, false);
 assert.equal(h3StudioGridMarkers(344, 39, "guide").av, null);
 

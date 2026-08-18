@@ -74,6 +74,7 @@ the completed predecessor.
 | `guide` | guide rows | 22 frames |
 | `latent_guide` | direct sampled-latent guide rows; RGB fallback | 22 frames |
 | `detail_guide` | tapered chroma-noise guide rows | 22 frames |
+| `detail_av` | protected disposable video-latent noise taper; audio unchanged | 39 frames |
 | `hard_av` | protected AV prefix | 39 frames |
 | `soft_av` | exact picture prefix with feathered audio release | 39 frames |
 
@@ -83,6 +84,14 @@ frames. `tapered_guide` accepts the listed Guide context lengths; only the
 22-frame preset has published validation, so other lengths remain
 experimental. The resolved values, not merely the preset name, enter scene
 metadata.
+
+Detail AV is deliberately narrower than the generic AV implementations. Its
+v1 recipe requires exactly 39 frames / 12 video-latent steps, applies
+matched-standard-deviation Gaussian noise only to a disposable copy of the
+carried video prefix, and tapers 0.45 -> 0.275 -> 0.10 over the final two
+steps. Audio and masks retain Hard AV semantics. The recipe version,
+parameters, and deterministic seed rule are part of `incoming_boundary`, so a
+resume cannot silently cross an implementation change.
 
 ## Scene dependency contract
 

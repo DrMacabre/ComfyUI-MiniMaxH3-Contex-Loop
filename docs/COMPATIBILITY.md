@@ -14,7 +14,7 @@ The two continuation engines and public masking path are capability-gated:
   generated predecessor's saved video latent and otherwise falls back to the
   RGB/VAE route. Tapered Guide alters only its disposable RGB context before
   VAE encoding;
-- `masked_av` and `feathered_av` prefer native per-token H3 AV masks from PR
+- `masked_av`, `tapered_av`, and `feathered_av` prefer native per-token H3 AV masks from PR
   #15375 and lazily install only missing mask-engine, payload, token-aligned
   inpaint-scale, and legacy sampler-bridge behavior when the masked path
   executes. It follows

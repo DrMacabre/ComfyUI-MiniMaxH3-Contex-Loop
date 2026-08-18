@@ -8,11 +8,14 @@ an ordinary reference. A nested denoise mask controls every target stream:
 1 = regenerate this row
 ```
 
-This is the general form of the chain's `masked_av` and `feathered_av`
+This is the general form of the chain's `masked_av`, `tapered_av`, and `feathered_av`
 continuation. The chain builds a temporal prefix mask automatically; the
 public masking nodes accept arbitrary static or tracked spatial masks.
 
 `masked_av` assigns `0` to the complete repeated picture prefix.
+Experimental `tapered_av` uses the same hard mask after replacing only the
+carried video prefix with a deterministic, disposable matched-variance noise
+taper; audio and the accepted predecessor remain unchanged.
 `feathered_av` keeps most of that picture prefix exact, then raises the mask
 gradually toward `1` over its final latent steps. When Audio Policy enables
 Generated continuity, the matching audio prefix participates too: with the

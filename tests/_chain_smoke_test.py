@@ -482,6 +482,15 @@ def main():
         assert all(str(value).strip() for value in output_tooltips), (
             "%s has an empty output tooltip" % node_name)
     print("tooltips: every public input and output is documented")
+    review_inputs = chain.MiniMaxH3ChainReview.INPUT_TYPES()
+    partial_audio_tooltip = review_inputs["required"][
+        "partial_audio_source"][1]["tooltip"]
+    legacy_source_tooltip = review_inputs["optional"][
+        "source_audio"][1]["tooltip"]
+    assert "Source Timeline audio carried in state" in partial_audio_tooltip
+    assert "none creates a silent partial" in partial_audio_tooltip
+    assert "Legacy fallback full source track" in legacy_source_tooltip
+    assert "does not affect generation" in legacy_source_tooltip
 
     readable_prompts = chain._normalize_plan(
         json.dumps({

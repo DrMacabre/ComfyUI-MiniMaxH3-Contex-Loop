@@ -62,7 +62,7 @@ H3_CONTEXT_LENGTHS = (
 )
 CONTINUATION_MODES = (
     "guide", "tone_carry_guide", "latent_guide", "tapered_guide",
-    "masked_av", "feathered_av", "audio_feathered_av")
+    "masked_av", "tapered_av", "feathered_av", "audio_feathered_av")
 
 
 def _safe_name(value: Any, fallback: str = "") -> str:

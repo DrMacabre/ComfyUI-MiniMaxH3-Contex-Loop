@@ -14,9 +14,11 @@ enabled lazily so ordinary guide-mode chains do not patch H3 mask handling.
 from __future__ import annotations
 
 import logging
+import math
 
 import torch
 
+from .contracts_v05 import DETAIL_AV_RECIPE
 from .nodes import (
     AV_RUN_GRID,
     AUDIO_HZ,
@@ -29,6 +31,68 @@ from .nodes import (
 
 
 _LOG = logging.getLogger("minimax_h3_context_loop.masked_prefix")
+
+
+def _detail_av_alpha(position, step_count):
+    """Return the latent-noise amount for one carried video step."""
+    position = int(position)
+    step_count = int(step_count)
+    if step_count < 1 or position < 0 or position >= step_count:
+        raise ValueError("h3_detail_av: position is outside its context span.")
+    ramp = min(int(DETAIL_AV_RECIPE["ramp_steps"]), step_count)
+    from_end = step_count - 1 - position
+    alpha = float(DETAIL_AV_RECIPE["alpha"])
+    if from_end >= ramp:
+        return alpha
+    alpha_end = float(DETAIL_AV_RECIPE["alpha_end"])
+    if from_end == 0:
+        return alpha_end
+    return alpha + (alpha_end - alpha) * (ramp - from_end) / ramp
+
+
+def _detail_av_video_prefix(video_prefix, seed):
+    """Build a deterministic, disposable noisy copy of an AV video prefix.
+
+    Only the video tensor is accepted here. The caller retains the clean
+    predecessor latent and the audio prefix independently, preventing this
+    one-shot context treatment from contaminating recursive state.
+    """
+    if not torch.is_tensor(video_prefix) or video_prefix.ndim != 5:
+        raise ValueError(
+            "h3_detail_av: video prefix must be [B,C,T,H,W], got %s." %
+            (tuple(getattr(video_prefix, "shape", ())),)
+        )
+    if not video_prefix.is_floating_point():
+        raise ValueError("h3_detail_av: video prefix must be floating point.")
+    steps = int(video_prefix.shape[2])
+    expected_steps = int(DETAIL_AV_RECIPE["video_steps"])
+    if steps != expected_steps:
+        raise ValueError(
+            "h3_detail_av: the v1 recipe requires %d video steps, got %d." %
+            (expected_steps, steps)
+        )
+
+    out = video_prefix.detach().contiguous().clone()
+    scale = float(out.detach().float().std().item())
+    if not scale or not math.isfinite(scale):
+        _LOG.warning(
+            "h3_detail_av: degenerate carried-latent standard deviation; "
+            "using unit Gaussian scale")
+        scale = 1.0
+    generator = torch.Generator(device="cpu")
+    generator.manual_seed(int(seed) & 0xFFFFFFFFFFFFFFFF)
+    alphas = []
+    for position in range(steps):
+        amount = _detail_av_alpha(position, steps)
+        alphas.append(amount)
+        block = out[:, :, position]
+        noise = torch.randn(
+            tuple(block.shape), generator=generator, dtype=torch.float32,
+            device="cpu")
+        noise = noise.mul_(scale).to(
+            device=block.device, dtype=block.dtype)
+        out[:, :, position] = block * (1.0 - amount) + noise * amount
+    return out, scale, tuple(alphas)
 
 
 def _require_h3_mask_support():
@@ -376,6 +440,8 @@ def apply_masked_prefix(
     temporal_feather=False,
     audio_only_feather=False,
     preserve_audio_prefix=True,
+    detail_video_taper=False,
+    detail_video_seed=0,
 ):
     """Return conditioning, masked target latent, and repeated trim length."""
     _require_h3_mask_support()
@@ -414,6 +480,19 @@ def apply_masked_prefix(
         raise ValueError(
             "h3_masked_prefix: video prefix consumes the whole target latent."
         )
+
+    detail_scale = None
+    detail_alphas = ()
+    if bool(detail_video_taper):
+        if int(frames) != int(DETAIL_AV_RECIPE["context_frames"]):
+            raise ValueError(
+                "h3_detail_av: the experimental v1 recipe requires exactly "
+                "%d context frames, got %d." %
+                (int(DETAIL_AV_RECIPE["context_frames"]), int(frames))
+            )
+        video_prefix, detail_scale, detail_alphas = _detail_av_video_prefix(
+            video_prefix, detail_video_seed)
+        video_source += " + disposable Detail AV latent taper"
 
     if not bool(preserve_audio_prefix):
         audio_prefix = None
@@ -498,6 +577,13 @@ def apply_masked_prefix(
             video_feather_steps, audio_feather_steps)
     else:
         mask_summary = "hard prefix mask"
+    if detail_scale is not None:
+        mask_summary += (
+            "; Detail AV video-only Gaussian taper %.3f -> %.3f over "
+            "%d steps (sigma %.4f, seed %d)" %
+            (float(detail_alphas[0]), float(detail_alphas[-1]),
+             int(DETAIL_AV_RECIPE["ramp_steps"]), float(detail_scale),
+             int(detail_video_seed)))
     _LOG.info(
         "h3_masked_prefix: preserved %d target frames = %d video steps / %d "
         "audio steps (%.3fs, video from %s, audio from %s); %s; target %d "

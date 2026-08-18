@@ -123,6 +123,7 @@ def main():
         "tone_guide": ("tone_carry_guide", 22),
         "latent_guide": ("latent_guide", 22),
         "detail_guide": ("tapered_guide", 22),
+        "detail_av": ("tapered_av", 39),
         "hard_av": ("masked_av", 39),
         "soft_av": ("audio_feathered_av", 39),
         "audio_feather_av": ("audio_feathered_av", 39),
@@ -166,6 +167,14 @@ def main():
         assert "exact shared" in str(exc)
     else:
         raise AssertionError("one-frame audio-feather AV transition was accepted")
+    try:
+        contracts.transition_policy(
+            "detail_av", expert_override=True,
+            continuation_mode="tapered_av", context_length=90)
+    except ValueError as exc:
+        assert "exactly 39" in str(exc)
+    else:
+        raise AssertionError("90-frame Detail AV transition was accepted")
     try:
         contracts.transition_policy(
             "guide", expert_override=True,

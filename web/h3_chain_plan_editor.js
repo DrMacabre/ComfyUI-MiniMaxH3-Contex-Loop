@@ -913,6 +913,7 @@ function mountEditor(node) {
             ["tone_carry_guide", "Tone Carry Guide · corrected RGB context"],
             ["latent_guide", "Latent Guide · direct generated latent"],
             ["tapered_guide", "Detail Guide · color injection"],
+            ["tapered_av", "Detail AV · experimental latent taper"],
             ["masked_av", "Masked AV · same shot"],
             ["feathered_av", "Feathered AV · experimental dual-stream feather"],
             ["audio_feathered_av", "Audio Feather AV · hard picture, soft sound"],
@@ -924,8 +925,8 @@ function mountEditor(node) {
         continuation.value = Object.hasOwn(shot, "continuation_mode")
             ? sceneContinuationMode(shot, planContinuationMode) : "";
         continuation.title = index === 0
-            ? "Continuation into this scene. Scene 1 uses it only when Existing Video Context supplies a predecessor. Guide re-encodes RGB; Latent Guide directly reuses a generated predecessor latent and falls back to RGB for imported context; Detail Guide adds a tapered chroma treatment; Masked AV protects an exact prefix; experimental Feathered AV softens both streams; Audio-Feathered AV keeps the picture exact and softens only the final audio ticks."
-            : "Continuation from the preceding scene. Guide re-encodes RGB into persistent conditioning; Latent Guide supplies the saved sampled-latent tail as persistent conditioning; Detail Guide applies luma-preserving tapered chroma injection; Masked AV protects an exact prefix; experimental Feathered AV softens both streams; Audio-Feathered AV keeps the picture exact and softens only the final audio ticks.";
+            ? "Continuation into this scene. Scene 1 uses it only when Existing Video Context supplies a predecessor. Guide re-encodes RGB; Latent Guide directly reuses a generated predecessor latent and falls back to RGB for imported context; Detail Guide adds a tapered chroma treatment; Detail AV applies a disposable video-only latent taper to a 39-frame hard AV prefix; Masked AV protects an exact prefix; experimental Feathered AV softens both streams; Audio-Feathered AV keeps the picture exact and softens only the final audio ticks."
+            : "Continuation from the preceding scene. Guide re-encodes RGB into persistent conditioning; Latent Guide supplies the saved sampled-latent tail as persistent conditioning; Detail Guide applies luma-preserving tapered chroma injection; Detail AV applies a disposable video-only latent taper to a 39-frame hard AV prefix; Masked AV protects an exact prefix; experimental Feathered AV softens both streams; Audio-Feathered AV keeps the picture exact and softens only the final audio ticks.";
         continuation.addEventListener("change", () => {
             if (continuation.value) {
                 shot.continuation_mode = continuation.value;

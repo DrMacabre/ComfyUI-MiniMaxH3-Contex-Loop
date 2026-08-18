@@ -35,8 +35,8 @@ giant cumulative image tensor.
 
 In the default `guide` mode and opt-in `latent_guide` and `tapered_guide`
 variants, updated ComfyUI core owns guide placement and reference-payload
-merging; this pack does not patch H3. The experimental `masked_av` and
-`feathered_av` modes additionally
+merging; this pack does not patch H3. The experimental `masked_av`,
+`tapered_av`, and `feathered_av` modes additionally
 need the per-stream H3 video/audio noise masks merged into ComfyUI by PR
 #15375. Current ComfyUI owns that path natively; older builds lazily receive
 the vendored runtime compatibility only when an AV mask mode executes.
@@ -131,7 +131,7 @@ instead of overwriting an MP4 with the same requested name.
 | Setting | Good starting point | Meaning |
 |---|---:|---|
 | `width × height` | `960 × 544` | Multiples of 32 |
-| Incoming Transition | `Guide (22f)` | Semantic choice into each scene: Cut, Guide, Tone Carry Guide, Latent Guide, Detail Guide, Hard AV, or Soft AV |
+| Incoming Transition | `Guide (22f)` | Semantic choice into each scene: Cut, Guide, Tone Carry Guide, Latent Guide, Detail Guide, Detail AV, Hard AV, or Soft AV |
 | Context | preset-controlled | Advanced overrides can set the exact repeated motion history |
 | `encode_mode` | `video` | Preserves motion in the VAE latent |
 | `anchor_mode` | `head` | Regenerates then trims the repeated opening context |
@@ -144,14 +144,15 @@ Use `generation_fingerprint` to record model, VAE, LoRA, references, CFG,
 sampler, and scheduler choices that live outside the Plan. Change it when those
 dependencies change so incompatible checkpoints cannot be resumed silently.
 
-### Cut, Guide, Tone Carry Guide, Latent Guide, Detail Guide, Hard AV, and Soft AV transitions
+### Cut, Guide, Tone Carry Guide, Latent Guide, Detail Guide, Detail AV, Hard AV, and Soft AV transitions
 
 The semantic Transition Policy maps `Cut` to no carried picture, `Guide` to
 22 RGB/VAE guide frames, experimental `Tone Carry Guide` to the same 22-frame
 RGB path with a saved predecessor tone correction, `Latent Guide` to 22 direct
 sampled-latent guide frames, experimental `Detail Guide` to a tapered
 chroma-noise 22-frame guide,
-`Hard AV` to a protected 39-frame picture prefix, and `Soft AV` to the same
+experimental `Detail AV` to a disposable latent-noise 39-frame picture
+prefix, `Hard AV` to a protected 39-frame picture prefix, and `Soft AV` to the same
 exact picture prefix with a half-cosine release over the final carried-audio
 ticks when Generated continuity is on.
 The old Plan `continuation_mode`,
@@ -220,6 +221,21 @@ entire raw scene. Wire the new **Chain Context latent** output to
 the sampler's `latent_image`; the output passes the original target through on
 scene 1 and in every Guide mode, so that one wire supports every mode.
 
+`tapered_av`, selected by experimental **Detail AV**, starts from the same
+39-frame hard AV prefix, but first makes a disposable copy of its 12 video
+latent steps. It blends matched-standard-deviation Gaussian noise at 0.45,
+tapering through 0.275 to 0.10 over the last two steps. The carried audio
+latent and both denoise masks are byte-for-byte the Hard AV path; audio is
+never noised. The accepted predecessor checkpoint remains clean, and Loop
+Trim removes the complete treated prefix. When assembly blending is enabled,
+Segment Save restores clean predecessor RGB in that separate blend artifact,
+so the disposable noise cannot leak into the final overlap. The deterministic
+noise seed is derived from the scene seed, and the complete recipe is recorded
+in the incoming-boundary dependency fingerprint. This implementation adapts
+the context-noise recipe published by
+[beijinren/ComfyUI-H3-Context-Noise](https://github.com/beijinren/ComfyUI-H3-Context-Noise)
+without importing that node pack.
+
 `audio_feathered_av`, selected by **Soft AV**, keeps all 12 video latent steps
 exact. When Generated continuity is on, it protects the first 57 of 65 audio
 steps and releases only the final 8 audio ticks with a half-cosine ramp. When
@@ -232,6 +248,7 @@ All AV mask continuations require `encode_mode=video`, `anchor_mode=head`,
 and an exact shared video/audio boundary: **39, 90, 141, 192, or 243 context
 frames**. The shortest and normal choice is 39 frames: at 24 fps it is exactly
 1.625 seconds and exactly 65 audio-latent steps at H3's 40 Hz audio grid. A
+Detail AV v1 transition specifically requires 39 frames. A
 per-scene override participates in the Plan/history hashes from that
 scene onward, so a checkpoint cannot silently resume under the wrong method.
 When modes are mixed, use settings compatible with masked AV for the whole

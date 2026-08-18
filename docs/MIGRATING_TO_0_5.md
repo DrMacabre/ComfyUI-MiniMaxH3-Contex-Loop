@@ -22,12 +22,13 @@ Version 0.5 replaces combined low-level choices with two explicit policies:
 | new `tone_carry_guide` | Tone Carry Guide | 22 frames |
 | new `latent_guide` | Latent Guide | 22 frames |
 | new `tapered_guide` | Detail Guide | 22 frames |
+| new `tapered_av` | Detail AV (experimental) | 39 frames |
 | `masked_av` | Hard AV | 39 frames |
 | `audio_feathered_av` | Soft AV | 39 frames |
 | `feathered_av` | Expert override (experimental compatibility mode) | custom |
 
 Advanced mode retains the old implementation and context fields for custom
-values. Tone Carry Guide, Latent Guide, and Detail Guide are opt-in and do not
+values. Tone Carry Guide, Latent Guide, Detail Guide, and Detail AV are opt-in and do not
 alter migrated workflows. The semantic choice always describes the boundary
 entering a scene.
 

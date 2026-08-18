@@ -207,6 +207,70 @@ def main():
     assert not torch.count_nonzero(audio_mask[..., :prefix_audio_steps])
     assert torch.all(audio_mask[..., prefix_audio_steps:] == 1.0)
 
+    # Detail AV perturbs only a disposable copy of the carried 12-step video
+    # prefix. Audio, masks, target latent, and accepted predecessor stay exact.
+    previous_video_copy = previous_video.clone()
+    previous_audio_copy = previous_audio.clone()
+    detail_seed = 912345
+    _, detail_a, detail_trim = masked.apply_masked_prefix(
+        conditioning=conditioning,
+        vae=UnexpectedVideoVAE(),
+        latent=target,
+        previous_frames=frames,
+        context_length=39,
+        crop="disabled",
+        previous_latent=previous,
+        detail_video_taper=True,
+        detail_video_seed=detail_seed,
+    )
+    _, detail_b, _ = masked.apply_masked_prefix(
+        conditioning=conditioning,
+        vae=UnexpectedVideoVAE(),
+        latent=target,
+        previous_frames=frames,
+        context_length=39,
+        crop="disabled",
+        previous_latent=previous,
+        detail_video_taper=True,
+        detail_video_seed=detail_seed,
+    )
+    _, detail_c, _ = masked.apply_masked_prefix(
+        conditioning=conditioning,
+        vae=UnexpectedVideoVAE(),
+        latent=target,
+        previous_frames=frames,
+        context_length=39,
+        crop="disabled",
+        previous_latent=previous,
+        detail_video_taper=True,
+        detail_video_seed=detail_seed + 1,
+    )
+    detail_video_a, detail_audio_a = detail_a["samples"].unbind()
+    detail_video_b, detail_audio_b = detail_b["samples"].unbind()
+    detail_video_c, _ = detail_c["samples"].unbind()
+    detail_video_mask, detail_audio_mask = detail_a["noise_mask"].unbind()
+    assert detail_trim == 39
+    assert masked._detail_av_alpha(0, 12) == 0.45
+    assert masked._detail_av_alpha(9, 12) == 0.45
+    assert abs(masked._detail_av_alpha(10, 12) - 0.275) < 1e-9
+    assert masked._detail_av_alpha(11, 12) == 0.10
+    assert torch.equal(detail_video_a, detail_video_b)
+    assert not torch.equal(detail_video_a, detail_video_c)
+    assert not torch.equal(
+        detail_video_a[:, :, :prefix_video_steps],
+        previous_video[:, :, -prefix_video_steps:],
+    )
+    assert not torch.count_nonzero(
+        detail_video_a[:, :, prefix_video_steps:])
+    assert torch.equal(detail_audio_a, audio)
+    assert torch.equal(detail_audio_b, audio)
+    assert torch.equal(detail_video_mask, video_mask)
+    assert torch.equal(detail_audio_mask, audio_mask)
+    assert torch.equal(previous_video, previous_video_copy)
+    assert torch.equal(previous_audio, previous_audio_copy)
+    assert not torch.count_nonzero(target_video)
+    assert not torch.count_nonzero(target_audio)
+
     _, feathered, feathered_trim = masked.apply_masked_prefix(
         conditioning=conditioning,
         vae=UnexpectedVideoVAE(),
@@ -345,6 +409,9 @@ def main():
     print(
         "feathered AV: first 8 video / 57 audio steps protected, final "
         "4 video / 8 audio prefix steps use a 0.85..0.95 denoise handoff")
+    print(
+        "Detail AV: deterministic 0.45 -> 0.10 video-only latent taper; "
+        "audio, masks, target, and predecessor remain exact")
 
     class VideoVAE:
         def __init__(self):
@@ -455,6 +522,31 @@ def main():
     assert audio_feathered_plan["compatibility"][
         "continuation_mode"] == "audio_feathered_av"
     assert "context=39/audio_feathered_av" in audio_feathered_plan["summary"]
+    detail_av_plan = chain._normalize_plan(
+        json.dumps({"shots": [
+            {"id": "one", "prompt": "first", "length": 192},
+            {"id": "two", "prompt": "second", "length": 192},
+        ]}),
+        "detail_av_test", 64, 32, 39, "video", "head", "disabled",
+        "generated_audio", 39, 8.0, 8, 1, 18, "model-stack-v1", 5,
+        "tapered_av",
+    )
+    assert detail_av_plan["compatibility"][
+        "continuation_mode"] == "tapered_av"
+    assert "context=39/tapered_av" in detail_av_plan["summary"]
+    detail_dependency = chain._scene_dependency_record(
+        detail_av_plan, 2, None)
+    assert detail_dependency["scopes"]["incoming_boundary"][
+        "detail_av_recipe"] == chain.DETAIL_AV_RECIPE
+
+    clean_blend_source = frames.clone()
+    noisy_blend = torch.full((12, 32, 48, 3), -7.0)
+    clean_blend = chain._detail_av_clean_blend_images(
+        {"previous_frames": clean_blend_source}, noisy_blend, 5)
+    assert torch.equal(clean_blend[:5], clean_blend_source[-5:])
+    assert torch.all(clean_blend[5:] == -7.0)
+    assert torch.all(noisy_blend == -7.0)
+    assert torch.equal(clean_blend_source, frames)
     migrated_av_plan = chain._normalize_plan(
         json.dumps({"shots": [
             {"id": "one", "prompt": "first", "length": 192},
@@ -795,7 +887,8 @@ def main():
     assert first_result[:3] == (conditioning, 0, False)
     assert first_result[3] is target
     for av_mode in (
-            "masked_av", "feathered_av", "audio_feathered_av"):
+            "masked_av", "tapered_av", "feathered_av",
+            "audio_feathered_av"):
         for invalid_args, expected in (
             ((1, "video", "head"), "exact shared"),
             ((22, "video", "head"), "exact shared"),
@@ -820,6 +913,20 @@ def main():
                 raise AssertionError(
                     "%s plan accepted invalid %s/%s/%s" %
                     (av_mode, *invalid_args))
+    try:
+        chain._normalize_plan(
+            json.dumps({"shots": [
+                {"id": "one", "prompt": "first", "length": 192},
+                {"id": "two", "prompt": "second", "length": 192},
+            ]}),
+            "invalid_detail_av_test", 64, 32, 90, "video", "head",
+            "disabled", "generated_audio", 90, 8.0, 8, 1, 18,
+            "model-stack-v1", 0, "tapered_av",
+        )
+    except ValueError as exc:
+        assert "exactly 39" in str(exc)
+    else:
+        raise AssertionError("Detail AV accepted a 90-frame context")
     try:
         chain._normalize_plan(
             json.dumps({"shots": [

@@ -36,9 +36,10 @@ Latent Guide reuses the generated predecessor's sampled video-latent tail
 directly, while imported or incompatible context falls back to the normal
 RGB/VAE Guide route. Tapered Guide changes only the disposable video context
 passed to the Guide VAE. In the
-experimental `masked_av` and `feathered_av` modes, Chain Context always places
+experimental `masked_av`, `tapered_av`, and `feathered_av` modes, Chain Context always places
 a video prefix inside the target latent. With Generated continuity on it also
 places the matching audio prefix; `masked_av` protects that complete prefix and
+`tapered_av` protects a disposable video-only latent-noise copy of that prefix;
 `feathered_av` progressively denoises its final latent steps. With Generated
 continuity off, the audio mask remains fully open even when final assembly uses
 `source_track`. For recursive scenes, enabled audio carry copies the previous
@@ -63,10 +64,14 @@ Transition Policy controls the incoming boundary: Cut carries no picture,
 Guide uses 22 clean RGB/VAE guide frames, Tone Carry Guide uses the same RGB
 span with the predecessor's detected tone correction, Latent Guide uses the
 same span from the saved sampled video latent, Detail Guide uses the same span with an
-eight-frame chroma-noise exit taper, Hard AV uses a protected 39-frame prefix,
+eight-frame chroma-noise exit taper, Detail AV uses a protected disposable
+39-frame video-latent copy with matched-variance Gaussian noise tapering from
+0.45 to 0.10 while leaving audio exact, Hard AV uses a protected 39-frame prefix,
 and Soft AV keeps the picture exact while feathering only a carried-audio exit.
 With Generated continuity off, both AV presets carry picture only.
-Advanced
+Detail AV v1 is fixed to 39 frames. Its seed and complete recipe enter the
+incoming-boundary dependency fingerprint, its predecessor checkpoint is never
+mutated, and the entire treated prefix is trimmed before delivery. Advanced
 mode may pair either experimental Guide with another Guide context length; 22
 is the published baseline. Mixed plans must still use
 encode/anchor settings compatible with every AV-mask scene.

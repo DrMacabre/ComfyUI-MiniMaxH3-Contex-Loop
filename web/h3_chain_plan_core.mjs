@@ -7,7 +7,7 @@ export const MAX_H3_FRAMES = 3592;
 export const MAX_SEED = 18446744073709551615n;
 export const CONTINUATION_MODES = Object.freeze([
     "guide", "tone_carry_guide", "latent_guide", "tapered_guide",
-    "masked_av", "feathered_av", "audio_feathered_av",
+    "masked_av", "tapered_av", "feathered_av", "audio_feathered_av",
 ]);
 const RETIRED_CONTINUATION_MODES = Object.freeze({
     feathered_av_rgb: "feathered_av",
@@ -611,7 +611,8 @@ export function calculatePlanTiming(plan, settings = {}) {
                 shot, planContinuationMode,
             );
             if (sceneContext > 0 && [
-                "masked_av", "feathered_av", "audio_feathered_av",
+                "masked_av", "tapered_av", "feathered_av",
+                "audio_feathered_av",
             ].includes(
                 continuationMode,
             )) {
@@ -625,6 +626,11 @@ export function calculatePlanTiming(plan, settings = {}) {
                 }
                 if (anchorMode !== "head") {
                     rowErrors.push("AV mask continuation requires head anchor mode.");
+                }
+                if (continuationMode === "tapered_av" && sceneContext !== 39) {
+                    rowErrors.push(
+                        "Detail AV currently requires exactly 39 context frames.",
+                    );
                 }
             }
             if (sceneContext > 0 && continuationMode === "latent_guide") {
@@ -671,7 +677,8 @@ export function calculatePlanTiming(plan, settings = {}) {
             contextLength: sceneContext,
             videoBlendFrames: sceneBlendFrames,
             audioContextLength: [
-                "masked_av", "feathered_av", "audio_feathered_av",
+                "masked_av", "tapered_av", "feathered_av",
+                "audio_feathered_av",
             ].includes(
                 continuationMode,
             )

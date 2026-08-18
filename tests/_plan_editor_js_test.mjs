@@ -33,7 +33,7 @@ assert.deepEqual(
     CONTINUATION_MODES,
     [
         "guide", "tone_carry_guide", "latent_guide", "tapered_guide",
-        "masked_av", "feathered_av",
+        "masked_av", "tapered_av", "feathered_av",
         "audio_feathered_av",
     ],
 );
@@ -86,6 +86,10 @@ assert.equal(
 assert.equal(
     sceneContinuationMode({continuation_mode: "masked_av"}, "guide"),
     "masked_av",
+);
+assert.equal(
+    sceneContinuationMode({continuation_mode: "tapered_av"}, "guide"),
+    "tapered_av",
 );
 assert.equal(
     sceneContinuationMode({continuation_mode: "feathered_av"}, "guide"),

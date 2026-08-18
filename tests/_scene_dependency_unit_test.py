@@ -140,6 +140,31 @@ assert contract_diffs == [{
     "regeneration_required": True,
 }]
 
+detail_plan = chain._normalize_plan(
+    json.dumps({"shots": [
+        {"id": "one", "prompt": "@actor opens.", "length": 90},
+        {"id": "two", "prompt": "@actor continues.", "length": 90},
+    ]}),
+    "detail-av-dependency-test", 64, 64, 39, "video", "head", "disabled",
+    "source_track", 39, 1.0, 8, 11, 18, "body:auto:v1", 0,
+    "tapered_av", chain._contract_audio_policy("source", "on", "off"))
+detail_dependency = chain._scene_dependency_record(detail_plan, 2, None)
+assert detail_dependency["scopes"]["incoming_boundary"][
+    "detail_av_recipe"] == chain.DETAIL_AV_RECIPE
+changed_detail_dependency = json.loads(json.dumps(detail_dependency))
+changed_detail_dependency["scopes"]["incoming_boundary"][
+    "detail_av_recipe"]["alpha"] = 0.40
+detail_diffs = chain._scene_dependency_diffs(
+    changed_detail_dependency, detail_dependency)
+assert detail_diffs == [{
+    "scope": "incoming_boundary",
+    "scene": 2,
+    "field": "detail_av_recipe.alpha",
+    "saved": 0.4,
+    "current": 0.45,
+    "regeneration_required": True,
+}]
+
 print("H3 scene dependencies: scene-local PCM, boundary isolation, assembly exclusion, and structured diffs pass")
 
 

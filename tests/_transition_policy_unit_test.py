@@ -59,6 +59,7 @@ def make_plan(policy=None, *, encode_mode="video", anchor_mode="head",
 node = chain.MiniMaxH3TransitionPolicy()
 preset_choices = node.INPUT_TYPES()["required"]["preset"][0]
 assert "soft_av" in preset_choices
+assert "detail_av" in preset_choices
 assert "audio_feather_av" not in preset_choices
 expected = {
     "cut": ("guide", 0),
@@ -66,6 +67,7 @@ expected = {
     "tone_guide": ("tone_carry_guide", 22),
     "latent_guide": ("latent_guide", 22),
     "detail_guide": ("tapered_guide", 22),
+    "detail_av": ("tapered_av", 39),
     "hard_av": ("masked_av", 39),
     "soft_av": ("audio_feathered_av", 39),
     "audio_feather_av": ("audio_feathered_av", 39),
@@ -78,7 +80,7 @@ for preset, (mode, context) in expected.items():
     assert policy["expert_override"] is False
     assert output_mode == mode and output_context == context
     assert " -> " in status
-    if preset in ("tone_guide", "detail_guide"):
+    if preset in ("tone_guide", "detail_guide", "detail_av"):
         assert "experimental preset" in status
     else:
         assert "tested preset" in status
@@ -87,6 +89,9 @@ soft_status = node.build("soft_av")[3]
 assert soft_status.startswith("Soft AV -> Audio-Feathered AV + 39 frames")
 hard_status = node.build("hard_av")[3]
 assert hard_status.startswith("Hard AV -> Masked AV + 39 frames")
+detail_av_status = node.build("detail_av")[3]
+assert detail_av_status.startswith("Detail AV -> Tapered AV + 39 frames")
+assert "latent taper v1" in detail_av_status
 audio_feather_status = node.build("audio_feather_av")[3]
 assert audio_feather_status.startswith(
     "Audio Feather AV (legacy alias) -> Audio-Feathered AV + 39 frames")
@@ -148,6 +153,13 @@ for off_grid in (5, 22, 56, 73):
     else:
         raise AssertionError(
             "off-grid AV expert override %d was accepted" % off_grid)
+
+try:
+    node.build("detail_av", True, "tapered_av", 90)
+except ValueError as exc:
+    assert "exactly 39" in str(exc)
+else:
+    raise AssertionError("Detail AV accepted a non-v1 90-frame context")
 
 tapered_expert, tapered_mode, tapered_context, _ = node.build(
     "detail_guide", True, "tapered_guide", 39)

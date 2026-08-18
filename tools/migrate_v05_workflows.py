@@ -170,12 +170,14 @@ def _transition_policy_node(plan: dict[str, Any]) -> dict[str, Any]:
         ("guide", 22): "guide",
         ("latent_guide", 22): "latent_guide",
         ("tapered_guide", 22): "detail_guide",
+        ("tapered_av", 39): "detail_av",
         ("masked_av", 39): "hard_av",
         ("audio_feathered_av", 39): "soft_av",
     }.get((mode, context), "guide")
     expert = (mode, context) not in {
         ("guide", 0), ("guide", 22), ("latent_guide", 22),
         ("tapered_guide", 22),
+        ("tapered_av", 39),
         ("masked_av", 39),
         ("audio_feathered_av", 39),
     }

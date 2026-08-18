@@ -164,8 +164,9 @@ shot value > JSON defaults > H3 Chain Plan node defaults.
 RECOMMENDED PLAN SETTINGS
 - width/height: multiples of 32; 960x544 is a good starting point.
 - Transition Policy: Guide (22 frames); Latent Guide keeps Guide behavior but
-  directly reuses a generated predecessor's saved latent. Use Hard AV or Soft
-  AV (39 frames) only for same-shot target-latent continuation.
+  directly reuses a generated predecessor's saved latent. Use experimental
+  Detail AV, Hard AV, or Soft AV (39 frames) only for same-shot target-latent
+  continuation.
 - encode_mode: video
 - anchor_mode: head
 - crop: disabled
@@ -223,7 +224,7 @@ Shot = string | {
   "seed"?: integer | digit string,
   "context_length"?: 0 | 1 | 5 | 22 | 39 | ... | 243,
   "audio_context_length"?: integer, // 0..240
-  "continuation_mode"?: "guide" | "latent_guide" | "tapered_guide" | "masked_av" | "feathered_av" | "audio_feathered_av"
+  "continuation_mode"?: "guide" | "latent_guide" | "tapered_guide" | "masked_av" | "tapered_av" | "feathered_av" | "audio_feathered_av"
 }
 ```
 
@@ -494,6 +495,9 @@ camera, action, or environment. Use `latent_guide` for the same behavior while
 reusing a compatible generated predecessor's sampled video latent directly;
 imported context falls back to RGB/VAE Guide. Use `masked_av` when it directly
 continues the same shot and should preserve the preceding AV prefix exactly.
+Use experimental `tapered_av` for the same 39-frame hard-mask geometry while
+conditioning on a deterministic, disposable video-only latent-noise copy; it
+does not alter carried audio or the accepted predecessor checkpoint.
 Scene 1 uses the field only when Existing Video Context supplies a predecessor.
 
 `context_length` overrides incoming video context for one scene. Omit it (or
@@ -520,9 +524,9 @@ advanced**; Plan Studio keeps them in the existing scene-properties row.
 | `run_name` | Filename-safe text; normalized to at most 96 characters | Give each independent render a unique name. Keep it unchanged only when resuming. |
 | `generation_fingerprint` | Any stable version string | Include model, VAE, LoRA, global-reference, CFG, sampler, and scheduler versions. Change it when any external generation dependency changes. |
 | `width`, `height` | Positive multiples of 32, UI range 32–4096 | `960 × 544` is the supplied long-form workflow setting. |
-| `transition_policy` | Cut, Guide, Latent Guide, Detail Guide, Hard AV, Soft AV policy wire | Preferred 0.5 incoming-boundary control. |
+| `transition_policy` | Cut, Guide, Latent Guide, Detail Guide, Detail AV, Hard AV, Soft AV policy wire | Preferred 0.5 incoming-boundary control. |
 | `audio_policy` | Independent final/reference/continuity policy wire | Preferred 0.5 audio-intent control. |
-| `continuation_mode` | `guide`, `latent_guide`, `tapered_guide`, `masked_av`, `feathered_av`, or `audio_feathered_av` | Legacy/advanced implementation override for scenes without `shots[n].continuation_mode`. `latent_guide` needs video encode mode and at least 5 positive context frames; `tapered_guide` accepts normal Guide context lengths and 22 is its published baseline. |
+| `continuation_mode` | `guide`, `latent_guide`, `tapered_guide`, `masked_av`, `tapered_av`, `feathered_av`, or `audio_feathered_av` | Legacy/advanced implementation override for scenes without `shots[n].continuation_mode`. `latent_guide` needs video encode mode and at least 5 positive context frames; `tapered_guide` accepts normal Guide context lengths and 22 is its published baseline; experimental `tapered_av` is fixed to 39 frames. |
 | `context_length` | `0`, `1`, then native runs `5`, `22`, `39`, ... `243` | Legacy/advanced exact context. Guide accepts the native runs; AV requires the shared-clock subset `39`, `90`, `141`, `192`, or `243`. |
 | `encode_mode` | `video` or `frames` | Use `video`. It preserves motion inside the VAE latent and is more efficient. |
 | `anchor_mode` | `head` or `before` | Use `head`; wire `trim_frames` into MiniMax H3 Contex Loop Trim. |

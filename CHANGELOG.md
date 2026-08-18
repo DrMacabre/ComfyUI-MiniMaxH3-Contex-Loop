@@ -46,6 +46,11 @@ Newest first. This file keeps release history out of the onboarding README.
   tapered chroma-noise context recipe. The 22-frame preset uses 19 frames at
   0.45 and a three-frame taper to 0.10; expert mode supports other Guide
   lengths without modifying the accepted predecessor checkpoint.
+- Added experimental Detail AV continuation, adapting beijinren's latent
+  context-noise recipe to the recursive hard-AV path. It treats a disposable
+  copy of the 39-frame / 12-step video prefix with matched-variance Gaussian
+  noise tapering from 0.45 to 0.10, leaves audio and masks unchanged, trims the
+  complete treated overlap, and fingerprints the exact recipe for resume.
 - Added model-free Chain Preflight and shared Plan Studio validation for source
   duration, scene windows, references, runtime compatibility, and resume
   eligibility.

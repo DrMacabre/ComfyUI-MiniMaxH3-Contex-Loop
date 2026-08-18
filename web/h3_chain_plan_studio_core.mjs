@@ -111,7 +111,7 @@ export function h3StudioGridMarkers(
     };
 
     const avMode = [
-        "masked_av", "feathered_av", "audio_feathered_av",
+        "masked_av", "tapered_av", "feathered_av", "audio_feathered_av",
     ].includes(
         String(continuationMode ?? ""),
     );

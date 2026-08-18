@@ -22,12 +22,27 @@ GENERATED_CONTINUITY_POLICIES = ("off", "on")
 PAIRED_AUDIO_POLICIES = ("off", "embedded")
 CONTINUATION_POLICIES = (
     "guide", "tone_carry_guide", "latent_guide", "tapered_guide",
-    "masked_av", "feathered_av", "audio_feathered_av")
+    "masked_av", "tapered_av", "feathered_av", "audio_feathered_av")
 TRANSITION_CONTEXT_LENGTHS = (
     0, 1, 5, 22, 39, 56, 73, 90, 107, 124,
     141, 158, 175, 192, 209, 226, 243,
 )
 AV_TRANSITION_CONTEXT_LENGTHS = (39, 90, 141, 192, 243)
+
+# Experimental one-shot latent-context recipe adapted from beijinren's
+# ComfyUI-H3-Context-Noise. Keep every generation-significant value in the
+# scene dependency contract so changing the recipe cannot silently resume a
+# scene rendered with an older taper.
+DETAIL_AV_RECIPE = {
+    "version": "h3_detail_av_latent_taper_v1",
+    "context_frames": 39,
+    "video_steps": 12,
+    "alpha": 0.45,
+    "alpha_end": 0.10,
+    "ramp_steps": 2,
+    "noise_scale": "match_latent_std",
+    "seed_xor": 0xD37A11,
+}
 
 LEGACY_AUDIO_MODE_POLICIES = {
     "source_track": {
@@ -72,6 +87,11 @@ TRANSITION_PRESETS = {
         "continuation_mode": "tapered_guide",
         "context_length": 22,
         "label": "Detail-preserving guided transition",
+    },
+    "detail_av": {
+        "continuation_mode": "tapered_av",
+        "context_length": 39,
+        "label": "Detail-preserving AV continuation (experimental)",
     },
     "hard_av": {
         "continuation_mode": "masked_av",
@@ -190,12 +210,18 @@ def transition_policy(
             raise ValueError(
                 "H3 Latent Guide requires at least 5 context frames.")
         if (mode in (
-                "masked_av", "feathered_av", "audio_feathered_av"
+                "masked_av", "tapered_av", "feathered_av",
+                "audio_feathered_av"
         ) and context > 0 and context not in AV_TRANSITION_CONTEXT_LENGTHS):
             raise ValueError(
                 "H3 AV transition implementations require an exact shared "
                 "video/audio boundary: 39, 90, 141, 192, or 243 context "
                 "frames (or 0 to disable continuation).")
+        if (mode == "tapered_av" and context not in (
+                0, int(DETAIL_AV_RECIPE["context_frames"]))):
+            raise ValueError(
+                "H3 Detail AV currently requires exactly 39 context frames "
+                "(or 0 to disable continuation).")
         resolved["continuation_mode"] = mode
         resolved["context_length"] = context
     resolved["expert_override"] = expert

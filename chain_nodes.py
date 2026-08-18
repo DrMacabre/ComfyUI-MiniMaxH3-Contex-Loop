@@ -97,6 +97,7 @@ from .contracts_v05 import (
     AV_TRANSITION_CONTEXT_LENGTHS,
     AUDIO_POLICY_VERSION,
     CONTINUATION_POLICIES,
+    DETAIL_AV_RECIPE,
     DEPENDENCY_SCOPES,
     FINAL_AUDIO_POLICIES,
     GENERATED_CONTINUITY_POLICIES,
@@ -139,11 +140,11 @@ H3_CONTEXT_LENGTHS = (
 AUDIO_MODES = ("source_track", "generated_audio", "source_plus_timeline")
 CONTINUATION_MODES = (
     "guide", "tone_carry_guide", "latent_guide", "tapered_guide",
-    "masked_av", "feathered_av", "audio_feathered_av")
+    "masked_av", "tapered_av", "feathered_av", "audio_feathered_av")
 GUIDE_CONTINUATION_MODES = frozenset((
     "guide", "tone_carry_guide", "latent_guide", "tapered_guide"))
 MASKED_CONTINUATION_MODES = frozenset((
-    "masked_av", "feathered_av", "audio_feathered_av"))
+    "masked_av", "tapered_av", "feathered_av", "audio_feathered_av"))
 REFERENCE_AUDIO_TIMELINE_MODES = ("standalone", "source_timeline")
 MOTION_REFERENCE_SHORT_EDGES = ("384", "512", "768", "source")
 
@@ -286,7 +287,7 @@ def _resolved_transition_policy(value: Any) -> dict[str, Any]:
     preset = "legacy"
     for candidate in (
             "cut", "guide", "tone_guide", "latent_guide", "detail_guide",
-            "hard_av", "soft_av",
+            "detail_av", "hard_av", "soft_av",
             "audio_feather_av"):
         resolved = _contract_transition_policy(candidate)
         if (resolved["continuation_mode"] == mode and
@@ -318,6 +319,7 @@ def _transition_policy_display(value: Any) -> str:
         "tone_guide": "Tone Carry Guide",
         "latent_guide": "Latent Guide",
         "detail_guide": "Detail Guide",
+        "detail_av": "Detail AV",
         "hard_av": "Hard AV",
         "soft_av": "Soft AV",
         "audio_feather_av": "Audio Feather AV (legacy alias)",
@@ -329,6 +331,7 @@ def _transition_policy_display(value: Any) -> str:
         "latent_guide": "Latent Guide",
         "tapered_guide": "Tapered Guide",
         "masked_av": "Masked AV",
+        "tapered_av": "Tapered AV",
         "feathered_av": "Feathered AV",
         "audio_feathered_av": "Audio-Feathered AV",
     }
@@ -3317,6 +3320,9 @@ def _scene_dependency_record(
         # pre-fix masked scene cannot be resumed as if it used the new clocks.
         scopes["incoming_boundary"]["masked_audio_contract"] = (
             MASKED_AUDIO_CONTRACT)
+    if transition == "tapered_av":
+        scopes["incoming_boundary"]["detail_av_recipe"] = dict(
+            DETAIL_AV_RECIPE)
     fingerprints = {scope: _fingerprint(scopes[scope])
                     for scope in DEPENDENCY_SCOPES}
     generation_hash = _fingerprint({
@@ -4034,6 +4040,13 @@ def _normalize_plan(
                     "H3 AV mask continuation requires anchor_mode=head "
                     "because it preserves a real target-latent prefix that "
                     "Loop Trim must remove (shot %d)." % index)
+            if (shot_continuation_mode == "tapered_av" and
+                    shot_context_length != int(
+                        DETAIL_AV_RECIPE["context_frames"])):
+                raise ValueError(
+                    "H3 Detail AV currently requires exactly %d context "
+                    "frames (shot %d)." %
+                    (int(DETAIL_AV_RECIPE["context_frames"]), index))
         if (shot_context_length and
                 shot_continuation_mode == "latent_guide"):
             if shot_context_length < 5:
@@ -4894,6 +4907,38 @@ def _compact_latent(latent: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("H3 Chain requires a sampled MiniMax AV latent.")
     return {"samples": [_tensor_cpu_clone(parts[0]),
                         _tensor_cpu_clone(parts[1])]}
+
+
+def _detail_av_clean_blend_images(
+        state: dict[str, Any], images_with_overlap: Any,
+        blend_frames: int) -> Any:
+    """Keep Detail AV's disposable noisy prefix out of assembly artifacts."""
+    blend_frames = int(blend_frames)
+    if blend_frames <= 0:
+        return images_with_overlap
+    previous = state.get("previous_frames")
+    if (torch is None or not torch.is_tensor(previous)
+            or not torch.is_tensor(images_with_overlap)):
+        raise ValueError(
+            "H3 Detail AV visual blending requires the clean predecessor "
+            "IMAGE checkpoint.")
+    if previous.ndim != 4 or images_with_overlap.ndim != 4:
+        raise ValueError(
+            "H3 Detail AV blend tensors must be [frames,height,width,channels].")
+    if int(previous.shape[0]) < blend_frames:
+        raise ValueError(
+            "H3 Detail AV blend requests %d clean predecessor frames, but "
+            "only %d are checkpointed." %
+            (blend_frames, int(previous.shape[0])))
+    if tuple(previous.shape[1:]) != tuple(images_with_overlap.shape[1:]):
+        raise ValueError(
+            "H3 Detail AV clean predecessor/blend image geometry differs: "
+            "%s vs %s." %
+            (tuple(previous.shape), tuple(images_with_overlap.shape)))
+    result = images_with_overlap.detach().contiguous().clone()
+    result[:blend_frames] = previous[-blend_frames:].to(
+        device=result.device, dtype=result.dtype)
+    return result
 
 
 def _previous_context_frames(state: dict[str, Any], vae: Any,
@@ -7651,7 +7696,7 @@ class MiniMaxH3TransitionPolicy:
             "required": {
                 "preset": ((
                         "cut", "guide", "tone_guide", "latent_guide",
-                        "detail_guide", "hard_av", "soft_av"
+                        "detail_guide", "detail_av", "hard_av", "soft_av"
                 ), {
                     "default": "guide",
                     "tooltip": "Incoming-transition presets: Cut = "
@@ -7664,6 +7709,9 @@ class MiniMaxH3TransitionPolicy:
                                "Detail Guide = tapered chroma-noise Guide + "
                                "22 frames (experimental outside its published "
                                "baseline); "
+                               "Detail AV = disposable video-latent Gaussian "
+                               "taper + hard AV mask + 39 frames "
+                               "(experimental); "
                                "Hard AV = Masked AV + 39 frames; Soft AV = "
                                "hard picture + half-cosine audio release + "
                                "39 frames. The older dual-stream Feathered "
@@ -7682,7 +7730,8 @@ class MiniMaxH3TransitionPolicy:
                         "default": "guide",
                         "tooltip": "Expert only. Low-level continuation "
                                    "implementation used when override is on. "
-                                   "Hard AV resolves to masked_av; Soft AV "
+                                   "Detail AV resolves to tapered_av; Hard AV "
+                                   "resolves to masked_av; Soft AV "
                                    "resolves to audio_feathered_av. The low-"
                                    "level feathered_av implementation softens "
                                    "both picture and sound and remains an "
@@ -7695,6 +7744,7 @@ class MiniMaxH3TransitionPolicy:
                                    "mask implementations require an exact "
                                    "shared AV boundary: 39, 90, 141, 192, or "
                                    "243 frames. "
+                                   "Detail AV v1 requires exactly 39 frames. "
                                    "Tapered Guide accepts any listed Guide "
                                    "length, but only 22 frames has published "
                                    "validation."}),
@@ -7730,6 +7780,8 @@ class MiniMaxH3TransitionPolicy:
             status += "; expert override"
         elif policy["preset"] in ("tone_guide", "detail_guide"):
             status += "; experimental preset; published baseline 22f"
+        elif policy["preset"] == "detail_av":
+            status += "; experimental preset; latent taper v1 at 39f"
         else:
             status += "; tested preset"
         return (policy, policy["continuation_mode"],
@@ -7785,7 +7837,7 @@ class MiniMaxH3Legacy04PolicyAdapter:
         matched_preset = None
         for candidate in (
                 "cut", "guide", "tone_guide", "latent_guide",
-                "detail_guide", "hard_av", "soft_av",
+                "detail_guide", "detail_av", "hard_av", "soft_av",
                 "audio_feather_av"):
             resolved = _contract_transition_policy(candidate)
             if (resolved["continuation_mode"] == mode and
@@ -7917,7 +7969,7 @@ class MiniMaxH3ChainPlan:
                                "rebuilding an old control surface. Default "
                                "previous-scene video frames used to "
                                "continue motion. Use 22 for guide mode and 39 "
-                               "for masked_av, feathered_av, or "
+                               "for masked_av, tapered_av, feathered_av, or "
                                "audio_feathered_av so the AV clocks "
                                "meet exactly. "
                                "A scene's Advanced selector can override this; "
@@ -8048,6 +8100,10 @@ class MiniMaxH3ChainPlan:
                                "masked_av (experimental) VAE-encodes the "
                                "previous video tail into the current target "
                                "latent and protects it with a denoise mask. "
+                               "tapered_av (Detail AV) makes a disposable "
+                               "Gaussian-noised copy of only that carried "
+                               "video prefix before applying the same hard "
+                               "mask; audio is never noised. "
                                "With Generated continuity on it also copies and "
                                "protects the matching sampled-audio tail; with "
                                "that policy off, target audio remains fully "
@@ -9700,7 +9756,7 @@ class MiniMaxH3ChainContext:
     CATEGORY = "conditioning/minimax/contex_loop"
     DESCRIPTION = ("Apply each scene's inherited or overridden RGB guide, "
                    "tone-carry RGB guide, latent guide, masked AV, full AV "
-                   "feather, or audio-only "
+                   "latent taper, feather, or audio-only "
                    "AV feather, "
                    "including "
                    "independent guide audio carry and scene 1 Existing Video "
@@ -9757,6 +9813,8 @@ class MiniMaxH3ChainContext:
             preserve_audio_prefix = (
                 _audio_policy_uses_generated_continuity(cfg)
                 and audio_context_length > 0)
+            detail_video_seed = (
+                int(shot["seed"]) ^ int(DETAIL_AV_RECIPE["seed_xor"]))
             out_conditioning, out_latent, trim = apply_masked_prefix(
                 conditioning=conditioning,
                 vae=vae,
@@ -9772,6 +9830,8 @@ class MiniMaxH3ChainContext:
                 audio_only_feather=(
                     continuation_mode == "audio_feathered_av"),
                 preserve_audio_prefix=preserve_audio_prefix,
+                detail_video_taper=(continuation_mode == "tapered_av"),
+                detail_video_seed=detail_video_seed,
             )
             return (out_conditioning, trim, True, out_latent)
         previous_latent = (state.get("previous_latent")
@@ -9941,6 +10001,13 @@ class MiniMaxH3ChainSegmentSave:
         continuation_mode = migrate_continuation_mode(shot.get(
             "continuation_mode",
             compatibility.get("continuation_mode", "guide")))
+        if continuation_mode == "tapered_av" and blend_frames:
+            images_with_overlap = _detail_av_clean_blend_images(
+                state, images_with_overlap, blend_frames)
+            _LOG.info(
+                "H3 Detail AV: restored %d clean predecessor frames in the "
+                "blend artifact; the disposable noisy latent overlap remains "
+                "fully trimmed from delivered video.", blend_frames)
         incoming_guide_tone = (
             _state_guide_tone_carry(state)
             if continuation_mode == "tone_carry_guide" else None)
@@ -10380,9 +10447,13 @@ class MiniMaxH3ChainReview:
                                "through the current scene into a partial MP4."}),
                 "partial_audio_source": (["checkpointed", "source", "none"], {
                     "default": "checkpointed",
-                    "tooltip": "Audio for the partial MP4. checkpointed uses each "
-                               "saved delivered-audio track; source requires the "
-                               "full source_audio input."}),
+                    "tooltip": "Audio for the partial MP4 created by Approve "
+                               "& Stop. checkpointed uses each saved generated "
+                               "delivered-audio track; source uses the exact "
+                               "Source Timeline audio carried in state, or the "
+                               "legacy full source_audio input when no Source "
+                               "Timeline is available; none creates a silent "
+                               "partial."}),
             },
             "optional": {
                 "audio": ("AUDIO", {
@@ -10390,8 +10461,12 @@ class MiniMaxH3ChainReview:
                                "MiniMax H3 Contex Loop Trim for synchronized "
                                "review."}),
                 "source_audio": ("AUDIO", {
-                    "tooltip": "Optional full source track used only when partial "
-                               "audio source is source."}),
+                    "tooltip": "Legacy fallback full source track used only "
+                               "when partial_audio_source is source and state "
+                               "does not carry a 0.5 Source Timeline. Leave this "
+                               "disconnected in Source Timeline workflows. It "
+                               "does not affect generation or the per-scene "
+                               "review preview."}),
             },
             "hidden": {
                 "dynprompt": "DYNPROMPT",

@@ -98,6 +98,8 @@ def validate_v05_topology(workflow):
         ("guide", 22): ["guide", False, "guide", 22],
         ("tapered_guide", 22): [
             "detail_guide", False, "tapered_guide", 22],
+        ("tapered_av", 39): [
+            "detail_av", False, "tapered_av", 39],
         ("masked_av", 39): ["hard_av", False, "masked_av", 39],
         ("audio_feathered_av", 39): [
             "soft_av", False, "audio_feathered_av", 39],

@@ -15,6 +15,7 @@ const TRANSITION_PRESETS = Object.freeze({
     tone_guide: ["tone_carry_guide", 22],
     latent_guide: ["latent_guide", 22],
     detail_guide: ["tapered_guide", 22],
+    detail_av: ["tapered_av", 39],
     hard_av: ["masked_av", 39],
     soft_av: ["audio_feathered_av", 39],
     audio_feather_av: ["audio_feathered_av", 39],
