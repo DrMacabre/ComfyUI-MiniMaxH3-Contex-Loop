@@ -130,7 +130,7 @@ instead of overwriting an MP4 with the same requested name.
 | Setting | Good starting point | Meaning |
 |---|---:|---|
 | `width × height` | `960 × 544` | Multiples of 32 |
-| Incoming Transition | `Guide (22f)` | Semantic choice into each scene: Cut, Guide, Latent Guide, Detail Guide, Hard AV, or Soft AV |
+| Incoming Transition | `Guide (22f)` | Semantic choice into each scene: Cut, Guide, Tone Carry Guide, Latent Guide, Detail Guide, Hard AV, or Soft AV |
 | Context | preset-controlled | Advanced overrides can set the exact repeated motion history |
 | `encode_mode` | `video` | Preserves motion in the VAE latent |
 | `anchor_mode` | `head` | Regenerates then trims the repeated opening context |
@@ -143,11 +143,13 @@ Use `generation_fingerprint` to record model, VAE, LoRA, references, CFG,
 sampler, and scheduler choices that live outside the Plan. Change it when those
 dependencies change so incompatible checkpoints cannot be resumed silently.
 
-### Cut, Guide, Latent Guide, Detail Guide, Hard AV, and Soft AV transitions
+### Cut, Guide, Tone Carry Guide, Latent Guide, Detail Guide, Hard AV, and Soft AV transitions
 
 The semantic Transition Policy maps `Cut` to no carried picture, `Guide` to
-22 RGB/VAE guide frames, `Latent Guide` to 22 direct sampled-latent guide
-frames, experimental `Detail Guide` to a tapered chroma-noise 22-frame guide,
+22 RGB/VAE guide frames, experimental `Tone Carry Guide` to the same 22-frame
+RGB path with a saved predecessor tone correction, `Latent Guide` to 22 direct
+sampled-latent guide frames, experimental `Detail Guide` to a tapered
+chroma-noise 22-frame guide,
 `Hard AV` to a protected 39-frame AV prefix, and `Soft AV` to a temporally
 feathered 39-frame AV prefix. The old Plan `continuation_mode`,
 `context_length`, and combined `audio_mode` widgets are hidden from the normal
@@ -160,6 +162,15 @@ them a second set of controls on Plan.
 `guide` leaves the target latent noisy and supplies the previous scene as
 fixed conditioning rows. H3 regenerates the repeated head, and Loop Trim
 removes it. This remains the default.
+
+`tone_carry_guide` starts as normal RGB Guide. After each generated scene,
+Segment Save compares its first four delivered frames with the Guide appearance
+it actually received. A coherent small tone step is stored as a capped direct
+curve in the checkpoint metadata. If the next scene selects **Tone Carry
+Guide**, that curve is applied to its predecessor RGB context before video-VAE
+encoding. No curve means an automatic fallback to regular Guide. This mode
+intentionally does not use the direct video-latent shortcut; final automatic
+tone assembly recognizes the carried boundary and does not grade it twice.
 
 `latent_guide` keeps those same Guide semantics and leaves the new target
 latent untouched, but supplies the phase-aligned video tail directly from the

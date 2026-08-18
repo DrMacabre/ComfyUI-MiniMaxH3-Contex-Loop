@@ -60,6 +60,7 @@ node = chain.MiniMaxH3TransitionPolicy()
 expected = {
     "cut": ("guide", 0),
     "guide": ("guide", 22),
+    "tone_guide": ("tone_carry_guide", 22),
     "latent_guide": ("latent_guide", 22),
     "detail_guide": ("tapered_guide", 22),
     "hard_av": ("masked_av", 39),
@@ -74,7 +75,7 @@ for preset, (mode, context) in expected.items():
     assert policy["expert_override"] is False
     assert output_mode == mode and output_context == context
     assert " -> " in status
-    if preset == "detail_guide":
+    if preset in ("tone_guide", "detail_guide"):
         assert "experimental preset" in status
     else:
         assert "tested preset" in status
@@ -210,6 +211,57 @@ assert not torch.equal(captured["context_frames"], source[-39:])
 assert captured["context_latent"] is original_latent
 assert captured["video_context_latent"] is None
 
+tone_policy = node.build("tone_guide")[0]
+tone_curve = {
+    "version": "h3_guide_tone_carry_v1",
+    "points": [[0.0, 0.0], [0.25, 0.27], [0.75, 0.77], [1.0, 1.0]],
+}
+captured.clear()
+chain.MiniMaxH3MotionContext = CapturingMotionContext
+try:
+    tone_plan = make_plan(tone_policy)
+    tone_result = chain.MiniMaxH3ChainContext().apply(
+        state={
+            "index": 2,
+            "plan": tone_plan,
+            "previous_frames": source,
+            "previous_latent": original_latent,
+            "segments": [{"guide_tone_carry": tone_curve}],
+        },
+        conditioning="stock-conditioning",
+        vae=object(),
+        latent="target-latent",
+    )
+finally:
+    chain.MiniMaxH3MotionContext = original_motion_context
+
+assert tone_result == ("tapered-conditioning", 22, True, "target-latent")
+expected_tone = chain._apply_guide_tone_carry(source, tone_curve)
+assert torch.allclose(captured["context_frames"], expected_tone)
+assert float(captured["context_frames"].mean()) > float(source.mean())
+assert captured["video_context_latent"] is None
+assert captured["context_latent"] is original_latent
+
+# The detector stores a direct curve from the raw generated scene to the RGB
+# Guide it actually received. The clean first frame followed by a four-level
+# exposure step mirrors the real H3 boundary this feature was designed for.
+guide_gradient = torch.linspace(
+    0.03, 0.73, 32, dtype=torch.float32).reshape(1, 1, 32, 1)
+guide_gradient = guide_gradient.expand(1, 32, 32, 3).contiguous()
+guide_context = guide_gradient.repeat(8, 1, 1, 1)
+guide_generated = torch.cat((
+    guide_gradient,
+    torch.clamp(guide_gradient - (4.0 / 255.0), 0.0, 1.0).repeat(3, 1, 1, 1),
+), dim=0)
+detected_tone = chain._detect_guide_tone_carry(
+    guide_context, guide_generated)
+assert detected_tone is not None
+assert detected_tone["version"] == "h3_guide_tone_carry_v1"
+assert detected_tone["start_frame"] == 1
+corrected_guide = chain._apply_guide_tone_carry(
+    guide_generated, detected_tone)
+assert float(corrected_guide[-1].mean()) > float(guide_generated[-1].mean())
+
 latent_policy = node.build("latent_guide")[0]
 captured.clear()
 chain.MiniMaxH3MotionContext = CapturingMotionContext
@@ -288,7 +340,7 @@ assert len(legacy_adapter.OUTPUT_TOOLTIPS) == len(legacy_adapter.RETURN_TYPES)
 assert all(legacy_adapter.OUTPUT_TOOLTIPS)
 
 print(
-    "transition policy: Cut/Guide/Latent Guide/Detail Guide/Hard AV/Soft "
-    "AV/Audio Feather AV presets, expert "
+    "transition policy: Cut/Guide/Tone Carry Guide/Latent Guide/Detail Guide/"
+    "Hard AV/Soft AV/Audio Feather AV presets, expert "
     "overrides, zero-context delivery, AV safety validation, legacy fallback "
     "and adapter, Plan resolution, and typed node registration pass")

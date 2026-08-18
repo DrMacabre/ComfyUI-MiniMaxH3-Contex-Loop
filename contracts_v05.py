@@ -21,8 +21,8 @@ SOURCE_REFERENCE_POLICIES = ("off", "on")
 GENERATED_CONTINUITY_POLICIES = ("off", "on")
 PAIRED_AUDIO_POLICIES = ("off", "embedded")
 CONTINUATION_POLICIES = (
-    "guide", "latent_guide", "tapered_guide", "masked_av", "feathered_av",
-    "audio_feathered_av")
+    "guide", "tone_carry_guide", "latent_guide", "tapered_guide",
+    "masked_av", "feathered_av", "audio_feathered_av")
 TRANSITION_CONTEXT_LENGTHS = (
     0, 1, 5, 22, 39, 56, 73, 90, 107, 124,
     141, 158, 175, 192, 209, 226, 243,
@@ -56,6 +56,11 @@ TRANSITION_PRESETS = {
         "continuation_mode": "guide",
         "context_length": 22,
         "label": "Guided transition",
+    },
+    "tone_guide": {
+        "continuation_mode": "tone_carry_guide",
+        "context_length": 22,
+        "label": "Tone-carry guided transition",
     },
     "latent_guide": {
         "continuation_mode": "latent_guide",

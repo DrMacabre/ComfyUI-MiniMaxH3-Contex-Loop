@@ -9,6 +9,7 @@ import tempfile
 import types
 
 import av
+import numpy as np
 import torch
 
 
@@ -165,6 +166,114 @@ def main():
         assert pyav_frames[4][0, 0, 1] > 20
         assert pyav_frames[-1][0, 0, 2] > 200
 
+        # Automatic tone matching detects a coherent exposure step only after
+        # the protected overlap, fits a capped percentile curve, and applies
+        # it from that generated frame onward. The preceding context remains
+        # bit-for-bit on the uncorrected path.
+        gradient = torch.linspace(
+            0.03, 0.73, 32, dtype=torch.float32).reshape(1, 1, 32, 1)
+        gradient = gradient.expand(1, 32, 32, 3).contiguous()
+        darker = torch.clamp(gradient - (4.0 / 255.0), 0.0, 1.0)
+        tone_base_frames = gradient.repeat(10, 1, 1, 1)
+        tone_incoming_frames = torch.cat((
+            gradient.repeat(8, 1, 1, 1),
+            gradient,
+            darker.repeat(3, 1, 1, 1),
+        ), dim=0)
+        tone_base = root / "tone_base.mkv"
+        tone_incoming = root / "tone_incoming.mkv"
+        chain._write_lossless_rgb_video(
+            tone_base_frames, str(tone_base), 24)
+        chain._write_lossless_rgb_video(
+            tone_incoming_frames, str(tone_incoming), 24)
+        tone_records = [
+            {"path": str(tone_base), "input_frames": 10,
+             "delivered_frames": 10, "blend_frames": 0,
+             "skip_frames": 0},
+            {"path": str(tone_incoming), "input_frames": 12,
+             "delivered_frames": 4, "blend_frames": 8,
+             "skip_frames": 0},
+        ]
+        matched_records = chain._auto_boundary_tone_match_records(
+            tone_records)
+        tone_match = matched_records[1].get("tone_match")
+        assert tone_match is not None
+        assert tone_match["start_frame"] == 9
+        assert max(abs(value) for value in
+                   tone_match["applied_shifts"]) <= 6.0
+        assert "curves=all=" in chain._ffmpeg_boundary_tone_filter(
+            tone_match)
+
+        # A resume made before Tone Carry metadata existed recovers the same
+        # small curve from its two immutable scene videos. The segment record
+        # is enriched in memory; its checkpoint/latent is not touched.
+        tone_delivered = root / "tone_delivered.mkv"
+        chain._write_lossless_rgb_video(
+            torch.cat((gradient, darker.repeat(3, 1, 1, 1))),
+            str(tone_delivered), 24)
+        legacy_state = {
+            "segments": [
+                {"index": 1, "segment": str(tone_base)},
+                {"index": 2, "segment": str(tone_delivered)},
+            ],
+        }
+        recovered_tone = chain._recover_state_guide_tone_carry(legacy_state)
+        assert recovered_tone is not None
+        assert recovered_tone["version"] == "h3_guide_tone_carry_v1"
+        assert recovered_tone["recovered_from"] == "saved_scene_videos"
+        assert recovered_tone["start_frame"] == 1
+        assert legacy_state["segments"][1][
+            "guide_tone_carry"] is recovered_tone
+        assert chain._recover_state_guide_tone_carry(
+            legacy_state) is recovered_tone
+        tone_third = root / "tone_third.mkv"
+        chain._write_lossless_rgb_video(
+            darker.repeat(8, 1, 1, 1), str(tone_third), 24)
+        propagated_records = chain._auto_boundary_tone_match_records(
+            tone_records + [{
+                "path": str(tone_third), "input_frames": 8,
+                "delivered_frames": 4, "blend_frames": 4,
+                "skip_frames": 0,
+            }])
+        assert len(propagated_records[2]["tone_match_prefix"]) == 1
+        assert propagated_records[2].get("tone_match") is None
+        tone_carried = root / "tone_carried.mkv"
+        chain._write_lossless_rgb_video(
+            gradient.repeat(8, 1, 1, 1), str(tone_carried), 24)
+        generation_carried_records = chain._auto_boundary_tone_match_records(
+            tone_records + [{
+                "path": str(tone_carried), "input_frames": 8,
+                "delivered_frames": 4, "blend_frames": 4,
+                "skip_frames": 0, "generation_tone_carry": True,
+            }])
+        assert not generation_carried_records[2].get("tone_match_prefix")
+        assert generation_carried_records[2].get("tone_match") is None
+
+        def mean_luma(array):
+            return float(np.mean(
+                array[..., 0] * 0.2126 + array[..., 1] * 0.7152 +
+                array[..., 2] * 0.0722))
+
+        tone_off = root / "tone_off.mp4"
+        tone_auto = root / "tone_auto.mp4"
+        chain._pyav_blend_video(
+            tone_records, str(tone_off), {"title": "tone off"}, 14, 0)
+        chain._pyav_blend_video(
+            matched_records, str(tone_auto), {"title": "tone auto"}, 14, 0)
+        tone_off_frames = decode(tone_off)
+        tone_auto_frames = decode(tone_auto)
+        assert abs(mean_luma(tone_off_frames[11]) -
+                   mean_luma(tone_off_frames[10])) > 2.0
+        assert abs(mean_luma(tone_auto_frames[11]) -
+                   mean_luma(tone_auto_frames[10])) < 1.0
+        tone_propagated = root / "tone_propagated.mp4"
+        chain._pyav_blend_video(
+            propagated_records, str(tone_propagated),
+            {"title": "tone propagated"}, 18, 0)
+        tone_propagated_frames = decode(tone_propagated)
+        assert abs(mean_luma(tone_propagated_frames[14]) -
+                   mean_luma(tone_propagated_frames[13])) < 1.0
+
         ffmpeg = shutil.which("ffmpeg")
         if ffmpeg:
             metadata = root / "metadata.txt"
@@ -181,6 +290,15 @@ def main():
                 ffmpeg, chained_records, str(chained_output), str(metadata),
                 13, 0)
             assert len(decode(chained_output)) == 13
+            ffmpeg_tone = root / "ffmpeg_tone_auto.mp4"
+            chain._ffmpeg_blend_video(
+                ffmpeg, matched_records, str(ffmpeg_tone), str(metadata),
+                14, 0)
+            ffmpeg_tone_frames = decode(ffmpeg_tone)
+            ffmpeg_tone_delta = abs(
+                mean_luma(ffmpeg_tone_frames[11]) -
+                mean_luma(ffmpeg_tone_frames[10]))
+            assert ffmpeg_tone_delta < 1.5, ffmpeg_tone_delta
 
         checkpoint_one = root / "one.safetensors"
         checkpoint_two = root / "two.safetensors"
@@ -325,7 +443,8 @@ def main():
         assert len(decode(hard)) == 9
 
     print("H3 video blend: extended context validation, scheduled recovery, "
-          "chained xfade CFR, and frame-exact PyAV/ffmpeg assembly pass")
+          "automatic boundary tone matching, chained xfade CFR, and "
+          "frame-exact PyAV/ffmpeg assembly pass")
 
 
 if __name__ == "__main__":

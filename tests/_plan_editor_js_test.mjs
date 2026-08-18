@@ -31,8 +31,8 @@ assert.equal(AUTO_SCENE_COLORS.length, 12);
 assert.deepEqual(
     CONTINUATION_MODES,
     [
-        "guide", "latent_guide", "tapered_guide", "masked_av",
-        "feathered_av",
+        "guide", "tone_carry_guide", "latent_guide", "tapered_guide",
+        "masked_av", "feathered_av",
         "audio_feathered_av",
     ],
 );

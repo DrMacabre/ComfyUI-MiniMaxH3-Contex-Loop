@@ -23,9 +23,9 @@ import {
     setSharedPrompt,
     shotLengthMode,
     sharedPrompt,
-} from "./h3_chain_plan_core.mjs?v=0.5.0-latentguide1";
+} from "./h3_chain_plan_core.mjs?v=0.5.0-tonecarry1";
 import {availableReferenceRecords} from "./h3_reference_preview_core.mjs?v=0.5.0";
-import {resolveTransitionPolicy} from "./h3_socket_presentation_core.mjs?v=0.5.0-latentguide1";
+import {resolveTransitionPolicy} from "./h3_socket_presentation_core.mjs?v=0.5.0-tonecarry1";
 
 // This scene editor is an original implementation. Its quick @ reference and
 // # dialogue interactions are inspired by nkxx188/ComfyUI-MiniMaxH3-Easy,
@@ -910,6 +910,7 @@ function mountEditor(node) {
         for (const [value, label] of [
             ["", `Plan default · ${planContinuationMode}`],
             ["guide", "Guide · new shot"],
+            ["tone_carry_guide", "Tone Carry Guide · corrected RGB context"],
             ["latent_guide", "Latent Guide · direct generated latent"],
             ["tapered_guide", "Detail Guide · color injection"],
             ["masked_av", "Masked AV · same shot"],

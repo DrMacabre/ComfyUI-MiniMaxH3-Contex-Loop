@@ -22,14 +22,14 @@ import {
     setShotLengthMode,
     sharedPrompt,
     shotLengthMode,
-} from "./h3_chain_plan_core.mjs?v=0.5.0-latentguide1";
+} from "./h3_chain_plan_core.mjs?v=0.5.0-tonecarry1";
 import {
     promptRevisionHelp,
     promptRevisionLabel,
     promptRevisionNavigation,
 } from "./h3_prompt_history_core.mjs?v=0.5.0";
 import {availableReferenceRecords} from "./h3_reference_preview_core.mjs?v=0.5.0";
-import {resolveTransitionPolicy} from "./h3_socket_presentation_core.mjs?v=0.5.0-latentguide1";
+import {resolveTransitionPolicy} from "./h3_socket_presentation_core.mjs?v=0.5.0-tonecarry1";
 import {
     locateStudioTimelineSecond,
     h3StudioGridMarkers,
@@ -982,6 +982,7 @@ function mount(node) {
         for (const [value, label] of [
             ["", `Plan default · ${settings().continuationMode}`],
             ["guide", "Guide · new shot"],
+            ["tone_carry_guide", "Tone Carry Guide · corrected RGB context"],
             ["latent_guide", "Latent Guide · direct generated latent"],
             ["tapered_guide", "Detail Guide · color injection"],
             ["masked_av", "Masked AV · same shot"],

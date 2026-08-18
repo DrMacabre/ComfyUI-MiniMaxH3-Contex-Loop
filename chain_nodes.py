@@ -114,6 +114,11 @@ PLAN_VERSION = 2
 MAX_SHOTS = 128
 MAX_SEED = 0xFFFFFFFFFFFFFFFF
 MAX_H3_FRAMES = 3592  # largest 17k+5 value accepted by H3's 3600-frame socket
+BOUNDARY_TONE_MATCH_MODES = ("off", "auto")
+BOUNDARY_TONE_MATCH_CONTEXT_FRAMES = 8
+BOUNDARY_TONE_MATCH_SEARCH_FRAMES = 4
+BOUNDARY_TONE_MATCH_MIN_JUMP = 1.25
+BOUNDARY_TONE_MATCH_MAX_SHIFT = 6.0
 PLAN_STUDIO_PREVIEW_TTL_SECONDS = 6 * 60 * 60
 PLAN_STUDIO_PREVIEW_MAX_SESSIONS = 32
 PLAN_STUDIO_PREVIEW_MAX_HEIGHT = 480
@@ -125,10 +130,10 @@ H3_CONTEXT_LENGTHS = (
 )
 AUDIO_MODES = ("source_track", "generated_audio", "source_plus_timeline")
 CONTINUATION_MODES = (
-    "guide", "latent_guide", "tapered_guide", "masked_av", "feathered_av",
-    "audio_feathered_av")
+    "guide", "tone_carry_guide", "latent_guide", "tapered_guide",
+    "masked_av", "feathered_av", "audio_feathered_av")
 GUIDE_CONTINUATION_MODES = frozenset((
-    "guide", "latent_guide", "tapered_guide"))
+    "guide", "tone_carry_guide", "latent_guide", "tapered_guide"))
 MASKED_CONTINUATION_MODES = frozenset((
     "masked_av", "feathered_av", "audio_feathered_av"))
 REFERENCE_AUDIO_TIMELINE_MODES = ("standalone", "source_timeline")
@@ -272,8 +277,8 @@ def _resolved_transition_policy(value: Any) -> dict[str, Any]:
     context = int(compatibility.get("context_length", 0))
     preset = "legacy"
     for candidate in (
-            "cut", "guide", "latent_guide", "detail_guide", "hard_av",
-            "soft_av",
+            "cut", "guide", "tone_guide", "latent_guide", "detail_guide",
+            "hard_av", "soft_av",
             "audio_feather_av"):
         resolved = _contract_transition_policy(candidate)
         if (resolved["continuation_mode"] == mode and
@@ -302,6 +307,7 @@ def _transition_policy_display(value: Any) -> str:
     preset_labels = {
         "cut": "Cut",
         "guide": "Guide",
+        "tone_guide": "Tone Carry Guide",
         "latent_guide": "Latent Guide",
         "detail_guide": "Detail Guide",
         "hard_av": "Hard AV",
@@ -311,6 +317,7 @@ def _transition_policy_display(value: Any) -> str:
     }
     implementation_labels = {
         "guide": "Guide",
+        "tone_carry_guide": "Tone Carry Guide",
         "latent_guide": "Latent Guide",
         "tapered_guide": "Tapered Guide",
         "masked_av": "Masked AV",
@@ -4693,6 +4700,157 @@ def _tapered_guide_context(
     return tail
 
 
+def _state_guide_tone_carry(state: dict[str, Any]) -> dict[str, Any] | None:
+    """Return the predecessor's validated direct RGB carry curve, if any."""
+    segments = state.get("segments")
+    segment = segments[-1] if isinstance(segments, list) and segments else None
+    value = segment.get("guide_tone_carry") if isinstance(segment, dict) else None
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("H3 Guide tone-carry metadata is not a record.")
+    points = value.get("points")
+    if not isinstance(points, list) or len(points) < 3:
+        raise ValueError("H3 Guide tone-carry metadata has no usable curve.")
+    previous_x = previous_y = -1.0
+    for point in points:
+        if not isinstance(point, list) or len(point) != 2:
+            raise ValueError("H3 Guide tone-carry curve contains a bad point.")
+        x, y = float(point[0]), float(point[1])
+        if (x < 0.0 or x > 1.0 or y < 0.0 or y > 1.0 or
+                x <= previous_x or y < previous_y):
+            raise ValueError("H3 Guide tone-carry curve is not monotonic.")
+        previous_x, previous_y = x, y
+    return value
+
+
+def _decode_guide_tone_segment_window(
+        segment: dict[str, Any], position: str) -> Any:
+    """Decode only the small encoded boundary window needed for recovery."""
+    if av is None or np is None or torch is None:
+        raise RuntimeError(
+            "Saved-scene Guide tone recovery requires PyAV, NumPy, and torch.")
+    path_value = segment.get("segment")
+    if not isinstance(path_value, str) or not path_value:
+        raise ValueError("Saved H3 scene has no video artifact for tone recovery.")
+    path = _absolute_output_path(path_value)
+    if not os.path.isfile(path):
+        raise FileNotFoundError(
+            "Saved H3 scene video is missing for tone recovery: %s" % path)
+    if position == "tail":
+        selected: Any = deque(maxlen=BOUNDARY_TONE_MATCH_CONTEXT_FRAMES)
+        limit = BOUNDARY_TONE_MATCH_CONTEXT_FRAMES
+    elif position == "head":
+        selected = []
+        limit = BOUNDARY_TONE_MATCH_SEARCH_FRAMES
+    else:
+        raise ValueError("Guide tone recovery position must be head or tail.")
+    with av.open(path, mode="r") as container:
+        streams = list(container.streams.video)
+        if len(streams) != 1:
+            raise ValueError(
+                "Saved H3 scene %s contains %d video streams; expected 1." %
+                (path, len(streams)))
+        for frame in container.decode(streams[0]):
+            selected.append(frame.to_ndarray(format="rgb24"))
+            if position == "head" and len(selected) >= limit:
+                break
+    if not selected:
+        raise ValueError("Saved H3 scene contains no decodable video frames: %s"
+                         % path)
+    arrays = np.stack(list(selected), axis=0)
+    return torch.from_numpy(arrays.copy()).to(torch.float32).div_(255.0)
+
+
+def _recover_state_guide_tone_carry(
+        state: dict[str, Any]) -> dict[str, Any] | None:
+    """Backfill tone metadata from saved scenes without rerunning diffusion.
+
+    Early Tone Carry builds did not save a curve on existing checkpoints. A
+    scene-N resume still has immutable scene N-2 and N-1 video artifacts, so
+    the same bounded boundary analysis can be reconstructed from those files.
+    The saved latent/checkpoint is deliberately neither decoded nor rewritten.
+    """
+    existing = _state_guide_tone_carry(state)
+    if existing is not None:
+        return existing
+    segments = state.get("segments")
+    if not isinstance(segments, list) or len(segments) < 2:
+        return None
+    current = segments[-1]
+    previous = segments[-2]
+    if not isinstance(current, dict) or not isinstance(previous, dict):
+        return None
+    if bool(current.get("_guide_tone_recovery_attempted", False)):
+        return None
+    current["_guide_tone_recovery_attempted"] = True
+    try:
+        guide_reference = _decode_guide_tone_segment_window(previous, "tail")
+        generated_head = _decode_guide_tone_segment_window(current, "head")
+        # If this legacy scene was itself generated with Tone Carry, compare
+        # it against the corrected RGB Guide it actually received.
+        previous_curve = previous.get("guide_tone_carry")
+        if (bool(current.get("guide_tone_input_applied", False))
+                and isinstance(previous_curve, dict)):
+            guide_reference = _apply_guide_tone_carry(
+                guide_reference, previous_curve)
+        recovered = _detect_guide_tone_carry(
+            guide_reference, generated_head)
+    except Exception as exc:
+        _LOG.warning(
+            "H3 Chain Tone Carry Guide could not recover clip %d's RGB curve "
+            "from its saved scene videos; regular RGB Guide remains active: "
+            "%s", int(current.get("index", 0)), exc)
+        return None
+    if recovered is None:
+        _LOG.info(
+            "H3 Chain Tone Carry Guide found no coherent recoverable tone "
+            "step for saved clip %d; regular RGB Guide remains active.",
+            int(current.get("index", 0)))
+        return None
+    recovered["recovered_from"] = "saved_scene_videos"
+    current["guide_tone_carry"] = recovered
+    _LOG.info(
+        "H3 Chain Tone Carry Guide recovered clip %d's RGB curve from saved "
+        "scene videos (frame %d, luma jump %+.3f); its existing checkpoint "
+        "and sampled AV latent are reused unchanged.",
+        int(current.get("index", 0)), int(recovered["start_frame"]),
+        float(recovered["detected_luma_jump"]))
+    return recovered
+
+
+def _apply_guide_tone_carry(
+        frames: Any, match: dict[str, Any]) -> Any:
+    """Apply an assembly-compatible RGB curve without 8-bit quantization."""
+    if torch is None or not torch.is_tensor(frames):
+        raise ValueError("H3 Tone Carry Guide requires a torch IMAGE tensor.")
+    if frames.ndim != 4 or int(frames.shape[-1]) < 3:
+        raise ValueError(
+            "H3 Tone Carry Guide expects [frames,height,width,channels] RGB "
+            "images; received %s." % (tuple(frames.shape),))
+    if not frames.is_floating_point():
+        raise ValueError("H3 Tone Carry Guide requires floating-point images.")
+    points = match["points"]
+    xs = torch.tensor(
+        [float(point[0]) for point in points],
+        device=frames.device, dtype=frames.dtype)
+    ys = torch.tensor(
+        [float(point[1]) for point in points],
+        device=frames.device, dtype=frames.dtype)
+    result = frames.detach().contiguous().clone()
+    rgb = torch.clamp(result[..., :3], 0.0, 1.0)
+    upper = torch.bucketize(rgb.contiguous(), xs)
+    lower = torch.clamp(upper - 1, min=0, max=len(points) - 2)
+    upper = torch.clamp(upper, min=1, max=len(points) - 1)
+    x0, x1 = xs[lower], xs[upper]
+    y0, y1 = ys[lower], ys[upper]
+    amount = torch.where(
+        x1 > x0, (rgb - x0) / torch.clamp(x1 - x0, min=1e-8),
+        torch.zeros_like(rgb))
+    result[..., :3] = torch.clamp(y0 + amount * (y1 - y0), 0.0, 1.0)
+    return result
+
+
 def _compact_latent(latent: dict[str, Any]) -> dict[str, Any]:
     parts = _streams_from_latent(latent)
     if len(parts) < 2:
@@ -4780,7 +4938,8 @@ def _public_segment(value: dict[str, Any]) -> dict[str, Any]:
         "scene_dependency",
         "prompt_prefix", "scene_prompt", "prompt", "prompt_hash", "archives",
         "seed", "steps", "continuation_mode", "context_length",
-        "audio_context_length",
+        "audio_context_length", "guide_tone_carry",
+        "guide_tone_input_applied",
         "sample_rate", "segment_sha256",
         "checkpoint_sha256", "prompt_file_sha256", "predecessor_revision",
         "predecessor_checkpoint_sha256") if key in value}
@@ -7373,13 +7532,15 @@ class MiniMaxH3TransitionPolicy:
         return {
             "required": {
                 "preset": ((
-                        "cut", "guide", "latent_guide", "detail_guide",
-                        "hard_av", "soft_av",
+                        "cut", "guide", "tone_guide", "latent_guide",
+                        "detail_guide", "hard_av", "soft_av",
                         "audio_feather_av"
                 ), {
                     "default": "guide",
                     "tooltip": "Incoming-transition presets: Cut = "
                                "Guide + 0 frames; Guide = Guide + 22 frames; "
+                               "Tone Guide = RGB Guide + automatic predecessor "
+                               "tone carry + 22 frames (experimental); "
                                "Latent Guide = direct sampled-latent Guide + "
                                "22 frames, with RGB fallback for imported "
                                "context; "
@@ -7438,7 +7599,7 @@ class MiniMaxH3TransitionPolicy:
         status = _transition_policy_display({"transition_policy": policy})
         if policy["expert_override"]:
             status += "; expert override"
-        elif policy["preset"] == "detail_guide":
+        elif policy["preset"] in ("tone_guide", "detail_guide"):
             status += "; experimental preset; published baseline 22f"
         else:
             status += "; tested preset"
@@ -7494,8 +7655,8 @@ class MiniMaxH3Legacy04PolicyAdapter:
         context = int(context_length)
         matched_preset = None
         for candidate in (
-                "cut", "guide", "latent_guide", "detail_guide", "hard_av",
-                "soft_av",
+                "cut", "guide", "tone_guide", "latent_guide",
+                "detail_guide", "hard_av", "soft_av",
                 "audio_feather_av"):
             resolved = _contract_transition_policy(candidate)
             if (resolved["continuation_mode"] == mode and
@@ -7742,6 +7903,9 @@ class MiniMaxH3ChainPlan:
                                "the established Motion Context "
                                "path: previous AV is supplied as fixed guide "
                                "rows while the overlap is regenerated. "
+                               "tone_carry_guide uses the RGB guide path and "
+                               "applies the predecessor's detected direct tone "
+                               "curve before VAE encoding. "
                                "masked_av (experimental) VAE-encodes the "
                                "previous video tail into the current target "
                                "latent, copies its sampled audio tail, and "
@@ -9387,7 +9551,8 @@ class MiniMaxH3ChainContext:
     FUNCTION = "apply"
     CATEGORY = "conditioning/minimax/contex_loop"
     DESCRIPTION = ("Apply each scene's inherited or overridden RGB guide, "
-                   "latent guide, masked AV, full AV feather, or audio-only "
+                   "tone-carry RGB guide, latent guide, masked AV, full AV "
+                   "feather, or audio-only "
                    "AV feather, "
                    "including "
                    "independent guide audio carry and scene 1 Existing Video "
@@ -9468,6 +9633,21 @@ class MiniMaxH3ChainContext:
         if (generated_audio_context and previous_latent is None
                 and previous_audio is None and not external_first):
             raise ValueError("H3 chain continuation has no previous AV latent.")
+        if continuation_mode == "tone_carry_guide" and context_length > 0:
+            tone_carry = _recover_state_guide_tone_carry(state)
+            if tone_carry is not None:
+                previous_frames = _apply_guide_tone_carry(
+                    previous_frames, tone_carry)
+                _LOG.info(
+                    "H3 Chain Tone Carry Guide: applied clip %d's saved RGB "
+                    "curve to %d context frames before video VAE encoding; "
+                    "direct-latent Guide is intentionally disabled.",
+                    max(0, index - 1), int(previous_frames.shape[0]))
+            else:
+                _LOG.info(
+                    "H3 Chain Tone Carry Guide: clip %d has no detected carry "
+                    "curve; using regular RGB Guide for this boundary.",
+                    max(0, index - 1))
         if continuation_mode == "tapered_guide" and context_length > 0:
             noise_seed = int(shot["seed"]) ^ 0x5A17
             previous_frames = _tapered_guide_context(
@@ -9604,6 +9784,26 @@ class MiniMaxH3ChainSegmentSave:
                 "Segment Save. Wire it through MiniMax H3 Contex Loop Trim "
                 "first.")
         compact = _compact_latent(sampled_latent)
+        continuation_mode = migrate_continuation_mode(shot.get(
+            "continuation_mode",
+            compatibility.get("continuation_mode", "guide")))
+        incoming_guide_tone = (
+            _state_guide_tone_carry(state)
+            if continuation_mode == "tone_carry_guide" else None)
+        guide_reference = state.get("previous_frames")
+        if incoming_guide_tone is not None and guide_reference is not None:
+            guide_reference = _apply_guide_tone_carry(
+                guide_reference, incoming_guide_tone)
+        guide_tone_carry = _detect_guide_tone_carry(
+            guide_reference, images)
+        if guide_tone_carry is not None:
+            _LOG.info(
+                "H3 Chain saved Guide tone carry for clip %d: generated frame "
+                "%d, luma jump %+.3f, percentile shifts %s.",
+                index, int(guide_tone_carry["start_frame"]),
+                float(guide_tone_carry["detected_luma_jump"]),
+                ",".join("%+.3f" % float(value) for value in
+                         guide_tone_carry["applied_shifts"]))
         context_length = min(_plan_context_storage_length(plan), actual_frames)
         context_frames = _tensor_cpu_clone(
             images[:0] if context_length == 0 else images[-context_length:])
@@ -9726,6 +9926,10 @@ class MiniMaxH3ChainSegmentSave:
                 "checkpoint_sha256": _file_sha256(published_checkpoint),
                 "prompt_file_sha256": _file_sha256(published_prompt),
             }
+            if incoming_guide_tone is not None:
+                segment["guide_tone_input_applied"] = True
+            if guide_tone_carry is not None:
+                segment["guide_tone_carry"] = guide_tone_carry
             if published_blend is not None:
                 segment.update({
                     "blend_segment": _relative_output_path(published_blend),
@@ -11112,11 +11316,295 @@ def _blend_video_records(
             "delivered_frames": delivered,
             "blend_frames": expected_blend,
             "skip_frames": skip_frames,
+            # This scene's protected Guide was already moved into its
+            # predecessor's corrected RGB space before sampling. Final
+            # assembly must therefore stop propagating an older post-grade
+            # into this raw record or it would apply that curve twice.
+            "generation_tone_carry": bool(
+                item.get("guide_tone_input_applied", False)),
         })
         has_predecessor = True
     if not records:
         raise ValueError("H3 chain blend assembly has no video inputs.")
     return records if any(int(item["blend_frames"]) for item in records) else []
+
+
+def _boundary_luma(array: Any, stride: int = 1) -> Any:
+    """Return gamma-domain Rec.709 luma for inexpensive boundary analysis."""
+    if np is None:
+        raise RuntimeError("Automatic H3 boundary tone matching requires NumPy.")
+    if not isinstance(array, np.ndarray) or array.ndim != 3 or array.shape[-1] < 3:
+        raise ValueError(
+            "H3 boundary tone matching expected an RGB frame; got %r." %
+            (getattr(array, "shape", None),))
+    stride = max(1, int(stride))
+    sample = array[::stride, ::stride, :3].astype(np.float32, copy=False)
+    return (sample[..., 0] * 0.2126 + sample[..., 1] * 0.7152 +
+            sample[..., 2] * 0.0722)
+
+
+def _boundary_tone_curve(previous: Any, current: Any) -> dict[str, Any] | None:
+    """Fit a small monotonic curve from one generated boundary frame pair.
+
+    Percentiles distinguish a flat exposure step from ordinary local motion.
+    The correction is deliberately capped: assembly may remove a tiny H3
+    decode/generation tone step, but it must never become a general grade.
+    """
+    previous_luma = _boundary_luma(previous)
+    current_luma = _boundary_luma(current)
+    quantiles = (5.0, 50.0, 95.0)
+    target = np.percentile(previous_luma, quantiles).astype(np.float64)
+    source = np.percentile(current_luma, quantiles).astype(np.float64)
+    shifts = np.clip(
+        target - source,
+        -BOUNDARY_TONE_MATCH_MAX_SHIFT,
+        BOUNDARY_TONE_MATCH_MAX_SHIFT)
+    mean_jump = float(current_luma.mean() - previous_luma.mean())
+    desired_sign = -1.0 if mean_jump > 0.0 else 1.0
+    aligned = int(np.count_nonzero(shifts * desired_sign > 0.0))
+    if aligned < 2:
+        return None
+    # A percentile moving against the dominant exposure step is usually
+    # foreground motion. Do not build a curve that exaggerates it.
+    shifts = np.where(shifts * desired_sign < 0.0, 0.0, shifts)
+
+    points = [(0.0, 0.0)]
+    for source_value, shift in zip(source, shifts):
+        x = float(np.clip(source_value, 0.0, 255.0))
+        y = float(np.clip(source_value + shift, 0.0, 255.0))
+        if x <= points[-1][0] + 0.5:
+            continue
+        y = max(points[-1][1], y)
+        points.append((x, y))
+    if points[-1][0] < 254.5:
+        points.append((255.0, 255.0))
+    else:
+        points[-1] = (255.0, 255.0)
+    if len(points) < 3:
+        return None
+    # Preserve monotonicity from both ends after capping and de-duplication.
+    for index in range(len(points) - 2, -1, -1):
+        x, y = points[index]
+        points[index] = (x, min(y, points[index + 1][1]))
+    return {
+        "points": [[x / 255.0, y / 255.0] for x, y in points],
+        "source_percentiles": source.tolist(),
+        "target_percentiles": target.tolist(),
+        "applied_shifts": shifts.tolist(),
+        "mean_luma_jump": mean_jump,
+    }
+
+
+def _images_rgb8(frames: Any, usage: str) -> Any:
+    if torch is None or np is None or not torch.is_tensor(frames):
+        raise ValueError("%s requires a torch IMAGE tensor and NumPy." % usage)
+    if frames.ndim != 4 or int(frames.shape[-1]) < 3:
+        raise ValueError(
+            "%s expected [frames,height,width,channels] RGB images; got %s." %
+            (usage, tuple(frames.shape)))
+    return (torch.clamp(frames[..., :3].detach(), 0.0, 1.0)
+            .mul(255.0).round().to(torch.uint8).cpu().numpy())
+
+
+def _detect_guide_tone_carry(
+    previous_frames: Any,
+    generated_frames: Any,
+) -> dict[str, Any] | None:
+    """Fit the current scene's raw output back to its actual RGB Guide.
+
+    Unlike final assembly, this sees delivered tensors before they are written
+    to disk.  The saved direct curve can therefore be applied to this scene's
+    tail when it becomes the next scene's RGB Guide.
+    """
+    if previous_frames is None:
+        return None
+    context_count = min(
+        int(previous_frames.shape[0]), BOUNDARY_TONE_MATCH_CONTEXT_FRAMES)
+    probe_count = min(
+        int(generated_frames.shape[0]), BOUNDARY_TONE_MATCH_SEARCH_FRAMES)
+    if context_count < 2 or probe_count < 1:
+        return None
+    # Slice on the source device before the CPU/uint8 conversion. A full H3
+    # scene can be hundreds of frames and is unnecessary for this four-frame
+    # boundary probe.
+    context = _images_rgb8(
+        previous_frames[-context_count:], "H3 Guide tone detection")
+    probe = _images_rgb8(
+        generated_frames[:probe_count], "H3 Guide tone detection")
+    context_means = [
+        float(_boundary_luma(frame, stride=8).mean()) for frame in context]
+    probe_means = [
+        float(_boundary_luma(frame, stride=8).mean()) for frame in probe]
+    baseline_deltas = [
+        abs(context_means[index] - context_means[index - 1])
+        for index in range(1, len(context_means))]
+    baseline = float(np.median(baseline_deltas)) if baseline_deltas else 0.0
+    mad = (float(np.median(np.abs(
+        np.asarray(baseline_deltas, dtype=np.float64) - baseline)))
+        if baseline_deltas else 0.0)
+    threshold = max(
+        BOUNDARY_TONE_MATCH_MIN_JUMP, baseline + 4.0 * mad)
+    joined_means = [context_means[-1], *probe_means]
+    onset = max(
+        range(probe_count),
+        key=lambda index: abs(joined_means[index + 1] -
+                              joined_means[index]))
+    jump = float(joined_means[onset + 1] - joined_means[onset])
+    if abs(jump) < threshold:
+        return None
+    predecessor = context[-1] if onset == 0 else probe[onset - 1]
+    curve = _boundary_tone_curve(predecessor, probe[onset])
+    if curve is None:
+        return None
+    curve.update({
+        "version": "h3_guide_tone_carry_v1",
+        "start_frame": int(onset),
+        "detected_luma_jump": jump,
+        "detection_threshold": threshold,
+        "context_motion_baseline": baseline,
+    })
+    return curve
+
+
+def _detect_boundary_tone_match(
+    record: dict[str, Any],
+    inherited_matches: list[dict[str, Any]] | None = None,
+) -> dict[str, Any] | None:
+    """Detect the first coherent tone step after an incoming overlap."""
+    if av is None or np is None:
+        return None
+    blend = int(record.get("blend_frames", 0))
+    delivered = int(record.get("delivered_frames", 0))
+    if blend < 2 or delivered < 1:
+        return None
+    skip = max(0, int(record.get("skip_frames", 0)))
+    baseline_start = max(0, blend - BOUNDARY_TONE_MATCH_CONTEXT_FRAMES)
+    probe_stop = blend + min(
+        delivered, BOUNDARY_TONE_MATCH_SEARCH_FRAMES)
+    means: dict[int, float] = {}
+    candidates: dict[int, Any] = {}
+    inherited_luts = [
+        _boundary_tone_lut(match)
+        for match in (inherited_matches or [])
+    ]
+    local_index = -skip
+    for array in _decode_rgb_frames(record["path"]):
+        if local_index >= probe_stop:
+            break
+        for lut in inherited_luts:
+            array = lut[array]
+        if local_index >= baseline_start:
+            means[local_index] = float(_boundary_luma(array, stride=8).mean())
+        if local_index >= blend - 1:
+            candidates[local_index] = array
+        local_index += 1
+
+    required = tuple(range(blend - 1, probe_stop))
+    if any(index not in means or index not in candidates for index in required):
+        raise ValueError(
+            "H3 boundary tone analysis could not decode the expected frames "
+            "around overlap %d from %s." % (blend, record["path"]))
+    baseline_deltas = [
+        abs(means[index] - means[index - 1])
+        for index in range(baseline_start + 1, blend)
+        if index in means and index - 1 in means
+    ]
+    if baseline_deltas:
+        baseline = float(np.median(baseline_deltas))
+        mad = float(np.median(np.abs(
+            np.asarray(baseline_deltas, dtype=np.float64) - baseline)))
+    else:
+        baseline = mad = 0.0
+    threshold = max(
+        BOUNDARY_TONE_MATCH_MIN_JUMP,
+        baseline + 4.0 * mad)
+
+    onset = max(
+        range(blend, probe_stop),
+        key=lambda index: abs(means[index] - means[index - 1]))
+    jump = float(means[onset] - means[onset - 1])
+    if abs(jump) < threshold:
+        return None
+    curve = _boundary_tone_curve(
+        candidates[onset - 1], candidates[onset])
+    if curve is None:
+        return None
+    curve.update({
+        "start_frame": int(onset),
+        "detected_luma_jump": jump,
+        "detection_threshold": threshold,
+        "context_motion_baseline": baseline,
+    })
+    return curve
+
+
+def _auto_boundary_tone_match_records(
+    records: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Annotate blend inputs with conservative post-context tone curves."""
+    prepared = [dict(record) for record in records]
+    if av is None or np is None:
+        _LOG.warning(
+            "H3 automatic boundary tone matching is unavailable because "
+            "PyAV or NumPy could not be imported; continuing without it.")
+        return prepared
+    inherited_matches: list[dict[str, Any]] = []
+    for index, record in enumerate(prepared[1:], start=2):
+        if bool(record.get("generation_tone_carry", False)):
+            inherited_matches = []
+        if inherited_matches:
+            # Every later scene's protected overlap came from the ungraded
+            # predecessor checkpoint. Carry the already accepted assembly
+            # curves across that overlap so a correction never creates the
+            # next boundary it was meant to remove.
+            record["tone_match_prefix"] = [
+                dict(match) for match in inherited_matches
+            ]
+        try:
+            match = _detect_boundary_tone_match(
+                record, inherited_matches=inherited_matches)
+        except Exception as exc:
+            _LOG.warning(
+                "H3 boundary tone analysis skipped input %d: %s", index, exc)
+            continue
+        if match is None:
+            continue
+        record["tone_match"] = match
+        inherited_matches.append(match)
+        _LOG.info(
+            "H3 boundary tone match input %d: start frame %d, luma jump "
+            "%+.3f, percentile shifts %s.",
+            index, int(match["start_frame"]),
+            float(match["detected_luma_jump"]),
+            ",".join("%+.3f" % float(value)
+                     for value in match["applied_shifts"]))
+    return prepared
+
+
+def _ffmpeg_boundary_tone_filter(match: dict[str, Any]) -> str:
+    points = " ".join(
+        "%.6f/%.6f" % (float(x), float(y))
+        for x, y in match["points"])
+    # Use the post-trim input frame index. A rounded N/FPS timestamp can land
+    # a fraction above the actual PTS and activate one frame late.
+    start = int(match["start_frame"])
+    return "curves=all='%s':enable='gte(n\\,%d)'" % (points, start)
+
+
+def _ffmpeg_boundary_tone_prefix_filter(match: dict[str, Any]) -> str:
+    points = " ".join(
+        "%.6f/%.6f" % (float(x), float(y))
+        for x, y in match["points"])
+    return "curves=all='%s'" % points
+
+
+def _boundary_tone_lut(match: dict[str, Any]) -> Any:
+    if np is None:
+        raise RuntimeError("Automatic H3 boundary tone matching requires NumPy.")
+    points = np.asarray(match["points"], dtype=np.float64) * 255.0
+    values = np.interp(
+        np.arange(256, dtype=np.float64), points[:, 0], points[:, 1])
+    return np.clip(values, 0.0, 255.0).round().astype(np.uint8)
 
 
 def _ffmpeg_blend_video(
@@ -11137,10 +11625,18 @@ def _ffmpeg_blend_video(
     for index in range(len(records)):
         skip = int(records[index].get("skip_frames", 0))
         count = int(records[index]["input_frames"])
-        filters.append(
-            "[%d:v]fps=%d,trim=start_frame=%d:end_frame=%d,"
-            "settb=AVTB,setpts=N/(%d*TB)[v%d]" %
-            (index, FPS, skip, skip + count, FPS, index))
+        operations = (
+            "fps=%d,trim=start_frame=%d:end_frame=%d,"
+            "settb=AVTB,setpts=N/(%d*TB)" %
+            (FPS, skip, skip + count, FPS))
+        tone_prefix = records[index].get("tone_match_prefix") or []
+        for match in tone_prefix:
+            if isinstance(match, dict):
+                operations += "," + _ffmpeg_boundary_tone_prefix_filter(match)
+        tone_match = records[index].get("tone_match")
+        if isinstance(tone_match, dict):
+            operations += "," + _ffmpeg_boundary_tone_filter(tone_match)
+        filters.append("[%d:v]%s[v%d]" % (index, operations, index))
     previous = "v0"
     cumulative = int(records[0]["delivered_frames"])
     for index, record in enumerate(records[1:], start=1):
@@ -11239,9 +11735,28 @@ def _pyav_blend_video(
             iterator = iter(_decode_rgb_frames(record["path"]))
             expected_input = int(record["input_frames"])
             blend = int(record["blend_frames"])
+            tone_prefix_luts = [
+                _boundary_tone_lut(match)
+                for match in (record.get("tone_match_prefix") or [])
+                if isinstance(match, dict)
+            ]
+            tone_match = record.get("tone_match")
+            tone_start = (int(tone_match["start_frame"])
+                          if isinstance(tone_match, dict) else None)
+            tone_lut = (_boundary_tone_lut(tone_match)
+                        if isinstance(tone_match, dict) else None)
             next_blend = (int(records[record_index + 1]["blend_frames"])
                           if record_index + 1 < len(records) else 0)
             seen = 0
+
+            def tone_adjust(array: Any, frame_index: int) -> Any:
+                for prefix_lut in tone_prefix_luts:
+                    array = prefix_lut[array]
+                if (tone_lut is not None and tone_start is not None and
+                        int(frame_index) >= tone_start):
+                    array = tone_lut[array]
+                return array
+
             for _ in range(int(record.get("skip_frames", 0))):
                 try:
                     next(iterator)
@@ -11266,6 +11781,7 @@ def _pyav_blend_video(
                     except StopIteration as exc:
                         raise ValueError(
                             "H3 blend input ended inside its overlap.") from exc
+                    incoming = tone_adjust(incoming, seen)
                     previous = pending.popleft()
                     alpha = (offset + 1) / float(blend + 1)
                     mixed = np.clip(
@@ -11275,6 +11791,7 @@ def _pyav_blend_video(
                     encode(mixed)
                     seen += 1
                 for array in iterator:
+                    array = tone_adjust(array, seen)
                     pending.append(array)
                     seen += 1
                     while len(pending) > next_blend:
@@ -11733,6 +12250,16 @@ class MiniMaxH3ChainAssemble:
                                "value repeats; extra values are ignored by a "
                                "shorter partial manifest. This never reruns "
                                "diffusion."}),
+                "boundary_tone_match": (BOUNDARY_TONE_MATCH_MODES, {
+                    "default": "off",
+                    "tooltip": "Optional assembly-only boundary correction. "
+                               "auto compares the protected overlap with the "
+                               "first generated frames, detects a coherent "
+                               "exposure/contrast step, and applies a small "
+                               "capped tone curve only after that step. "
+                               "Accepted corrections are carried through "
+                               "later overlaps so they do not create a new "
+                               "seam. This never reruns diffusion."}),
                 "source_audio": ("AUDIO", {
                     "tooltip": "Full original source track. Required when "
                                "audio_source resolves to source; it is trimmed "
@@ -11770,9 +12297,16 @@ class MiniMaxH3ChainAssemble:
                  source_audio=None, overwrite_existing=False,
                  copy_to_output=False, output_subfolder="",
                  source_timeline=None, blend_schedule="plan",
-                 blend_video_vae=None):
+                 blend_video_vae=None, boundary_tone_match="off"):
         segments = _validate_manifest(manifest)
         prelude = _validate_prelude(manifest)
+        tone_match_mode = str(
+            boundary_tone_match if boundary_tone_match is not None
+            else "off").strip().lower()
+        if tone_match_mode not in BOUNDARY_TONE_MATCH_MODES:
+            raise ValueError(
+                "H3 Chain Assemble boundary_tone_match must be off or auto; "
+                "got %r." % boundary_tone_match)
         selected = audio_source
         if selected == "plan":
             selected = _audio_policy_final(manifest)
@@ -11887,6 +12421,9 @@ class MiniMaxH3ChainAssemble:
                 blend_schedule=blend_schedule,
                 video_vae=blend_video_vae,
                 temporary_paths=scheduled_blend_temps)
+            if tone_match_mode == "auto" and blend_records:
+                blend_records = _auto_boundary_tone_match_records(
+                    blend_records)
             blend_enabled = bool(blend_records)
             media_metadata = _manifest_media_metadata(manifest)
             if blend_enabled:
@@ -11986,9 +12523,20 @@ class MiniMaxH3ChainAssemble:
             "; scheduled visual blends [%s]" % ",".join(
                 str(value) for value in resolved_blends)
             if any(resolved_blends) else "; hard cuts")
-        status = "assembled %d generated clips%s with %s%s -> %s%s%s" % (
+        matched_boundaries = sum(
+            1 for record in blend_records[1:]
+            if isinstance(record.get("tone_match"), dict))
+        tone_status = (
+            "; auto tone matched %d %s" % (
+                matched_boundaries,
+                "boundary" if matched_boundaries == 1 else "boundaries")
+            if tone_match_mode == "auto" and matched_boundaries else
+            ("; auto tone match found no coherent step"
+             if tone_match_mode == "auto" else ""))
+        status = "assembled %d generated clips%s with %s%s%s -> %s%s%s" % (
             len(segments), " + existing-video prelude" if prelude else "",
-            backend, blend_status, final_path, sidecar_status, copy_status)
+            backend, blend_status, tone_status, final_path,
+            sidecar_status, copy_status)
         _LOG.info("H3 Chain %s", status)
         published_video = output_copy or final_path
         _publish_final_review_preview(manifest, published_video, status)

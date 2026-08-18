@@ -23,7 +23,15 @@ Saved 0.4 modes migrate without changing behavior:
 | `source_track` | source | on | off |
 | `source_plus_timeline` | source | on | on |
 
-These descriptions apply to `guide`, `latent_guide`, and `tapered_guide`.
+These descriptions apply to `guide`, `tone_carry_guide`, `latent_guide`, and
+`tapered_guide`.
+Tone Carry Guide uses the RGB/VAE route and applies the predecessor's saved,
+direct boundary-tone curve before encoding its context. It falls back to clean
+Guide when no coherent curve was detected and never silently takes the direct
+video-latent path.
+When an older checkpoint predates this curve metadata, resume recovers it from
+the two existing scene videos. The saved checkpoint and sampled AV latent are
+reused unchanged; diffusion is not rerun.
 Latent Guide reuses the generated predecessor's sampled video-latent tail
 directly, while imported or incompatible context falls back to the normal
 RGB/VAE Guide route. Tapered Guide changes only the disposable video context
@@ -43,12 +51,13 @@ first 8 video / 42 audio steps and ramps the final 4 video / 23 audio prefix
 steps.
 
 Transition Policy controls the incoming boundary: Cut carries no picture,
-Guide uses 22 clean RGB/VAE guide frames, Latent Guide uses the same span from
-the saved sampled video latent, Detail Guide uses the same span with an
+Guide uses 22 clean RGB/VAE guide frames, Tone Carry Guide uses the same RGB
+span with the predecessor's detected tone correction, Latent Guide uses the
+same span from the saved sampled video latent, Detail Guide uses the same span with an
 eight-frame chroma-noise exit taper, Hard AV uses a protected 39-frame prefix,
 and Soft AV uses the same prefix with a feathered denoise boundary. Advanced
-mode may pair `tapered_guide` with another Guide context length; 22 is the
-published baseline. Mixed plans must still use
+mode may pair either experimental Guide with another Guide context length; 22
+is the published baseline. Mixed plans must still use
 encode/anchor settings compatible with every AV-mask scene.
 
 ## Source Timeline wiring
