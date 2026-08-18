@@ -4,6 +4,10 @@ Newest first. This file keeps release history out of the onboarding README.
 
 ## v0.5.0 — Source Timeline and workflow clarity
 
+- Recognized the final merged ComfyUI PR #15375 helper-based mask API and left
+  it fully native. The old-build fallback now mirrors merge-time commit
+  `c676536`, including pooled token-grid masks and ceil-quantized 8-bit mask
+  strengths, and removes obsolete pre-merge wrappers before capability checks.
 - Restored saved prompts, Plan widgets, and connected 0.5 audio/transition
   policy nodes together when loading a run or checkpoint revision. Revision
   recovery now uses the selected checkpoint chain's policy metadata instead of

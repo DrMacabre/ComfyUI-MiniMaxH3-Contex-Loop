@@ -10,8 +10,8 @@ support wins; compatibility is installed only for missing pieces. Restarting
 ComfyUI reverts all runtime modifications.
 
 Originally adapted from seitanism/ComfyUI-H3-Motion-Context-MultiRef
-(GPL-3.0). This compatibility snapshot now tracks ComfyUI PR #15375 through
-commit 989e7a9, reviewed on 2026-08-15.
+(GPL-3.0). This compatibility snapshot tracks the merged ComfyUI PR #15375,
+including final refactor commit c676536, reviewed on 2026-08-18.
 """
 
 from __future__ import annotations
@@ -23,12 +23,16 @@ import types
 
 
 _LOG = logging.getLogger("minimax_h3_context_loop.masked_prefix")
-# Version 3 follows PR #15375's post-review mask-blend design. Version 2 used
+# Version 4 follows the final merged PR #15375 token-grid helper design.
+# Version 3 follows the pre-merge post-review mask-blend design. Version 2 used
 # ``process_denoise_mask`` to replace the user's mask with its pooled token
-# mask. The diffusion engine itself remains compatible, but the v2 model hooks
-# must be replaced because they reintroduce the edge artifact fixed upstream.
-_MARKER = "_h3_motion_context_pr15375_compat_v3"
-_LEGACY_MARKER = "_h3_motion_context_pr15375_compat_v2"
+# mask. The diffusion engine itself remains compatible, but the v2/v3 model
+# hooks must be replaced to match the final merged ceil-quantized token grid.
+_MARKER = "_h3_motion_context_pr15375_compat_v4"
+_LEGACY_MARKERS = (
+    "_h3_motion_context_pr15375_compat_v2",
+    "_h3_motion_context_pr15375_compat_v3",
+)
 _SAMPLER_MARKER = "_h3_motion_context_pr15375_sampler_blend_v3"
 _ACTIVE_MASK_ATTR = "_h3_motion_context_active_denoise_mask_v3"
 
@@ -52,7 +56,7 @@ def _is_ours(fn):
 
 
 def _is_legacy_compat(fn):
-    return bool(getattr(fn, _LEGACY_MARKER, False))
+    return any(getattr(fn, marker, False) for marker in _LEGACY_MARKERS)
 
 
 def _is_known_engine_compat(fn):
@@ -112,6 +116,25 @@ def _sampler_passes_mask_to_scale(fn):
     )
 
 
+def _model_mask_helpers(cls):
+    names = (
+        "_pool_masks_to_token_grid",
+        "_token_grid_masks",
+        "_denoise_mask_values",
+        "_denoise_mask_conds",
+    )
+    methods = [cls.__dict__.get(name) for name in names] if cls else []
+    complete = bool(methods and all(callable(item) for item in methods))
+    return {
+        "complete": complete,
+        "native": bool(
+            complete and not any(_is_known_engine_compat(item)
+                                 for item in methods)),
+        "compat": bool(
+            complete and all(_is_ours(item) for item in methods)),
+    }
+
+
 def capability_status():
     import comfy.model_base as model_base
     import comfy.ldm.minimax.model as h3m
@@ -158,6 +181,7 @@ def capability_status():
         and _is_known_engine_compat(forward)
         and _is_known_engine_compat(inner)
     )
+    helpers = _model_mask_helpers(cls)
 
     return {
         "process_denoise_mask_native": process_native,
@@ -173,6 +197,9 @@ def capability_status():
         "mask_engine_native": bool(engine_complete and not engine_ours),
         "mask_engine_compat": engine_ours,
         "mask_engine_indicators": engine_indicators,
+        "mask_helpers_complete": helpers["complete"],
+        "mask_helpers_native": helpers["native"],
+        "mask_helpers_compat": helpers["compat"],
     }
 
 
@@ -450,7 +477,7 @@ def _install_engine_compat(h3m):
 
 
 def _install_model_base_hooks(model_base):
-    """Build the post-989e7a9 H3 model hooks.
+    """Build the final merged #15375 H3 model hooks.
 
     The identity preprocessing hook is only used on intermediate #15375
     builds whose sampler still calls it. Returning the original mask is
@@ -480,6 +507,33 @@ def _install_model_base_hooks(model_base):
     return pooled''',
         "_pool_masks_to_token_grid",
     )
+    token_grid_masks = _exec_into(
+        model_base,
+        '''def _token_grid_masks(self, denoise_mask, latent_shapes):
+    masks = utils.unpack_latents(denoise_mask, latent_shapes)
+    return [torch.ceil(mask * 256.0) / 256.0 for mask in self._pool_masks_to_token_grid(masks)]''',
+        "_token_grid_masks",
+    )
+    denoise_mask_values = _exec_into(
+        model_base,
+        '''def _denoise_mask_values(self, denoise_mask, latent_shapes):
+    if latent_shapes is None or len(latent_shapes) < 2:
+        return {}
+    masks = self._token_grid_masks(denoise_mask, latent_shapes)
+    out = {}
+    if torch.amin(masks[0]).item() < 1.0 - 1e-3:
+        out["denoise_mask"] = masks[0][:1, :1].clone()
+    if torch.amin(masks[1]).item() < 1.0 - 1e-3:
+        out["audio_denoise_mask"] = masks[1][:1].amax(dim=1, keepdim=True)
+    return out''',
+        "_denoise_mask_values",
+    )
+    denoise_mask_conds = _exec_into(
+        model_base,
+        '''def _denoise_mask_conds(self, denoise_mask, latent_shapes):
+    return {name: comfy.conds.CONDRegular(value) for name, value in self._denoise_mask_values(denoise_mask, latent_shapes).items()}''',
+        "_denoise_mask_conds",
+    )
     scale_latent_inpaint = _exec_into(
         model_base,
         '''def scale_latent_inpaint(self, sigma, noise, latent_image, x=None, denoise_mask=None, **kwargs):
@@ -502,10 +556,8 @@ def _install_model_base_hooks(model_base):
         denoise_mask = getattr(self, "_h3_motion_context_active_denoise_mask_v3", None)
     if x is None or denoise_mask is None:
         return injected
-    masks = utils.unpack_latents(denoise_mask, shapes)
-    pooled_token_grid = utils.pack_latents(self._pool_masks_to_token_grid(masks))[0]
-    pooled_token_grid = torch.round(pooled_token_grid * 256.0) / 256.0
-    x_blend_weight = (pooled_token_grid - denoise_mask) / (1.0 - denoise_mask).clamp(min=1e-6)
+    token_grid_mask = utils.pack_latents(self._token_grid_masks(denoise_mask, shapes))[0]
+    x_blend_weight = (token_grid_mask - denoise_mask) / (1.0 - denoise_mask).clamp(min=1e-6)
     x_blend_weight = torch.where(denoise_mask < 1.0, x_blend_weight.clamp(0.0, 1.0), torch.zeros_like(x_blend_weight))
     return injected + x_blend_weight.to(injected.dtype) * (x - injected)''',
         "scale_latent_inpaint",
@@ -513,10 +565,20 @@ def _install_model_base_hooks(model_base):
     for fn in (
         process_denoise_mask,
         pool_masks_to_token_grid,
+        token_grid_masks,
+        denoise_mask_values,
+        denoise_mask_conds,
         scale_latent_inpaint,
     ):
         _mark(fn)
-    return process_denoise_mask, pool_masks_to_token_grid, scale_latent_inpaint
+    return (
+        process_denoise_mask,
+        pool_masks_to_token_grid,
+        token_grid_masks,
+        denoise_mask_values,
+        denoise_mask_conds,
+        scale_latent_inpaint,
+    )
 
 
 def _install_sampler_mask_bridge(model_base):
@@ -622,16 +684,21 @@ def ensure_h3_mask_compat():
     need_scale = not (
         status["scale_latent_inpaint_native"]
         or status["scale_latent_inpaint_compat"])
+    need_helpers = not status["mask_helpers_complete"]
     legacy_scale = _is_legacy_compat(
         getattr(cls, "scale_latent_inpaint", None))
     needs_attribute_bridge = not before["sampler_mask_blend_native"]
     # A v2 compatibility scale has the old preprocessing contract even though
     # it is callable, so replace it deliberately.
-    if need_scale or legacy_scale or (
+    if need_scale or need_helpers or legacy_scale or (
             needs_attribute_bridge
             and not status["scale_latent_inpaint_compat"]):
-        process_fn, pool_fn, scale_fn = _install_model_base_hooks(model_base)
+        (process_fn, pool_fn, token_fn, values_fn, conds_fn,
+         scale_fn) = _install_model_base_hooks(model_base)
         cls._pool_masks_to_token_grid = pool_fn
+        cls._token_grid_masks = token_fn
+        cls._denoise_mask_values = values_fn
+        cls._denoise_mask_conds = conds_fn
         cls.scale_latent_inpaint = scale_fn
         _LOG.info(
             "h3_masked_prefix: PR #15375 token-aligned inpaint scaling "

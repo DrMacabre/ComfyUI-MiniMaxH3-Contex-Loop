@@ -787,8 +787,9 @@ def main():
         "scene settings are history-significant, and invalid configurations "
         "are rejected")
 
-    # Native post-989e7a9 PR #15375 support must remain authoritative. The
-    # removed process_denoise_mask hook must not be recreated on this path.
+    # Native merged PR #15375 support must remain authoritative. The final
+    # helper-based extra_conds path must be detected even though its bytecode
+    # no longer mentions audio_denoise_mask directly.
     h3m = sys.modules["comfy.ldm.minimax.model"]
     model_base = sys.modules["comfy.model_base"]
     samplers = sys.modules["comfy.samplers"]
@@ -812,9 +813,17 @@ def main():
             return value
 
     class NativeBase:
-        def process_timestep(
-                self, timestep, denoise_mask=None, audio_denoise_mask=None):
-            return timestep
+        def _pool_masks_to_token_grid(self, masks):
+            return masks
+
+        def _token_grid_masks(self, denoise_mask, latent_shapes):
+            return [denoise_mask, latent_shapes]
+
+        def _denoise_mask_values(self, denoise_mask, latent_shapes):
+            return {"denoise_mask": denoise_mask}
+
+        def _denoise_mask_conds(self, denoise_mask, latent_shapes):
+            return self._denoise_mask_values(denoise_mask, latent_shapes)
 
         def scale_latent_inpaint(
                 self, sigma, noise, latent_image, x=None,
@@ -822,11 +831,12 @@ def main():
             return kwargs
 
         def extra_conds(self, **kwargs):
-            # Bytecode exposes both native payload keys.
-            return {
-                "denoise_mask": kwargs.get("denoise_mask"),
-                "audio_denoise_mask": kwargs.get("audio_denoise_mask"),
-            }
+            out = {}
+            denoise_mask = kwargs.get("denoise_mask")
+            if denoise_mask is not None:
+                out.update(self._denoise_mask_conds(
+                    denoise_mask, kwargs.get("latent_shapes")))
+            return out
 
     class NativeSampler:
         def __call__(self, x, sigma, denoise_mask, model_options=None,
@@ -857,10 +867,14 @@ def main():
     assert "process_denoise_mask" not in NativeBase.__dict__
     native_status = mask_compat.capability_status()
     assert native_status["mask_engine_native"]
+    assert native_status["mask_helpers_native"]
     assert native_status["scale_latent_inpaint_native"]
     assert native_status["sampler_mask_blend_native"]
-    assert payload_compat.capability_status()["native_av_mask_payload"]
-    assert mask_compat._MARKER == "_h3_motion_context_pr15375_compat_v3"
+    native_payload_status = payload_compat.capability_status()
+    assert native_payload_status["native_av_mask_payload"]
+    assert not native_payload_status["native_payload_direct"]
+    assert native_payload_status["native_h3_mask_hooks"]
+    assert mask_compat._MARKER == "_h3_motion_context_pr15375_compat_v4"
 
     def wrapper(self, **kwargs):
         return native_extra(self, **kwargs)
@@ -868,9 +882,38 @@ def main():
     setattr(wrapper, payload_compat._MARKER, True)
     assert payload_compat._is_compatible_wrapper(wrapper)
     print(
-        "mask compatibility: native post-989e7a9 model/sampler support is "
+        "mask compatibility: native merged #15375 model/sampler support is "
         "detected and left untouched; the removed preprocessing hook stays "
         "removed")
+
+    # A checkout from immediately before the merge-time refactor has the
+    # direct payload and scale hook, but lacks the final helper contract. It
+    # must be upgraded rather than mistaken for the merged implementation.
+    class PreMergeBase:
+        def _pool_masks_to_token_grid(self, masks):
+            return masks
+
+        def scale_latent_inpaint(
+                self, sigma, noise, latent_image, x=None,
+                denoise_mask=None, **kwargs):
+            return kwargs
+
+        def extra_conds(self, **kwargs):
+            return {
+                "denoise_mask": kwargs.get("denoise_mask"),
+                "audio_denoise_mask": kwargs.get("audio_denoise_mask"),
+            }
+
+    model_base.MiniMaxH3 = PreMergeBase
+    premerge_extra = PreMergeBase.extra_conds
+    premerge_mask = _load("h3_mask_compat")
+    premerge_payload = _load("h3_mask_payload_compat")
+    assert not premerge_mask.capability_status()["mask_helpers_complete"]
+    assert premerge_mask.ensure_h3_mask_compat()
+    assert premerge_mask.capability_status()["mask_helpers_compat"]
+    assert premerge_payload.ensure_av_mask_payload_compat()
+    assert PreMergeBase.extra_conds is not premerge_extra
+    assert premerge_payload.capability_status()["wrapper_present"]
 
     # A legacy post-#15439 H3 core receives all missing #15375 pieces lazily.
     for name in ("mask_row_values", "_mod_row"):
@@ -933,6 +976,7 @@ def main():
     assert fallback_mask.ensure_h3_mask_compat()
     fallback_status = fallback_mask.capability_status()
     assert fallback_status["mask_engine_compat"]
+    assert fallback_status["mask_helpers_compat"]
     assert fallback_status["process_denoise_mask_compat"]
     assert fallback_status["scale_latent_inpaint_compat"]
     assert fallback_status["sampler_mask_blend_compat"]
@@ -955,6 +999,9 @@ def main():
     for name in (
         "process_denoise_mask",
         "_pool_masks_to_token_grid",
+        "_token_grid_masks",
+        "_denoise_mask_values",
+        "_denoise_mask_conds",
         "scale_latent_inpaint",
     ):
         setattr(LegacyRuntime, name, getattr(LegacyBase, name))
@@ -1020,17 +1067,18 @@ def main():
     assert fallback_payload.capability_status()["wrapper_present"]
     payload_out = runtime.extra_conds(
         denoise_mask=packed_mask, latent_shapes=latent_shapes)
-    expected_video = torch.round(video_mask * 256.0) / 256.0
-    expected_audio = torch.round(audio_mask * 256.0) / 256.0
-    expected_audio = expected_audio.amax(dim=1, keepdim=True)
+    expected_video = torch.full_like(video_mask, 0.75)
+    expected_audio = audio_mask.amax(dim=1, keepdim=True)
+    expected_audio = torch.ceil(expected_audio * 256.0) / 256.0
     assert torch.equal(
         payload_out["denoise_mask"].cond, expected_video), (
             payload_out["denoise_mask"].cond, expected_video)
     assert torch.equal(payload_out["audio_denoise_mask"].cond,
                        expected_audio)
     print(
-        "mask compatibility: legacy post-#15439 H3 receives the 989e7a9 "
-        "token-grid blend, per-step sampler bridge, and quantized AV payload")
+        "mask compatibility: legacy post-#15439 H3 receives the merged "
+        "#15375 token-grid blend, per-step sampler bridge, and quantized AV "
+        "payload")
 
 
 if __name__ == "__main__":

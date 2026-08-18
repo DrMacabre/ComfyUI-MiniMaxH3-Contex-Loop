@@ -36,9 +36,9 @@ giant cumulative image tensor.
 In the default `guide` mode and opt-in `tapered_guide` variant, updated ComfyUI
 core owns guide placement and reference-payload merging; this pack does not
 patch H3. The experimental `masked_av` and `feathered_av` modes additionally
-need per-stream H3
-video/audio noise masks from PR #15375. They prefer native support and lazily
-enable the vendored runtime compatibility only when an AV mask mode executes.
+need the per-stream H3 video/audio noise masks merged into ComfyUI by PR
+#15375. Current ComfyUI owns that path natively; older builds lazily receive
+the vendored runtime compatibility only when an AV mask mode executes.
 
 ## Install
 
