@@ -12550,6 +12550,19 @@ class MiniMaxH3ChainAssemble:
         }
 
 
+def _partial_boundary_tone_match_mode(manifest: dict[str, Any]) -> str:
+    """Keep automatic review partials faithful to Tone Carry generation."""
+    if str((manifest.get("compatibility") or {}).get(
+            "continuation_mode", "")) == "tone_carry_guide":
+        return "auto"
+    if any(
+            isinstance(item.get("guide_tone_carry"), dict)
+            or bool(item.get("guide_tone_input_applied", False))
+            for item in manifest.get("segments", [])):
+        return "auto"
+    return "off"
+
+
 def _assemble_review_partial(
     state: dict[str, Any],
     segment: dict[str, Any],
@@ -12573,12 +12586,18 @@ def _assemble_review_partial(
 
     assembler = MiniMaxH3ChainAssemble()
     filename = "partial_through_clip_%04d" % index
+    # Tone Carry changes the RGB Guide consumed by the following scene, while
+    # its predecessor's immutable segment remains raw on disk. The automatic
+    # Issue Gate partial must therefore apply the matching assembly correction
+    # too; otherwise its preview disagrees with the final Tone Carry output.
+    tone_match = _partial_boundary_tone_match_mode(manifest)
     warning = ""
     try:
         result = assembler.assemble(
             manifest, selected, filename, 192, source_audio,
             overwrite_existing=True,
-            source_timeline=state.get("source_timeline"))
+            source_timeline=state.get("source_timeline"),
+            boundary_tone_match=tone_match)
     except Exception as audio_error:
         if selected == "none":
             raise
@@ -12588,7 +12607,8 @@ def _assemble_review_partial(
         result = assembler.assemble(
             manifest, "none", filename, 192, source_audio,
             overwrite_existing=True,
-            source_timeline=state.get("source_timeline"))
+            source_timeline=state.get("source_timeline"),
+            boundary_tone_match=tone_match)
         warning = "audio unavailable, so the partial video is silent (%s)" % audio_error
     return str(result["result"][0]), warning
 

@@ -129,6 +129,18 @@ def main():
     assert chain._scheduled_blend_frames("plan", 3, 5) == [5, 5, 5]
     assert chain._scheduled_blend_frames("5,30", 4, 0) == [5, 30, 30, 30]
     assert chain._scheduled_blend_frames("0", 2, 39) == [0, 0]
+    assert chain._partial_boundary_tone_match_mode({
+        "compatibility": {"continuation_mode": "guide"},
+        "segments": [],
+    }) == "off"
+    assert chain._partial_boundary_tone_match_mode({
+        "compatibility": {"continuation_mode": "tone_carry_guide"},
+        "segments": [],
+    }) == "auto"
+    assert chain._partial_boundary_tone_match_mode({
+        "compatibility": {"continuation_mode": "guide"},
+        "segments": [{"guide_tone_input_applied": True}],
+    }) == "auto"
     try:
         chain._scheduled_blend_frames("5,nope", 2, 0)
     except ValueError as exc:
