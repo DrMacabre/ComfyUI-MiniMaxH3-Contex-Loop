@@ -598,6 +598,13 @@
           "name": "status",
           "type": "STRING",
           "links": null
+        },
+        {
+          "name": "video_blend_frames",
+          "type": "INT",
+          "links": [
+            80
+          ]
         }
       ],
       "title": "CURRENT REF2V SCENE — PROMPT / SEED / TIMING",
@@ -1782,9 +1789,7 @@
         {
           "name": "video_blend_frames",
           "type": "INT",
-          "links": [
-            80
-          ]
+          "links": null
         }
       ],
       "title": "REF2V TAGGED PLAN — STANDARD EDITOR",
@@ -2780,8 +2785,8 @@
     ],
     [
       80,
-      1700,
-      5,
+      1702,
+      14,
       132,
       3,
       "INT"

@@ -18,11 +18,12 @@ import {
     safeShotId,
     sceneContextLength,
     sceneContinuationMode,
+    sceneVideoBlendFrames,
     setShotLengthMode,
     setSharedPrompt,
     shotLengthMode,
     sharedPrompt,
-} from "./h3_chain_plan_core.mjs?v=0.5.0-avclean1";
+} from "./h3_chain_plan_core.mjs?v=0.5.0-blend1";
 import {availableReferenceRecords} from "./h3_reference_preview_core.mjs?v=0.5.0";
 import {resolveTransitionPolicy} from "./h3_socket_presentation_core.mjs?v=0.5.0";
 
@@ -471,6 +472,7 @@ function mountEditor(node) {
                 ? transition.contextLength
                 : widgetValue(node, "context_length", 22),
             audioContextLength: widgetValue(node, "audio_context_length", 22),
+            videoBlendFrames: widgetValue(node, "video_blend_frames", 0),
             encodeMode: widgetValue(node, "encode_mode", "video"),
             anchorMode: widgetValue(node, "anchor_mode", "head"),
             continuationMode: transition.known
@@ -511,7 +513,9 @@ function mountEditor(node) {
             const label = card.querySelector(".h3c-timing");
             if (label) {
                 label.textContent = `${row.rawFrames || "—"} raw / ${row.deliveredFrames || "—"} delivered · ${formatClock(row.deliveredSeconds)}`;
-                label.title = row.errors.join("\n") || `Generation starts at delivered frame ${row.generationStartFrame}.`;
+                label.title = row.errors.join("\n") ||
+                    `Generation starts at delivered frame ${row.generationStartFrame}. ` +
+                    `The incoming assembly boundary blends ${row.videoBlendFrames} frame(s).`;
             }
             card.classList.toggle("h3c-invalid", row.errors.length > 0);
         }
@@ -859,6 +863,7 @@ function mountEditor(node) {
             if (context.value === "") delete shot.context_length;
             else shot.context_length = Number(context.value);
             sceneContextLength(shot, planContextLength);
+            refreshBlendControl();
             syncPlan();
         });
         const audioContext = numberInput(shot.audio_context_length ?? "", {
@@ -874,6 +879,30 @@ function mountEditor(node) {
         audioContext.addEventListener("input", () => {
             if (audioContext.value === "") delete shot.audio_context_length;
             else shot.audio_context_length = Number(audioContext.value);
+            syncPlan();
+        });
+        const blendFrames = numberInput(shot.video_blend_frames ?? "", {
+            min: "0", max: String(planContextLength), step: "1",
+        });
+        const planBlendFrames = Number(resolvedPlanSettings.videoBlendFrames);
+        function refreshBlendControl() {
+            const resolvedContext = sceneContextLength(shot, planContextLength);
+            blendFrames.max = String(resolvedContext);
+            blendFrames.placeholder = String(Math.min(
+                planBlendFrames, resolvedContext,
+            ));
+        }
+        refreshBlendControl();
+        blendFrames.title = index === 0
+            ? "Visible assembly blend entering scene 1 when Existing Video Context supplies a predecessor. Blank inherits the Plan default, capped to this scene's video context. This is assembly-only and does not alter sampling."
+            : "Visible assembly blend at the boundary from the previous scene into this scene. Blank inherits the Plan default, capped to this scene's video context. Zero keeps a hard cut. This is assembly-only and does not alter sampling.";
+        blendFrames.addEventListener("input", () => {
+            if (blendFrames.value === "") delete shot.video_blend_frames;
+            else shot.video_blend_frames = Number(blendFrames.value);
+            sceneVideoBlendFrames(
+                shot, planBlendFrames,
+                sceneContextLength(shot, planContextLength),
+            );
             syncPlan();
         });
         const continuation = element("select", "h3c-continuation");
@@ -910,6 +939,7 @@ function mountEditor(node) {
             field("Steps (blank = default)", steps),
             field("Video context", context),
             field("Audio context", audioContext),
+            field("Blend entering scene", blendFrames),
             field("Continuation into scene", continuation),
         );
         card.append(

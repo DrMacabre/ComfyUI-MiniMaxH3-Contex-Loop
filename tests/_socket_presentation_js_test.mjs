@@ -3,6 +3,7 @@ import fs from "node:fs";
 import {
     applySocketPresentation,
     hasSourceTimeline,
+    policyPlanConsumers,
     presentationForNode,
     resolveAudioPolicy,
     resolveTransitionPolicy,
@@ -137,6 +138,16 @@ assert.deepEqual(resolveTransitionPolicy(plan), {
     expertOverride: false,
     source: "typed",
 });
+assert.deepEqual(policyPlanConsumers(transition), [plan]);
+
+const unrelatedPlan = node(9, "MiniMaxH3ChainPlan", [
+    ["audio_policy", null], ["transition_policy", null],
+]);
+plan.graph._nodes.push(unrelatedPlan);
+unrelatedPlan.graph = plan.graph;
+assert.deepEqual(policyPlanConsumers(transition), [plan],
+    "only directly connected Plans are invalidated");
+assert.deepEqual(policyPlanConsumers(audioPolicy), [plan]);
 
 transition.widgets.find((item) => item.name === "preset").value = "audio_feather_av";
 assert.deepEqual(resolveTransitionPolicy(plan), {
@@ -184,6 +195,9 @@ const extensionSource = fs.readFileSync(
     new URL("../web/h3_socket_presentation.js", import.meta.url), "utf8");
 assert.match(extensionSource, /Show advanced \/ legacy H3 controls/);
 assert.match(extensionSource, /Hide advanced \/ legacy H3 controls/);
+assert.match(extensionSource, /refreshPolicyConsumers\(node\)/);
+assert.match(extensionSource, /_h3ChainEditorConnectionRefresh/);
+assert.match(extensionSource, /_h3PlanStudioRefresh/);
 assert.doesNotMatch(extensionSource, /removeInput|removeOutput/);
 
 console.log("H3 socket presentation: positional compatibility and policy visibility pass");

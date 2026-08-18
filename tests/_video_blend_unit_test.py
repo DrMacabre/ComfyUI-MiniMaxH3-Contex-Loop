@@ -71,6 +71,48 @@ def main():
     assert plan["compatibility"]["video_blend_frames"] == 39
     assert plan["shots"][1]["delivered_frames"] == 34
     assert "blend=39" in plan["summary"]
+    per_scene = chain._normalize_plan(
+        '{"shots":[{"id":"one","prompt":"one","length":124},'
+        '{"id":"two","prompt":"two","length":124,'
+        '"context_length":39,"video_blend_frames":5},'
+        '{"id":"three","prompt":"three","length":124,'
+        '"context_length":22,"video_blend_frames":0}]}',
+        "scene_blend_test", 64, 64, 90, "video", "head", "disabled",
+        "generated_audio", 22, 5.0, 20, 0, 18,
+        generation_fingerprint="test", video_blend_frames=39)
+    assert per_scene["shots"][1]["video_blend_frames"] == 5
+    assert per_scene["shots"][2]["video_blend_frames"] == 0
+    assert chain._shot_video_blend_frames(
+        per_scene["shots"][1], 39, 39) == 5
+    assert chain._scene_dependency_record(
+        per_scene, 2)["scopes"]["assembly_only"][
+            "video_blend_frames"] == 5
+    inherited = {"context_length": 22}
+    assert chain._shot_video_blend_frames(inherited, 39, 22) == 22
+    history_variant = chain._normalize_plan(
+        '{"shots":[{"id":"one","prompt":"one","length":124},'
+        '{"id":"two","prompt":"two","length":124,'
+        '"context_length":39,"video_blend_frames":30},'
+        '{"id":"three","prompt":"three","length":124,'
+        '"context_length":22,"video_blend_frames":0}]}',
+        "scene_blend_test", 64, 64, 90, "video", "head", "disabled",
+        "generated_audio", 22, 5.0, 20, 0, 18,
+        generation_fingerprint="test", video_blend_frames=39)
+    assert chain._history_hash(per_scene, 2) == chain._history_hash(
+        history_variant, 2)
+    try:
+        chain._normalize_plan(
+            '{"shots":[{"prompt":"one","length":124},'
+            '{"prompt":"two","length":124,"context_length":22,'
+            '"video_blend_frames":23}]}',
+            "bad_scene_blend", 64, 64, 90, "video", "head", "disabled",
+            "generated_audio", 22, 5.0, 20, 0, 18,
+            video_blend_frames=0)
+    except ValueError as exc:
+        assert "Shot 2" in str(exc)
+        assert "between 0 and its context length (22)" in str(exc)
+    else:
+        raise AssertionError("scene blend larger than scene context was accepted")
     try:
         normalized(context=22, blend=23)
     except ValueError as exc:
@@ -189,6 +231,27 @@ def main():
         assert scheduled_records[1]["blend_frames"] == 1
         assert scheduled_records[1]["skip_frames"] == 1
         assert scheduled_records[1]["input_frames"] == 5
+        per_scene_overlap = root / "per_scene_overlap.mp4"
+        chain._write_segment_video(
+            torch.cat((frames(1, (0, 1, 0)), frames(4, (0, 0, 1))),
+                      dim=0),
+            str(per_scene_overlap), 24, 0)
+        per_scene_manifest = {
+            **blended_manifest,
+            "segments": [
+                blended_manifest["segments"][0],
+                {**blended_manifest["segments"][1],
+                 "blend_segment": str(per_scene_overlap),
+                 "blend_segment_sha256": chain._file_sha256(
+                     str(per_scene_overlap)),
+                 "blend_frames": 1},
+            ],
+        }
+        plan_records = chain._blend_video_records(
+            per_scene_manifest, per_scene_manifest["segments"], None,
+            blend_schedule="plan")
+        assert plan_records[1]["blend_frames"] == 1
+        assert plan_records[1]["skip_frames"] == 0
         scheduled = chain.MiniMaxH3ChainAssemble().assemble(
             blended_manifest, "none", "scheduled_one", 128,
             blend_schedule="1")["result"][0]

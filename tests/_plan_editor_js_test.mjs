@@ -19,6 +19,7 @@ import {
     sceneAudioContextLength,
     sceneContextLength,
     sceneContinuationMode,
+    sceneVideoBlendFrames,
     setShotLengthMode,
     setSharedPrompt,
     shotLengthMode,
@@ -112,6 +113,14 @@ assert.throws(
     () => sceneAudioContextLength({audio_context_length: 241}, 22, 0),
     /between 0 and 240/,
 );
+assert.equal(sceneVideoBlendFrames({}, 5, 22), 5);
+assert.equal(sceneVideoBlendFrames({}, 39, 22), 22);
+assert.equal(sceneVideoBlendFrames({video_blend_frames: 0}, 5, 22), 0);
+assert.equal(sceneVideoBlendFrames({video_blend_frames: 17}, 5, 22), 17);
+assert.throws(
+    () => sceneVideoBlendFrames({video_blend_frames: 23}, 5, 22),
+    /between 0 and its context length \(22\)/,
+);
 
 const invalidDurationShot = {duration_seconds: 999};
 assert.throws(() => setShotLengthMode(invalidDurationShot, "frames", 15));
@@ -168,6 +177,7 @@ assert.throws(() => validateH3Length(240), /length % 17/);
 
 const timing = calculatePlanTiming(plan, {
     contextLength: 22,
+    videoBlendFrames: 5,
     encodeMode: "video",
     anchorMode: "head",
     continuationMode: "guide",
@@ -183,6 +193,27 @@ assert.deepEqual(
     timing.shots.map((shot) => shot.continuationMode),
     ["guide", "guide"],
 );
+assert.deepEqual(timing.shots.map((shot) => shot.videoBlendFrames), [5, 5]);
+
+const perSceneBlendTiming = calculatePlanTiming({shots: [
+    {id: "one", prompt: "One.", length: 124},
+    {id: "two", prompt: "Two.", length: 124, context_length: 39,
+        video_blend_frames: 5},
+    {id: "three", prompt: "Three.", length: 124, context_length: 22,
+        video_blend_frames: 0},
+]}, {
+    contextLength: 39,
+    videoBlendFrames: 30,
+    encodeMode: "video",
+    anchorMode: "head",
+    continuationMode: "guide",
+    defaultDurationSeconds: 5,
+});
+assert.deepEqual(
+    perSceneBlendTiming.shots.map((shot) => shot.videoBlendFrames),
+    [30, 5, 0],
+);
+assert.deepEqual(perSceneBlendTiming.errors, []);
 
 const mixedContinuationPlan = parsePlanJson(JSON.stringify({
     shots: [

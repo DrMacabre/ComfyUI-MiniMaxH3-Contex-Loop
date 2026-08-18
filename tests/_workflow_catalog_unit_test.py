@@ -106,6 +106,14 @@ def validate_v05_topology(workflow):
     assert origin_for_input(
         workflow, socket(plan["inputs"], "transition_policy")) == transition
 
+    current = node(workflow, "MiniMaxH3ChainCurrent")
+    trim = node(workflow, "MiniMaxH3LoopTrim")
+    retain = socket(trim["inputs"], "retain_overlap_frames")
+    assert origin_for_input(workflow, retain) == current
+    assert socket(current["outputs"], "video_blend_frames")["links"] == [
+        retain["link"]]
+    assert socket(plan["outputs"], "video_blend_frames")["links"] is None
+
     start = node(workflow, "MiniMaxH3ChainLoopStart")
     studios = [item for item in workflow["nodes"]
                if item.get("type") == "MiniMaxH3ChainPlanStudio"]

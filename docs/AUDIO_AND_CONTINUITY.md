@@ -162,9 +162,12 @@ Use **MiniMax H3 Contex Loop Trim** after decoding. In head mode it removes the
 repeated visual prefix. With `match_tail=true`, it also truncates or zero-pads
 the decoded audio tail to the exact delivered-frame duration.
 
-`retain_overlap_frames` exposes an additional visual stream containing part of
-the repeated context for external stitchers. It does not alter the normal clean
-images output or audio.
+`images_with_overlap` exposes an additional visual stream containing the
+retained repeated context selected by `retain_overlap_frames`. In 0.5 chains,
+wire **Current Shot → video_blend_frames** into that input. A scene-level
+`video_blend_frames` value controls the boundary entering that scene; blank
+inherits the Plan default and explicit `0` keeps a hard cut. This assembly-only
+setting does not alter diffusion, the normal clean images output, or audio.
 
 All continuation modes return the prefix length as `trim_frames`. In AV mask
 modes those leading frames come from target-latent rows rather than persistent

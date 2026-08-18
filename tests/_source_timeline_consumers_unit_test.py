@@ -117,7 +117,8 @@ with tempfile.TemporaryDirectory() as temporary:
     second = chain.MiniMaxH3ChainCurrent().current(state)["result"]
     expected = chain._source_timeline_scene_audio(runtime, 17, 39)
     assert torch.equal(second[12]["waveform"], expected["waveform"])
-    assert "Source Timeline frame-exact" in second[-1]
+    assert "Source Timeline frame-exact" in second[13]
+    assert second[14] == 0
 
     tagged = chain.MiniMaxH3TaggedMotionReferenceTimeline().add(
         runtime, "motion", "<Subject 1>", "the supplied motion", "384",

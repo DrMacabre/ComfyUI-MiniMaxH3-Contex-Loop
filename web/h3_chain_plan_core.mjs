@@ -455,6 +455,32 @@ export function sceneAudioContextLength(
     return resolved;
 }
 
+export function sceneVideoBlendFrames(
+    shot, planDefault = 0, videoContextLength = 22,
+) {
+    const fallback = Number(planDefault);
+    const context = Number(videoContextLength);
+    if (!Number.isInteger(fallback) || fallback < 0) {
+        throw new Error("Plan video blend frames must be a non-negative integer.");
+    }
+    if (!Number.isInteger(context) || context < 0) {
+        throw new Error("Scene video context must be a non-negative integer.");
+    }
+    const value = shot?.video_blend_frames;
+    if (value === undefined || value === null
+            || (typeof value === "string" && !value.trim())) {
+        return Math.min(fallback, context);
+    }
+    const resolved = Number(value);
+    if (typeof value === "boolean" || !Number.isInteger(resolved)
+            || resolved < 0 || resolved > context) {
+        throw new Error(
+            `Scene video blend frames must be between 0 and its context length (${context}).`,
+        );
+    }
+    return resolved;
+}
+
 export function validateH3Length(value) {
     const length = Number(value);
     if (!Number.isInteger(length) || length < 5 || length > MAX_H3_FRAMES || length % 17 !== 5) {
@@ -494,6 +520,7 @@ export function calculatePlanTiming(plan, settings = {}) {
     const rows = [];
     const contextLength = Number(settings.contextLength ?? 22);
     const audioContextLength = Number(settings.audioContextLength ?? 22);
+    const videoBlendFrames = Number(settings.videoBlendFrames ?? 0);
     const encodeMode = settings.encodeMode ?? "video";
     const anchorMode = settings.anchorMode ?? "head";
     const planContinuationMode = settings.continuationMode ?? "guide";
@@ -508,6 +535,12 @@ export function calculatePlanTiming(plan, settings = {}) {
     if (!Number.isInteger(audioContextLength)
             || audioContextLength < 0 || audioContextLength > 240) {
         errors.push("Audio context length must be between 0 and 240 frames.");
+    }
+    if (!Number.isInteger(videoBlendFrames) || videoBlendFrames < 0
+            || videoBlendFrames > contextLength) {
+        errors.push(
+            `Video blend frames must be between 0 and context length (${contextLength}).`,
+        );
     }
     if (!Number.isFinite(planDefaultDuration) || planDefaultDuration <= 0) {
         errors.push("Default duration must be a finite positive number.");
@@ -553,6 +586,20 @@ export function calculatePlanTiming(plan, settings = {}) {
             sceneAudioContext = sceneAudioContextLength(
                 shot, audioContextLength, sceneContext,
             );
+        } catch (error) {
+            rowErrors.push(error.message);
+        }
+
+        let sceneBlendFrames = Math.min(
+            Math.max(0, videoBlendFrames), Math.max(0, sceneContext),
+        );
+        try {
+            sceneBlendFrames = sceneVideoBlendFrames(
+                shot, videoBlendFrames, sceneContext,
+            );
+            if (sceneBlendFrames > 0 && anchorMode !== "head") {
+                rowErrors.push("Video blending requires head anchor mode.");
+            }
         } catch (error) {
             rowErrors.push(error.message);
         }
@@ -611,6 +658,7 @@ export function calculatePlanTiming(plan, settings = {}) {
             deliveredSeconds: deliveredFrames / FPS,
             generationStartFrame,
             contextLength: sceneContext,
+            videoBlendFrames: sceneBlendFrames,
             audioContextLength: [
                 "masked_av", "feathered_av", "audio_feathered_av",
             ].includes(

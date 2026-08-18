@@ -182,8 +182,14 @@ def main():
         module, "MiniMaxH3ChainLoopStart", "optional")
     assert loop_optional[:4] == FIXTURE["loop_start_optional_input_order"]
     assert loop_optional[4:] == ["source_timeline"]
+    appended_outputs = {
+        "MiniMaxH3ChainCurrent": ["video_blend_frames"],
+    }
     for node_name, output_names in FIXTURE["positional_outputs"].items():
-        assert return_names(module, node_name) == output_names, node_name
+        observed = return_names(module, node_name)
+        assert observed[:len(output_names)] == output_names, node_name
+        assert observed[len(output_names):] == appended_outputs.get(
+            node_name, []), node_name
     for format_name in FIXTURE["checkpoint_formats"]:
         assert format_name in source, format_name
 

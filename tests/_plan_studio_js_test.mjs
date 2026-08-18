@@ -119,7 +119,9 @@ assert.match(source, /state\.plan\.shots\.push\(makeShot\(state\.plan\.shots\)\)
 assert.match(source, /state\.active = state\.plan\.shots\.length - 1/);
 assert.match(source, /field\("Continuation", continuation\)/);
 assert.match(source, /field\("Context V \/ A", contextPair\)/);
+assert.match(source, /field\("Blend entering scene", blendFrames\)/);
 assert.match(source, /audio_context_length/);
+assert.match(source, /video_blend_frames/);
 assert.match(source, /Guide · new shot/);
 assert.match(source, /Detail Guide · color injection/);
 assert.match(source, /Masked AV · same shot/);

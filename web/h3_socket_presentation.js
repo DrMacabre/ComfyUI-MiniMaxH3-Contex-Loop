@@ -7,8 +7,9 @@ import {
     applySocketPresentation,
     hasAdvancedPresentation,
     nodeType,
+    policyPlanConsumers,
     presentationForNode,
-} from "./h3_socket_presentation_core.mjs?v=0.5.0";
+} from "./h3_socket_presentation_core.mjs?v=0.5.1";
 
 const EXTENSION = "minimax_h3_context_loop.socket_presentation";
 const WATCHED_POLICY_NODES = new Set([
@@ -75,7 +76,27 @@ function scheduleGraphRefresh(node) {
     queueMicrotask(() => {
         node._h3PresentationRefreshPending = false;
         refreshGraph(node.graph ?? app.graph);
+        refreshPolicyConsumers(node);
     });
+}
+
+function refreshPolicyConsumers(node) {
+    const plans = new Set(policyPlanConsumers(node));
+    if (!plans.size) return;
+    for (const plan of plans) {
+        plan._h3ChainEditorConnectionRefresh?.();
+        plan.graph?.setDirtyCanvas?.(true, true);
+    }
+    // Companion editors cache the resolved timing policy separately from the
+    // Plan JSON. A policy widget edit is not a LiteGraph connection event, so
+    // explicitly invalidate companions bound to one of the affected Plans.
+    for (const candidate of node.graph?._nodes ?? []) {
+        if (candidate._h3PlanStudioState?.planNode
+                && !plans.has(candidate._h3PlanStudioState.planNode)) continue;
+        candidate._h3PlanStudioRefresh?.();
+        candidate._h3ScenePromptEditorRefresh?.();
+        candidate._h3RichPromptRefresh?.();
+    }
 }
 
 function watchWidgets(node) {

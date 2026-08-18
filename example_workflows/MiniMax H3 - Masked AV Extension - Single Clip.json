@@ -552,6 +552,13 @@
           "name": "status",
           "type": "STRING",
           "links": null
+        },
+        {
+          "name": "video_blend_frames",
+          "type": "INT",
+          "links": [
+            80
+          ]
         }
       ],
       "title": "CURRENT T2V SCENE — PROMPT / SEED / TIMING",
@@ -1620,9 +1627,7 @@
         {
           "name": "video_blend_frames",
           "type": "INT",
-          "links": [
-            80
-          ]
+          "links": null
         }
       ],
       "title": "ONE-SCENE MASKED AV EXTENSION PLAN",
@@ -2141,7 +2146,7 @@
         "aux_id": "ethanfel/ComfyUI-MiniMaxH3-Contex-Loop"
       },
       "widgets_values": [
-        24.0,
+        24,
         true
       ],
       "color": "#1f1f48",
@@ -2680,8 +2685,8 @@
     ],
     [
       80,
-      1700,
-      5,
+      1702,
+      14,
       132,
       3,
       "INT"

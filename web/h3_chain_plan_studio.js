@@ -17,11 +17,12 @@ import {
     safeShotId,
     sceneContextLength,
     sceneContinuationMode,
+    sceneVideoBlendFrames,
     setSharedPrompt,
     setShotLengthMode,
     sharedPrompt,
     shotLengthMode,
-} from "./h3_chain_plan_core.mjs?v=0.5.0-avclean1";
+} from "./h3_chain_plan_core.mjs?v=0.5.0-blend1";
 import {
     promptRevisionHelp,
     promptRevisionLabel,
@@ -363,6 +364,7 @@ function mount(node) {
                 ? transition.contextLength
                 : widget(state.planNode, "context_length")?.value ?? 22,
             audioContextLength:widget(state.planNode, "audio_context_length")?.value ?? 22,
+            videoBlendFrames:widget(state.planNode, "video_blend_frames")?.value ?? 0,
             encodeMode:widget(state.planNode, "encode_mode")?.value ?? "video",
             anchorMode:widget(state.planNode, "anchor_mode")?.value ?? "head",
             continuationMode:transition.known
@@ -380,6 +382,7 @@ function mount(node) {
                 ? transition.contextLength
                 : widget(planNode, "context_length")?.value ?? 22,
             widget(planNode, "audio_context_length")?.value ?? 22,
+            widget(planNode, "video_blend_frames")?.value ?? 0,
             widget(planNode, "encode_mode")?.value ?? "video",
             widget(planNode, "anchor_mode")?.value ?? "head",
             transition.known
@@ -831,7 +834,7 @@ function mount(node) {
         const panel = element("div");
         const head = element("div", "h3studio-scene-head");
         head.append(element("strong", "", `Scene ${state.active + 1} of ${state.plan.shots.length}`),
-            element("span", "h3studio-scene-label", `${row.rawFrames || "—"} raw · ${row.deliveredFrames || "—"} delivered · starts at ${formatClock(row.generationStartFrame / 24)}`));
+            element("span", "h3studio-scene-label", `${row.rawFrames || "—"} raw · ${row.deliveredFrames || "—"} delivered · ${row.videoBlendFrames}f incoming blend · starts at ${formatClock(row.generationStartFrame / 24)}`));
         const grid = h3StudioGridMarkers(
             row.rawFrames, row.contextLength, row.continuationMode,
         );
@@ -924,6 +927,7 @@ function mount(node) {
             if (context.value === "") delete shot.context_length;
             else shot.context_length = Number(context.value);
             sceneContextLength(shot, settings().contextLength);
+            refreshBlendControl();
             writePlan();
             renderStatus();
         });
@@ -946,6 +950,34 @@ function mount(node) {
         });
         const contextPair = element("span", "h3studio-context-pair");
         contextPair.append(context, audioContext);
+        const blendFrames = element("input");
+        blendFrames.type = "number";
+        blendFrames.min = "0";
+        blendFrames.step = "1";
+        blendFrames.value = shot.video_blend_frames ?? "";
+        function refreshBlendControl() {
+            const resolvedContext = sceneContextLength(
+                shot, settings().contextLength,
+            );
+            blendFrames.max = String(resolvedContext);
+            blendFrames.placeholder = String(Math.min(
+                Number(settings().videoBlendFrames), resolvedContext,
+            ));
+        }
+        refreshBlendControl();
+        blendFrames.title = state.active === 0
+            ? "Assembly blend entering scene 1 when Existing Video Context is present. Blank inherits the Plan default, capped to scene context."
+            : "Assembly blend from the previous scene into this scene. Blank inherits the Plan default, capped to scene context; zero is a hard cut. It does not change diffusion.";
+        blendFrames.addEventListener("change", () => {
+            if (blendFrames.value === "") delete shot.video_blend_frames;
+            else shot.video_blend_frames = Number(blendFrames.value);
+            sceneVideoBlendFrames(
+                shot, settings().videoBlendFrames,
+                sceneContextLength(shot, settings().contextLength),
+            );
+            writePlan();
+            renderStatus();
+        });
         const continuation = element("select");
         for (const [value, label] of [
             ["", `Plan default · ${settings().continuationMode}`],
@@ -976,6 +1008,7 @@ function mount(node) {
             field("Scene ID", id), field("Length", lengthControl),
             field("Steps", steps), field("Seed", seedWrap),
             field("Context V / A", contextPair),
+            field("Blend entering scene", blendFrames),
             field("Continuation", continuation),
         );
 

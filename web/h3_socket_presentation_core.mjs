@@ -77,6 +77,25 @@ function linkedOrigin(node, input) {
     return link ? node.graph?.getNodeById?.(link.origin_id) ?? null : null;
 }
 
+export function policyPlanConsumers(policyNode) {
+    const type = nodeType(policyNode);
+    const inputNames = type === AUDIO_POLICY_NODE
+        ? ["audio_policy"]
+        : type === TRANSITION_POLICY_NODE
+            ? ["transition_policy"]
+            : type === LEGACY_POLICY_NODE
+                ? ["audio_policy", "transition_policy"]
+                : [];
+    if (!inputNames.length) return [];
+    const graph = policyNode?.graph;
+    return (graph?._nodes ?? []).filter((candidate) =>
+        nodeType(candidate) === PLAN_NODE
+        && inputNames.some((name) => linkedOrigin(
+            candidate, inputByName(candidate, name),
+        ) === policyNode),
+    );
+}
+
 function linked(slot, output = false) {
     if (!slot) return false;
     if (!output) return slot.link != null;

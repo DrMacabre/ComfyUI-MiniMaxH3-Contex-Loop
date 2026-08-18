@@ -135,7 +135,9 @@ Each requested ten-second scene normalizes to 243 raw H3 frames. The second
 scene reproduces and removes 22 context frames, so the assembled delivery is
 464 frames, or 19.333 seconds at 24 fps. Normal demonstrates a hard trimmed
 boundary (`video_blend_frames = 0`); Studio demonstrates a five-frame visual
-blend. Audio remains frame-locked and is not crossfaded.
+blend. These are Plan defaults; each scene can override the blend entering that
+scene in its advanced settings. Audio remains frame-locked and is not
+crossfaded.
 
 ### Prompt source
 

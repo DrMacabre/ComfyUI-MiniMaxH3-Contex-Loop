@@ -81,7 +81,9 @@ instead of silently padding or stretching them.
 
 ## External stitchers
 
-Loop Trim's `retain_overlap_frames` output exposes part of the repeated visual
-context while leaving its normal images and audio fully trimmed. Use it when an
-external optical-flow or learned stitcher benefits from overlap. Keep it at `0`
-for the standard hard-boundary chain.
+Loop Trim's `images_with_overlap` output exposes part of the repeated visual
+context while leaving its normal images and audio fully trimmed. Connect
+**Current Shot → video_blend_frames** to Loop Trim's
+`retain_overlap_frames`; this resolves each incoming scene's optional
+`video_blend_frames` override, or the Plan default when the scene value is
+blank. Scene N controls the N−1→N boundary. Keep it at `0` for a hard boundary.

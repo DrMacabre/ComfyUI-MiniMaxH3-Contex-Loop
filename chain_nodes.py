@@ -3008,6 +3008,42 @@ def _shot_audio_context_length(shot: dict[str, Any],
     return resolved
 
 
+def _shot_video_blend_frames(shot: dict[str, Any],
+                             default_blend_frames: int,
+                             video_context_length: int) -> int:
+    """Resolve the visible blend at the boundary entering one scene.
+
+    A blank scene value inherits the Plan default, capped to the scene's
+    actual video overlap. An explicit value is exact and therefore rejected
+    when it cannot fit inside that scene's context window.
+    """
+    context = max(0, int(video_context_length))
+    default = int(default_blend_frames)
+    if default < 0:
+        raise ValueError("H3 Plan video blend frames cannot be negative.")
+    value = shot.get("video_blend_frames")
+    inherited = value is None or (
+        isinstance(value, str) and not value.strip())
+    if inherited:
+        return min(default, context)
+    if isinstance(value, bool) or (
+            isinstance(value, float) and not value.is_integer()):
+        raise ValueError(
+            "H3 scene video blend frames must be a whole number between 0 "
+            "and its context length (%d)." % context)
+    try:
+        resolved = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "H3 scene video blend frames must be a whole number between 0 "
+            "and its context length (%d)." % context) from exc
+    if resolved < 0 or resolved > context:
+        raise ValueError(
+            "H3 scene video blend frames must be between 0 and its context "
+            "length (%d)." % context)
+    return resolved
+
+
 def _plan_context_storage_length(plan: dict[str, Any]) -> int:
     """Tail length checkpoints retain for all transitions in this plan."""
     cfg = plan["compatibility"]
@@ -3175,6 +3211,12 @@ def _scene_dependency_record(
         shot, int(compatibility.get("context_length", 0)))
     audio_context = _shot_audio_context_length(
         shot, int(compatibility.get("audio_context_length", 0)), context)
+    repeated_frames = max(
+        0, int(shot["raw_frames"]) - int(shot["delivered_frames"]))
+    video_blend = min(
+        repeated_frames,
+        _shot_video_blend_frames(
+            shot, int(compatibility.get("video_blend_frames", 0)), context))
     transition = str(shot.get(
         "continuation_mode", compatibility.get("continuation_mode", "guide")))
     external_hash = str(compatibility.get("external_context_hash") or "")
@@ -3225,8 +3267,7 @@ def _scene_dependency_record(
                 compatibility.get("source_audio_hash") or ""),
             "segment_crf": int(
                 compatibility.get("segment_crf", plan.get("segment_crf", 18))),
-            "video_blend_frames": int(
-                compatibility.get("video_blend_frames", 0)),
+            "video_blend_frames": video_blend,
         },
     }
     fingerprints = {scope: _fingerprint(scopes[scope])
@@ -3913,9 +3954,16 @@ def _normalize_plan(
             shot_context_length = _shot_context_length(item, context_length)
             shot_audio_context_length = _shot_audio_context_length(
                 item, audio_context_length, shot_context_length)
+            shot_video_blend_frames = _shot_video_blend_frames(
+                item, video_blend_frames, shot_context_length)
         except ValueError as exc:
             raise ValueError("Shot %d: %s" % (index, exc)) from exc
         resolved_context_lengths.append(shot_context_length)
+        if anchor_mode != "head" and shot_video_blend_frames:
+            raise ValueError(
+                "H3 scene video blending requires anchor_mode=head because "
+                "before mode does not reproduce a leading overlap to blend "
+                "(shot %d)." % index)
 
         shot_continuation_mode = migrate_continuation_mode(item.get(
             "continuation_mode", continuation_mode))
@@ -4026,6 +4074,13 @@ def _normalize_plan(
                 isinstance(explicit_audio_context, str)
                 and not explicit_audio_context.strip()):
             shot["audio_context_length"] = shot_audio_context_length
+        explicit_video_blend = item.get("video_blend_frames")
+        if explicit_video_blend is not None and not (
+                isinstance(explicit_video_blend, str)
+                and not explicit_video_blend.strip()):
+            # Assembly-only: deliberately excluded from predecessor history,
+            # but retained in the editable scene declaration and manifest.
+            shot["video_blend_frames"] = shot_video_blend_frames
         shots.append(shot)
         stitched_frames += delivered_frames
 
@@ -4362,7 +4417,9 @@ def _effective_editor_plan(plan: dict[str, Any]) -> dict[str, Any]:
              **({"context_length": shot["context_length"]}
                 if "context_length" in shot else {}),
              **({"audio_context_length": shot["audio_context_length"]}
-                if "audio_context_length" in shot else {}))
+                if "audio_context_length" in shot else {}),
+             **({"video_blend_frames": shot["video_blend_frames"]}
+                if "video_blend_frames" in shot else {}))
             for shot in plan["shots"]],
     }
 
@@ -7645,12 +7702,14 @@ class MiniMaxH3ChainPlan:
                                "safetensors continuation checkpoint."}),
                 "video_blend_frames": ("INT", {
                     "default": 0, "min": 0, "max": 243,
-                    "tooltip": "Optional visual blend at each scene boundary, "
-                               "in frames. 0 preserves the current hard-cut "
-                               "assembly. A positive value must not exceed "
-                               "context_length and requires head anchors. "
-                               "Connect this output to Loop Trim's "
-                               "retain_overlap_frames and its "
+                    "tooltip": "Default visual blend entering each scene, in "
+                               "frames. A scene's Blend entering scene field "
+                               "can override it; blank inherits this value, "
+                               "capped to that scene's context, and 0 makes a "
+                               "hard cut. A positive value requires head "
+                               "anchors. Connect Current Shot's resolved "
+                               "video_blend_frames output to Loop Trim's "
+                               "retain_overlap_frames and Loop Trim's "
                                "images_with_overlap output to Segment Save. "
                                "Final and partial videos are re-encoded with a "
                                "linear cumulative blend; audio timing and the "
@@ -7715,8 +7774,9 @@ class MiniMaxH3ChainPlan:
         "Number of scenes in the plan.",
         "Validated generation width; connect to the stock H3 conditioning node.",
         "Validated generation height; connect to the stock H3 conditioning node.",
-        "Configured boundary blend length. Connect it to Loop Trim's "
-        "retain_overlap_frames input.",
+        "Legacy Plan-wide default blend length. New 0.5 workflows connect "
+        "Current Shot's resolved per-scene video_blend_frames output to Loop "
+        "Trim instead.",
     )
     FUNCTION = "build"
     CATEGORY = "conditioning/minimax/contex_loop"
@@ -9067,11 +9127,11 @@ class MiniMaxH3ChainCurrent:
 
     RETURN_TYPES = (STATE_TYPE, "INT", "INT", "STRING", "STRING", "INT",
                     "INT", "INT", "INT", "INT", "FLOAT", "FLOAT",
-                    "AUDIO", "STRING")
+                    "AUDIO", "STRING", "INT")
     RETURN_NAMES = ("state", "clip_index", "clip_count", "shot_id", "prompt",
                     "noise_seed", "length", "steps", "width", "height",
                     "audio_start", "audio_duration", "source_audio_slice",
-                    "status")
+                    "status", "video_blend_frames")
     OUTPUT_TOOLTIPS = (
         "Unchanged current state for Chain Context, Segment Save, Review, and "
         "Loop End.",
@@ -9095,6 +9155,9 @@ class MiniMaxH3ChainCurrent:
         "or capped to the target H3 audio grid when alignment is enabled. It is "
         "empty when the Plan Audio Policy has Source reference=off.",
         "Current scene timing, delivered frames, source window, and seed.",
+        "Resolved visible blend at the boundary entering this scene. Connect "
+        "to Loop Trim retain_overlap_frames. Scene overrides inherit the "
+        "Plan default when blank.",
     )
     FUNCTION = "current"
     CATEGORY = "conditioning/minimax/contex_loop"
@@ -9167,11 +9230,20 @@ class MiniMaxH3ChainCurrent:
             audio_status = "song %.3f..%.3fs" % (
                 shot["audio_start_seconds"],
                 shot["audio_start_seconds"] + shot["audio_duration_seconds"])
-        status = ("clip %d/%d %s; raw=%df delivered=%df; %s; %s; seed=%d" %
-                  (index, len(plan["shots"]), shot["id"], shot["raw_frames"],
-                   shot["delivered_frames"], audio_status, alignment_status,
-                  shot["seed"]))
         cfg = plan["compatibility"]
+        context_length = _shot_context_length(
+            shot, int(cfg.get("context_length", 0)))
+        repeated_frames = max(
+            0, int(shot["raw_frames"]) - int(shot["delivered_frames"]))
+        video_blend_frames = min(
+            repeated_frames,
+            _shot_video_blend_frames(
+                shot, int(cfg.get("video_blend_frames", 0)), context_length))
+        status = ("clip %d/%d %s; raw=%df delivered=%df; blend=%df; %s; %s; "
+                  "seed=%d" %
+                  (index, len(plan["shots"]), shot["id"], shot["raw_frames"],
+                   shot["delivered_frames"], video_blend_frames, audio_status,
+                   alignment_status, shot["seed"]))
         dependency_state = dict(state)
         dependency_state["current_source_reference_dependency"] = (
             _canonical_source_reference_dependency(
@@ -9181,6 +9253,7 @@ class MiniMaxH3ChainCurrent:
             shot["seed"], shot["raw_frames"], shot["steps"], cfg["width"],
             cfg["height"], shot["audio_start_seconds"],
             shot["audio_duration_seconds"], audio_slice, status,
+            video_blend_frames,
         )
         # ComfyUI adds prompt_id and display_node to the resulting `executed`
         # event. The frontend therefore receives an authoritative loop index
@@ -9476,16 +9549,18 @@ class MiniMaxH3ChainSegmentSave:
                 "Wire decoded images through MiniMax H3 Contex Loop Trim before "
                 "Segment Save." % (index, actual_frames, expected_frames))
 
-        configured_blend = int(
-            plan["compatibility"].get("video_blend_frames", 0))
         repeated_frames = max(
             0, int(shot["raw_frames"]) - int(shot["delivered_frames"]))
-        blend_frames = min(configured_blend, repeated_frames)
+        blend_frames = min(
+            repeated_frames,
+            _shot_video_blend_frames(
+                shot, int(compatibility.get("video_blend_frames", 0)),
+                effective_context_length))
         if blend_frames:
             if images_with_overlap is None:
                 raise ValueError(
                     "H3 chain clip %d needs %d retained blend frames. Connect "
-                    "Plan video_blend_frames to Loop Trim "
+                    "Current Shot video_blend_frames to Loop Trim "
                     "retain_overlap_frames, then connect images_with_overlap "
                     "to Segment Save." % (index, blend_frames))
             blend_count = int(images_with_overlap.shape[0])
@@ -9620,6 +9695,7 @@ class MiniMaxH3ChainSegmentSave:
                     plan["compatibility"].get("continuation_mode", "guide")),
                 "context_length": effective_context_length,
                 "audio_context_length": effective_audio_context_length,
+                "blend_frames": blend_frames,
                 "sample_rate": sample_rate,
                 "segment_sha256": _file_sha256(published_segment),
                 "checkpoint_sha256": _file_sha256(published_checkpoint),
@@ -9629,7 +9705,6 @@ class MiniMaxH3ChainSegmentSave:
                 segment.update({
                     "blend_segment": _relative_output_path(published_blend),
                     "blend_segment_sha256": _file_sha256(published_blend),
-                    "blend_frames": blend_frames,
                 })
             if published_audio is not None:
                 segment.update({
@@ -10899,8 +10974,24 @@ def _blend_video_records(
         (manifest.get("compatibility") or {}).get("video_blend_frames", 0))
     boundary_count = len(segments) if prelude is not None else max(
         0, len(segments) - 1)
-    schedule = _scheduled_blend_frames(
-        blend_schedule, boundary_count, configured)
+    schedule_text = str(
+        blend_schedule if blend_schedule is not None else "plan").strip().lower()
+    if not schedule_text or schedule_text == "plan":
+        # New manifests persist the resolved incoming-scene blend on every
+        # segment, including explicit zero. Older manifests inherit the
+        # historical Plan-wide value when that field is absent.
+        incoming = segments if prelude is not None else segments[1:]
+        schedule = []
+        for item in incoming:
+            delivered = int(item["delivered_frames"])
+            repeated = max(
+                0, int(item.get("raw_frames", delivered)) - delivered)
+            schedule.append(min(
+                repeated, max(0, int(item.get(
+                    "blend_frames", configured)))))
+    else:
+        schedule = _scheduled_blend_frames(
+            blend_schedule, boundary_count, configured)
     if not any(schedule):
         return []
     records: list[dict[str, Any]] = []
