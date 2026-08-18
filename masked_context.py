@@ -41,20 +41,13 @@ def _require_h3_mask_support():
             "MiniMax H3 Add Guide / MultiRef core from ComfyUI PR #15439. "
             "Update ComfyUI before using this experimental mode."
         )
-    from .h3_mask_compat import ensure_h3_mask_compat
+    from .h3_mask_compat import ensure_h3_mask_compat, is_ready
     from .h3_mask_payload_compat import ensure_av_mask_payload_compat
 
     ensure_h3_mask_compat()
     ensure_av_mask_payload_compat()
 
-    import comfy.model_base
-
-    cls = getattr(comfy.model_base, "MiniMaxH3", None)
-    if (
-        cls is None
-        or "process_denoise_mask" not in cls.__dict__
-        or "scale_latent_inpaint" not in cls.__dict__
-    ):
+    if not is_ready():
         raise RuntimeError(
             "h3_masked_prefix: H3 per-stream AV mask support could not be "
             "enabled. Check the ComfyUI console capability report."

@@ -2,6 +2,12 @@
 
 Newest first. This file keeps release history out of the onboarding README.
 
+## v0.4.13 — Native mask readiness gate
+
+- Fixed the masked-AV preflight after merged PR #15375 removed
+  `process_denoise_mask`. The gate now uses the capability module's runtime
+  readiness check instead of requiring that obsolete method by name.
+
 ## v0.4.12 — Merged H3 mask API compatibility
 
 - Recognized the final helper-based API merged by ComfyUI PR #15375 and left

@@ -140,6 +140,7 @@ def main():
     _load("patch_payload")
     nodes = _load("nodes")
     masked = _load("masked_context")
+    actual_require_h3_mask_support = masked._require_h3_mask_support
     masked._require_h3_mask_support = lambda: None
 
     target_frames = 192
@@ -549,6 +550,10 @@ def main():
     assert not native_payload_status["native_payload_direct"]
     assert native_payload_status["native_h3_mask_hooks"]
     assert mask_compat._MARKER == "_h3_motion_context_pr15375_compat_v4"
+    sys.modules["%s.patch_layout" % PACKAGE].native_guides_available = (
+        lambda: True)
+    assert actual_require_h3_mask_support() is None
+    assert "process_denoise_mask" not in NativeBase.__dict__
 
     def wrapper(self, **kwargs):
         return native_extra(self, **kwargs)
