@@ -269,6 +269,30 @@ def main():
     assert audio_feathered_audio_mask[0, 0, 0, 64] == 1.0
     assert torch.all(audio_feathered_audio_mask[..., 65:] == 1.0)
 
+    _, source_driven, source_driven_trim = masked.apply_masked_prefix(
+        conditioning=conditioning,
+        vae=UnexpectedVideoVAE(),
+        latent=target,
+        previous_frames=frames,
+        context_length=39,
+        crop="disabled",
+        previous_latent=previous,
+        audio_only_feather=True,
+        preserve_audio_prefix=False,
+    )
+    source_video, source_audio = source_driven["samples"].unbind()
+    source_video_mask, source_audio_mask = (
+        source_driven["noise_mask"].unbind())
+    assert source_driven_trim == 39
+    assert torch.equal(
+        source_video[:, :, :prefix_video_steps],
+        previous_video[:, :, -prefix_video_steps:],
+    )
+    assert not torch.count_nonzero(source_audio)
+    assert not torch.count_nonzero(
+        source_video_mask[:, :, :prefix_video_steps])
+    assert torch.all(source_audio_mask == 1.0)
+
     existing_video_mask = torch.ones_like(target_video[:, :1])
     existing_video_mask[:, :, 8:12, 0, 0] = 0.1
     existing_audio_mask = torch.ones(
@@ -659,6 +683,33 @@ def main():
         mixed_state, conditioning, VideoVAE(), target)
     assert mixed_result[1:3] == (39, True)
     assert "noise_mask" in mixed_result[3]
+    no_carry_policy = chain.MiniMaxH3AudioPolicy().build(
+        "source", "on", "off")[0]
+    no_carry_plan = chain._normalize_plan(
+        json.dumps({"shots": [
+            {"id": "one", "prompt": "first", "length": 192},
+            {"id": "source_driven", "prompt": "second", "length": 192},
+        ]}),
+        "masked_source_audio_test", 64, 32, 39, "video", "head",
+        "disabled", "source_track", 39, 8.0, 8, 1, 18,
+        "model-stack-v1", 0, "audio_feathered_av", no_carry_policy,
+    )
+    no_carry_result = chain.MiniMaxH3ChainContext().apply(
+        {"plan": no_carry_plan, "index": 2, "previous_frames": frames,
+         "previous_latent": previous},
+        conditioning, VideoVAE(), target)
+    no_carry_video, no_carry_audio = no_carry_result[3]["samples"].unbind()
+    no_carry_video_mask, no_carry_audio_mask = (
+        no_carry_result[3]["noise_mask"].unbind())
+    assert no_carry_result[1:3] == (39, True)
+    assert torch.equal(
+        no_carry_video[:, :, :prefix_video_steps],
+        previous_video[:, :, -prefix_video_steps:],
+    )
+    assert not torch.count_nonzero(no_carry_audio)
+    assert not torch.count_nonzero(
+        no_carry_video_mask[:, :, :prefix_video_steps])
+    assert torch.all(no_carry_audio_mask == 1.0)
     feathered_state = dict(mixed_state)
     feathered_state["plan"] = feathered_plan
     feathered_result = chain.MiniMaxH3ChainContext().apply(

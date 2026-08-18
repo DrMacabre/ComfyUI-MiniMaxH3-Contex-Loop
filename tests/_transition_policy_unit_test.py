@@ -57,6 +57,9 @@ def make_plan(policy=None, *, encode_mode="video", anchor_mode="head",
 
 
 node = chain.MiniMaxH3TransitionPolicy()
+preset_choices = node.INPUT_TYPES()["required"]["preset"][0]
+assert "soft_av" in preset_choices
+assert "audio_feather_av" not in preset_choices
 expected = {
     "cut": ("guide", 0),
     "guide": ("guide", 22),

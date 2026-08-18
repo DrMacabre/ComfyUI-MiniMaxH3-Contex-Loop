@@ -330,10 +330,10 @@ assert chain._reference_entry_contract({
 })["timeline_mode"] == "sequential"
 
 sequential_video = chain.torch.arange(
-    500, dtype=chain.torch.float32).reshape(500, 1, 1, 1).expand(-1, 2, 2, 3)
+    700, dtype=chain.torch.float32).reshape(700, 1, 1, 1).expand(-1, 2, 2, 3)
 sequential_audio = {
     "waveform": chain.torch.arange(
-        5000, dtype=chain.torch.float32).reshape(1, 1, 5000),
+        7000, dtype=chain.torch.float32).reshape(1, 1, 7000),
     "sample_rate": 240,
 }
 sequential_schedule = chain.MiniMaxH3ScheduledVideoReference().add(
@@ -803,11 +803,11 @@ masked_motion_state = {
     "plan": {
         "compatibility": {"continuation_mode": "masked_av"},
         "shots": [
-            {"raw_frames": 243, "delivered_frames": 243,
+            {"raw_frames": 362, "delivered_frames": 362,
              "generation_start_frame": 0,
              "prompt": "Begin @performance."},
-            {"raw_frames": 243, "delivered_frames": 221,
-             "generation_start_frame": 221,
+            {"raw_frames": 345, "delivered_frames": 306,
+             "generation_start_frame": 323,
              "prompt": "Continue @performance."},
         ],
     },
@@ -815,14 +815,15 @@ masked_motion_state = {
 masked_motion_video, masked_motion_audio, masked_motion_detail = (
     chain._scheduled_video_reference_slice(
         sequential_motion_role["entries"][0], masked_motion_state,
-        2, 2, 243))
-assert tuple(masked_motion_video.shape) == (221, 2, 2, 3)
-assert float(masked_motion_video[0, 0, 0, 0]) == 243
-assert float(masked_motion_video[-1, 0, 0, 0]) == 463
-assert tuple(masked_motion_audio["waveform"].shape) == (1, 1, 2210)
-assert float(masked_motion_audio["waveform"][0, 0, 0]) == 2430
+        2, 2, 345))
+assert tuple(masked_motion_video.shape) == (306, 2, 2, 3)
+assert float(masked_motion_video[0, 0, 0, 0]) == 362
+assert float(masked_motion_video[-1, 0, 0, 0]) == 667
+assert tuple(masked_motion_audio["waveform"].shape) == (1, 1, 3450)
+assert float(masked_motion_audio["waveform"][0, 0, 0]) == 3230
 assert masked_motion_detail == (
-    "@performance sequential delivered frames 243:464 (origin scene 1)")
+    "@performance sequential delivered video frames 362:668; paired audio "
+    "raw frames 323:668 (origin scene 1)")
 
 guide_motion_state = {
     **masked_motion_state,
@@ -834,12 +835,12 @@ guide_motion_state = {
 guide_motion_video, guide_motion_audio, guide_motion_detail = (
     chain._scheduled_video_reference_slice(
         sequential_motion_role["entries"][0], guide_motion_state,
-        2, 2, 243))
-assert tuple(guide_motion_video.shape) == (243, 2, 2, 3)
-assert float(guide_motion_video[0, 0, 0, 0]) == 221
-assert float(guide_motion_audio["waveform"][0, 0, 0]) == 2210
+        2, 2, 345))
+assert tuple(guide_motion_video.shape) == (345, 2, 2, 3)
+assert float(guide_motion_video[0, 0, 0, 0]) == 323
+assert float(guide_motion_audio["waveform"][0, 0, 0]) == 3230
 assert guide_motion_detail == (
-    "@performance sequential frames 221:464 (origin scene 1)")
+    "@performance sequential frames 323:668 (origin scene 1)")
 
 large_motion_video = chain.torch.zeros((5, 512, 640, 3))
 compact_motion = chain.MiniMaxH3TaggedMotionReference().add(

@@ -36,17 +36,21 @@ Latent Guide reuses the generated predecessor's sampled video-latent tail
 directly, while imported or incompatible context falls back to the normal
 RGB/VAE Guide route. Tapered Guide changes only the disposable video context
 passed to the Guide VAE. In the
-experimental `masked_av` and `feathered_av` modes, Chain Context places a
-matching video and audio prefix inside the target latent, including when final
-assembly uses `source_track`. `masked_av` protects the complete prefix;
-`feathered_av` progressively denoises its final latent steps. For recursive
-scenes it copies the previous sampler's audio latent directly. For scene 1
-after Existing Video Context, source audio and the H3 audio VAE must both be
-connected.
+experimental `masked_av` and `feathered_av` modes, Chain Context always places
+a video prefix inside the target latent. With Generated continuity on it also
+places the matching audio prefix; `masked_av` protects that complete prefix and
+`feathered_av` progressively denoises its final latent steps. With Generated
+continuity off, the audio mask remains fully open even when final assembly uses
+`source_track`. For recursive scenes, enabled audio carry copies the previous
+sampler's audio latent directly. For scene 1 after Existing Video Context,
+carrying imported audio requires source audio and the H3 audio VAE.
 
 The 0.5 **Soft AV** preset selects `audio_feathered_av`: all picture-prefix
-steps remain exact while only the final eight audio ticks are released with a
-half-cosine ramp. This is the tested upstream AV extension recipe. The older
+steps remain exact. With Generated continuity on, only the final eight carried
+audio ticks are released with a half-cosine ramp. With Generated continuity
+off, the target audio stays fully denoisable and paired source audio spans the
+complete raw scene window instead of inheriting the delivered-video window.
+This is the tested upstream AV extension recipe. The older
 dual-stream `feathered_av` remains an Expert override for compatibility.
 
 AV prefixes must end on both native clocks: 39, 90, 141, 192, or 243 frames.
@@ -60,7 +64,8 @@ Guide uses 22 clean RGB/VAE guide frames, Tone Carry Guide uses the same RGB
 span with the predecessor's detected tone correction, Latent Guide uses the
 same span from the saved sampled video latent, Detail Guide uses the same span with an
 eight-frame chroma-noise exit taper, Hard AV uses a protected 39-frame prefix,
-and Soft AV keeps the picture exact while feathering only the audio exit.
+and Soft AV keeps the picture exact while feathering only a carried-audio exit.
+With Generated continuity off, both AV presets carry picture only.
 Advanced
 mode may pair either experimental Guide with another Guide context length; 22
 is the published baseline. Mixed plans must still use

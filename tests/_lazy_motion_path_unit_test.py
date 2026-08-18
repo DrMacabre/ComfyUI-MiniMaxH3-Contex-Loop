@@ -171,10 +171,11 @@ with tempfile.TemporaryDirectory() as temporary:
     assert tuple(video.shape) == (5, 64, 64, 3)
     assert abs(float(video[0, 0, 0, 0]) - 49 / 255) < 1e-6
     assert abs(float(video[-1, 0, 0, 0]) - 77 / 255) < 1e-6
-    assert tuple(audio["waveform"].shape) == (1, 1, 10000)
+    assert tuple(audio["waveform"].shape) == (1, 1, 14000)
     assert audio["sample_rate"] == 48000
     assert detail == (
-        "@performance sequential delivered frames 7:12 (origin scene 1)")
+        "@performance sequential delivered video frames 7:12; paired audio "
+        "raw frames 5:12 (origin scene 1)")
 
     preview = chain.MiniMaxH3LazyMotionScenePreview()
     no_video, no_audio, no_plan_status = preview.preview(
@@ -184,7 +185,7 @@ with tempfile.TemporaryDirectory() as temporary:
     preview_video, preview_audio, preview_status = preview.preview(
         preview_source, 2, plan)
     assert tuple(preview_video.shape) == (5, 64, 64, 3)
-    assert tuple(preview_audio["waveform"].shape) == (1, 1, 10000)
+    assert tuple(preview_audio["waveform"].shape) == (1, 1, 14000)
     assert "Scene 2/2" in preview_status
 
     inactive_plan = {

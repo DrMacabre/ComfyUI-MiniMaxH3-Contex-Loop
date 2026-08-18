@@ -46,7 +46,7 @@ Audio intent uses `h3_audio_policy_v1` and three independent axes:
 |---|---|---|
 | Final audio | `generated`, `source`, `none` | What Assemble places in the final MP4 |
 | Source reference | `on`, `off` | Whether the active source window guides H3 generation |
-| Generated continuity | `on`, `off` | Whether the prior sampled audio latent continues into the next scene |
+| Generated continuity | `on`, `off` | Whether the prior sampled audio latent continues into the next scene, including AV-mask prefixes |
 
 Paired audio on a tagged motion reference is a fourth, reference-local decision:
 `embedded` or `off`. It never selects the final soundtrack implicitly.

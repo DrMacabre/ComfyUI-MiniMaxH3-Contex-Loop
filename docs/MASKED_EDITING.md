@@ -12,12 +12,14 @@ This is the general form of the chain's `masked_av` and `feathered_av`
 continuation. The chain builds a temporal prefix mask automatically; the
 public masking nodes accept arbitrary static or tracked spatial masks.
 
-`masked_av` assigns `0` to the complete repeated AV prefix. `feathered_av`
-keeps most of that prefix exact, then raises the mask gradually toward `1` over
-its final latent steps. With the recommended 39-frame context, 8 of 12 video
-steps and 42 of 65 audio steps are fully protected; the final 4 video and 23
-audio prefix steps form the denoise ramp. Both modes trim all 39 repeated
-frames after decoding.
+`masked_av` assigns `0` to the complete repeated picture prefix.
+`feathered_av` keeps most of that picture prefix exact, then raises the mask
+gradually toward `1` over its final latent steps. When Audio Policy enables
+Generated continuity, the matching audio prefix participates too: with the
+recommended 39-frame context, 8 of 12 video steps and 42 of 65 audio steps are
+fully protected; the final 4 video and 23 audio prefix steps form the denoise
+ramp. With Generated continuity off, audio remains fully denoisable. Both modes
+trim all 39 repeated picture frames after decoding.
 
 Start with
 [`MiniMax H3 - Masked Video Inpaint.json`](<../example_workflows/MiniMax H3 - Masked Video Inpaint.json>).

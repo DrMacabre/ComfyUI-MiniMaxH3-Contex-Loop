@@ -375,6 +375,7 @@ def apply_masked_prefix(
     previous_audio=None,
     temporal_feather=False,
     audio_only_feather=False,
+    preserve_audio_prefix=True,
 ):
     """Return conditioning, masked target latent, and repeated trim length."""
     _require_h3_mask_support()
@@ -414,7 +415,11 @@ def apply_masked_prefix(
             "h3_masked_prefix: video prefix consumes the whole target latent."
         )
 
-    if previous_latent is not None:
+    if not bool(preserve_audio_prefix):
+        audio_prefix = None
+        audio_steps = 0
+        audio_source = "open target (generated continuity off)"
+    elif previous_latent is not None:
         audio_prefix, audio_steps, overhang = _audio_tail_from_latent(
             previous_latent, frames)
         audio_source = "previous sampled latent"
@@ -429,34 +434,37 @@ def apply_masked_prefix(
     else:
         audio_prefix, audio_steps, audio_source = _encode_imported_audio(
             audio_vae, previous_audio, frames)
-    expected_audio_steps = int(round(frames / float(FPS) * AUDIO_HZ))
-    if audio_steps != expected_audio_steps:
-        raise RuntimeError(
-            "h3_masked_prefix: %d video frames require %d audio steps, got %d."
-            % (frames, expected_audio_steps, audio_steps)
-        )
-    if audio_steps >= int(target_audio.shape[-1]):
-        raise ValueError(
-            "h3_masked_prefix: audio prefix consumes the whole target latent."
-        )
+    if bool(preserve_audio_prefix):
+        expected_audio_steps = int(round(frames / float(FPS) * AUDIO_HZ))
+        if audio_steps != expected_audio_steps:
+            raise RuntimeError(
+                "h3_masked_prefix: %d video frames require %d audio steps, "
+                "got %d." % (frames, expected_audio_steps, audio_steps)
+            )
+        if audio_steps >= int(target_audio.shape[-1]):
+            raise ValueError(
+                "h3_masked_prefix: audio prefix consumes the whole target "
+                "latent.")
 
     out_video = target_video.clone()
     out_audio = target_audio.clone()
     vp = video_prefix[:1].to(out_video.device, out_video.dtype)
-    ap = audio_prefix[:1].to(out_audio.device, out_audio.dtype)
+    ap = (audio_prefix[:1].to(out_audio.device, out_audio.dtype)
+          if audio_prefix is not None else None)
     if (int(vp.shape[1]) != int(out_video.shape[1])
             or tuple(vp.shape[3:]) != tuple(out_video.shape[3:])):
         raise ValueError(
             "h3_masked_prefix: encoded video prefix shape %s does not match "
             "target %s." % (tuple(vp.shape), tuple(out_video.shape))
         )
-    if tuple(ap.shape[1:3]) != tuple(out_audio.shape[1:3]):
+    if ap is not None and tuple(ap.shape[1:3]) != tuple(out_audio.shape[1:3]):
         raise ValueError(
             "h3_masked_prefix: audio prefix shape %s does not match target %s."
             % (tuple(ap.shape), tuple(out_audio.shape))
         )
     out_video[:, :, :video_steps] = vp
-    out_audio[..., :audio_steps] = ap
+    if ap is not None:
+        out_audio[..., :audio_steps] = ap
 
     video_mask, audio_mask = _existing_mask_streams(
         latent, out_video, out_audio)
@@ -480,18 +488,23 @@ def apply_masked_prefix(
         (video_mask, audio_mask))
     out_conditioning = _drop_prefix_guides(conditioning, frames)
 
+    if not bool(preserve_audio_prefix):
+        mask_summary = "audio fully denoisable (generated continuity off)"
+    elif audio_only_feather:
+        mask_summary = "audio-only half-cosine feather %d audio steps" % (
+            audio_feather_steps)
+    elif temporal_feather:
+        mask_summary = "temporal feather %d video / %d audio steps" % (
+            video_feather_steps, audio_feather_steps)
+    else:
+        mask_summary = "hard prefix mask"
     _LOG.info(
         "h3_masked_prefix: preserved %d target frames = %d video steps / %d "
         "audio steps (%.3fs, video from %s, audio from %s); %s; target %d "
         "frames at %dx%d; trim %d",
         frames, video_steps, audio_steps, frames / float(FPS), video_source,
         audio_source,
-        ("audio-only half-cosine feather %d audio steps" %
-         audio_feather_steps
-         if audio_only_feather else
-         ("temporal feather %d video / %d audio steps" %
-          (video_feather_steps, audio_feather_steps)
-          if temporal_feather else "hard prefix mask")),
+        mask_summary,
         target_frames, width, height, frames,
     )
     return out_conditioning, out_latent, frames

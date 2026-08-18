@@ -151,8 +151,9 @@ The semantic Transition Policy maps `Cut` to no carried picture, `Guide` to
 RGB path with a saved predecessor tone correction, `Latent Guide` to 22 direct
 sampled-latent guide frames, experimental `Detail Guide` to a tapered
 chroma-noise 22-frame guide,
-`Hard AV` to a protected 39-frame AV prefix, and `Soft AV` to an exact
-39-frame picture prefix with a half-cosine release over the final audio ticks.
+`Hard AV` to a protected 39-frame picture prefix, and `Soft AV` to the same
+exact picture prefix with a half-cosine release over the final carried-audio
+ticks when Generated continuity is on.
 The old Plan `continuation_mode`,
 `context_length`, and combined `audio_mode` widgets are hidden from the normal
 0.5 interface so they do not compete with the policy nodes. Existing 0.4
@@ -204,21 +205,26 @@ dialogue, ambience, or music into that new shot. Explicit audio `0` carries no
 preceding generated sound. For scene 1, these control Existing Video Context;
 a zero-video-context imported original can still be prepended during assembly.
 Independent audio context applies to all Guide variants with generated-audio
-continuity.
-Both AV mask modes always keep their audio and video prefix lengths
-synchronized, while `source_track` continues to use its exact timeline slice.
+continuity. AV mask modes use a positive audio context to carry the matching
+shared-clock audio prefix; explicit audio `0`, or Generated continuity off,
+keeps the picture prefix but leaves target audio fully denoisable. A paired
+motion soundtrack then covers the complete raw target window, while
+`source_track` continues to use its exact timeline slice.
 
 `masked_av` writes the previous scene's decoded video tail into the beginning
-of the current target video latent, copies the matching tail from the previous
-sampled audio latent, and protects both streams with `0 = preserve`,
-`1 = generate` denoise masks. Wire the new **Chain Context latent** output to
+of the current target video latent and protects it with a `0 = preserve`,
+`1 = generate` denoise mask. With Generated continuity on it also copies and
+protects the matching previous sampled-audio tail. With that policy off, the
+audio target stays fully denoisable so source/reference audio can drive the
+entire raw scene. Wire the new **Chain Context latent** output to
 the sampler's `latent_image`; the output passes the original target through on
 scene 1 and in every Guide mode, so that one wire supports every mode.
 
 `audio_feathered_av`, selected by **Soft AV**, keeps all 12 video latent steps
-exact and protects the first 57 of 65 audio steps, then releases only the final
-8 audio ticks with a half-cosine ramp. This matches the tested upstream AV
-extension recipe. The older `feathered_av` implementation remains available
+exact. When Generated continuity is on, it protects the first 57 of 65 audio
+steps and releases only the final 8 audio ticks with a half-cosine ramp. When
+continuity is off, it carries no stale audio prefix. This matches the tested
+upstream AV extension recipe. The older `feathered_av` implementation remains available
 through Expert override: it softens the final four video steps as well as the
 audio and is retained as an experimental compatibility option.
 

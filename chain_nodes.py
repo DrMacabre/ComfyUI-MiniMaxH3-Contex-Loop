@@ -126,6 +126,7 @@ BOUNDARY_TONE_MATCH_CONTEXT_FRAMES = 8
 BOUNDARY_TONE_MATCH_SEARCH_FRAMES = 4
 BOUNDARY_TONE_MATCH_MIN_JUMP = 1.25
 BOUNDARY_TONE_MATCH_MAX_SHIFT = 6.0
+MASKED_AUDIO_CONTRACT = "raw_source_window_v2"
 PLAN_STUDIO_PREVIEW_TTL_SECONDS = 6 * 60 * 60
 PLAN_STUDIO_PREVIEW_MAX_SESSIONS = 32
 PLAN_STUDIO_PREVIEW_MAX_HEIGHT = 480
@@ -2204,6 +2205,8 @@ def _scheduled_video_reference_slice(
     current_start = int(current["generation_start_frame"])
     source_start = current_start - origin_start
     source_length = int(length)
+    audio_source_start = source_start
+    audio_source_length = source_length
     detail_mode = ""
     compatibility = state["plan"].get("compatibility")
     if not isinstance(compatibility, dict):
@@ -2215,8 +2218,12 @@ def _scheduled_video_reference_slice(
         # Native Ref2VA video banks carry no target-frame coordinates. A
         # masked continuation already owns the repeated prefix, so including
         # those reference frames makes H3 replay them once the denoisable tail
-        # begins (one context span late). Advance motion on the delivered
-        # timeline and apply the identical window to paired audio.
+        # begins (one context span late). Advance only the motion video on
+        # the delivered timeline. Its paired soundtrack still describes the
+        # complete raw target, including the repeated prefix, and therefore
+        # must remain on the raw generation window. Applying the delivered
+        # video window to audio shifts source-driven performance by exactly
+        # one context span on every continuation scene.
         delivered = current.get("delivered_frames")
         if delivered is None:
             raise ValueError(
@@ -2238,7 +2245,8 @@ def _scheduled_video_reference_slice(
                 (entry.get("tag", "video"), int(scene)))
         detail_mode = " delivered"
     source_end = source_start + source_length
-    if source_start < 0:
+    audio_source_end = audio_source_start + audio_source_length
+    if source_start < 0 or audio_source_start < 0:
         raise ValueError(
             "Sequential scheduled video @%s resolved a negative source "
             "window for scene %d." %
@@ -2261,13 +2269,14 @@ def _scheduled_video_reference_slice(
         sliced_video = _source_timeline_scene_video(
             video, source_start, source_end)
         sliced_audio = (
-            _source_timeline_scene_audio(video, source_start, source_end)
+            _source_timeline_scene_audio(
+                video, audio_source_start, audio_source_end)
             if audio is not None else None)
     elif _is_lazy_motion_descriptor(video):
         sliced_video = _decode_lazy_motion_video(
             video, source_start, source_end)
         sliced_audio = _decode_lazy_motion_audio(
-            video, source_start, source_end)
+            video, audio_source_start, audio_source_end)
     else:
         sliced_video = video[source_start:source_end]
         sliced_audio = None
@@ -2276,8 +2285,10 @@ def _scheduled_video_reference_slice(
         waveform, sample_rate = _validate_audio(
             audio, "Sequential scheduled video @%s audio" % entry.get(
                 "tag", "video"))
-        sample_start = int(round(source_start / float(FPS) * sample_rate))
-        sample_end = int(round(source_end / float(FPS) * sample_rate))
+        sample_start = int(round(
+            audio_source_start / float(FPS) * sample_rate))
+        sample_end = int(round(
+            audio_source_end / float(FPS) * sample_rate))
         available_samples = int(waveform.shape[-1])
         if sample_end > available_samples:
             raise ValueError(
@@ -2290,9 +2301,19 @@ def _scheduled_video_reference_slice(
             "waveform": waveform[..., sample_start:sample_end],
             "sample_rate": sample_rate,
         }
-    detail = "@%s sequential%s frames %d:%d (origin scene %d)" % (
-        entry.get("tag", "video"), detail_mode, source_start, source_end,
-        origin_scene)
+    if (sliced_audio is not None
+            and (audio_source_start != source_start
+                 or audio_source_end != source_end)):
+        detail = (
+            "@%s sequential%s video frames %d:%d; paired audio raw frames "
+            "%d:%d (origin scene %d)" % (
+                entry.get("tag", "video"), detail_mode, source_start,
+                source_end, audio_source_start, audio_source_end,
+                origin_scene))
+    else:
+        detail = "@%s sequential%s frames %d:%d (origin scene %d)" % (
+            entry.get("tag", "video"), detail_mode, source_start, source_end,
+            origin_scene)
     return sliced_video, sliced_audio, detail
 
 
@@ -3288,6 +3309,14 @@ def _scene_dependency_record(
             "video_blend_frames": video_blend,
         },
     }
+    if transition in MASKED_CONTINUATION_MODES:
+        # v2 separates a masked motion video's delivered-only bank from its
+        # paired soundtrack's full raw target window, and obeys Generated
+        # continuity when deciding whether to preserve the predecessor audio
+        # latent. Keep that generation-significant behavior explicit so a
+        # pre-fix masked scene cannot be resumed as if it used the new clocks.
+        scopes["incoming_boundary"]["masked_audio_contract"] = (
+            MASKED_AUDIO_CONTRACT)
     fingerprints = {scope: _fingerprint(scopes[scope])
                     for scope in DEPENDENCY_SCOPES}
     generation_hash = _fingerprint({
@@ -7622,8 +7651,7 @@ class MiniMaxH3TransitionPolicy:
             "required": {
                 "preset": ((
                         "cut", "guide", "tone_guide", "latent_guide",
-                        "detail_guide", "hard_av", "soft_av",
-                        "audio_feather_av"
+                        "detail_guide", "hard_av", "soft_av"
                 ), {
                     "default": "guide",
                     "tooltip": "Incoming-transition presets: Cut = "
@@ -7638,9 +7666,8 @@ class MiniMaxH3TransitionPolicy:
                                "baseline); "
                                "Hard AV = Masked AV + 39 frames; Soft AV = "
                                "hard picture + half-cosine audio release + "
-                               "39 frames; Audio Feather AV is the retained "
-                               "legacy alias for Soft AV. The older dual-"
-                               "stream Feathered AV remains available only "
+                               "39 frames. The older dual-stream Feathered "
+                               "AV remains available only "
                                "through Expert override. These are Plan "
                                "defaults; explicit per-scene settings still "
                                "win. Expert override ignores the selected "
@@ -7794,10 +7821,12 @@ class MiniMaxH3AudioPolicy:
                 "generated_continuity": (
                     list(GENERATED_CONTINUITY_POLICIES), {
                         "default": "on",
-                        "tooltip": "Whether guide continuation carries the "
-                                   "previous sampled audio latent into the "
-                                   "next scene. This does not select the final "
-                                   "soundtrack."}),
+                        "tooltip": "Whether continuation carries the previous "
+                                   "sampled audio latent into the next scene. "
+                                   "When off, AV-mask transitions preserve "
+                                   "picture only and leave target audio fully "
+                                   "denoisable for source/reference guidance. "
+                                   "This does not select the final soundtrack."}),
             },
         }
 
@@ -7953,8 +7982,11 @@ class MiniMaxH3ChainPlan:
                                "Policy has Generated continuity=on. Legacy "
                                "generated_audio and source_plus_timeline enable "
                                "that axis; source_track disables it. AV mask modes "
-                               "also ignore it and always preserve audio for the "
-                               "same duration as context_length. A scene's "
+                               "use zero versus positive as an audio-carry "
+                               "switch: positive preserves audio for the exact "
+                               "video-prefix duration required by the shared AV "
+                               "clock, while zero leaves audio fully denoisable. "
+                               "A scene's "
                                "Advanced Audio context can override this default; "
                                "there, explicit 0 means no audio carry."}),
                 "default_duration_seconds": ("FLOAT", {
@@ -8015,8 +8047,11 @@ class MiniMaxH3ChainPlan:
                                "curve before VAE encoding. "
                                "masked_av (experimental) VAE-encodes the "
                                "previous video tail into the current target "
-                               "latent, copies its sampled audio tail, and "
-                               "protects both with per-stream denoise masks. "
+                               "latent and protects it with a denoise mask. "
+                               "With Generated continuity on it also copies and "
+                               "protects the matching sampled-audio tail; with "
+                               "that policy off, target audio remains fully "
+                               "denoisable for source/reference guidance. "
                                "feathered_av uses the same prefix but "
                                "progressively denoises its final temporal "
                                "steps for a softer handoff. "
@@ -9719,6 +9754,9 @@ class MiniMaxH3ChainContext:
             from .masked_context import apply_masked_prefix
 
             previous_latent = state.get("previous_latent")
+            preserve_audio_prefix = (
+                _audio_policy_uses_generated_continuity(cfg)
+                and audio_context_length > 0)
             out_conditioning, out_latent, trim = apply_masked_prefix(
                 conditioning=conditioning,
                 vae=vae,
@@ -9733,6 +9771,7 @@ class MiniMaxH3ChainContext:
                 temporal_feather=(continuation_mode == "feathered_av"),
                 audio_only_feather=(
                     continuation_mode == "audio_feathered_av"),
+                preserve_audio_prefix=preserve_audio_prefix,
             )
             return (out_conditioning, trim, True, out_latent)
         previous_latent = (state.get("previous_latent")

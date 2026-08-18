@@ -114,6 +114,32 @@ assert chain._scene_dependency_diffs({"version": "legacy"}, scene1_a) == []
 assert set(scene1_a["scopes"]) == set(chain.DEPENDENCY_SCOPES)
 assert scene1_a["version"] == chain.SCENE_DEPENDENCY_VERSION
 
+masked_plan = chain._normalize_plan(
+    json.dumps({"shots": [
+        {"id": "one", "prompt": "@actor opens.", "length": 90},
+        {"id": "two", "prompt": "@actor continues.", "length": 90},
+    ]}),
+    "masked-dependency-test", 64, 64, 39, "video", "head", "disabled",
+    "source_track", 39, 1.0, 8, 11, 18, "body:auto:v1", 0,
+    "audio_feathered_av",
+    chain._contract_audio_policy("source", "on", "off"))
+masked_dependency = chain._scene_dependency_record(masked_plan, 2, None)
+assert masked_dependency["scopes"]["incoming_boundary"][
+    "masked_audio_contract"] == "raw_source_window_v2"
+legacy_masked_dependency = json.loads(json.dumps(masked_dependency))
+del legacy_masked_dependency["scopes"]["incoming_boundary"][
+    "masked_audio_contract"]
+contract_diffs = chain._scene_dependency_diffs(
+    legacy_masked_dependency, masked_dependency)
+assert contract_diffs == [{
+    "scope": "incoming_boundary",
+    "scene": 2,
+    "field": "masked_audio_contract",
+    "saved": None,
+    "current": "raw_source_window_v2",
+    "regeneration_required": True,
+}]
+
 print("H3 scene dependencies: scene-local PCM, boundary isolation, assembly exclusion, and structured diffs pass")
 
 

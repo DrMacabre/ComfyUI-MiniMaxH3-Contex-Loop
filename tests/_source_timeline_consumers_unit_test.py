@@ -133,6 +133,24 @@ with tempfile.TemporaryDirectory() as temporary:
     assert tuple(scene_audio["waveform"].shape) == (1, 1, 44000)
     assert "frames 17:39" in detail
 
+    masked_plan = {
+        **prepared,
+        "compatibility": {
+            **prepared["compatibility"],
+            "continuation_mode": "audio_feathered_av",
+        },
+        "shots": [dict(shot) for shot in prepared["shots"]],
+    }
+    masked_plan["shots"][1]["continuation_mode"] = "audio_feathered_av"
+    masked_video, masked_audio, masked_detail = (
+        chain._scheduled_video_reference_slice(
+            entry, {**state, "index": 2, "plan": masked_plan}, 2, 2, 22))
+    assert tuple(masked_video.shape) == (17, 64, 64, 3)
+    assert tuple(masked_audio["waveform"].shape) == (1, 1, 44000)
+    assert masked_detail == (
+        "@motion sequential delivered video frames 22:39; paired audio raw "
+        "frames 17:39 (origin scene 1)")
+
     lazy_preview = chain.MiniMaxH3LazyMotionScenePreview().preview(
         preview_source, 2, plan=prepared)
     assert tuple(lazy_preview[0].shape) == (22, 64, 64, 3)
