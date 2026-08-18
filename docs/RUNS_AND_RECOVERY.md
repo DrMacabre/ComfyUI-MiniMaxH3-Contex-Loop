@@ -67,6 +67,14 @@ continuation and context overrides remain part of that scene's history.
 Review Gate's checkpoint browser can set up this resume and preview the joined
 partial through the selected predecessor.
 
+**Manifest Load** also supports interrupted runs. It discovers the longest
+contiguous active checkpoint prefix beginning at scene 1, verifies every scene
+and artifact through that point, and emits a partial manifest when later scenes
+have not been saved. Connect that output directly to **Assemble** to recover the
+finished prefix without sampling again. A missing scene ends the prefix; an
+orphaned later checkpoint is never joined across the gap. When every planned
+scene is present, the same node emits the normal completed manifest.
+
 ### Restore an earlier scene revision
 
 **Refresh** in Review Gate discovers the active checkpoint and every immutable
@@ -166,7 +174,8 @@ Keep run folders private when workflows contain credentials.
 
 ## Assembly
 
-Assemble accepts completed or partial manifests. Its filename supports date
+Assemble accepts completed or partial manifests, including an interrupted
+prefix reconstructed by Manifest Load. Its filename supports date
 tokens such as `%date:yyyy-MM-dd%`, `%year%`, `%month%`, `%day%`, `%hour%`,
 `%minute%`, and `%second%`. Existing files are never overwritten; numbered
 suffixes are added automatically.

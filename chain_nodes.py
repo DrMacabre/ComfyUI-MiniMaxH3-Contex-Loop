@@ -10240,6 +10240,23 @@ def _manifest_path(plan: dict[str, Any]) -> str:
     return os.path.join(_run_dir(plan), "manifest.json")
 
 
+def _saved_scene_prefix_length(plan: dict[str, Any]) -> int:
+    """Return the contiguous active checkpoint prefix available for recovery.
+
+    Segment Save publishes one canonical metadata pointer only after all of a
+    scene's immutable artifacts are durable.  Recovery can therefore discover
+    an interrupted run without opening every large checkpoint up front.  The
+    selected prefix is still passed through ``_load_resume_state`` below,
+    which performs the authoritative history, artifact, and SHA-256 checks.
+    """
+    saved = 0
+    for index in range(1, len(plan["shots"]) + 1):
+        if not os.path.isfile(_artifact_paths(plan, index)["metadata"]):
+            break
+        saved = index
+    return saved
+
+
 class MiniMaxH3ChainLoopEnd:
     @classmethod
     def INPUT_TYPES(cls):
@@ -10486,15 +10503,16 @@ class MiniMaxH3ChainManifestLoad:
     RETURN_TYPES = (MANIFEST_TYPE, "STRING", "STRING")
     RETURN_NAMES = ("manifest", "manifest_json", "status")
     OUTPUT_TOOLTIPS = (
-        "Verified completed manifest reconstructed from saved scene "
-        "checkpoints; connect to H3 Chain Assemble.",
+        "Verified completed or partial manifest reconstructed from the "
+        "longest contiguous saved scene prefix; connect to H3 Chain Assemble.",
         "Human-readable JSON form of the reconstructed manifest.",
         "Number of verified scenes and checkpoint directory used.",
     )
     FUNCTION = "load"
     CATEGORY = "conditioning/minimax/contex_loop"
-    DESCRIPTION = ("Validate every saved clip and rebuild a completed chain "
-                   "manifest without rerendering the final clip.")
+    DESCRIPTION = ("Validate the longest contiguous saved scene prefix and "
+                   "rebuild a completed or partial chain manifest without "
+                   "rerendering.")
 
     @classmethod
     def IS_CHANGED(cls, *args, **kwargs):
@@ -10503,6 +10521,7 @@ class MiniMaxH3ChainManifestLoad:
     def load(self, plan, source_audio=None, external_context=None,
              source_timeline=None):
         prepared_plan = _plan_with_external_context(plan, external_context)
+        runtime_timeline = None
         if source_timeline is None and isinstance(
                 plan.get("source_timeline"), dict):
             source_timeline = _source_timeline_from_recovery(
@@ -10512,19 +10531,37 @@ class MiniMaxH3ChainManifestLoad:
                 "H3 Chain Manifest Load accepts Source Timeline or legacy "
                 "source_audio, not both.")
         if source_timeline is not None:
-            prepared_plan, _runtime_timeline = _plan_with_source_timeline(
+            prepared_plan, runtime_timeline = _plan_with_source_timeline(
                 prepared_plan, source_timeline)
         else:
             prepared_plan = _plan_with_source_audio(
                 prepared_plan, source_audio)
-        completed = _load_resume_state(
-            prepared_plan, len(prepared_plan["shots"]) + 1)
-        manifest = _manifest_from_state(completed)
-        _atomic_json(_manifest_path(prepared_plan), manifest)
+        saved_count = _saved_scene_prefix_length(prepared_plan)
+        if saved_count < 1:
+            raise FileNotFoundError(
+                "H3 Chain Manifest Load found no saved scenes for run %s in %s."
+                % (prepared_plan["run_name"], _run_dir(prepared_plan)))
+        recovered = _load_resume_state(
+            prepared_plan, saved_count + 1,
+            source_timeline=runtime_timeline,
+            source_audio=source_audio if runtime_timeline is None else None)
+        complete = saved_count == len(prepared_plan["shots"])
+        manifest = _manifest_from_segments(
+            prepared_plan, recovered["segments"], complete=complete)
+        if complete:
+            manifest_path = _manifest_path(prepared_plan)
+            kind = "completed"
+        else:
+            manifest_path = os.path.join(
+                _run_dir(prepared_plan), "partial",
+                "through_clip_%04d.manifest.json" % saved_count)
+            kind = "partial"
+        _atomic_json(manifest_path, manifest)
         manifest_json = json.dumps(
             manifest, ensure_ascii=False, indent=2, sort_keys=True)
-        status = "loaded and verified %d saved clips from %s" % (
-            len(manifest["segments"]), _run_dir(prepared_plan))
+        status = "loaded and verified %s manifest through clip %d/%d from %s" % (
+            kind, saved_count, len(prepared_plan["shots"]),
+            _run_dir(prepared_plan))
         return (manifest, manifest_json, status)
 
 

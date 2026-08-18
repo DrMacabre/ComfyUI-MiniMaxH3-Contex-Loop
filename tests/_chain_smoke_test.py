@@ -1571,6 +1571,19 @@ def main():
             print("recovery metadata: MP4, prompt sidecar, plan, API prompt, "
                   "and workflow archive exact inputs")
 
+            interrupted_manifest = chain.MiniMaxH3ChainManifestLoad().load(
+                plan, source)
+            assert interrupted_manifest[0]["format"] == (
+                "h3_chain_partial_manifest_v3")
+            assert interrupted_manifest[0]["clip_count"] == 1
+            assert interrupted_manifest[0]["planned_clip_count"] == 2
+            assert "partial manifest through clip 1/2" in (
+                interrupted_manifest[2])
+            assert pathlib.Path(
+                tempdir, "h3_chains", "smoke", "partial",
+                "through_clip_0001.manifest.json").is_file()
+            print("manifest load: interrupted run restored through scene 1")
+
             segment1_path = pathlib.Path(
                 chain._absolute_output_path(segment1["segment"]))
             checkpoint1_path = pathlib.Path(
