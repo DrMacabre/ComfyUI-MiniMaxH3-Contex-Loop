@@ -7,6 +7,10 @@ import {
 } from "./h3_chain_plan_core.mjs?v=0.5.0";
 import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.5.0";
 import {
+    refreshRestoredPlanEditors,
+    restoreConnectedPolicyInputs,
+} from "./h3_plan_restore_core.mjs?v=0.5.0";
+import {
     applyCheckpointRevisionSet,
     applyReviewEdit,
     checkpointRevisionChain,
@@ -299,7 +303,7 @@ function updatePlanFromCheckpointRevisions(reviewNode, revisions) {
     return true;
 }
 
-function restoreSavedPlanInputs(reviewNode, inputs) {
+function restoreSavedPlanInputs(reviewNode, inputs, policyInputs = {}) {
     const planNode = upstreamPlanNode(reviewNode);
     if (!planNode || !inputs || typeof inputs !== "object") {
         throw new Error("The saved run has no Plan inputs to restore.");
@@ -329,8 +333,8 @@ function restoreSavedPlanInputs(reviewNode, inputs) {
     }
     const planWidget = widgetByName(planNode, "plan_json");
     const plan = parsePlanJson(String(planWidget?.value ?? ""));
-    planNode._h3ChainEditorRefresh?.();
-    planNode.graph?.setDirtyCanvas?.(true, true);
+    const policies = restoreConnectedPolicyInputs(planNode, policyInputs);
+    refreshRestoredPlanEditors(planNode);
     app.graph?.setDirtyCanvas?.(true, true);
     for (const [sceneIndex, shot] of plan.shots.entries()) {
         publishCompanionPrompt(
@@ -340,7 +344,7 @@ function restoreSavedPlanInputs(reviewNode, inputs) {
             promptValueToText(shot.prompt),
         );
     }
-    return {sceneCount: plan.shots.length, unavailable};
+    return {sceneCount: plan.shots.length, unavailable, policies};
 }
 
 function formatBytes(value) {
@@ -945,6 +949,7 @@ function mount(node) {
             if (!runResponse.ok) throw new Error(
                 runBody.error || `HTTP ${runResponse.status}`,
             );
+            let restoredPolicyInputs = runBody.policy_inputs;
             if (selections.length) {
                 const response = await api.fetchApi(
                     "/minimax_h3_context_loop/checkpoint-revisions/restore", {
@@ -965,8 +970,11 @@ function mount(node) {
                     body.error || `HTTP ${response.status}`,
                 );
                 restored = body.restored ?? [];
+                restoredPolicyInputs = body.policy_inputs
+                    ?? restoredPolicyInputs;
             }
-            const savedPlan = restoreSavedPlanInputs(node, runBody.plan_inputs);
+            const savedPlan = restoreSavedPlanInputs(
+                node, runBody.plan_inputs, restoredPolicyInputs);
             if (savedPlan.sceneCount < resumeScene) {
                 throw new Error(
                     `The saved Plan has ${savedPlan.sceneCount} scenes and cannot resume scene ${resumeScene}.`,
@@ -999,8 +1007,11 @@ function mount(node) {
             }
             const unavailable = savedPlan.unavailable.length
                 ? ` Current Plan has no ${savedPlan.unavailable.join(", ")} control. ` : " ";
+            const unavailablePolicies = savedPlan.policies.unavailable.length
+                ? ` Could not restore ${savedPlan.policies.unavailable.join(", ")}. ` : "";
             const finalStatus = `Restored the saved ${savedPlan.sceneCount}-scene Plan and ${restored.length} checkpoint scene${restored.length === 1 ? "" : "s"}.` +
-                unavailable + `Checkpoint ${resumeScene - 1} loaded for preview. Loop Start is armed for scene ${resumeScene}; queue the workflow to validate and resume.`;
+                unavailable + unavailablePolicies +
+                `Checkpoint ${resumeScene - 1} loaded for preview. Loop Start is armed for scene ${resumeScene}; queue the workflow to validate and resume.`;
             if (changed) await refreshResumeOptions();
             resumeStatus.textContent = finalStatus;
         } catch (error) {

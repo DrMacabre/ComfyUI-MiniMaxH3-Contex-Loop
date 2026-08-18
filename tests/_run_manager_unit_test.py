@@ -48,6 +48,19 @@ def main():
             "compatibility": {
                 "width": 960, "height": 544, "context_length": 22,
                 "generation_fingerprint": "",
+                "audio_policy": {
+                    "version": "h3_audio_policy_v1",
+                    "final_audio": "source",
+                    "source_reference": "on",
+                    "generated_continuity": "off",
+                },
+                "transition_policy": {
+                    "version": "h3_transition_policy_v1",
+                    "preset": "soft_av",
+                    "continuation_mode": "feathered_av",
+                    "context_length": 39,
+                    "expert_override": True,
+                },
             },
         })
         exact_inputs = {
@@ -110,9 +123,23 @@ def main():
                     key: value for key, value in exact_inputs.items()
                     if key != "plan_json"}
         assert loaded["scene_count"] == 1
+        assert loaded["policy_inputs"] == {
+            "audio_policy": {
+                "final_audio": "source",
+                "source_reference": "on",
+                "generated_continuity": "off",
+            },
+            "transition_policy": {
+                "preset": "soft_av",
+                "expert_override": True,
+                "expert_continuation_mode": "feathered_av",
+                "expert_context_length": 39,
+            },
+        }
         assert loaded["sources"][-1] == "api_prompt.json"
         plan_only = manager.load_plan("variant_exact")
         assert plan_only["plan_inputs"] == loaded["plan_inputs"]
+        assert plan_only["policy_inputs"] == loaded["policy_inputs"]
         assert "assets" not in plan_only
 
         # Connected API inputs are skipped, leaving the effective archived
@@ -127,7 +154,8 @@ def main():
         assert linked_restore["generation_fingerprint"] == ""
         assert linked_restore["base_seed"] == "18446744073709551615"
 
-        restored = manager.load_run("variant_fallback")["plan_inputs"]
+        fallback_payload = manager.load_run("variant_fallback")
+        restored = fallback_payload["plan_inputs"]
         assert restored["run_name"] == "variant_fallback"
         assert restored["width"] == 768
         assert restored["anchor_mode"] == "before"
@@ -139,6 +167,19 @@ def main():
         assert restored_plan["shots"][0]["seed"] == "9"
         assert restored_plan["shots"][0]["context_length"] == 0
         assert restored_plan["shots"][0]["audio_context_length"] == 33
+        assert fallback_payload["policy_inputs"] == {
+            "audio_policy": {
+                "final_audio": "source",
+                "source_reference": "on",
+                "generated_continuity": "off",
+            },
+            "transition_policy": {
+                "preset": "guide",
+                "expert_override": True,
+                "expert_continuation_mode": "guide",
+                "expert_context_length": 5,
+            },
+        }
 
     print("H3 Run Manager: discovery, exact API restoration and Plan fallback pass")
 

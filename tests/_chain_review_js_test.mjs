@@ -130,6 +130,10 @@ const reviewSource = fs.readFileSync(
     new URL("../web/h3_chain_review_final.js", import.meta.url),
     "utf8",
 );
+const backendSource = fs.readFileSync(
+    new URL("../chain_nodes.py", import.meta.url),
+    "utf8",
+);
 assert.match(reviewSource, /minimax_h3_context_loop\/review/);
 assert.match(reviewSource, /minimax_h3_context_loop_review_resolved/);
 assert.match(reviewSource, /item\.name === "scene_range"/);
@@ -204,7 +208,18 @@ const checkpointLoadSource = reviewSource.slice(
     reviewSource.indexOf("function stopCountdown", checkpointLoadStart),
 );
 assert.match(checkpointLoadSource, /include_assets: "false"/);
-assert.match(checkpointLoadSource, /restoreSavedPlanInputs\(node, runBody\.plan_inputs\)/);
+assert.match(checkpointLoadSource, /let restoredPolicyInputs = runBody\.policy_inputs/);
+assert.match(checkpointLoadSource, /restoredPolicyInputs = body\.policy_inputs/);
+assert.match(
+    checkpointLoadSource,
+    /restoreSavedPlanInputs\(\s*node, runBody\.plan_inputs, restoredPolicyInputs\)/,
+);
+assert.match(reviewSource, /restoreConnectedPolicyInputs\(planNode, policyInputs\)/);
+assert.match(reviewSource, /refreshRestoredPlanEditors\(planNode\)/);
+assert.match(
+    backendSource,
+    /"policy_inputs": archive_policy_inputs\(\{\s*"compatibility": compatibility/,
+);
 assert.match(checkpointLoadSource, /if \(selections\.length\)/);
 assert.ok(
     checkpointLoadSource.indexOf("restoreSavedPlanInputs")

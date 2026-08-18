@@ -12,6 +12,10 @@ import {
     runArchiveOptionLabel,
     runManagerIdentity,
 } from "./h3_run_manager_core.mjs?v=0.5.0";
+import {
+    refreshRestoredPlanEditors,
+    restoreConnectedPolicyInputs,
+} from "./h3_plan_restore_core.mjs?v=0.5.0";
 
 const NODE_NAME = "MiniMaxH3ChainRunManager";
 const PLAN_NAME = "MiniMaxH3ChainPlan";
@@ -186,7 +190,7 @@ async function jsonRequest(path) {
     return payload;
 }
 
-function applyPlanInputs(planNode, inputs) {
+function applyPlanInputs(planNode, inputs, policyInputs = {}) {
     if (!planNode) throw new Error("Connect this Run Manager to the active H3 Chain Plan.");
     if (!inputs || typeof inputs !== "object") throw new Error("The saved run has no Plan inputs.");
     const names = Object.keys(inputs).sort((left, right) =>
@@ -212,10 +216,10 @@ function applyPlanInputs(planNode, inputs) {
     if (!applied.includes("plan_json")) {
         throw new Error("The connected Plan does not expose an editable plan_json widget.");
     }
-    planNode._h3ChainEditorRefresh?.();
-    planNode.graph?.setDirtyCanvas?.(true, true);
+    const policies = restoreConnectedPolicyInputs(planNode, policyInputs);
+    refreshRestoredPlanEditors(planNode);
     app.graph?.setDirtyCanvas?.(true, true);
-    return {applied, unavailable};
+    return {applied, unavailable, policies};
 }
 
 function mount(node) {
@@ -500,7 +504,7 @@ function mount(node) {
             ? ` It will also attempt to restore ${run.asset_count} loader asset${run.asset_count === 1 ? "" : "s"}.`
             : "";
         const message = `Load saved run “${run.run_name}” into the connected Plan?\n\n` +
-            `This replaces all active scene prompts and archived Plan settings${current ? ` from “${current}”` : ""}.${assetNotice}`;
+            `This replaces all active scene prompts, archived Plan settings, and connected 0.5 policies${current ? ` from “${current}”` : ""}.${assetNotice}`;
         if (!window.confirm(message)) return;
         setBusy(true);
         status.className = "h3rm-status";
@@ -508,7 +512,8 @@ function mount(node) {
         try {
             const query = new URLSearchParams({run_name: run.run_name});
             const payload = await jsonRequest(`/minimax_h3_context_loop/run?${query}`);
-            const result = applyPlanInputs(planNode, payload.plan_inputs);
+            const result = applyPlanInputs(
+                planNode, payload.plan_inputs, payload.policy_inputs);
             const assetResults = [];
             const graph = node.graph ?? app.graph;
             graph?.beforeChange?.();
@@ -525,6 +530,8 @@ function mount(node) {
                 ...(payload.warnings ?? []),
                 ...(result.unavailable.length
                     ? [`Unavailable current widgets: ${result.unavailable.join(", ")}`] : []),
+                ...(result.policies.unavailable.length
+                    ? [`Unavailable 0.5 policies: ${result.policies.unavailable.join(", ")}`] : []),
                 ...assetFailures.map((item) =>
                     `${item.binding?.label ?? "Asset"}: ${item.reason.replaceAll("_", " ")}`),
             ];

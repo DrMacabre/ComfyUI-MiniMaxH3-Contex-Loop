@@ -85,7 +85,7 @@ from .nodes import (
 )
 from .prompt_history import PromptHistoryStore
 from .prompt_optimizer import optimize_prompt_payload
-from .run_manager import RunArchiveManager
+from .run_manager import RunArchiveManager, archive_policy_inputs
 from .asset_store import MAX_ASSET_BINDINGS, RunAssetStore
 from .contracts_v05 import (
     AUDIO_POLICY_VERSION,
@@ -12256,6 +12256,12 @@ async def _restore_checkpoint_revisions(request):
             "run_name": run_name,
             "resume_scene": resume_scene,
             "restored": restored,
+            # The revision chain is authoritative.  The latest plan.json can
+            # legitimately describe newer 0.5 policies than an older revision
+            # selected here, so return the selected checkpoint policy values.
+            "policy_inputs": archive_policy_inputs({
+                "compatibility": compatibility,
+            }),
             "message": "Restored scenes 1 through %d; resume scene %d is ready."
                        % (resume_scene - 1, resume_scene),
         })

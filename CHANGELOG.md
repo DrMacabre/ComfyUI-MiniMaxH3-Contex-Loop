@@ -4,6 +4,10 @@ Newest first. This file keeps release history out of the onboarding README.
 
 ## v0.5.0 — Source Timeline and workflow clarity
 
+- Restored saved prompts, Plan widgets, and connected 0.5 audio/transition
+  policy nodes together when loading a run or checkpoint revision. Revision
+  recovery now uses the selected checkpoint chain's policy metadata instead of
+  silently retaining newer controls from the active workflow.
 - Disabled the legacy Review Gate prompt textarea by default and added an
   Interface setting to restore it. While disabled, Retry and Reroll use the
   active Plan prompt authored in Scene Prompt Editor or Rich Scene Prompt
