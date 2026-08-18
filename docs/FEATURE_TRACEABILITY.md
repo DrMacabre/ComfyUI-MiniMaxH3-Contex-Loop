@@ -1,0 +1,76 @@
+# Feature traceability
+
+This page answers two questions: **where did a feature come from?** and
+**where is it implemented here?** It is a navigation aid, not a replacement
+for the license notices or Git history.
+
+Origin labels have precise meanings:
+
+- **Original** — designed and implemented in this repository.
+- **Adapted** — implementation work is based on an identified upstream
+  project or algorithm.
+- **Inspired** — an upstream idea or interaction informed a new local
+  implementation.
+- **Integrated** — this pack targets or interoperates with an upstream API;
+  it does not claim that upstream implementation.
+- **Compatibility** — retained only so older workflows or compatible packs
+  continue to work.
+
+For copied or adapted work, [Third-party notices](../THIRD_PARTY_NOTICES.md)
+remain the authoritative attribution and license record.
+
+## Production loop and authoring
+
+| Feature | What users get | Origin | Implementation and evidence |
+|---|---|---|---|
+| Recursive scene loop | One reusable H3 sampling body advances through a scene plan. | **Original**, built on the adapted Motion Context foundation described below. | [`chain_nodes.py`](../chain_nodes.py), [initial loop commit](https://github.com/ethanfel/ComfyUI-MiniMaxH3-Contex-Loop/commit/3a744122ce4cf2a2e611a6f2fd90ac8ec7318070) |
+| Plan and scene editor | Multiline prompts, exact H3 timing, per-scene seeds, settings, and bounded scene ranges. | **Original** | [`chain_nodes.py`](../chain_nodes.py), [`web/h3_chain_plan_editor.js`](../web/h3_chain_plan_editor.js), [visual editor commit](https://github.com/ethanfel/ComfyUI-MiniMaxH3-Contex-Loop/commit/c56bc6e85496d66bf08da426567a9ab42cd5c78c) |
+| Review, retry, and reroll | Every rendered scene can be approved, edited and retried, rerolled, or used to stop with a valid partial run. | **Original** | [`chain_nodes.py`](../chain_nodes.py), [`web/h3_chain_review_final.js`](../web/h3_chain_review_final.js), [Review Gate commit](https://github.com/ethanfel/ComfyUI-MiniMaxH3-Contex-Loop/commit/6bb0082edf66ce6b199dd165644868fb2ee66a39) |
+| Checkpoints, resume, and assembly | Accepted scenes are saved atomically and assembled from disk without a cumulative image tensor. | **Original** | [`chain_nodes.py`](../chain_nodes.py), [`run_manager.py`](../run_manager.py), [resumable loop commit](https://github.com/ethanfel/ComfyUI-MiniMaxH3-Contex-Loop/commit/3a744122ce4cf2a2e611a6f2fd90ac8ec7318070) |
+| Run Manager and prompt history | Saved plans, branching prompt revisions, archived loader assets, and run restoration. | **Original** | [`run_manager.py`](../run_manager.py), [`prompt_history.py`](../prompt_history.py), [Run Manager](https://github.com/ethanfel/ComfyUI-MiniMaxH3-Contex-Loop/commit/2695a9a950511c0f42e95052fcd82b98046c1476), [prompt history](https://github.com/ethanfel/ComfyUI-MiniMaxH3-Contex-Loop/commit/5543ff73469a663ac4c07bb6f6ceb9d462f6973b) |
+| Plan Studio and Rich Scene Prompt Editor | Optional timeline authoring, source comparison, richer prompt presentation, and optimizer connections. | **Original, experimental UI**; selected quick-reference and dialogue interactions are **inspired** by `ComfyUI-MiniMaxH3-Easy`. | [`web/h3_chain_plan_studio.js`](../web/h3_chain_plan_studio.js), [`web/h3_chain_rich_scene_prompt_editor.js`](../web/h3_chain_rich_scene_prompt_editor.js), [notice](../THIRD_PARTY_NOTICES.md#comfyui-minimaxh3-easy) |
+| Preflight and structured dependencies | Model-free checks explain source length, references, compatibility, and exactly which change invalidates a saved scene. | **Original** | [`chain_nodes.py`](../chain_nodes.py), [`contracts_v05.py`](../contracts_v05.py), [preflight](https://github.com/ethanfel/ComfyUI-MiniMaxH3-Contex-Loop/commit/855c06e6341743246052b2d8530b26da850e689c), [scene dependencies](https://github.com/ethanfel/ComfyUI-MiniMaxH3-Contex-Loop/commit/100e65861995b1a59d94ef73b334120e6835988d) |
+| PNG re-decode | Saved scene latents can be decoded later into lossless PNG sequences. | **Original** | [`chain_nodes.py`](../chain_nodes.py), [PNG export commit](https://github.com/ethanfel/ComfyUI-MiniMaxH3-Contex-Loop/commit/d1dd4f7daae15b48a31ec86cc54d0c75de20a769) |
+
+## Continuity, audio, and editing
+
+| Feature | What users get | Origin | Implementation and evidence |
+|---|---|---|---|
+| H3 Motion Context foundation | Previous frames condition the next scene; last-frame targets, 56-frame context, and seam diagnostics remain available. | **Adapted** from [`NikoDemon80/ComfyUI-H3-Motion-Context`](https://github.com/NikoDemon80/ComfyUI-H3-Motion-Context). | [`nodes.py`](../nodes.py), [`probe_node.py`](../probe_node.py), [`patch_layout.py`](../patch_layout.py), [notice](../THIRD_PARTY_NOTICES.md#comfyui-h3-motion-context) |
+| Guide and Cut transitions | Clean RGB/VAE context or no carried picture, selected by an incoming-scene policy. | Local policy is **Original**; native guide placement is **Integrated** with [ComfyUI PR #15439](https://github.com/Comfy-Org/ComfyUI/pull/15439). | [`chain_nodes.py`](../chain_nodes.py), [`contracts_v05.py`](../contracts_v05.py), [native compatibility commit](https://github.com/ethanfel/ComfyUI-MiniMaxH3-Contex-Loop/commit/387ce5f7628e82780e61ff03a32adda6de3738a3) |
+| Tone Carry Guide | Detects a coherent boundary tone difference and applies a saved correction to the next disposable RGB guide. | **Original, experimental** | [`chain_nodes.py`](../chain_nodes.py), [implementation commit](https://github.com/ethanfel/ComfyUI-MiniMaxH3-Contex-Loop/commit/0b2068c238db527910aa727ed4e7ded0bb73af20) |
+| Latent Guide | Reuses the predecessor's compatible sampled video-latent tail and falls back to RGB/VAE Guide when needed. | **Original, opt-in** | [`chain_nodes.py`](../chain_nodes.py), [implementation commit](https://github.com/ethanfel/ComfyUI-MiniMaxH3-Contex-Loop/commit/e211007efb7b872d3dd86d161524ef59f6a9d822) |
+| Detail Guide | Applies a deterministic, tapered chroma-noise treatment to a disposable Guide copy. | **Adapted, experimental** from [`MacroSony/minimax-h3-chained-character-swap`](https://github.com/MacroSony/minimax-h3-chained-character-swap). | [`chain_nodes.py`](../chain_nodes.py), [local integration](https://github.com/ethanfel/ComfyUI-MiniMaxH3-Contex-Loop/commit/c797345932d5f8492d8c8f967a73d507b65b5375), [notice](../THIRD_PARTY_NOTICES.md#minimax-h3-chained-character-swap) |
+| Hard AV and Soft AV | Carries an exact protected picture prefix; optionally carries exact or audio-feathered generated sound. | **Adapted** from [`seitanism/ComfyUI-H3-Motion-Context-MultiRef`](https://github.com/seitanism/ComfyUI-H3-Motion-Context-MultiRef). Per-token masking is **Integrated** with [ComfyUI PR #15375](https://github.com/Comfy-Org/ComfyUI/pull/15375). | [`masked_context.py`](../masked_context.py), [`h3_mask_compat.py`](../h3_mask_compat.py), [masked AV commit](https://github.com/ethanfel/ComfyUI-MiniMaxH3-Contex-Loop/commit/e4ec458af0063be7774dae8dc3575c8c96248935), [notices](../THIRD_PARTY_NOTICES.md#comfyui-h3-motion-context-multiref) |
+| Detail AV | Adds matched-variance latent noise to a disposable Hard AV picture prefix, tapering to a clean boundary while leaving audio exact. | **Adapted, experimental** from [`beijinren/ComfyUI-H3-Context-Noise`](https://github.com/beijinren/ComfyUI-H3-Context-Noise). | [`masked_context.py`](../masked_context.py), [local integration](https://github.com/ethanfel/ComfyUI-MiniMaxH3-Contex-Loop/commit/72a4e449425c9b4174cabb0eda4da3eeed6d78de), [notice](../THIRD_PARTY_NOTICES.md#comfyui-h3-context-noise) |
+| Audio policies and exact timing | Final soundtrack, source reference, and generated continuity are independent; cumulative frame boundaries prevent long-run A/V rounding drift. | Policy contract is **Original**. Cumulative audio budgeting is **Inspired** by MultiRef; exact AV timing paths are **Adapted** from later MultiRef updates. | [`av_timing.py`](../av_timing.py), [`chain_nodes.py`](../chain_nodes.py), [audio policy](https://github.com/ethanfel/ComfyUI-MiniMaxH3-Contex-Loop/commit/d47523cac69aacd8eed2bd82717771ba49751f7a), [timing integration](https://github.com/ethanfel/ComfyUI-MiniMaxH3-Contex-Loop/commit/06045d4aca71316269bbc32b6add6fc843047c1d), [notice](../THIRD_PARTY_NOTICES.md#comfyui-h3-motion-context-multiref) |
+| General masked editing | Loop-aware source AV targets, tracked-mask slicing, 32px cell preview, audio preservation, inpaint/outpaint, and mask composition. | **Adapted** from [`ethanfel/ComfyUI-MiniMaxH3-PerRowMasking`](https://github.com/ethanfel/ComfyUI-MiniMaxH3-PerRowMasking); mask execution uses the PR #15375 integration instead of the earlier model wrapper. | [`masking_nodes.py`](../masking_nodes.py), [`source_av_target.py`](../source_av_target.py), [`masking_ops.py`](../masking_ops.py), [local integration](https://github.com/ethanfel/ComfyUI-MiniMaxH3-Contex-Loop/commit/174e8d2dabba6892092300c67286e16aa0dfbbf0), [notice](../THIRD_PARTY_NOTICES.md#comfyui-minimaxh3-perrowmasking) |
+| Exact causal mask conversion | Thin or moving masks are max-reduced through H3's causal frame groups and 2x2 latent-token cells instead of being weakened by temporal interpolation. | **Adapted** from [`drozbay/MaskVidExperiments`](https://github.com/drozbay/MaskVidExperiments). | [`masking_ops.py`](../masking_ops.py), [`masking_nodes.py`](../masking_nodes.py), [notice](../THIRD_PARTY_NOTICES.md#maskvidexperiments-causal-mask-conversion) |
+| Master-audio continuation and two-ended AV bridge | Protects exact soundtrack windows, optionally carries a video prefix, or preserves both clip endpoints while generating the gap. | **Adapted** from MultiRef Updates 4–6. | [`master_audio_context.py`](../master_audio_context.py), [`masked_bridge.py`](../masked_bridge.py), [notice](../THIRD_PARTY_NOTICES.md#comfyui-h3-motion-context-multiref) |
+| Boundary blending and partial recovery | Scene-specific overlap blends also survive interrupted-run assembly. | **Original** | [`chain_nodes.py`](../chain_nodes.py), [frame-exact blending](https://github.com/ethanfel/ComfyUI-MiniMaxH3-Contex-Loop/commit/0e4f070e6d95f6288022281cf2b0d0b337443907), [recovery schedules](https://github.com/ethanfel/ComfyUI-MiniMaxH3-Contex-Loop/commit/73bfb911871bd593d764479fb256bf1925db26a6) |
+
+## References, media, and interoperability
+
+| Feature | What users get | Origin | Implementation and evidence |
+|---|---|---|---|
+| Prompt-driven tagged references | Stable `@tags` activate only the pictures, videos, motion, and audio used by the current scene. | **Original** | [`chain_nodes.py`](../chain_nodes.py), [`web/h3_reference_autoconnect.js`](../web/h3_reference_autoconnect.js), [v0.4 tagged workflow commit](https://github.com/ethanfel/ComfyUI-MiniMaxH3-Contex-Loop/commit/c21bebd0eb0d72e6c30d4389ab0f1ec0a0bfc9d6) |
+| Timed semantic picture anchors | `#picture[time]` adds Qwen-only identity reinforcement or a picture storyboard without creating another native VAE reference. | **Original, experimental** | [`chain_nodes.py`](../chain_nodes.py), [syntax](https://github.com/ethanfel/ComfyUI-MiniMaxH3-Contex-Loop/commit/73af736ae9d2e59355e55b3b0c17311e651587aa), [conditioning](https://github.com/ethanfel/ComfyUI-MiniMaxH3-Contex-Loop/commit/1355c390e2ead60c19a45024220b50d5d6ebd25f), [storyboard mode](https://github.com/ethanfel/ComfyUI-MiniMaxH3-Contex-Loop/commit/11783a3d57982dc3bd00fff4f55c5d2787ea65d4) |
+| Source Timeline and lazy motion media | Register source media once, decode only the active scene window, and retain exact FPS/PTS and recovery provenance. | **Original** | [`chain_nodes.py`](../chain_nodes.py), [disk-backed loader](https://github.com/ethanfel/ComfyUI-MiniMaxH3-Contex-Loop/commit/9438c67e3eb10680ed5d9880448936c0908f50f2), [typed timeline](https://github.com/ethanfel/ComfyUI-MiniMaxH3-Contex-Loop/commit/f168555e5ff98ec2ec866be2e75a603ca0a6fc11) |
+| Existing-video continuation | Scene 1 can continue an imported clip and optionally prepend the normalized original during assembly. | **Original** | [`chain_nodes.py`](../chain_nodes.py), [workflow commit](https://github.com/ethanfel/ComfyUI-MiniMaxH3-Contex-Loop/commit/a7ebfa7b3bd61458e7efe162165bb1c0ba8a65f1) |
+| Legacy scheduled references | Numeric scene selectors remain available for old graphs and explicit schedules. | **Original, compatibility route** | [`chain_nodes.py`](../chain_nodes.py), [initial schedule commit](https://github.com/ethanfel/ComfyUI-MiniMaxH3-Contex-Loop/commit/6b3a36809f53662aaacf1480716ea62f2345af46) |
+| H3-Multishot and SolAttn coexistence | Known external payload and attention wrappers remain active instead of being overwritten. | **Integrated compatibility**; SolAttn defensive detection includes a contribution by `tsolful` in repository PR #16. | [`patch_layout.py`](../patch_layout.py), [`patch_payload.py`](../patch_payload.py), [compatibility guide](COMPATIBILITY.md) |
+| Legacy widget-width repair | Older serialized widgets remain usable in current ComfyUI frontends. | **Adapted** with permission from [`pekkAi-dev/ComfyUI-LegacyWidgetWidthFix`](https://github.com/pekkAi-dev/ComfyUI-LegacyWidgetWidthFix). | [`web/h3_legacy_widget_width_fix.js`](../web/h3_legacy_widget_width_fix.js), [notice](../THIRD_PARTY_NOTICES.md#comfyui-legacywidgetwidthfix) |
+
+## Example and media provenance
+
+Example-specific prompts, images, footage, and licensing are recorded next to
+the workflow that uses them:
+
+- [Workflow catalog and prompt sources](../example_workflows/README.md)
+- [Bundled example asset licenses](../example_workflows/assets/README.md)
+- [Complete third-party notices](../THIRD_PARTY_NOTICES.md)
+
+When adding a feature from another project, update this page and
+`THIRD_PARTY_NOTICES.md` in the same change. Record the upstream repository,
+author, revision, license, local files, and whether the relationship is
+adapted, inspired, integrated, or compatibility-only.
