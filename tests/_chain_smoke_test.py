@@ -104,11 +104,32 @@ def main():
     async def review_route_check():
         token = "review-route-smoke"
         future = asyncio.get_running_loop().create_future()
+        review_plan = package.NODE_CLASS_MAPPINGS[
+            "MiniMaxH3ChainPlan"]().build(
+                json.dumps({
+                    "prompt_prefix": "Shared only.",
+                    "shots": [{
+                        "id": "review_route",
+                        "prompt": "Original scene prompt.",
+                        "length": 22,
+                        "steps": 8,
+                        "seed": "7",
+                    }],
+                }),
+                "review_route_smoke", "", 64, 64, 22,
+                "video", "head", "disabled", "generated_audio", 22,
+                1.0, 8, 0, 18, 0, "guide")[0]
         chain._PENDING_REVIEWS[token] = {
             "future": future,
             "loop": asyncio.get_running_loop(),
-            "public": {"token": token, "prompt_prefix": "Shared only."},
+            "public": {
+                "token": token,
+                "prompt_prefix": "Shared only.",
+                "clip_index": 1,
+            },
+            "plan": review_plan,
             "current_seed": 7,
+            "current_length": 22,
         }
 
         class Request:
@@ -490,7 +511,7 @@ def main():
     run_manager = package.NODE_CLASS_MAPPINGS["MiniMaxH3ChainRunManager"]()
     run_manager_result = run_manager.passthrough(
         readable_prompts, True, True, False, "[]")
-    assert run_manager_result == (readable_prompts,)
+    assert run_manager_result == (readable_prompts, None)
     opening_image = object()
     first_scene_gate = package.NODE_CLASS_MAPPINGS[
         "MiniMaxH3ChainFirstSceneImage"]()
@@ -866,7 +887,7 @@ def main():
     motion_role_compiled, motion_role_summary, motion_role_bindings = (
         chain._compile_tagged_reference_prompt(
             tagged_motion_role, 1, 1, motion_role_prompt))
-    assert "<Subject 2> is the reusable pose, action, and motion from " \
+    assert "<Subject 3> is the reusable pose, action, and motion from " \
            "<Video 1>" in motion_role_compiled
     assert "<Subject 1> performs <Subject 3>." in motion_role_compiled
     assert "without importing the source identity, wardrobe, setting, " \
@@ -1216,7 +1237,8 @@ def main():
                 chain.MiniMaxH3ChainLoopStart().start(
                     plan, 1, short_non_silent)
             except ValueError as exc:
-                assert "Only silent placeholder audio" in str(exc)
+                assert "source_audio_too_short" in str(exc)
+                assert "provide a longer track" in str(exc)
             else:
                 raise AssertionError("Loop Start accepted a short non-silent song")
             conditioning = [["cond", {}]]
@@ -1350,6 +1372,7 @@ def main():
                 1, 32, 32, 3)
             first_current = chain.MiniMaxH3ChainCurrent().current(
                 external_state1, extension_audio)["result"]
+            external_current_state1 = first_current[0]
             first_slice = first_current[12]["waveform"]
             first_lead_samples = round(1 / 24 * 8000)
             assert int(first_slice.shape[-1]) == round(5 / 24 * 8000)
@@ -1371,7 +1394,7 @@ def main():
             chain.MiniMaxH3MotionContext = FakeExternalMotionContext
             try:
                 external_conditioning = chain.MiniMaxH3ChainContext().apply(
-                    external_state1, conditioning, None, av_latent(),
+                    external_current_state1, conditioning, None, av_latent(),
                     audio_vae="audio-vae")
             finally:
                 chain.MiniMaxH3MotionContext = real_motion_context
@@ -1379,23 +1402,25 @@ def main():
             assert external_conditioning[3] is context_call["latent"]
             assert context_call["context_latent"] is None
             assert context_call["audio_vae"] == "audio-vae"
-            assert context_call["context_audio"] is external_state1[
+            assert context_call["context_audio"] is external_current_state1[
                 "previous_audio"]
 
             external_saver = chain.MiniMaxH3ChainSegmentSave()
             external_saver.save(
-                external_state1,
+                external_current_state1,
                 torch.zeros((4, 32, 32, 3), dtype=torch.float32),
                 av_latent())["result"][0]
             external_state2 = chain._initial_state(
                 effective_external_plan, 2)
+            external_current_state2 = chain.MiniMaxH3ChainCurrent().current(
+                external_state2, extension_audio)["result"][0]
             external_segment2 = external_saver.save(
-                external_state2,
+                external_current_state2,
                 torch.zeros((4, 32, 32, 3), dtype=torch.float32),
                 av_latent())["result"][0]
-            external_complete = dict(external_state2)
+            external_complete = dict(external_current_state2)
             external_complete["segments"] = (
-                external_state2["segments"] + [external_segment2])
+                external_current_state2["segments"] + [external_segment2])
             external_manifest = chain._manifest_from_state(external_complete)
             assert external_manifest["prelude"]["frame_count"] == 6
             loaded_external = chain.MiniMaxH3ChainManifestLoad().load(
@@ -1462,7 +1487,7 @@ def main():
                 assert "expected exactly" in str(exc)
             else:
                 raise AssertionError("Segment Save accepted mistimed audio")
-            state1 = chain._initial_state(prepared_plan, 1)
+            state1 = current[0]
             images1 = torch.zeros((5, 32, 32, 3), dtype=torch.float32)
             queued_prompt = {
                 "1700": {
@@ -1901,6 +1926,8 @@ def main():
             assert len(state2["previous_latent"]["samples"]) == 2
             print("resume: clip 2 restored clip 1 frame tail + AV latent")
 
+            state2 = chain.MiniMaxH3ChainCurrent().current(
+                state2, source)["result"][0]
             images2 = torch.zeros((4, 32, 32, 3), dtype=torch.float32)
             result2 = saver.save(
                 state2, images2, av_latent(), audio_for_frames(4))

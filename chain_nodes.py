@@ -5913,6 +5913,12 @@ class MiniMaxH3TaggedPictureReference:
 
     RETURN_TYPES = (TAGGED_REFERENCE_TYPE, "STRING", "STRING")
     RETURN_NAMES = ("references", "reference_fingerprint", "status")
+    OUTPUT_TOOLTIPS = (
+        "Updated prompt-driven reference registry; chain into another Tagged "
+        "reference or Tagged Ref2VA.",
+        "Fingerprint of the complete ordered registry for checkpoint safety.",
+        "Registered tag, media kind, source count, and fingerprint summary.",
+    )
     FUNCTION = "add"
     CATEGORY = "conditioning/minimax/contex_loop/references/prompt_driven"
     DESCRIPTION = ("Register one picture under a stable tag. @tag activates "
@@ -5984,6 +5990,12 @@ class MiniMaxH3TaggedVideoReference:
 
     RETURN_TYPES = (TAGGED_REFERENCE_TYPE, "STRING", "STRING")
     RETURN_NAMES = ("references", "reference_fingerprint", "status")
+    OUTPUT_TOOLTIPS = (
+        "Updated prompt-driven registry containing this video and optional "
+        "paired audio.",
+        "Fingerprint of the complete ordered registry for checkpoint safety.",
+        "Registered tags, timeline mode, source count, and fingerprint summary.",
+    )
     FUNCTION = "add"
     CATEGORY = "conditioning/minimax/contex_loop/references/prompt_driven"
     DESCRIPTION = ("Register one 24 fps video and optional paired soundtrack "
@@ -6117,6 +6129,12 @@ class MiniMaxH3TaggedMotionReference:
 
     RETURN_TYPES = (TAGGED_REFERENCE_TYPE, "STRING", "STRING")
     RETURN_NAMES = ("references", "reference_fingerprint", "status")
+    OUTPUT_TOOLTIPS = (
+        "Updated prompt-driven registry with this reusable motion Subject.",
+        "Fingerprint of the complete ordered registry for checkpoint safety.",
+        "Motion tag, target Subject, decode size, timeline mode, and source "
+        "summary.",
+    )
     FUNCTION = "add"
     CATEGORY = "conditioning/minimax/contex_loop/references/prompt_driven"
     DESCRIPTION = (
@@ -6222,6 +6240,12 @@ class MiniMaxH3SourceTimeline:
 
     RETURN_TYPES = (SOURCE_TIMELINE_TYPE, "STRING")
     RETURN_NAMES = ("source_timeline", "status")
+    OUTPUT_TOOLTIPS = (
+        "Lazy typed source descriptor shared by Plan, Run Manager, previews, "
+        "motion references, Loop Start, and Assemble.",
+        "Resolved media route, timing extent, audio availability, and content "
+        "fingerprint.",
+    )
     FUNCTION = "build"
     CATEGORY = "conditioning/minimax/contex_loop/media"
     DESCRIPTION = (
@@ -6316,6 +6340,13 @@ class MiniMaxH3LazyMotionAVLoader:
     RETURN_TYPES = ("VIDEO", "AUDIO", "INT", "STRING")
     RETURN_NAMES = (
         "source_video", "source_audio", "skip_first_frames", "status")
+    OUTPUT_TOOLTIPS = (
+        "Native file-backed VIDEO wrapper; the full picture stream remains "
+        "on disk.",
+        "Complete post-skip embedded soundtrack for legacy AUDIO wiring.",
+        "Validated native-frame origin to connect to Tagged Motion Ref Path.",
+        "Resolved path, skipped origin, audio duration, and lazy-load summary.",
+    )
     FUNCTION = "load"
     CATEGORY = "conditioning/minimax/contex_loop/media"
     DESCRIPTION = (
@@ -6408,6 +6439,14 @@ class MiniMaxH3TaggedMotionReferenceTimeline:
         TAGGED_REFERENCE_TYPE, "STRING", "STRING", LAZY_MOTION_SOURCE_TYPE)
     RETURN_NAMES = (
         "references", "reference_fingerprint", "status", "preview_source")
+    OUTPUT_TOOLTIPS = (
+        "Updated prompt-driven registry containing the lazy motion reference.",
+        "Fingerprint of the complete ordered registry for checkpoint safety.",
+        "Motion tag, target Subject, timeline mode, paired-audio policy, and "
+        "fingerprint summary.",
+        "Lazy motion descriptor for the scene preview node; it does not decode "
+        "the full source.",
+    )
     FUNCTION = "add"
     CATEGORY = "conditioning/minimax/contex_loop/references/prompt_driven"
     DESCRIPTION = (
@@ -6542,6 +6581,15 @@ class MiniMaxH3TaggedMotionReferencePath:
     RETURN_NAMES = (
         "references", "reference_fingerprint", "status", "preview_source",
         "source_audio")
+    OUTPUT_TOOLTIPS = (
+        "Updated prompt-driven registry containing the path-backed motion "
+        "reference.",
+        "Fingerprint of the complete ordered registry for checkpoint safety.",
+        "Resolved route, motion tag, timeline, frame origin, and decode summary.",
+        "Lazy descriptor for scene-local preview without a full IMAGE batch.",
+        "Complete post-skip soundtrack for legacy source-track wiring; empty "
+        "when embedded audio is disabled and no AUDIO was supplied.",
+    )
     FUNCTION = "add"
     CATEGORY = "conditioning/minimax/contex_loop/references/prompt_driven"
     DESCRIPTION = (
@@ -6670,6 +6718,11 @@ class MiniMaxH3LazyMotionScenePreview:
 
     RETURN_TYPES = ("IMAGE", "AUDIO", "STRING")
     RETURN_NAMES = ("scene_video", "scene_audio", "status")
+    OUTPUT_TOOLTIPS = (
+        "Decoded 24 fps motion-reference window for the selected Plan scene.",
+        "Audio from the identical scene window, or blocked when unavailable.",
+        "Selected scene, timeline rule, decoded frame count, and dimensions.",
+    )
     FUNCTION = "preview"
     CATEGORY = "conditioning/minimax/contex_loop/references/prompt_driven"
     DESCRIPTION = (
@@ -6757,6 +6810,12 @@ class MiniMaxH3SourceTimelineScenePreview:
 
     RETURN_TYPES = ("IMAGE", "AUDIO", "STRING")
     RETURN_NAMES = ("scene_video", "scene_audio", "status")
+    OUTPUT_TOOLTIPS = (
+        "Decoded 24 fps Source Timeline picture window for the selected scene.",
+        "Audio from the identical source window, or blocked when disabled or "
+        "unavailable.",
+        "Selected scene, timeline rule, decoded frame count, and dimensions.",
+    )
     FUNCTION = "preview"
     CATEGORY = "conditioning/minimax/contex_loop/media"
     DESCRIPTION = (
@@ -6845,6 +6904,12 @@ class MiniMaxH3TaggedAudioReference:
 
     RETURN_TYPES = (TAGGED_REFERENCE_TYPE, "STRING", "STRING")
     RETURN_NAMES = ("references", "reference_fingerprint", "status")
+    OUTPUT_TOOLTIPS = (
+        "Updated prompt-driven registry containing this audio reference.",
+        "Fingerprint of the complete ordered registry for checkpoint safety.",
+        "Registered tag, timeline mode, alignment policy, source count, and "
+        "fingerprint summary.",
+    )
     FUNCTION = "add"
     CATEGORY = "conditioning/minimax/contex_loop/references/prompt_driven"
     DESCRIPTION = ("Register audio under a stable @tag. It can remain a fixed "
@@ -7057,15 +7122,31 @@ class MiniMaxH3SemanticAnchorConditioning:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "positive": ("CONDITIONING",),
-                "clip": ("CLIP",),
-                "prompt": ("STRING", {"multiline": True}),
-                "presentation": (SEMANTIC_PRESENTATION_TYPE,),
+                "positive": ("CONDITIONING", {
+                    "tooltip": "Native Ref2VA conditioning whose media "
+                               "payload is preserved while Qwen presentation "
+                               "tokens are rebuilt."}),
+                "clip": ("CLIP", {
+                    "tooltip": "MiniMax H3 text encoder used to rebuild the "
+                               "complete multimodal presentation."}),
+                "prompt": ("STRING", {
+                    "multiline": True,
+                    "tooltip": "Compiled current-scene prompt paired with "
+                               "the semantic anchor presentation."}),
+                "presentation": (SEMANTIC_PRESENTATION_TYPE, {
+                    "tooltip": "Internal timestamped-video or picture-"
+                               "storyboard presentation emitted by Tagged "
+                               "Ref2VA expansion."}),
             },
         }
 
     RETURN_TYPES = ("CONDITIONING", "STRING")
     RETURN_NAMES = ("positive", "status")
+    OUTPUT_TOOLTIPS = (
+        "Conditioning with the rebuilt Qwen presentation and original native "
+        "Ref2VA VAE/audio payload.",
+        "Semantic-anchor mode, selected checkpoints, and presentation summary.",
+    )
     FUNCTION = "apply"
     CATEGORY = "conditioning/minimax/contex_loop/references/internal"
     DESCRIPTION = (
@@ -7596,6 +7677,13 @@ class MiniMaxH3TransitionPolicy:
     RETURN_TYPES = (TRANSITION_POLICY_TYPE, "STRING", "INT", "STRING")
     RETURN_NAMES = (
         "transition_policy", "continuation_mode", "context_length", "status")
+    OUTPUT_TOOLTIPS = (
+        "Typed 0.5 incoming-transition policy to connect to Chain Plan.",
+        "Resolved low-level continuation implementation for inspection or "
+        "advanced routing.",
+        "Resolved incoming context length in 24 fps video frames.",
+        "Human-readable preset, implementation, context, and validation tier.",
+    )
     FUNCTION = "build"
     CATEGORY = "conditioning/minimax/contex_loop/policies"
     DESCRIPTION = (
@@ -7715,6 +7803,11 @@ class MiniMaxH3AudioPolicy:
 
     RETURN_TYPES = (AUDIO_POLICY_TYPE, "STRING")
     RETURN_NAMES = ("audio_policy", "status")
+    OUTPUT_TOOLTIPS = (
+        "Typed 0.5 audio intent to connect to Chain Plan.",
+        "Resolved final soundtrack, source-reference, generated-continuity, "
+        "and source requirement summary.",
+    )
     FUNCTION = "build"
     CATEGORY = "conditioning/minimax/contex_loop/policies"
     DESCRIPTION = (
@@ -8860,7 +8953,12 @@ class MiniMaxH3ChainPlanStudio:
                     "max": MAX_SHOTS, "tooltip": "Resume scene to preflight."}),
                 "scene_range": ("STRING", {"default": "",
                     "tooltip": "Optional contiguous scene selection to preflight."}),
-                "verify_resume_history": ("BOOLEAN", {"default": True}),
+                "verify_resume_history": ("BOOLEAN", {
+                    "default": True,
+                    "tooltip": "When resuming after scene 1, compare every "
+                               "saved predecessor dependency with the active "
+                               "Plan. Disable only for an intentional expert "
+                               "recovery from known artifacts."}),
                 "tagged_references": (TAGGED_REFERENCE_TYPE, {
                     "tooltip": "Optional active prompt-driven reference registry."}),
                 "reference_schedule": (REFERENCE_SCHEDULE_TYPE, {
@@ -8921,6 +9019,7 @@ class MiniMaxH3ChainPreflight:
 
     RETURN_TYPES = MiniMaxH3ChainPlanStudio.RETURN_TYPES
     RETURN_NAMES = MiniMaxH3ChainPlanStudio.RETURN_NAMES
+    OUTPUT_TOOLTIPS = MiniMaxH3ChainPlanStudio.OUTPUT_TOOLTIPS
     FUNCTION = "check"
     CATEGORY = "conditioning/minimax/contex_loop"
     DESCRIPTION = ("Model-free validation of Plan timing, Source Timeline, "

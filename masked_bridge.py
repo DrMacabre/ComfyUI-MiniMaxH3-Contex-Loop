@@ -204,20 +204,40 @@ class MiniMaxH3ContexMaskedAVBridge:
                     "tooltip": "Audio synchronized with the second clip."}),
                 "start_fps": ("FLOAT", {
                     "default": 24.0, "min": 0.001, "max": 1000.0,
-                    "step": 0.001}),
+                    "step": 0.001,
+                    "tooltip": "Actual frame rate represented by "
+                               "start_frames; it is converted to H3's 24 fps "
+                               "timeline before selecting the protected tail.",
+                }),
                 "end_fps": ("FLOAT", {
                     "default": 24.0, "min": 0.001, "max": 1000.0,
-                    "step": 0.001}),
+                    "step": 0.001,
+                    "tooltip": "Actual frame rate represented by end_frames; "
+                               "it is converted to H3's 24 fps timeline before "
+                               "selecting the protected head.",
+                }),
                 "preserve_frames": ("INT", {
                     "default": 39, "min": 5, "max": 9999,
                     "tooltip": "Exact H3 run: 5, 22, 39, 56, ... . Use 39 "
                                "for an exact 65-step AV boundary."}),
-                "crop": (["disabled", "center"], {"default": "center"}),
+                "crop": (["disabled", "center"], {
+                    "default": "center",
+                    "tooltip": "Resize policy for both endpoint videos: "
+                               "disabled stretches to the target canvas; "
+                               "center preserves aspect ratio and center-crops.",
+                }),
             },
         }
 
     RETURN_TYPES = ("LATENT", "INT", "INT")
     RETURN_NAMES = ("latent", "middle_frames", "preserve_frames")
+    OUTPUT_TOOLTIPS = (
+        "Full bridge target with protected source AV windows at both ends "
+        "and a denoised middle.",
+        "Number of picture frames left for the model to generate between "
+        "the two protected endpoints.",
+        "Actual number of protected picture frames copied from each endpoint.",
+    )
     FUNCTION = "prepare"
     CATEGORY = "conditioning/minimax/contex_loop/masking"
     DESCRIPTION = (

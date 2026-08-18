@@ -65,6 +65,10 @@ Newest first. This file keeps release history out of the onboarding README.
 - Added an idempotent workflow migration tool, frozen 0.4 positional fixtures,
   and backend/frontend release validation. Existing nodes, workflow JSON,
   manifests, and checkpoints remain supported.
+- Completed input and output tooltips across the 0.5 policy, Source Timeline,
+  prompt-driven reference, semantic-anchor, masking, and bridge nodes. The
+  integration smoke fixture now follows the real Current Shot state wire so
+  strict per-scene source-window provenance is exercised during recovery.
 
 ## v0.4.9 — Run Manager active asset target
 

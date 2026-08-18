@@ -171,12 +171,26 @@ class MiniMaxH3ContexLoopSourceAVTarget:
                     "step": 0.001,
                     "tooltip": "Actual FPS of source_frames. Connect the FPS "
                                "output from Get Video Components."}),
-                "crop": (["disabled", "center"], {"default": "center"}),
+                "crop": (["disabled", "center"], {
+                    "default": "center",
+                    "tooltip": "Resize policy for the selected source-video "
+                               "interval: disabled stretches to the target "
+                               "canvas; center preserves aspect ratio and "
+                               "center-crops.",
+                }),
             },
         }
 
     RETURN_TYPES = ("LATENT", "IMAGE", "AUDIO", "STRING")
     RETURN_NAMES = ("source_target", "scene_frames", "scene_audio", "status")
+    OUTPUT_TOOLTIPS = (
+        "Current stock H3 target with the exact source-video and source-audio "
+        "scene interval encoded into it.",
+        "The resized 24 fps source frames selected for the current scene.",
+        "The synchronized source-audio interval selected for the current scene.",
+        "Summary of the selected timeline range, target grid, and any audio "
+        "tail padding.",
+    )
     FUNCTION = "prepare"
     CATEGORY = "conditioning/minimax/contex_loop/masking"
     DESCRIPTION = (
@@ -286,6 +300,13 @@ class MiniMaxH3ContexLoopMaskSlice:
 
     RETURN_TYPES = ("MASK", "INT", "STRING")
     RETURN_NAMES = ("scene_mask", "scene_mask_frames", "status")
+    OUTPUT_TOOLTIPS = (
+        "Static mask broadcast or tracked-mask slice aligned to the current "
+        "scene's complete raw frame interval.",
+        "Number of mask frames returned for the current scene.",
+        "Summary of the selected scene interval and whether the mask was "
+        "broadcast or sliced.",
+    )
     FUNCTION = "slice"
     CATEGORY = "conditioning/minimax/contex_loop/masking"
     DESCRIPTION = (

@@ -137,7 +137,13 @@ class MiniMaxH3ContexMasterAudioMaskedAV:
                                "source_frames path. It is ignored when "
                                "source_latent is used.",
                 }),
-                "crop": (["disabled", "center"], {"default": "disabled"}),
+                "crop": (["disabled", "center"], {
+                    "default": "disabled",
+                    "tooltip": "Resize policy for legacy source_frames: "
+                               "disabled stretches to the target canvas; "
+                               "center preserves aspect ratio and center-crops. "
+                               "Ignored when source_latent is used.",
+                }),
             },
             "optional": {
                 "vae": ("VAE", {

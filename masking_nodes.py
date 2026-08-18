@@ -153,6 +153,13 @@ class MiniMaxH3ContexTrimSourceAV:
     RETURN_TYPES = ("IMAGE", "AUDIO", "INT", "STRING")
     RETURN_NAMES = ("trimmed_frames", "trimmed_audio", "h3_length",
                     "trim_info")
+    OUTPUT_TOOLTIPS = (
+        "Source frames trimmed to the largest valid H3 17k+5 length.",
+        "Synchronized audio trimmed to the returned frame duration, or an "
+        "empty output when no audio was connected.",
+        "The valid H3 frame count represented by both returned streams.",
+        "Human-readable summary of the frame and audio trimming performed.",
+    )
     FUNCTION = "trim"
     CATEGORY = "conditioning/minimax/contex_loop/masking"
     DESCRIPTION = ("Trim source video and optional audio to the largest H3 "
@@ -224,6 +231,12 @@ class MiniMaxH3ContexMaskedTarget:
 
     RETURN_TYPES = ("LATENT", "STRING")
     RETURN_NAMES = ("masked_target", "mask_info")
+    OUTPUT_TOOLTIPS = (
+        "Copy of target_latent carrying the composed H3 video and audio "
+        "denoise mask.",
+        "Summary of the latent dimensions and generated percentages for "
+        "each stream.",
+    )
     FUNCTION = "apply"
     CATEGORY = "conditioning/minimax/contex_loop/masking"
     DESCRIPTION = ("Attach arbitrary per-row H3 video/audio denoise masks to "
@@ -333,14 +346,32 @@ class MiniMaxH3ContexMaskGridPreview:
                 }),
                 "overlay_opacity": ("FLOAT", {
                     "default": 0.38, "min": 0.0, "max": 1.0, "step": 0.01,
+                    "tooltip": "Opacity of the orange snapped-generation "
+                               "overlay in grid_preview.",
                 }),
-                "show_grid": ("BOOLEAN", {"default": True}),
-                "show_source_outline": ("BOOLEAN", {"default": True}),
+                "show_grid": ("BOOLEAN", {
+                    "default": True,
+                    "tooltip": "Draw the effective 32x32 H3 source-pixel "
+                               "cell grid over the preview.",
+                }),
+                "show_source_outline": ("BOOLEAN", {
+                    "default": True,
+                    "tooltip": "Outline the original unsnapped mask so its "
+                               "difference from the effective mask is visible.",
+                }),
             },
         }
 
     RETURN_TYPES = ("MASK", "IMAGE", "STRING")
     RETURN_NAMES = ("snapped_mask", "grid_preview", "grid_info")
+    OUTPUT_TOOLTIPS = (
+        "Complete mask batch snapped to H3's effective 32x32 source-pixel "
+        "generation cells.",
+        "Selected source frame with the snapped mask and optional grid or "
+        "source outline overlaid.",
+        "Summary of the selected frame, grid dimensions, and snapped-mask "
+        "coverage.",
+    )
     FUNCTION = "preview"
     CATEGORY = "conditioning/minimax/contex_loop/masking"
     DESCRIPTION = ("Preview and snap a video mask to H3's effective 32x32 "
