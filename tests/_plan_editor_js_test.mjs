@@ -3,6 +3,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import {
+    AV_CONTEXT_LENGTHS,
     AUTO_SCENE_COLORS,
     CONTINUATION_MODES,
     H3_CONTEXT_LENGTHS,
@@ -37,6 +38,7 @@ assert.deepEqual(
     ],
 );
 assert.equal(H3_CONTEXT_LENGTHS.at(-1), 243);
+assert.deepEqual(AV_CONTEXT_LENGTHS, [39, 90, 141, 192, 243]);
 assert.equal(new Set(AUTO_SCENE_COLORS).size, AUTO_SCENE_COLORS.length);
 assert.equal(automaticSceneColor(0), AUTO_SCENE_COLORS[0]);
 assert.equal(automaticSceneColor(12), AUTO_SCENE_COLORS[0]);
@@ -245,6 +247,13 @@ assert.match(calculatePlanTiming(mixedContinuationPlan, {
     continuationMode: "guide",
     defaultDurationSeconds: 5,
 }).errors.join("\n"), /AV mask continuation requires/);
+assert.match(calculatePlanTiming(mixedContinuationPlan, {
+    contextLength: 22,
+    encodeMode: "video",
+    anchorMode: "head",
+    continuationMode: "guide",
+    defaultDurationSeconds: 5,
+}).errors.join("\n"), /exact shared video\/audio boundary/);
 
 const featheredContinuationPlan = parsePlanJson(JSON.stringify({
     shots: [

@@ -115,13 +115,13 @@ assert hard["shots"][1]["delivered_frames"] == 34
 assert hard["total_delivered_frames"] == 107
 
 expert, expert_mode, expert_context, expert_status = node.build(
-    "guide", True, "feathered_av", 56)
-assert expert_mode == "feathered_av" and expert_context == 56
+    "guide", True, "feathered_av", 39)
+assert expert_mode == "feathered_av" and expert_context == 39
 assert expert["preset"] == "guide"
 assert expert["expert_override"] is True
 assert "expert override" in expert_status
 expert_plan = make_plan(expert)
-assert expert_plan["compatibility"]["context_length"] == 56
+assert expert_plan["compatibility"]["context_length"] == 39
 assert expert_plan["compatibility"]["continuation_mode"] == "feathered_av"
 
 migrated_expert, migrated_mode, migrated_context, migrated_status = node.build(
@@ -133,9 +133,18 @@ assert "Feathered AV" in migrated_status
 try:
     node.build("guide", True, "masked_av", 1)
 except ValueError as exc:
-    assert "at least 5" in str(exc)
+    assert "exact shared" in str(exc)
 else:
     raise AssertionError("one-frame hard AV expert override was accepted")
+
+for off_grid in (5, 22, 56, 73):
+    try:
+        node.build("soft_av", True, "audio_feathered_av", off_grid)
+    except ValueError as exc:
+        assert "39, 90, 141, 192, or 243" in str(exc)
+    else:
+        raise AssertionError(
+            "off-grid AV expert override %d was accepted" % off_grid)
 
 tapered_expert, tapered_mode, tapered_context, _ = node.build(
     "detail_guide", True, "tapered_guide", 39)
@@ -318,10 +327,10 @@ assert chain.CHAIN_NODE_CLASS_MAPPINGS[
 
 legacy_adapter = chain.MiniMaxH3Legacy04PolicyAdapter()
 legacy_audio, legacy_transition, legacy_status = legacy_adapter.build(
-    "source_plus_timeline", "feathered_av", 56)
+    "source_plus_timeline", "feathered_av", 39)
 assert legacy_audio == chain.migrate_legacy_audio_mode("source_plus_timeline")
 assert legacy_transition["continuation_mode"] == "feathered_av"
-assert legacy_transition["context_length"] == 56
+assert legacy_transition["context_length"] == 39
 assert legacy_transition["expert_override"] is True
 assert "legacy 0.4" in legacy_status
 matched_audio, matched_transition, _ = legacy_adapter.build(

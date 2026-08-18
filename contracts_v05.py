@@ -27,6 +27,7 @@ TRANSITION_CONTEXT_LENGTHS = (
     0, 1, 5, 22, 39, 56, 73, 90, 107, 124,
     141, 158, 175, 192, 209, 226, 243,
 )
+AV_TRANSITION_CONTEXT_LENGTHS = (39, 90, 141, 192, 243)
 
 LEGACY_AUDIO_MODE_POLICIES = {
     "source_track": {
@@ -188,12 +189,13 @@ def transition_policy(
         if mode == "latent_guide" and 0 < context < 5:
             raise ValueError(
                 "H3 Latent Guide requires at least 5 context frames.")
-        if mode in (
+        if (mode in (
                 "masked_av", "feathered_av", "audio_feathered_av"
-        ) and context < 5:
+        ) and context > 0 and context not in AV_TRANSITION_CONTEXT_LENGTHS):
             raise ValueError(
-                "H3 AV transition implementations require at least 5 context "
-                "frames.")
+                "H3 AV transition implementations require an exact shared "
+                "video/audio boundary: 39, 90, 141, 192, or 243 context "
+                "frames (or 0 to disable continuation).")
         resolved["continuation_mode"] = mode
         resolved["context_length"] = context
     resolved["expert_override"] = expert

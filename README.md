@@ -222,10 +222,10 @@ through Expert override: it softens the final four video steps as well as the
 audio and is retained as an experimental compatibility option.
 
 All AV mask continuations require `encode_mode=video`, `anchor_mode=head`,
-and at least 5 context frames, on a ComfyUI build with native PR #15439
-guide/MultiRef support. Use **39 frames** for comparisons: at 24 fps it is
-exactly 1.625 seconds and exactly 65 audio-latent steps at H3's 40 Hz audio
-grid. A per-scene override participates in the Plan/history hashes from that
+and an exact shared video/audio boundary: **39, 90, 141, 192, or 243 context
+frames**. The shortest and normal choice is 39 frames: at 24 fps it is exactly
+1.625 seconds and exactly 65 audio-latent steps at H3's 40 Hz audio grid. A
+per-scene override participates in the Plan/history hashes from that
 scene onward, so a checkpoint cannot silently resume under the wrong method.
 When modes are mixed, use settings compatible with masked AV for the whole
 Plan—normally `context_length=39`, `encode_mode=video`, and `anchor_mode=head`.

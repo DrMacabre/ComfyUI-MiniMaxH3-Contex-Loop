@@ -88,6 +88,7 @@ from .prompt_optimizer import optimize_prompt_payload
 from .run_manager import RunArchiveManager, archive_policy_inputs
 from .asset_store import MAX_ASSET_BINDINGS, RunAssetStore
 from .contracts_v05 import (
+    AV_TRANSITION_CONTEXT_LENGTHS,
     AUDIO_POLICY_VERSION,
     CONTINUATION_POLICIES,
     DEPENDENCY_SCOPES,
@@ -3984,10 +3985,11 @@ def _normalize_plan(
                 (index, shot_continuation_mode))
         if (shot_context_length and
                 shot_continuation_mode in MASKED_CONTINUATION_MODES):
-            if shot_context_length < 5:
+            if shot_context_length not in AV_TRANSITION_CONTEXT_LENGTHS:
                 raise ValueError(
-                    "H3 AV mask continuation requires context_length of at "
-                    "least 5 frames (shot %d)." % index)
+                    "H3 AV mask continuation requires an exact shared video/"
+                    "audio boundary: context_length must be 39, 90, 141, "
+                    "192, or 243 frames (shot %d)." % index)
             if encode_mode != "video":
                 raise ValueError(
                     "H3 AV mask continuation requires encode_mode=video "
@@ -7576,7 +7578,9 @@ class MiniMaxH3TransitionPolicy:
                         "default": 22,
                         "tooltip": "Expert only. Incoming visual context in "
                                    "frames. 0 creates an independent cut; AV "
-                                   "mask implementations require at least 5. "
+                                   "mask implementations require an exact "
+                                   "shared AV boundary: 39, 90, 141, 192, or "
+                                   "243 frames. "
                                    "Tapered Guide accepts any listed Guide "
                                    "length, but only 22 frames has published "
                                    "validation."}),

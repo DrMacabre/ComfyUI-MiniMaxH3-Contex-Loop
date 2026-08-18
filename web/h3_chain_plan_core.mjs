@@ -16,6 +16,7 @@ export const H3_CONTEXT_LENGTHS = Object.freeze([
     1, 5, 22, 39, 56, 73, 90, 107, 124,
     141, 158, 175, 192, 209, 226, 243,
 ]);
+export const AV_CONTEXT_LENGTHS = Object.freeze([39, 90, 141, 192, 243]);
 export const AUTO_SCENE_COLORS = Object.freeze([
     "#6ea8fe", "#ffb86b", "#63d69f", "#c493ff",
     "#ff7fa6", "#55d6e8", "#e6cb65", "#ff7878",
@@ -614,9 +615,9 @@ export function calculatePlanTiming(plan, settings = {}) {
             ].includes(
                 continuationMode,
             )) {
-                if (sceneContext < 5) {
+                if (!AV_CONTEXT_LENGTHS.includes(sceneContext)) {
                     rowErrors.push(
-                        "AV mask continuation requires a context length of at least 5 frames.",
+                        "AV mask continuation requires an exact shared video/audio boundary: 39, 90, 141, 192, or 243 context frames.",
                     );
                 }
                 if (encodeMode !== "video") {

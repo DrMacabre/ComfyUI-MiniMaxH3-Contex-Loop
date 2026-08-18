@@ -49,11 +49,11 @@ steps remain exact while only the final eight audio ticks are released with a
 half-cosine ramp. This is the tested upstream AV extension recipe. The older
 dual-stream `feathered_av` remains an Expert override for compatibility.
 
-Prefer a 39-frame AV prefix. It maps exactly to 12 video latent steps and 65
-audio steps; 22 frames maps to 36.666... audio steps and therefore requires
-rounding at the AV boundary. At 39 frames, `feathered_av` fully protects the
-first 8 video / 42 audio steps and ramps the final 4 video / 23 audio prefix
-steps.
+AV prefixes must end on both native clocks: 39, 90, 141, 192, or 243 frames.
+The normal 39-frame prefix maps exactly to 12 video latent steps and 65 audio
+steps; 22 frames maps to 36.666... audio steps and is rejected before model
+loading. At 39 frames, expert `feathered_av` fully protects the first 8 video /
+42 audio steps and ramps the final 4 video / 23 audio prefix steps.
 
 Transition Policy controls the incoming boundary: Cut carries no picture,
 Guide uses 22 clean RGB/VAE guide frames, Tone Carry Guide uses the same RGB

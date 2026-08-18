@@ -150,6 +150,13 @@ VIDEO_RUN_GRID = (
     243, 226, 209, 192, 175, 158, 141, 124,
     107, 90, 73, 56, 39, 22, 5, 1,
 )
+# These video-VAE runs also end on an integer 40 Hz audio-latent tick at
+# H3's native 24 fps. Masked AV continuation must use this stricter subset so
+# picture and sound protect exactly the same physical interval.
+AV_RUN_GRID = tuple(
+    frames for frames in VIDEO_RUN_GRID
+    if (frames * int(AUDIO_HZ)) % FPS == 0
+)
 
 
 def _pixel_frames(latent_t):

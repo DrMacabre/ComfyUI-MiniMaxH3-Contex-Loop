@@ -518,7 +518,7 @@ advanced**; Plan Studio keeps them in the existing scene-properties row.
 | `transition_policy` | Cut, Guide, Latent Guide, Detail Guide, Hard AV, Soft AV policy wire | Preferred 0.5 incoming-boundary control. |
 | `audio_policy` | Independent final/reference/continuity policy wire | Preferred 0.5 audio-intent control. |
 | `continuation_mode` | `guide`, `latent_guide`, `tapered_guide`, `masked_av`, `feathered_av`, or `audio_feathered_av` | Legacy/advanced implementation override for scenes without `shots[n].continuation_mode`. `latent_guide` needs video encode mode and at least 5 positive context frames; `tapered_guide` accepts normal Guide context lengths and 22 is its published baseline. |
-| `context_length` | `0`, `1`, then native runs `5`, `22`, `39`, ... `243` | Legacy/advanced exact context. Use 22 for Guide and 39 for AV so picture and audio meet on an exact boundary. |
+| `context_length` | `0`, `1`, then native runs `5`, `22`, `39`, ... `243` | Legacy/advanced exact context. Guide accepts the native runs; AV requires the shared-clock subset `39`, `90`, `141`, `192`, or `243`. |
 | `encode_mode` | `video` or `frames` | Use `video`. It preserves motion inside the VAE latent and is more efficient. |
 | `anchor_mode` | `head` or `before` | Use `head`; wire `trim_frames` into MiniMax H3 Contex Loop Trim. |
 | `crop` | `disabled` or `center` | Use `disabled` when references and output already share the intended framing. |

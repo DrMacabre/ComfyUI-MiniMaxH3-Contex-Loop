@@ -858,7 +858,7 @@ function mount(node) {
             );
             avGrid.title = grid.av.exact
                 ? "The AV context ends on both H3's video latent grid and its 40 Hz audio grid."
-                : "The AV context is valid, but its duration ends between 40 Hz audio ticks. Exact aligned choices are 39, 90, 141, 192, … frames.";
+                : "This AV context is invalid because its duration ends between 40 Hz audio ticks. Exact aligned choices are 39, 90, 141, 192, … frames.";
             gridMarkers.append(avGrid);
         }
         if (grid.cut) {

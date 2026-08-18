@@ -27,6 +27,9 @@ Newest first. This file keeps release history out of the onboarding README.
   prefix plus a half-cosine audio release. The older dual-stream
   `feathered_av` implementation remains available through Expert override for
   compatibility, and the former Audio Feather AV preset remains as an alias.
+- AV continuation now validates the shared 24 fps picture / 40 Hz audio clock
+  before model loading. Only 39, 90, 141, 192, or 243 context frames are
+  accepted, eliminating silently rounded prefixes such as 22 or 56 frames.
 - Added opt-in Latent Guide continuation. Generated boundaries reuse the
   phase-aligned tail of the accepted predecessor's sampled video latent as
   persistent Guide conditioning without an RGB/VAE round trip; imported or

@@ -746,7 +746,9 @@ def main():
     for av_mode in (
             "masked_av", "feathered_av", "audio_feathered_av"):
         for invalid_args, expected in (
-            ((1, "video", "head"), "at least 5"),
+            ((1, "video", "head"), "exact shared"),
+            ((22, "video", "head"), "exact shared"),
+            ((56, "video", "head"), "exact shared"),
             ((39, "frames", "head"), "encode_mode=video"),
             ((39, "video", "before"), "anchor_mode=head"),
         ):

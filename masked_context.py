@@ -18,9 +18,9 @@ import logging
 import torch
 
 from .nodes import (
+    AV_RUN_GRID,
     AUDIO_HZ,
     FPS,
-    VIDEO_RUN_GRID,
     _audio_tail_from_latent,
     _pixel_frames,
     _resize,
@@ -39,19 +39,19 @@ def _require_h3_mask_support():
 
 
 def _snap_prefix_length(requested, available, target_frames):
-    """Resolve a context window to an exact H3 video-VAE run."""
+    """Resolve a context window to a shared H3 video/audio boundary."""
     cap = min(int(requested), int(available), int(target_frames) - 1)
-    run = next((value for value in VIDEO_RUN_GRID if value <= cap), 0)
-    if run < 5:
+    run = next((value for value in AV_RUN_GRID if value <= cap), 0)
+    if run < 39:
         raise ValueError(
-            "h3_masked_prefix: masked continuation needs at least 5 previous "
-            "frames and a target longer than the preserved prefix."
+            "h3_masked_prefix: masked continuation needs at least 39 previous "
+            "frames, a target longer than the prefix, and an exact shared "
+            "video/audio boundary."
         )
     if run != int(requested):
         _LOG.warning(
             "h3_masked_prefix: context_length %d -> exact H3 prefix %d "
-            "(valid runs are 5, 22, 39, 56, ...; 39/90/141/... align AV "
-            "clocks exactly)",
+            "(exact shared AV runs are 39, 90, 141, 192, and 243)",
             int(requested), run,
         )
     return run

@@ -140,10 +140,10 @@ def main():
         assert policy["expert_override"] is False
     expert = contracts.transition_policy(
         "guide", expert_override=True,
-        continuation_mode="feathered_av", context_length=56)
+        continuation_mode="feathered_av", context_length=39)
     assert expert["preset"] == "guide"
     assert expert["continuation_mode"] == "feathered_av"
-    assert expert["context_length"] == 56
+    assert expert["context_length"] == 39
     assert expert["expert_override"] is True
     migrated_expert = contracts.transition_policy(
         "soft_av", expert_override=True,
@@ -155,7 +155,7 @@ def main():
             "guide", expert_override=True,
             continuation_mode="masked_av", context_length=1)
     except ValueError as exc:
-        assert "at least 5" in str(exc)
+        assert "exact shared" in str(exc)
     else:
         raise AssertionError("one-frame AV transition was accepted")
     try:
@@ -163,7 +163,7 @@ def main():
             "guide", expert_override=True,
             continuation_mode="audio_feathered_av", context_length=1)
     except ValueError as exc:
-        assert "at least 5" in str(exc)
+        assert "exact shared" in str(exc)
     else:
         raise AssertionError("one-frame audio-feather AV transition was accepted")
     try:
