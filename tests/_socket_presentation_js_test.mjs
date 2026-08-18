@@ -133,7 +133,7 @@ transition.widgets.find((item) => item.name === "preset").value = "soft_av";
 assert.deepEqual(resolveTransitionPolicy(plan), {
     known: true,
     preset: "soft_av",
-    continuationMode: "feathered_av",
+    continuationMode: "audio_feathered_av",
     contextLength: 39,
     expertOverride: false,
     source: "typed",

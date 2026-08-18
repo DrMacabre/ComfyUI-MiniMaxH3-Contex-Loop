@@ -150,8 +150,9 @@ The semantic Transition Policy maps `Cut` to no carried picture, `Guide` to
 RGB path with a saved predecessor tone correction, `Latent Guide` to 22 direct
 sampled-latent guide frames, experimental `Detail Guide` to a tapered
 chroma-noise 22-frame guide,
-`Hard AV` to a protected 39-frame AV prefix, and `Soft AV` to a temporally
-feathered 39-frame AV prefix. The old Plan `continuation_mode`,
+`Hard AV` to a protected 39-frame AV prefix, and `Soft AV` to an exact
+39-frame picture prefix with a half-cosine release over the final audio ticks.
+The old Plan `continuation_mode`,
 `context_length`, and combined `audio_mode` widgets are hidden from the normal
 0.5 interface so they do not compete with the policy nodes. Existing 0.4
 workflows still deserialize and execute those saved values unchanged. For a
@@ -213,13 +214,14 @@ sampled audio latent, and protects both streams with `0 = preserve`,
 the sampler's `latent_image`; the output passes the original target through on
 scene 1 and in every Guide mode, so that one wire supports every mode.
 
-`feathered_av` uses the same target content and trim interval, but gradually
-raises the mask over the end of the protected prefix. With 39 frames, 8 of 12
-video latent steps and 42 of 65 audio steps remain exact; the final 4 video and
-23 audio prefix steps ramp toward generation. This reduces a hard boundary,
-but does not add the persistent conditioning rows supplied by `guide`.
+`audio_feathered_av`, selected by **Soft AV**, keeps all 12 video latent steps
+exact and protects the first 57 of 65 audio steps, then releases only the final
+8 audio ticks with a half-cosine ramp. This matches the tested upstream AV
+extension recipe. The older `feathered_av` implementation remains available
+through Expert override: it softens the final four video steps as well as the
+audio and is retained as an experimental compatibility option.
 
-Both AV mask continuations require `encode_mode=video`, `anchor_mode=head`,
+All AV mask continuations require `encode_mode=video`, `anchor_mode=head`,
 and at least 5 context frames, on a ComfyUI build with native PR #15439
 guide/MultiRef support. Use **39 frames** for comparisons: at 24 fps it is
 exactly 1.625 seconds and exactly 65 audio-latent steps at H3's 40 Hz audio

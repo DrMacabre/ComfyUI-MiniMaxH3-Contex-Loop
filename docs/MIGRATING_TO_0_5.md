@@ -23,7 +23,8 @@ Version 0.5 replaces combined low-level choices with two explicit policies:
 | new `latent_guide` | Latent Guide | 22 frames |
 | new `tapered_guide` | Detail Guide | 22 frames |
 | `masked_av` | Hard AV | 39 frames |
-| `feathered_av` | Soft AV | 39 frames |
+| `audio_feathered_av` | Soft AV | 39 frames |
+| `feathered_av` | Expert override (experimental compatibility mode) | custom |
 
 Advanced mode retains the old implementation and context fields for custom
 values. Tone Carry Guide, Latent Guide, and Detail Guide are opt-in and do not

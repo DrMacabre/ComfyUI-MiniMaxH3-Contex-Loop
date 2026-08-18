@@ -126,7 +126,7 @@ assert.match(source, /Guide · new shot/);
 assert.match(source, /Latent Guide · direct generated latent/);
 assert.match(source, /Detail Guide · color injection/);
 assert.match(source, /Masked AV · same shot/);
-assert.match(source, /Feathered AV · softer handoff/);
+assert.match(source, /Feathered AV · experimental dual-stream feather/);
 assert.doesNotMatch(source, /Feathered AV \+ RGB/);
 assert.match(source, /17n\+5 temporal latent grid/);
 assert.match(source, /Exact aligned choices are 39, 90, 141, 192/);

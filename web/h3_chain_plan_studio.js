@@ -986,7 +986,7 @@ function mount(node) {
             ["latent_guide", "Latent Guide · direct generated latent"],
             ["tapered_guide", "Detail Guide · color injection"],
             ["masked_av", "Masked AV · same shot"],
-            ["feathered_av", "Feathered AV · softer handoff"],
+            ["feathered_av", "Feathered AV · experimental dual-stream feather"],
             ["audio_feathered_av", "Audio Feather AV · hard picture, soft sound"],
         ]) {
             const option = element("option", "", label);
@@ -997,7 +997,7 @@ function mount(node) {
             ? sceneContinuationMode(shot, settings().continuationMode) : "";
         continuation.title = state.active === 0
             ? "Continuation into this scene. Scene 1 uses it only with Existing Video Context. Guide re-encodes RGB; Latent Guide reuses generated latent context and falls back to RGB for imported context; Detail Guide adds luma-preserving tapered chroma injection."
-            : "Guide re-encodes RGB into persistent conditioning; Latent Guide directly conditions on the saved sampled-latent tail; Detail Guide applies luma-preserving tapered chroma injection; Masked AV preserves an exact prefix; Feathered AV softens both streams; Audio Feather AV keeps the picture exact and softens only the final audio ticks.";
+            : "Guide re-encodes RGB into persistent conditioning; Latent Guide directly conditions on the saved sampled-latent tail; Detail Guide applies luma-preserving tapered chroma injection; Masked AV preserves an exact prefix; experimental Feathered AV softens both streams; Audio-Feathered AV keeps the picture exact and softens only the final audio ticks.";
         continuation.addEventListener("change", () => {
             if (continuation.value) shot.continuation_mode = continuation.value;
             else delete shot.continuation_mode;

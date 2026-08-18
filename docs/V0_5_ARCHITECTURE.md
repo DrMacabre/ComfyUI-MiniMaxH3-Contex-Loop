@@ -75,7 +75,7 @@ the completed predecessor.
 | `latent_guide` | direct sampled-latent guide rows; RGB fallback | 22 frames |
 | `detail_guide` | tapered chroma-noise guide rows | 22 frames |
 | `hard_av` | protected AV prefix | 39 frames |
-| `soft_av` | temporally feathered AV prefix | 39 frames |
+| `soft_av` | exact picture prefix with feathered audio release | 39 frames |
 
 Advanced mode may override the implementation and context count explicitly.
 `latent_guide` requires video encode mode and at least five positive context

@@ -312,7 +312,7 @@ def _transition_policy_display(value: Any) -> str:
         "detail_guide": "Detail Guide",
         "hard_av": "Hard AV",
         "soft_av": "Soft AV",
-        "audio_feather_av": "Audio Feather AV",
+        "audio_feather_av": "Audio Feather AV (legacy alias)",
         "legacy": "Legacy",
     }
     implementation_labels = {
@@ -7548,9 +7548,11 @@ class MiniMaxH3TransitionPolicy:
                                "22 frames (experimental outside its published "
                                "baseline); "
                                "Hard AV = Masked AV + 39 frames; Soft AV = "
-                               "Feathered AV + 39 frames; Audio Feather AV = "
                                "hard picture + half-cosine audio release + "
-                               "39 frames. These are Plan "
+                               "39 frames; Audio Feather AV is the retained "
+                               "legacy alias for Soft AV. The older dual-"
+                               "stream Feathered AV remains available only "
+                               "through Expert override. These are Plan "
                                "defaults; explicit per-scene settings still "
                                "win. Expert override ignores the selected "
                                "pair and uses the two expert widgets below."}),
@@ -7565,8 +7567,10 @@ class MiniMaxH3TransitionPolicy:
                         "tooltip": "Expert only. Low-level continuation "
                                    "implementation used when override is on. "
                                    "Hard AV resolves to masked_av; Soft AV "
-                                   "resolves to feathered_av; Audio Feather "
-                                   "AV resolves to audio_feathered_av."}),
+                                   "resolves to audio_feathered_av. The low-"
+                                   "level feathered_av implementation softens "
+                                   "both picture and sound and remains an "
+                                   "experimental compatibility option."}),
                 "expert_context_length": (
                     list(TRANSITION_CONTEXT_LENGTHS), {
                         "default": 22,

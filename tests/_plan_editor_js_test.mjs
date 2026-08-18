@@ -409,7 +409,7 @@ assert.match(editorSource, /Guide · new shot/);
 assert.match(editorSource, /Latent Guide · direct generated latent/);
 assert.match(editorSource, /Detail Guide · color injection/);
 assert.match(editorSource, /Masked AV · same shot/);
-assert.match(editorSource, /Feathered AV · softer handoff/);
+assert.match(editorSource, /Feathered AV · experimental dual-stream feather/);
 assert.match(editorSource, /Video context/);
 assert.match(editorSource, /Audio context/);
 assert.match(editorSource, /0 · new visual/);

@@ -44,6 +44,11 @@ scenes it copies the previous sampler's audio latent directly. For scene 1
 after Existing Video Context, source audio and the H3 audio VAE must both be
 connected.
 
+The 0.5 **Soft AV** preset selects `audio_feathered_av`: all picture-prefix
+steps remain exact while only the final eight audio ticks are released with a
+half-cosine ramp. This is the tested upstream AV extension recipe. The older
+dual-stream `feathered_av` remains an Expert override for compatibility.
+
 Prefer a 39-frame AV prefix. It maps exactly to 12 video latent steps and 65
 audio steps; 22 frames maps to 36.666... audio steps and therefore requires
 rounding at the AV boundary. At 39 frames, `feathered_av` fully protects the
@@ -55,7 +60,8 @@ Guide uses 22 clean RGB/VAE guide frames, Tone Carry Guide uses the same RGB
 span with the predecessor's detected tone correction, Latent Guide uses the
 same span from the saved sampled video latent, Detail Guide uses the same span with an
 eight-frame chroma-noise exit taper, Hard AV uses a protected 39-frame prefix,
-and Soft AV uses the same prefix with a feathered denoise boundary. Advanced
+and Soft AV keeps the picture exact while feathering only the audio exit.
+Advanced
 mode may pair either experimental Guide with another Guide context length; 22
 is the published baseline. Mixed plans must still use
 encode/anchor settings compatible with every AV-mask scene.

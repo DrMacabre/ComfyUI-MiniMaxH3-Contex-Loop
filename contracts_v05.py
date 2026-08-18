@@ -78,14 +78,14 @@ TRANSITION_PRESETS = {
         "label": "Hard continuation",
     },
     "soft_av": {
-        "continuation_mode": "feathered_av",
+        "continuation_mode": "audio_feathered_av",
         "context_length": 39,
-        "label": "Soft continuation",
+        "label": "Soft continuation (hard picture, soft audio)",
     },
     "audio_feather_av": {
         "continuation_mode": "audio_feathered_av",
         "context_length": 39,
-        "label": "Audio-feathered continuation",
+        "label": "Audio-feathered continuation (legacy alias)",
     },
 }
 

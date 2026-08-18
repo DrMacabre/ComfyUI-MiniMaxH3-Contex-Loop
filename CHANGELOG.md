@@ -23,6 +23,10 @@ Newest first. This file keeps release history out of the onboarding README.
   continuity axes while preserving the exact behavior of saved 0.4 modes.
 - Added Cut, Guide, Latent Guide, Detail Guide, Hard AV, and Soft AV incoming-
   transition policies with advanced access to the existing low-level controls.
+- Aligned Soft AV with the upstream tested recipe: an exact 39-frame picture
+  prefix plus a half-cosine audio release. The older dual-stream
+  `feathered_av` implementation remains available through Expert override for
+  compatibility, and the former Audio Feather AV preset remains as an alias.
 - Added opt-in Latent Guide continuation. Generated boundaries reuse the
   phase-aligned tail of the accepted predecessor's sampled video latent as
   persistent Guide conditioning without an RGB/VAE round trip; imported or
