@@ -4,6 +4,11 @@ Newest first. This file keeps release history out of the onboarding README.
 
 ## v0.5.0 — Source Timeline and workflow clarity
 
+- Added a maintained two-scene Ref2V masked-inpaint demo that uses the bundled
+  CC0 crab picture as replacement appearance while keeping the source movie as
+  the authoritative joint AV target. Documented its exact mask-contract
+  compatibility with Ablejones/droz's v3.1 MaskVidExperiments workflow and the
+  separate, optional roles of crop/uncrop, tracking, and mask growth.
 - Reworked the README as a task-oriented quick start and workflow chooser,
   moving implementation detail into focused guides. Added a feature
   traceability matrix that distinguishes original, adapted, inspired,

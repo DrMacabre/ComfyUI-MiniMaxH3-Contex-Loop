@@ -31,6 +31,7 @@ example_workflows/
 ├── MiniMax H3 I2V - Normal.json
 ├── MiniMax H3 I2V - Studio.json
 ├── MiniMax H3 Ref2V - Basic.json
+├── MiniMax H3 Ref2V - Masked Video Inpaint.json
 ├── MiniMax H3 Ref2V - Tagged.json
 ├── MiniMax H3 Ref2V - Studio Tagged.json
 ├── MiniMax H3 Ref2V - Studio Tagged Source Audio.json
@@ -90,7 +91,14 @@ adapts the earlier standalone PerRowMasking experiment to this pack's
 native-first H3 mask runtime and full Chain Loop. It contains no MODEL patch
 or LTX AV concat/separate node.
 
-1. Copy the bundled source video and mask to `ComfyUI/input/`.
+[`MiniMax H3 Ref2V - Masked Video Inpaint.json`](<MiniMax H3 Ref2V - Masked Video Inpaint.json>)
+uses the identical source-target, mask, loop, review, and assembly graph with
+the Ref2VA base model and a single global `<Picture 1>`. The picture defines
+the regenerated crab appearance; the source movie remains the real masked AV
+target and is deliberately not connected again as `ref_video_0`.
+
+1. Copy the bundled source video and mask to `ComfyUI/input/`. Also copy the
+   bundled reference PNG for the Ref2V variant.
 2. Keep the bundled one-frame mask for a fixed region, or replace it with a
    tracked MASK batch covering the complete source timeline.
 3. Verify the effective 32×32 H3 cells in Grid Preview.
@@ -117,6 +125,13 @@ Apply Target Mask intersects any existing nested AV mask, which allows this
 manual spatial path to compose with a chain `masked_av` prefix. See
 [Masked editing](../docs/MASKED_EDITING.md) for audio modes and preparation of
 outpaint or two-clip bridge targets.
+
+The Ref2V variant is the maintained compatibility demonstration for
+Ablejones/droz's `droz_MiniMaxH3_LatentMaskInpainting_wReference_v3.1`
+workflow. Its H3 mask conversion corresponds to `auto + max + max` with zero
+additional grow. Ablejones' Subject Crop/Uncrop, SAM3 tracking, and optional
+mask growth remain external preparation/compositing tools; they are not
+required for the latent mask to execute correctly.
 
 ## T2V
 

@@ -769,6 +769,8 @@ def main():
         EXAMPLES / "EXPERIMENTAL MiniMax H3 Ref2V - Sequential Motion.json")
     masked_inpaint_path = (
         EXAMPLES / "MiniMax H3 - Masked Video Inpaint.json")
+    masked_ref_inpaint_path = (
+        EXAMPLES / "MiniMax H3 Ref2V - Masked Video Inpaint.json")
     masked_single_extension_path = (
         EXAMPLES / "MiniMax H3 - Masked AV Extension - Single Clip.json")
     masked_chain_extension_path = (
@@ -784,6 +786,7 @@ def main():
         ref2v_source_audio_path.name,
         sequential_path.name,
         masked_inpaint_path.name,
+        masked_ref_inpaint_path.name,
         masked_single_extension_path.name,
         masked_chain_extension_path.name,
         masked_bridge_path.name,
@@ -794,7 +797,7 @@ def main():
             validate_links(workflow)
             continue
         validate_v05_topology(workflow)
-        if path == masked_inpaint_path:
+        if path in {masked_inpaint_path, masked_ref_inpaint_path}:
             validate_links(workflow)
             continue
         context = node(workflow, "MiniMaxH3ChainContext")
@@ -885,6 +888,74 @@ def main():
     assert [shot["length"] for shot in masked_plan["shots"]] == [175, 175]
     assert masked_plan_node["widgets_values"][5] == 39
     assert masked_plan_node["widgets_values"][16] == "masked_av"
+
+    masked_ref_inpaint = load(masked_ref_inpaint_path)
+    masked_ref_types = {
+        item["type"] for item in masked_ref_inpaint["nodes"]}
+    assert {
+        "MiniMaxH3ReferenceToVideo",
+        "MiniMaxH3ContexLoopSourceAVTarget",
+        "MiniMaxH3ContexLoopMaskSlice",
+        "MiniMaxH3ContexMaskGridPreview",
+        "MiniMaxH3ContexMaskedTarget",
+    } <= masked_ref_types
+    assert not masked_ref_types.intersection({
+        "MiniMaxH3ImageToVideo", "LTXVConcatAVLatent",
+        "LTXVSeparateAVLatent", "MVEx_MaskToLatentSpace",
+        "MVEx_SubjectCrop", "MVEx_SubjectUncrop",
+    })
+    ref_model = node(masked_ref_inpaint, "UNETLoader")
+    assert ref_model["widgets_values"][0] == (
+        "MiniMax-H3/minimax_h3_ref2va_pruned_int8_convrot.safetensors")
+    ref_picture = node(masked_ref_inpaint, "LoadImage")
+    assert ref_picture["widgets_values"][0] == (
+        "soldier_crabs_reference_cc0.png")
+    ref_conditioner = node(masked_ref_inpaint, "MiniMaxH3ReferenceToVideo")
+    ref_image_input = socket(
+        ref_conditioner["inputs"], "ref_images.ref_image_0")
+    assert ref_image_input["link"] == (
+        socket(ref_picture["outputs"], "IMAGE")["links"][0])
+    assert socket(ref_conditioner["inputs"], "ref_videos.ref_video_0")[
+        "link"] is None
+    assert socket(ref_conditioner["inputs"], "audio_vae")["link"] is not None
+    ref_source_target = node(
+        masked_ref_inpaint, "MiniMaxH3ContexLoopSourceAVTarget")
+    assert socket(ref_conditioner["outputs"], "LATENT")["links"] == [
+        socket(ref_source_target["inputs"], "latent")["link"]]
+    ref_context = node(masked_ref_inpaint, "MiniMaxH3ChainContext")
+    assert socket(ref_conditioner["outputs"], "positive")["links"] == [
+        socket(ref_context["inputs"], "conditioning")["link"]]
+    assert socket(ref_source_target["outputs"], "source_target")["links"] == [
+        socket(ref_context["inputs"], "latent")["link"]]
+    ref_masked_target = node(
+        masked_ref_inpaint, "MiniMaxH3ContexMaskedTarget")
+    assert socket(ref_context["outputs"], "latent")["links"] == [
+        socket(ref_masked_target["inputs"], "target_latent")["link"]]
+    assert ref_masked_target["widgets_values"] == [
+        "white = generate", "preserve source audio",
+        "H3 exact (causal/token max)"]
+    ref_sampler = node(masked_ref_inpaint, "SamplerCustomAdvanced")
+    assert socket(ref_masked_target["outputs"], "masked_target")["links"] == [
+        socket(ref_sampler["inputs"], "latent_image")["link"]]
+    ref_plan_node = node(masked_ref_inpaint, "MiniMaxH3ChainPlan")
+    ref_plan = json.loads(ref_plan_node["widgets_values"][0])
+    assert [shot["length"] for shot in ref_plan["shots"]] == [175, 175]
+    assert ref_plan_node["widgets_values"][1:3] == [
+        "cc0_soldier_crabs_ref2v_inpaint",
+        "cc0-crab-source-av-v1+picture1-ref2v+static-mask-h3-exact-v1",
+    ]
+    for shot in ref_plan["shots"]:
+        prompt = prompt_text(shot["prompt"])
+        positions = [prompt.index(section) for section in (
+            "subject_definitions:", "summary:", "retention_analysis:",
+            "detailed_description:", "overall_soundscape:",
+            "non_diegetic_music:")]
+        assert positions == sorted(positions) and positions[0] == 0
+        assert "<Subject 1>" in prompt and "<Picture 1>" in prompt
+        assert "<Video 1>" not in prompt and "<Audio 1>" not in prompt
+        assert "source target" in prompt
+        assert "[reference generation + video editing + audio reuse]" in prompt
+        assert "Preserve" in prompt or "preserve" in prompt
     masked_single_extension = validate_crab_extension(
         masked_single_extension_path, 1, False)
     masked_chain_extension = validate_crab_extension(
@@ -913,10 +984,11 @@ def main():
         for workflow in (
             t2v_normal, t2v_studio, i2v_normal, i2v_studio, fl2v_normal,
             ref2v_basic, ref2v_tagged, ref2v_studio, ref2v_source_audio,
-            sequential, masked_inpaint, masked_single_extension,
+            sequential, masked_inpaint, masked_ref_inpaint,
+            masked_single_extension,
             masked_chain_extension, masked_bridge)
     }
-    assert len(uuids) == 14
+    assert len(uuids) == 15
 
     asset = EXAMPLES / "assets" / "jigen_market_garden_doom_opening.png"
     assert asset.is_file()
@@ -941,6 +1013,7 @@ def main():
     print("H3 workflow catalog: T2VA, I2VA, indexed A-B-A FL2VA, Basic / "
           "Tagged / Studio Tagged / source-timeline audio Ref2VA, "
           "experimental sequential-motion Ref2VA, masked video inpaint, "
+          "picture-conditioned masked Ref2VA inpaint, "
           "looped masked AV extension, and two-ended masked AV bridge; "
           "valid links, bundled "
           "assets, timeline wiring, six-section prompts, restoration, and "

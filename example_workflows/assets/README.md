@@ -61,11 +61,13 @@ SHA-256:
 ## `soldier_crabs_reference_cc0.png`
 
 Reference frame extracted at 9 seconds from the CC0 soldier-crab video above.
-The multi-scene Ref2VA extension workflow uses it only to stabilize species
-appearance beneath the authoritative protected AV prefix.
+The multi-scene Ref2VA extension workflow uses it to stabilize species
+appearance beneath the authoritative protected AV prefix. The Ref2V masked
+inpaint demo uses it as `<Picture 1>` to define the appearance regenerated only
+inside the spatial mask.
 
 SHA-256:
 `432dc2c9b0b9d0c33ed33217247fefcbe551d240959f6eefb7c04dfc99378047`
 
-Copy it to `ComfyUI/input/` together with the WebM before loading the chained
-Ref2VA extension example.
+Copy it to `ComfyUI/input/` together with the WebM before loading either the
+chained Ref2VA extension or Ref2V masked-inpaint example.

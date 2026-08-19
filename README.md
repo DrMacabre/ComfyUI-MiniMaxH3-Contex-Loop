@@ -67,6 +67,7 @@ Some examples need bundled media copied into `ComfyUI/input/`. See the
 | Use prompt-driven pictures | [Ref2V Tagged](<example_workflows/MiniMax H3 Ref2V - Tagged.json>) |
 | Guide scenes with a source soundtrack | [Ref2V Studio Tagged Source Audio](<example_workflows/MiniMax H3 Ref2V - Studio Tagged Source Audio.json>) |
 | Inpaint a fixed or tracked region | [Masked Video Inpaint](<example_workflows/MiniMax H3 - Masked Video Inpaint.json>) |
+| Inpaint with a picture-defined replacement | [Ref2V Masked Video Inpaint](<example_workflows/MiniMax H3 Ref2V - Masked Video Inpaint.json>) |
 | Continue one existing clip | [Masked AV Extension — Single Clip](<example_workflows/MiniMax H3 - Masked AV Extension - Single Clip.json>) |
 | Continue several reviewed scenes | [Masked AV Extension — Chain](<example_workflows/MiniMax H3 - Masked AV Extension - Chain + Reference Image.json>) |
 | Generate the gap between two clips | [Two-Clip Masked AV Bridge](<example_workflows/MiniMax H3 - Masked AV Bridge - Two Clips.json>) |

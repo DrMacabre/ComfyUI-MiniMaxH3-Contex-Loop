@@ -26,8 +26,38 @@ trim all 39 repeated picture frames after decoding.
 
 Start with
 [`MiniMax H3 - Masked Video Inpaint.json`](<../example_workflows/MiniMax H3 - Masked Video Inpaint.json>).
+For picture-defined replacement appearance, use
+[`MiniMax H3 Ref2V - Masked Video Inpaint.json`](<../example_workflows/MiniMax H3 Ref2V - Masked Video Inpaint.json>).
 For temporal continuation and bridging, use the three
 [masked AV examples](../example_workflows/README.md#masked-av-extension-and-bridge).
+
+## Ablejones / MaskVidExperiments interoperability
+
+Ablejones/droz's
+[`droz_MiniMaxH3_LatentMaskInpainting_wReference_v3.1.json`](https://discord.com/channels/1076117621407223829/1539132102585356359/1539347237887549512)
+uses `MVEx Mask To Latent Space` in `auto + max + max` mode before stock
+`Set Latent Noise Mask`. At zero additional grow, that is the same H3 mask
+contract as **Apply Target Mask → H3 exact**: VAE-aware causal frame groups,
+conservative max reduction, and 2×2 latent-token unification. The corresponding
+[workflow thread](https://discord.com/channels/1076117621407223829/1539132102585356359/1539132102585356359)
+also documents the crop-based approach and its current border-flicker caveat.
+
+The maintained Ref2V demo maps the remaining wiring as follows:
+
+| Ablejones v3.1 | This pack |
+|---|---|
+| `MiniMaxH3ReferenceToVideo` picture input | The same core Ref2VA picture input |
+| Video/audio VAE encode + two `SetLatentNoiseMask` nodes + `LTXVConcatAVLatent` | **Loop Source AV Target** followed by **Apply Target Mask** on the authoritative stock joint target |
+| `MVEx Subject Crop/Uncrop` | Optional external speed/compositing layer; the maintained loop demo stays full-frame |
+| SAM3 tracked mask | Any static mask or complete tracked MASK batch through **Loop Mask Slice** |
+| `grow_spatial` / `grow_temporal` | Optional pixel-mask preparation before **Loop Mask Slice**; the bundled generous static mask uses zero additional grow |
+
+Do not feed the source movie into Ref2VA again merely to label it. The source
+movie is already the clean target latent and supplies protected pixels, motion,
+camera, and synchronized audio. A picture reference should supply only the
+replacement appearance. Crop/uncrop remains useful when a small subject would
+otherwise spend most compute on an unchanged full frame, but a multi-scene
+chain must slice crop boxes on the same scene windows before uncropping.
 
 ## Nodes
 
