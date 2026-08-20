@@ -10,6 +10,15 @@ persisted before the gate waits, then the gate offers:
 - **Reroll seed**
 - **Approve & stop**, optionally assembling a partial video
 
+Set Review Gate's optional **candidate_count** above 1 to collect several
+different-seed takes before making a decision. Intermediate takes are saved and
+rerolled automatically. When the requested count is reached, use **Choose take**
+to preview the candidates, then continue or stop with the selected checkpoint.
+The chosen take's saved video frames and AV tensors—not the last generated
+take—become the context for the following scene. The default value of 1 keeps
+the normal one-take review behavior. The widget can be converted to an input
+and driven by a regular INT node; the safety limit is 20 candidates per scene.
+
 Notification sound, automatic timeout, and model unloading while waiting are
 optional. Drag the bar below the player to resize it; double-click to restore
 the default height.
@@ -79,7 +88,7 @@ scene is present, the same node emits the normal completed manifest.
 
 **Refresh** in Review Gate discovers the active checkpoint and every immutable
 revision retained for that scene. Choose the scene to resume, then select the
-desired version of each predecessor under **Checkpoint revisions**. Clicking
+desired version of each predecessor under **Checkpoint history**. Clicking
 **Restore & load** validates the selected MP4, safetensors checkpoint, hashes,
 shared prompt, and compatibility contract before atomically promoting the
 selected prefix. The corresponding prompts, seeds, lengths, steps, and scene
@@ -93,7 +102,10 @@ an MP4 copied from `segments/` or `reviews/` alone cannot recreate the saved AV
 latent. When only video survives, use Existing Video Context as a re-encoded
 continuation instead.
 
-Inactive leaf revisions can be deleted from the same panel to reclaim space.
+Retrying, rerolling, and candidate collection intentionally retain earlier
+files as immutable revisions; they are recovery points rather than abandoned
+temporary files. Inactive leaf revisions can be deleted from the same panel or
+the dedicated Checkpoint Manager to reclaim space.
 Review Gate now retrieves a fresh server-side deletion preview before asking
 for confirmation. Active revisions and revisions with dependent later scenes
 cannot be deleted. Cleanup is limited to that revision's segment, safetensors

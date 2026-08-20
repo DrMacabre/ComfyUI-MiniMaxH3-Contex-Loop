@@ -4,12 +4,12 @@ import {
     parsePlanJson,
     planToJson,
     promptValueToText,
-} from "./h3_chain_plan_core.mjs?v=0.5.2";
-import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.5.2";
+} from "./h3_chain_plan_core.mjs?v=0.5.3";
+import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.5.3";
 import {
     refreshRestoredPlanEditors,
     restoreConnectedPolicyInputs,
-} from "./h3_plan_restore_core.mjs?v=0.5.2";
+} from "./h3_plan_restore_core.mjs?v=0.5.3";
 import {
     applyCheckpointRevisionSet,
     applyReviewEdit,
@@ -21,7 +21,7 @@ import {
     reviewLocalDeadline,
     reviewPlanScenePrompt,
     reviewSeed,
-} from "./h3_chain_review_core.mjs?v=0.5.2";
+} from "./h3_chain_review_core.mjs?v=0.5.3";
 
 const NODE_NAME = "MiniMaxH3ChainReview";
 const PLAN_NAME = "MiniMaxH3ChainPlan";
@@ -131,6 +131,13 @@ function injectStyles() {
         .h3r-duration { width:100%; min-width:0; padding:6px 7px;
             border:1px solid #56637e; border-radius:5px; background:#101218;
             color:#eef1f7; }
+        .h3r-candidates { display:flex; align-items:center; gap:7px; padding:7px;
+            border:1px solid #4c6388; border-radius:6px; background:#172033; }
+        .h3r-candidate-label { flex:0 0 auto; color:#a9c2ff; font-weight:700; }
+        .h3r-candidate-select { flex:1; min-width:0; padding:6px 7px;
+            border:1px solid #637aa2; border-radius:5px; background:#101827;
+            color:#eef1f7; }
+        .h3r-candidate-help { flex:0 0 auto; color:#9ca8bc; font-size:10px; }
         .h3r-actions { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:7px; }
         .h3r-button { padding:7px; border:1px solid #63708b; border-radius:5px;
             background:#292e3a; color:#eef1f7; cursor:pointer; }
@@ -674,6 +681,20 @@ function mount(node) {
     durationField.append(duration);
     seedRow.append(seedField, durationField);
 
+    const candidateRow = document.createElement("div");
+    candidateRow.className = "h3r-candidates";
+    candidateRow.hidden = true;
+    const candidateLabel = document.createElement("span");
+    candidateLabel.className = "h3r-candidate-label";
+    candidateLabel.textContent = "Choose take";
+    const candidateSelect = document.createElement("select");
+    candidateSelect.className = "h3r-candidate-select";
+    candidateSelect.title = "Preview each generated take. The selected checkpoint, including its exact video and audio continuation tensors, becomes the active scene when you approve.";
+    const candidateHelp = document.createElement("span");
+    candidateHelp.className = "h3r-candidate-help";
+    candidateHelp.textContent = "exact checkpoint";
+    candidateRow.append(candidateLabel, candidateSelect, candidateHelp);
+
     const actions = document.createElement("div");
     actions.className = "h3r-actions";
     const actionButtons = [];
@@ -701,7 +722,8 @@ function mount(node) {
         actionButtons.push(button);
         return button;
     }
-    actionButton("Approve & continue", "h3r-approve", "approve");
+    const approveButton = actionButton(
+        "Approve & continue", "h3r-approve", "approve");
     actionButton("Retry scene / seed / length", "h3r-retry", "retry");
     actionButton("Reroll seed", "h3r-retry", "reroll");
     actionButton("Approve & stop", "h3r-stop", "stop");
@@ -750,7 +772,7 @@ function mount(node) {
 
     root.append(
         head, videoPanel, prefix, promptNotice, promptLabel,
-        seedRow, actions, status, resume,
+        seedRow, candidateRow, actions, status, resume,
     );
 
     let current = null;
@@ -759,10 +781,62 @@ function mount(node) {
     let checkpointRevisions = [];
     let revisionChain = [];
     let planClipCount = 0;
+    let resumeRefreshToken = 0;
 
     function setActionsEnabled(enabled) {
         for (const button of actionButtons) button.disabled = !enabled;
     }
+
+    function selectedCandidate() {
+        const candidates = Array.isArray(current?.candidates)
+            ? current.candidates : [];
+        return candidates.find(
+            (candidate) => candidate.revision === candidateSelect.value,
+        ) ?? candidates.at(-1) ?? null;
+    }
+
+    function showCandidate(candidate, announce = false) {
+        if (!candidate) return;
+        if (candidate.video) {
+            video.src = videoUrl(candidate.video);
+            video.load();
+        }
+        seed.value = String(candidate.seed ?? seed.value);
+        badge.textContent = `clip ${current.clip_index}/${current.clip_count} · ` +
+            `candidate ${candidate.number}/${current.candidate_count} · ${current.shot_id}`;
+        if (announce) {
+            status.className = `h3r-status${candidate.warning ? " h3r-warning" : ""}`;
+            status.textContent = candidate.warning ||
+                `Previewing candidate ${candidate.number}/${current.candidate_count}, seed ${candidate.seed}.`;
+        }
+    }
+
+    function renderCandidateChoices() {
+        const previous = candidateSelect.value;
+        const candidates = Array.isArray(current?.candidates)
+            ? current.candidates : [];
+        const multiple = Number(current?.candidate_count) > 1 && candidates.length > 1;
+        candidateRow.hidden = !multiple;
+        approveButton.textContent = multiple
+            ? "Use selected take & continue" : "Approve & continue";
+        candidateSelect.replaceChildren();
+        if (!multiple) return null;
+        for (const candidate of candidates) {
+            const option = document.createElement("option");
+            option.value = candidate.revision;
+            option.textContent = `Candidate ${candidate.number}/${current.candidate_count} · ` +
+                `seed ${candidate.seed} · ${candidate.revision.slice(0, 8)}`;
+            candidateSelect.append(option);
+        }
+        candidateSelect.value = candidates.some(
+            (candidate) => candidate.revision === previous,
+        ) ? previous : candidates.at(-1).revision;
+        return selectedCandidate();
+    }
+
+    candidateSelect.addEventListener("change", () => {
+        showCandidate(selectedCandidate(), true);
+    });
 
     function selectedRevisionChain() {
         const selectedResumeScene = Number(resumeSelect.value);
@@ -895,6 +969,7 @@ function mount(node) {
     }
 
     async function refreshResumeOptions() {
+        const refreshToken = ++resumeRefreshToken;
         const previousResumeScene = Number(resumeSelect.value);
         resumeSelect.replaceChildren();
         resumeChoices = [];
@@ -911,6 +986,7 @@ function mount(node) {
                 `/minimax_h3_context_loop/checkpoints?${query.toString()}`,
             );
             const body = await response.json();
+            if (refreshToken !== resumeRefreshToken) return;
             if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
             resumeChoices = checkpointResumeOptions(
                 body.checkpoints, context.clipCount);
@@ -934,6 +1010,7 @@ function mount(node) {
                     ? `All ${context.clipCount} scenes are saved; there is no later scene to resume.`
                     : "No usable predecessor checkpoint was found for a later scene.";
         } catch (error) {
+            if (refreshToken !== resumeRefreshToken) return;
             resumeStatus.textContent = error.message;
         }
     }
@@ -1048,8 +1125,9 @@ function mount(node) {
 
     function renderWaitingStatus() {
         if (!current) return;
-        const message = current.warning ||
-            "Review the synchronized picture and sound, then choose an action.";
+        const message = current.warning || (Number(current.candidate_count) > 1
+            ? `All ${current.candidate_count} candidates are saved. Preview them and choose the checkpoint that should continue the chain.`
+            : "Review the synchronized picture and sound, then choose an action.");
         const countdown = reviewCountdown(current.local_deadline);
         status.className = `h3r-status${current.warning ? " h3r-warning" : ""}`;
         status.textContent = countdown ?
@@ -1087,6 +1165,7 @@ function mount(node) {
             const submittedReview = current;
             const submittedToken = submittedReview.token;
             const submittedIndex = submittedReview.clip_index;
+            const submittedCandidate = selectedCandidate();
             const submittedPrompt = reviewPromptEditorEnabled() && promptEditedInGate
                 ? prompt.value
                 : (planScenePrompt(node, submittedReview)
@@ -1110,14 +1189,24 @@ function mount(node) {
                     scene_prompt: submittedPrompt,
                     seed: normalizedSeed,
                     length: normalizedDuration?.length,
+                    candidate_revision: (action === "approve" || action === "stop") &&
+                            Number(submittedReview.candidate_count) > 1
+                        ? submittedCandidate?.revision ?? "" : "",
                 }),
             });
             const body = await response.json();
             if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
             if (action === "approve") {
+                const selected = Number(body.candidate_count) > 1;
+                const saved = selected && updatePlan(
+                    node, submittedIndex, body.scene_prompt, body.seed, body.length);
                 status.textContent = submittedReview.unload_models_while_waiting
                     ? "Approval received — workflow is resuming and reloading the model stack."
                     : "Approval received — workflow resumed.";
+                if (selected) {
+                    status.textContent += ` Candidate ${body.candidate_number}/${body.candidate_count} is now active.` +
+                        (saved ? " The Plan seed was updated." : "");
+                }
             } else if (action === "retry" || action === "reroll") {
                 const acceptedPrompt = typeof body.scene_prompt === "string"
                     ? body.scene_prompt : submittedPrompt.trim();
@@ -1133,11 +1222,16 @@ function mount(node) {
                 status.textContent = `Retrying scene with seed ${body.seed} at ${body.length} frames (${acceptedDuration}s).` +
                     (saved ? " The Plan editor was updated." : "");
             } else if (action === "stop") {
+                const selected = Number(body.candidate_count) > 1;
+                const saved = selected && updatePlan(
+                    node, submittedIndex, body.scene_prompt, body.seed, body.length);
                 const prepared = submittedReview.clip_index < submittedReview.clip_count &&
                     prepareResume(node, submittedReview.clip_index + 1);
                 status.textContent = (submittedReview.assemble_partial_on_stop
                     ? "Stop accepted — assembling the partial video…"
                     : "Stopped at the accepted checkpoint.") +
+                    (selected ? ` Candidate ${body.candidate_number}/${body.candidate_count} is now active.` : "") +
+                    (saved ? " The Plan seed was updated." : "") +
                     (prepared ? ` Loop Start is ready at clip ${submittedReview.clip_index + 1}.` : "");
                 setTimeout(refreshResumeOptions, 0);
             }
@@ -1175,9 +1269,6 @@ function mount(node) {
             // in history without requiring the user to press Refresh.
             setTimeout(refreshResumeOptions, 0);
         }
-        badge.textContent = `clip ${data.clip_index}/${data.clip_count} · ${data.shot_id}`;
-        video.src = videoUrl(data.video);
-        video.load();
         if (!sameToken) {
             prompt.value = data.scene_prompt ?? "";
             promptEditedInGate = false;
@@ -1195,6 +1286,14 @@ function mount(node) {
             }
         } else if (!root.classList.contains("h3r-busy")) {
             renderWaitingStatus();
+        }
+        const candidate = renderCandidateChoices();
+        if (candidate) {
+            showCandidate(candidate);
+        } else {
+            badge.textContent = `clip ${data.clip_index}/${data.clip_count} · ${data.shot_id}`;
+            video.src = videoUrl(data.video);
+            video.load();
         }
         const planNode = upstreamPlanNode(node);
         if (planNode) {

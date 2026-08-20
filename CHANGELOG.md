@@ -2,6 +2,18 @@
 
 Newest first. This file keeps release history out of the onboarding README.
 
+## v0.5.3 — Review candidate batches and checkpoint refresh
+
+- Review Gate can now generate 1–20 different-seed takes for each scene,
+  present them together, and continue from the exact saved video/audio
+  checkpoint selected by the user. The default remains one take.
+- Selecting an earlier take atomically promotes its checkpoint and recovery
+  Plan before the loop continues, so later scenes and interrupted-run recovery
+  follow the chosen branch rather than the last generated take.
+- Fixed overlapping checkpoint refresh requests adding duplicate choices after
+  workflow reload, and clarified that rejected, rerolled, and candidate takes
+  remain as intentional immutable recovery revisions until explicitly deleted.
+
 ## v0.5.2 — Shared checkpoint lineage visibility
 
 - Repeated checkpoint revisions now keep the existing branch layout while

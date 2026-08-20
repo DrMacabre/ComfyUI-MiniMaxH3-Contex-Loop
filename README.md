@@ -46,7 +46,10 @@ Restart ComfyUI, then:
 4. Keep **Guide** and **Generated audio** for a simple first run.
 5. Queue the graph. Preflight checks timing, media, references, compatibility,
    and resume state before H3 loads.
-6. At Review Gate, approve, retry, reroll, or approve and stop.
+6. At Review Gate, approve, retry, reroll, or approve and stop. To compare
+   several takes per scene, set its optional `candidate_count` above 1 (or
+   convert it to an input and connect an INT node); Review Gate generates the
+   candidates automatically and continues from the exact take you select.
 7. Assemble the completed or partial manifest.
 
 Version 0.5 expects a current ComfyUI build containing native **Add Guide for
