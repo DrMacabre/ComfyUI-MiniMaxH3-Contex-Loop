@@ -2,6 +2,13 @@
 
 Newest first. This file keeps release history out of the onboarding README.
 
+## Unreleased — Light-theme prompt editor contrast
+
+- Made titles, active controls, and rich reference tags derive their semantic
+  colors from the active ComfyUI foreground. Both scene prompt editors retain
+  their pastel dark-theme palette while gaining readable contrast in light
+  themes.
+
 ## v0.4.14 — Prompt editor undo
 
 - Added shared text-level Ctrl/Cmd+Z and redo history to both dedicated scene
