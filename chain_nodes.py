@@ -3285,6 +3285,38 @@ def _reference_cache_descriptor(metadata: Any) -> dict[str, Any] | None:
         "tensors", "tensors_sha256")}
 
 
+def _run_local_reference_cache(
+        run_name: Any, scene: int, value: Any) -> dict[str, Any] | None:
+    """Return a verified run-local equivalent of one cache descriptor."""
+    descriptor = _reference_cache_descriptor(value)
+    normalized_run = _safe_name(run_name, "")
+    if descriptor is None or not normalized_run or int(scene) < 1:
+        return None
+    root = os.path.abspath(os.path.join(
+        _run_dir({"run_name": normalized_run}), "reference_cache"))
+    signature = str(descriptor["signature"])
+    stem = "scene_%04d.%s" % (int(scene), signature[:24])
+    metadata_path = os.path.join(root, stem + ".json")
+    tensors_path = os.path.join(root, stem + ".safetensors")
+    if not (os.path.isfile(metadata_path) and os.path.isfile(tensors_path)):
+        return None
+    try:
+        metadata = _read_json(metadata_path)
+        local = _reference_cache_descriptor(metadata)
+        if local is None:
+            return None
+        identity = ("format", "signature", "reference_fingerprint",
+                    "tensors_sha256")
+        if any(local[key] != descriptor[key] for key in identity):
+            return None
+        if (_absolute_output_path(local["metadata"]) != metadata_path
+                or _absolute_output_path(local["tensors"]) != tensors_path):
+            return None
+        return _load_reference_cache_descriptor(local)
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return None
+
+
 def _adopt_reference_cache_for_run(
         plan: dict[str, Any], metadata: Any) -> dict[str, Any]:
     """Publish a self-contained run-local view of a global cache object."""
@@ -3295,6 +3327,10 @@ def _adopt_reference_cache_for_run(
     if scene < 1 or scene > len(plan["shots"]):
         raise ValueError(
             "H3 reference cache scene %d does not belong to this run." % scene)
+    existing = _run_local_reference_cache(
+        plan["run_name"], scene, descriptor)
+    if existing is not None:
+        return existing
     source_tensors = _absolute_output_path(descriptor["tensors"])
     expected_hash = descriptor["tensors_sha256"]
     if (not os.path.isfile(source_tensors)
@@ -3336,6 +3372,15 @@ def _adopt_reference_cache_for_run(
     # a run-local pointer that cannot be loaded independently.
     return _load_reference_cache_descriptor(
         _reference_cache_descriptor(adopted))
+
+
+def _load_run_reference_cache_descriptor(
+        run_name: Any, scene: int, value: Any) -> dict[str, Any]:
+    """Resolve a relocated cache before falling back to its legacy path."""
+    local = _run_local_reference_cache(run_name, scene, value)
+    if local is not None:
+        return local
+    return _load_reference_cache_descriptor(value)
 
 
 def _load_reference_cache_descriptor(value: Any) -> dict[str, Any]:
@@ -5660,7 +5705,7 @@ def _public_segment(value: dict[str, Any]) -> dict[str, Any]:
         "created_at", "branch_id", "forked_from_branch_id",
         "generated_audio", "generated_audio_sha256",
         "raw_frames", "delivered_frames", "history_hash",
-        "scene_dependency",
+        "scene_dependency", "reference_cache",
         "prompt_prefix", "scene_prompt", "prompt", "prompt_hash", "archives",
         "seed", "steps", "continuation_mode", "context_length",
         "audio_context_length", "context_spatial_proxy",
@@ -14460,6 +14505,35 @@ def _checkpoint_selection_manifest(value: Any) -> dict[str, Any] | None:
                 raise ValueError(
                     "Selected scene %d was generated from another scene %d "
                     "checkpoint." % (index, index - 1))
+        descriptor = segment.get("reference_cache")
+        if isinstance(descriptor, dict):
+            try:
+                local_cache = _run_local_reference_cache(
+                    run_name, index, descriptor)
+                adopted = local_cache is None
+                if local_cache is None:
+                    legacy_cache = _load_reference_cache_descriptor(descriptor)
+                    local_cache = _adopt_reference_cache_for_run(
+                        archived_plan, legacy_cache)
+                local_descriptor = _reference_cache_descriptor(local_cache)
+                if local_descriptor is None:
+                    raise ValueError(
+                        "adopted H3 reference cache has no valid descriptor")
+                metadata = dict(metadata)
+                metadata["segment"] = dict(segment)
+                metadata["segment"]["reference_cache"] = local_descriptor
+                segment = metadata["segment"]
+                if adopted:
+                    _LOG.info(
+                        "H3 Checkpoint Manager adopted legacy scene %d "
+                        "reference cache into run %s", index, run_name)
+            except (OSError, TypeError, ValueError) as exc:
+                # Cache relocation is supplementary. Preserve branch loading
+                # and its immutable revision record when migration is not
+                # possible; the upscale node will report the missing cache.
+                _LOG.warning(
+                    "H3 Checkpoint Manager could not adopt scene %d legacy "
+                    "reference cache into run %s: %s", index, run_name, exc)
         loaded.append(metadata)
 
     segments = [_public_segment(item["segment"]) for item in loaded]

@@ -152,6 +152,12 @@ wanted. Existing checkpoints made before this feature have no cache; the
 upscale conditioning node can either fall back to text-only conditioning or
 raise an explicit error.
 
+Checkpoints made during the earlier global-cache-only implementation are
+adopted automatically on their next complete-branch selection in Checkpoint
+Manager. The verified tensor is hard-linked or copied into the run-local cache;
+the original `output/h3_reference_cache/` object is deliberately left intact.
+No source render or manual file move is required.
+
 ## Patch priority
 
 If an older compatible H3 Motion Context copy wins process load order, insert

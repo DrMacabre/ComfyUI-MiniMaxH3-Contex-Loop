@@ -186,6 +186,14 @@ Segment Save adopts each verified cache object into
 descriptor. Copying or backing up the parent run therefore preserves everything
 required to rebuild pass-2 Ref2VA conditioning.
 
+Legacy checkpoints that still point into `output/h3_reference_cache/` migrate
+without a rerender. Selecting their complete branch in Checkpoint Manager
+hard-links the verified cache into the corresponding run (or copies it when a
+hard link is unavailable) and returns a run-local descriptor. Migration never
+deletes the global object or rewrites immutable revision metadata. Later branch
+loads resolve the verified run-local equivalent first, so the old staging copy
+can be archived or removed after a successful selection and upscale check.
+
 Send the backend's decoded **raw** frame batch to both Segment Save and Loop
 End. They remove the parent scene's repeated context head exactly once, persist
 the delivered HQ segment, and carry optional HQ context to the next iteration.

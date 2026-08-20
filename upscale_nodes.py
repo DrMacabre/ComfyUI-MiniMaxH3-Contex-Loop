@@ -500,7 +500,8 @@ class MiniMaxH3ChainUpscaleReferenceConditioning:
         height = int(compatibility.get("height", 0))
         length = int(source.get("raw_frames", 0))
         descriptor = source.get("reference_cache")
-        cached = (chain._load_reference_cache_descriptor(descriptor)
+        cached = (chain._load_run_reference_cache_descriptor(
+                      manifest.get("run_name"), scene, descriptor)
                   if isinstance(descriptor, dict) else
                   chain._find_reference_cache(
                       fingerprint, scene, scene_count, prompt, width, height,

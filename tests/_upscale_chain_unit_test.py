@@ -181,15 +181,55 @@ def main():
             "h3_chains/upscale_test/reference_cache/")
         assert chain._load_reference_cache_descriptor(
             adopted_cache)["run_name"] == "upscale_test"
+        cached_second_state = chain._initial_state(prepared_plan, 2)
+        cached_source_2 = chain.MiniMaxH3ChainSegmentSave().save(
+            cached_second_state,
+            torch.zeros((second_frames, 32, 32, 3), dtype=torch.float32),
+            av_latent(0.35), audio_for_frames(second_frames),
+            denoised_latent=av_latent(0.85))["result"][0]
+
+        # Simulate a checkpoint created by the first cache implementation:
+        # its immutable revision points at the global staging object and no
+        # run-local object exists yet.
+        legacy_revision_path = pathlib.Path(chain._absolute_output_path(
+            cached_source["revision_metadata"]))
+        legacy_revision = chain._read_json(str(legacy_revision_path))
+        legacy_revision["segment"]["reference_cache"] = cache_descriptor
+        chain._atomic_json(str(legacy_revision_path), legacy_revision)
+        pathlib.Path(chain._absolute_output_path(
+            adopted_cache["metadata"])).unlink()
+        pathlib.Path(chain._absolute_output_path(
+            adopted_cache["tensors"])).unlink()
+
+        legacy_selection = json.dumps({
+            "run_name": "upscale_test",
+            "lineage": [
+                {"scene": 1, "revision": cached_source["revision"]},
+                {"scene": 2, "revision": cached_source_2["revision"]},
+            ],
+        })
+        migrated_manifest = manager.passthrough(legacy_selection)[0]
+        migrated_cache = migrated_manifest["segments"][0]["reference_cache"]
+        assert migrated_cache["metadata"].startswith(
+            "h3_chains/upscale_test/reference_cache/")
+        assert migrated_cache["tensors"].startswith(
+            "h3_chains/upscale_test/reference_cache/")
+        assert pathlib.Path(chain._absolute_output_path(
+            cache_descriptor["metadata"])).is_file()
+        assert pathlib.Path(chain._absolute_output_path(
+            cache_descriptor["tensors"])).is_file()
+
+        # Once one selection has adopted and verified the cache, the original
+        # global staging pair may disappear without breaking future selection.
         pathlib.Path(chain._absolute_output_path(
             cache_descriptor["metadata"])).unlink()
         pathlib.Path(chain._absolute_output_path(
             cache_descriptor["tensors"])).unlink()
-        cached_manifest = dict(upscale_state["source_manifest"])
-        cached_manifest["segments"] = [
-            cached_source, cached_manifest["segments"][1]]
+        relocated_manifest = manager.passthrough(legacy_selection)[0]
+        assert (relocated_manifest["segments"][0]["reference_cache"] ==
+                migrated_cache)
         cached_upscale_state = dict(upscale_state)
-        cached_upscale_state["source_manifest"] = cached_manifest
+        cached_upscale_state["source_manifest"] = relocated_manifest
         cached_conditioning = (
             upscale.MiniMaxH3ChainUpscaleReferenceConditioning().condition(
                 cached_upscale_state, FakeClip(), "error"))
