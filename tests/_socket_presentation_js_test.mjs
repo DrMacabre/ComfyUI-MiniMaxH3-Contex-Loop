@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import {
+    CHAIN_POLICY_NODE,
     applySocketPresentation,
     hasSourceTimeline,
     policyPlanConsumers,
     presentationForNode,
+    resolveAudioContextLength,
     resolveAudioPolicy,
     resolveTransitionPolicy,
 } from "../web/h3_socket_presentation_core.mjs";
@@ -38,10 +40,15 @@ const audioPolicy = node(1, "MiniMaxH3AudioPolicy", [], [["audio_policy", [10]]]
     ["generated_continuity", "on"],
 ]);
 const plan = node(2, "MiniMaxH3ChainPlan", [
-    ["audio_policy", 10], ["transition_policy", null],
-], [["plan", [11]]], [
+    ["audio_policy", 10], ["transition_policy", null], ["chain_policy", null],
+], [
+    ["plan", [11]], ["summary", null], ["clip_count", null],
+    ["video_blend_frames", null],
+], [
     ["audio_mode", "source_track"], ["continuation_mode", "guide"],
-    ["context_length", 22],
+    ["context_length", 22], ["audio_context_length", 22],
+    ["encode_mode", "resize"], ["anchor_mode", "head"], ["crop", "center"],
+    ["video_blend_frames", 0],
 ]);
 const start = node(3, "MiniMaxH3ChainLoopStart", [
     ["plan", 11], ["source_audio", null], ["source_timeline", null],
@@ -63,6 +70,16 @@ const planPresentation = presentationForNode(plan, false);
 assert.equal(planPresentation.hiddenWidgets.has("audio_mode"), true);
 assert.equal(planPresentation.hiddenWidgets.has("continuation_mode"), true);
 assert.equal(planPresentation.hiddenWidgets.has("context_length"), true);
+assert.equal(planPresentation.hiddenWidgets.has("audio_context_length"), true);
+assert.equal(planPresentation.hiddenWidgets.has("encode_mode"), true);
+assert.equal(planPresentation.hiddenWidgets.has("anchor_mode"), true);
+assert.equal(planPresentation.hiddenWidgets.has("crop"), true);
+assert.equal(planPresentation.hiddenWidgets.has("video_blend_frames"), true);
+assert.equal(planPresentation.hiddenOutputs.has("summary"), true);
+assert.equal(planPresentation.hiddenOutputs.has("clip_count"), true);
+assert.equal(planPresentation.hiddenOutputs.has("video_blend_frames"), true);
+assert.equal(planPresentation.hiddenInputs.has("audio_policy"), true);
+assert.equal(planPresentation.hiddenInputs.has("transition_policy"), true);
 assert.equal(presentationForNode(plan, true).hiddenWidgets.size, 0);
 
 const inputOrder = start.inputs.map((slot) => slot.name);
@@ -149,6 +166,46 @@ assert.deepEqual(policyPlanConsumers(transition), [plan],
     "only directly connected Plans are invalidated");
 assert.deepEqual(policyPlanConsumers(audioPolicy), [plan]);
 
+const compactPolicy = node(10, CHAIN_POLICY_NODE, [], [
+    ["chain_policy", [31]], ["status", null],
+], [
+    ["incoming_transition", "hard_av"], ["final_audio", "source"],
+    ["source_reference", "on"], ["generated_continuity", "off"],
+]);
+const compactPlan = node(11, "MiniMaxH3ChainPlan", [
+    ["audio_policy", null], ["transition_policy", null], ["chain_policy", 31],
+], [["plan", [32]]], [
+    ["audio_context_length", 91],
+]);
+const compactStart = node(12, "MiniMaxH3ChainLoopStart", [
+    ["plan", 32], ["source_audio", null], ["source_timeline", null],
+]);
+new Graph([compactPolicy, compactPlan, compactStart], {
+    31: {origin_id: 10, target_id: 11},
+    32: {origin_id: 11, target_id: 12},
+});
+assert.deepEqual(resolveAudioPolicy(compactStart), {
+    known: true,
+    finalAudio: "source",
+    sourceReference: "on",
+    generatedContinuity: "off",
+    source: "compact",
+});
+assert.deepEqual(resolveTransitionPolicy(compactStart), {
+    known: true,
+    preset: "hard_av",
+    continuationMode: "masked_av",
+    contextLength: 39,
+    expertOverride: false,
+    source: "compact",
+});
+assert.equal(resolveAudioContextLength(compactStart), 22,
+    "compact 0.5 policy owns the automatic audio context default");
+assert.deepEqual(policyPlanConsumers(compactPolicy), [compactPlan]);
+assert.equal(
+    presentationForNode(compactPolicy, false).hiddenOutputs.has("status"), true,
+);
+
 transition.widgets.find((item) => item.name === "preset").value = "audio_feather_av";
 assert.deepEqual(resolveTransitionPolicy(plan), {
     known: true,
@@ -211,9 +268,11 @@ assert.deepEqual(resolveTransitionPolicy(plan), {
 
 const legacyAdapter = node(8, "MiniMaxH3Legacy04PolicyAdapter", [], [
     ["audio_policy", null], ["transition_policy", null], ["status", null],
+    ["chain_policy", null], ["audio_context_length", null],
 ], [
     ["audio_mode", "source_plus_timeline"],
     ["continuation_mode", "masked_av"], ["context_length", 56],
+    ["audio_context_length", 91],
 ]);
 assert.deepEqual(resolveAudioPolicy(legacyAdapter), {
     known: true,
@@ -230,6 +289,7 @@ assert.deepEqual(resolveTransitionPolicy(legacyAdapter), {
     expertOverride: true,
     source: "legacy_adapter",
 });
+assert.equal(resolveAudioContextLength(legacyAdapter), 91);
 
 const extensionSource = fs.readFileSync(
     new URL("../web/h3_socket_presentation.js", import.meta.url), "utf8");

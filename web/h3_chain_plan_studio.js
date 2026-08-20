@@ -29,7 +29,16 @@ import {
     promptRevisionNavigation,
 } from "./h3_prompt_history_core.mjs?v=0.5.5";
 import {availableReferenceRecords} from "./h3_reference_preview_core.mjs?v=0.5.5";
-import {resolveTransitionPolicy} from "./h3_socket_presentation_core.mjs?v=0.5.5";
+import {
+    applySceneTransitionPreset,
+    primaryTransitionOptions,
+    sceneTransitionPreset,
+    transitionPresetLabel,
+} from "./h3_policy_core.mjs?v=0.5.6";
+import {
+    resolveAudioContextLength,
+    resolveTransitionPolicy,
+} from "./h3_socket_presentation_core.mjs?v=0.5.6";
 import {
     locateStudioTimelineSecond,
     h3StudioGridMarkers,
@@ -130,6 +139,11 @@ function injectStyles() {
         .h3studio-form { align-items:end; display:grid;
             grid-template-columns:minmax(130px,1.3fr) minmax(175px,1.3fr) minmax(65px,.5fr) minmax(135px,1.1fr) minmax(120px,.85fr) minmax(140px,1fr); margin-bottom:8px; }
         .h3studio-field { display:flex; min-width:0; flex-direction:column; gap:3px; color:var(--hs-muted); }
+        .h3studio-expert { margin:0 0 8px; padding:6px 8px; border:1px solid var(--hs-border);
+            border-radius:6px; color:var(--hs-muted); }
+        .h3studio-expert summary { cursor:pointer; font-weight:700; }
+        .h3studio-expert-grid { display:grid; grid-template-columns:repeat(3,minmax(160px,1fr));
+            gap:7px; margin-top:7px; align-items:end; }
         .h3studio-length { display:grid; grid-template-columns:112px minmax(80px,1fr); gap:5px; }
         .h3studio-context-pair { display:grid; grid-template-columns:1fr 1fr; gap:5px; }
         .h3studio-prompt { min-height:250px; width:100%; font:15px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace !important; }
@@ -167,7 +181,7 @@ function injectStyles() {
             gap:8px; align-items:start; color:var(--hs-muted); }
         .h3studio-ref-preview img,.h3studio-ref-preview video { width:100%; max-height:150px; object-fit:contain; background:#08090c; }
         .h3studio-ref-preview audio { width:100%; height:36px; }
-        @media(max-width:760px) { .h3studio-form { grid-template-columns:1fr 1fr; }
+        @media(max-width:760px) { .h3studio-form,.h3studio-expert-grid { grid-template-columns:1fr 1fr; }
             .h3studio-defaults { grid-template-columns:1fr; } }
     `;
     document.head.appendChild(style);
@@ -363,13 +377,14 @@ function mount(node) {
             contextLength:transition.known
                 ? transition.contextLength
                 : widget(state.planNode, "context_length")?.value ?? 22,
-            audioContextLength:widget(state.planNode, "audio_context_length")?.value ?? 22,
+            audioContextLength:resolveAudioContextLength(state.planNode ?? node),
             videoBlendFrames:widget(state.planNode, "video_blend_frames")?.value ?? 0,
             encodeMode:widget(state.planNode, "encode_mode")?.value ?? "video",
             anchorMode:widget(state.planNode, "anchor_mode")?.value ?? "head",
             continuationMode:transition.known
                 ? transition.continuationMode
                 : widget(state.planNode, "continuation_mode")?.value ?? "guide",
+            transitionPreset:transition.known ? transition.preset : "custom",
             defaultDurationSeconds:widget(state.planNode, "default_duration_seconds")?.value ?? 15,
             defaultSteps:widget(state.planNode, "default_steps")?.value ?? 20,
         };
@@ -381,7 +396,7 @@ function mount(node) {
             transition.known
                 ? transition.contextLength
                 : widget(planNode, "context_length")?.value ?? 22,
-            widget(planNode, "audio_context_length")?.value ?? 22,
+            resolveAudioContextLength(planNode ?? node),
             widget(planNode, "video_blend_frames")?.value ?? 0,
             widget(planNode, "encode_mode")?.value ?? "video",
             widget(planNode, "anchor_mode")?.value ?? "head",
@@ -908,6 +923,57 @@ function mount(node) {
         const seedWrap = element("span", "h3studio-length");
         const reroll = button("↻", "Store a new random seed for this scene", () => { seed.value = randomSceneSeed(); shot.seed = seed.value; writePlan(); });
         seedWrap.append(seed, reroll);
+        const planSettings = settings();
+        const incomingTransition = element("select");
+        const inheritOption = element(
+            "option", "",
+            `Inherit Chain Policy · ${transitionPresetLabel(planSettings.transitionPreset)}`,
+        );
+        inheritOption.value = "inherit";
+        incomingTransition.append(inheritOption);
+        for (const preset of primaryTransitionOptions()) {
+            const option = element(
+                "option", "", `${preset.label} · ${preset.description}`,
+            );
+            option.value = preset.name;
+            incomingTransition.append(option);
+        }
+        function refreshIncomingTransition() {
+            const selected = sceneTransitionPreset(
+                shot, planSettings.continuationMode,
+                planSettings.contextLength,
+            );
+            let custom = incomingTransition.querySelector(
+                'option[value="custom"]',
+            );
+            if (selected === "custom" && !custom) {
+                custom = element(
+                    "option", "", transitionPresetLabel("custom"),
+                );
+                custom.value = "custom";
+                incomingTransition.append(custom);
+            }
+            incomingTransition.value = selected;
+        }
+        refreshIncomingTransition();
+        incomingTransition.title = "One semantic boundary choice. Inherit "
+            + "uses the connected Chain Policy. A preset writes its tested "
+            + "visual implementation/context pair and restores automatic "
+            + "generated-audio context. Custom means raw Legacy / Expert "
+            + "overrides remain below.";
+        incomingTransition.addEventListener("change", () => {
+            if (incomingTransition.value === "custom") return;
+            applySceneTransitionPreset(shot, incomingTransition.value);
+            const nextContext = sceneContextLength(
+                shot, planSettings.contextLength,
+            );
+            if (Object.hasOwn(shot, "video_blend_frames")
+                    && Number(shot.video_blend_frames) > nextContext) {
+                shot.video_blend_frames = nextContext;
+            }
+            writePlan();
+            renderShell();
+        });
         const context = element("select");
         for (const [value, label] of [
             ["", `Plan default · ${settings().contextLength}`],
@@ -928,6 +994,7 @@ function mount(node) {
             else shot.context_length = Number(context.value);
             sceneContextLength(shot, settings().contextLength);
             refreshBlendControl();
+            refreshIncomingTransition();
             writePlan();
             renderStatus();
         });
@@ -945,6 +1012,7 @@ function mount(node) {
         audioContext.addEventListener("change", () => {
             if (audioContext.value === "") delete shot.audio_context_length;
             else shot.audio_context_length = Number(audioContext.value);
+            refreshIncomingTransition();
             writePlan();
             renderStatus();
         });
@@ -1004,6 +1072,7 @@ function mount(node) {
             if (continuation.value) shot.continuation_mode = continuation.value;
             else delete shot.continuation_mode;
             sceneContinuationMode(shot, settings().continuationMode);
+            refreshIncomingTransition();
             writePlan();
             renderStatus();
         });
@@ -1029,11 +1098,20 @@ function mount(node) {
         form.append(
             field("Scene ID", id), field("Length", lengthControl),
             field("Steps", steps), field("Seed", seedWrap),
-            field("Context V / A", contextPair),
-            field("Blend entering scene", blendFrames),
-            field("Continuation", continuation),
+            field("Incoming transition", incomingTransition),
+            field("Final assembly crossfade frames", blendFrames),
+        );
+        const expert = element("details", "h3studio-expert");
+        expert.append(element(
+            "summary", "", "Legacy / Expert boundary controls",
+        ));
+        const expertGrid = element("div", "h3studio-expert-grid");
+        expertGrid.append(
+            field("Visual / audio context", contextPair),
+            field("Implementation", continuation),
             field("Boundary spatial proxy", spatialProxy),
         );
+        expert.append(expertGrid);
 
         if (state.promptEditors.length) {
             const delegated = element("div", "h3studio-prompt-delegated");
@@ -1044,7 +1122,7 @@ function mount(node) {
                     "Scene selection is synchronized in both directions; Studio keeps scene ID, length, steps, seed, timeline, and playback controls.",
                 ),
             );
-            panel.append(head, form, delegated);
+            panel.append(head, form, expert, delegated);
             return panel;
         }
 
@@ -1074,7 +1152,7 @@ function mount(node) {
         );
         const history = element("div", "h3studio-history");
         state.history.host = history; state.history.textarea = prompt; state.history.status = message;
-        panel.append(head, form, prompt, tools, tray, history);
+        panel.append(head, form, expert, prompt, tools, tray, history);
         void loadHistory(row.id, prompt.value);
         return panel;
     }

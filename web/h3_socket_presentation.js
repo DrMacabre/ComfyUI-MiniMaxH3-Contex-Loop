@@ -1,6 +1,7 @@
 import {app} from "/scripts/app.js";
 import {
     AUDIO_POLICY_NODE,
+    CHAIN_POLICY_NODE,
     LEGACY_POLICY_NODE,
     PLAN_NODE,
     TRANSITION_POLICY_NODE,
@@ -13,7 +14,8 @@ import {
 
 const EXTENSION = "minimax_h3_context_loop.socket_presentation";
 const WATCHED_POLICY_NODES = new Set([
-    AUDIO_POLICY_NODE, LEGACY_POLICY_NODE, PLAN_NODE, TRANSITION_POLICY_NODE,
+    AUDIO_POLICY_NODE, CHAIN_POLICY_NODE, LEGACY_POLICY_NODE, PLAN_NODE,
+    TRANSITION_POLICY_NODE,
 ]);
 
 function collapseWidget(widget) {

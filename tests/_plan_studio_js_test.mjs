@@ -11,6 +11,17 @@ import {
     studioSceneStartSeconds,
     studioSourceSecond,
 } from "../web/h3_chain_plan_studio_core.mjs";
+import {
+    applySceneTransitionPreset,
+    sceneTransitionPreset,
+} from "../web/h3_policy_core.mjs";
+
+const studioBoundary = {};
+assert.equal(sceneTransitionPreset(studioBoundary), "inherit");
+applySceneTransitionPreset(studioBoundary, "soft_av");
+assert.deepEqual(studioBoundary, {
+    continuation_mode: "audio_feathered_av", context_length: 39,
+});
 
 const rows = [
     {id:"one", deliveredFrames:362, deliveredSeconds:362 / 24},
@@ -123,13 +134,16 @@ assert.match(source, /publishCompanionScene/);
 assert.match(source, /Append a new scene and select it/);
 assert.match(source, /state\.plan\.shots\.push\(makeShot\(state\.plan\.shots\)\)/);
 assert.match(source, /state\.active = state\.plan\.shots\.length - 1/);
-assert.match(source, /field\("Continuation", continuation\)/);
+assert.match(source, /field\("Incoming transition", incomingTransition\)/);
+assert.match(source, /field\("Final assembly crossfade frames", blendFrames\)/);
+assert.match(source, /Legacy \/ Expert boundary controls/);
+assert.match(source, /field\("Implementation", continuation\)/);
+assert.match(source, /applySceneTransitionPreset/);
 assert.match(source, /field\("Boundary spatial proxy", spatialProxy\)/);
 assert.match(source, /Low-grid 5\/6 proxy · Guide/);
 assert.match(source, /Latent 5\/6 proxy · AV/);
 assert.match(source, /context_spatial_proxy/);
-assert.match(source, /field\("Context V \/ A", contextPair\)/);
-assert.match(source, /field\("Blend entering scene", blendFrames\)/);
+assert.match(source, /field\("Visual \/ audio context", contextPair\)/);
 assert.match(source, /audio_context_length/);
 assert.match(source, /video_blend_frames/);
 assert.match(source, /Guide · new shot/);

@@ -25,7 +25,16 @@ import {
     sharedPrompt,
 } from "./h3_chain_plan_core.mjs?v=0.5.5";
 import {availableReferenceRecords} from "./h3_reference_preview_core.mjs?v=0.5.5";
-import {resolveTransitionPolicy} from "./h3_socket_presentation_core.mjs?v=0.5.5";
+import {
+    applySceneTransitionPreset,
+    primaryTransitionOptions,
+    sceneTransitionPreset,
+    transitionPresetLabel,
+} from "./h3_policy_core.mjs?v=0.5.6";
+import {
+    resolveAudioContextLength,
+    resolveTransitionPolicy,
+} from "./h3_socket_presentation_core.mjs?v=0.5.6";
 
 // This scene editor is an original implementation. Its quick @ reference and
 // # dialogue interactions are inspired by nkxx188/ComfyUI-MiniMaxH3-Easy,
@@ -172,6 +181,8 @@ function injectStyles() {
             align-items:center; gap:6px; }
         .h3c-seed-status { grid-column:1 / -1; color:var(--h3c-muted);
             overflow-wrap:anywhere; }
+        .h3c-boundary-fields { display:grid; grid-template-columns:minmax(220px,1fr)
+            minmax(180px,.7fr); gap:7px; margin-top:8px; }
         .h3c-advanced-fields { display: none; grid-template-columns:repeat(4, minmax(140px, 1fr)); gap: 7px; margin-top: 8px; }
         .h3c-editor.h3c-show-advanced .h3c-advanced-fields { display: grid; }
         .h3c-errors { display: none; margin: 7px 0; padding: 7px; border-radius: 5px; color: #ffb4b8; background: #5d202866; white-space: pre-wrap; }
@@ -185,7 +196,7 @@ function injectStyles() {
         .h3c-footer a { color: var(--h3c-accent); }
         @media (max-width: 650px) {
             .h3c-defaults, .h3c-length-row, .h3c-advanced-fields,
-            .h3c-seed-control { grid-template-columns: 1fr; }
+            .h3c-seed-control, .h3c-boundary-fields { grid-template-columns: 1fr; }
             .h3c-seed-status { grid-column:1; }
             .h3c-card-head { flex-wrap: wrap; }
             .h3c-timing { width: 100%; }
@@ -471,13 +482,14 @@ function mountEditor(node) {
             contextLength: transition.known
                 ? transition.contextLength
                 : widgetValue(node, "context_length", 22),
-            audioContextLength: widgetValue(node, "audio_context_length", 22),
+            audioContextLength: resolveAudioContextLength(node),
             videoBlendFrames: widgetValue(node, "video_blend_frames", 0),
             encodeMode: widgetValue(node, "encode_mode", "video"),
             anchorMode: widgetValue(node, "anchor_mode", "head"),
             continuationMode: transition.known
                 ? transition.continuationMode
                 : widgetValue(node, "continuation_mode", "guide"),
+            transitionPreset: transition.known ? transition.preset : "custom",
             defaultDurationSeconds: widgetValue(node, "default_duration_seconds", 15),
             defaultSteps: widgetValue(node, "default_steps", 20),
         };
@@ -845,6 +857,56 @@ function mountEditor(node) {
         const context = element("select", "h3c-context");
         const resolvedPlanSettings = currentSettings();
         const planContextLength = Number(resolvedPlanSettings.contextLength);
+        const incomingTransition = element("select", "h3c-incoming-transition");
+        const inheritedPreset = resolvedPlanSettings.transitionPreset;
+        const inheritOption = element(
+            "option", "",
+            `Inherit Chain Policy · ${transitionPresetLabel(inheritedPreset)}`,
+        );
+        inheritOption.value = "inherit";
+        incomingTransition.append(inheritOption);
+        for (const preset of primaryTransitionOptions()) {
+            const option = element(
+                "option", "",
+                `${preset.label} · ${preset.description}`,
+            );
+            option.value = preset.name;
+            incomingTransition.append(option);
+        }
+        function refreshIncomingTransition() {
+            const selected = sceneTransitionPreset(
+                shot, resolvedPlanSettings.continuationMode,
+                resolvedPlanSettings.contextLength,
+            );
+            let custom = incomingTransition.querySelector(
+                'option[value="custom"]',
+            );
+            if (selected === "custom" && !custom) {
+                custom = element(
+                    "option", "", transitionPresetLabel("custom"),
+                );
+                custom.value = "custom";
+                incomingTransition.append(custom);
+            }
+            incomingTransition.value = selected;
+        }
+        refreshIncomingTransition();
+        incomingTransition.title = "One semantic boundary choice. Inherit uses "
+            + "the connected Chain Policy. Choosing a preset writes its tested "
+            + "visual implementation/context pair and returns generated-audio "
+            + "context to automatic behavior. Custom means this scene still "
+            + "contains raw Legacy / Expert overrides below.";
+        incomingTransition.addEventListener("change", () => {
+            if (incomingTransition.value === "custom") return;
+            applySceneTransitionPreset(shot, incomingTransition.value);
+            const nextContext = sceneContextLength(shot, planContextLength);
+            if (Object.hasOwn(shot, "video_blend_frames")
+                    && Number(shot.video_blend_frames) > nextContext) {
+                shot.video_blend_frames = nextContext;
+            }
+            syncPlan();
+            render();
+        });
         for (const [value, label] of [
             ["", `Plan default · ${planContextLength}`],
             ["0", "0 · new visual"],
@@ -864,14 +926,15 @@ function mountEditor(node) {
             else shot.context_length = Number(context.value);
             sceneContextLength(shot, planContextLength);
             refreshBlendControl();
+            refreshIncomingTransition();
             syncPlan();
         });
         const audioContext = numberInput(shot.audio_context_length ?? "", {
             min: "0", max: "240", step: "1",
         });
-        const planAudioContextLength = Number(widgetValue(
-            node, "audio_context_length", 22,
-        ));
+        const planAudioContextLength = Number(
+            resolvedPlanSettings.audioContextLength,
+        );
         audioContext.placeholder = planAudioContextLength
             ? String(planAudioContextLength)
             : `Follow video · ${planContextLength}`;
@@ -879,6 +942,7 @@ function mountEditor(node) {
         audioContext.addEventListener("input", () => {
             if (audioContext.value === "") delete shot.audio_context_length;
             else shot.audio_context_length = Number(audioContext.value);
+            refreshIncomingTransition();
             syncPlan();
         });
         const blendFrames = numberInput(shot.video_blend_frames ?? "", {
@@ -937,6 +1001,7 @@ function mountEditor(node) {
             // Resolve once here so malformed externally supplied values cannot
             // be introduced through the compact editor control.
             sceneContinuationMode(shot, planContinuationMode);
+            refreshIncomingTransition();
             syncPlan();
         });
         const spatialProxy = element("select", "h3c-spatial-proxy");
@@ -959,12 +1024,16 @@ function mountEditor(node) {
             }
             syncPlan();
         });
+        const boundary = element("div", "h3c-boundary-fields");
+        boundary.append(
+            field("Incoming transition", incomingTransition),
+            field("Final assembly crossfade frames", blendFrames),
+        );
         advanced.append(
             field("Steps (blank = default)", steps),
-            field("Video context", context),
-            field("Audio context", audioContext),
-            field("Blend entering scene", blendFrames),
-            field("Continuation into scene", continuation),
+            field("Expert visual context", context),
+            field("Expert audio context", audioContext),
+            field("Expert implementation", continuation),
             field("Boundary spatial proxy", spatialProxy),
         );
         card.append(
@@ -973,6 +1042,7 @@ function mountEditor(node) {
             field("Scene prompt (optional with shared prompt)", prompt),
             promptTools(prompt, index + 1),
             field("Scene seed", seedControl),
+            boundary,
             advanced,
         );
         return card;

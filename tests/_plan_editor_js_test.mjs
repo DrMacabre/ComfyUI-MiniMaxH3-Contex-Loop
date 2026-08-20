@@ -28,6 +28,36 @@ import {
     sharedPrompt,
     validateH3Length,
 } from "../web/h3_chain_plan_core.mjs";
+import {
+    PRIMARY_TRANSITION_PRESETS,
+    applySceneTransitionPreset,
+    primaryTransitionOptions,
+    sceneTransitionPreset,
+    transitionPresetLabel,
+} from "../web/h3_policy_core.mjs";
+
+assert.deepEqual(PRIMARY_TRANSITION_PRESETS, [
+    "cut", "guide", "hard_av", "soft_av",
+]);
+assert.deepEqual(
+    primaryTransitionOptions().map(({name}) => name),
+    PRIMARY_TRANSITION_PRESETS,
+);
+assert.equal(sceneTransitionPreset({}, "guide", 22), "inherit");
+const compactBoundary = {};
+applySceneTransitionPreset(compactBoundary, "hard_av");
+assert.deepEqual(compactBoundary, {
+    continuation_mode: "masked_av", context_length: 39,
+});
+compactBoundary.audio_context_length = 7;
+assert.equal(sceneTransitionPreset(compactBoundary), "custom");
+applySceneTransitionPreset(compactBoundary, "guide");
+assert.deepEqual(compactBoundary, {
+    continuation_mode: "guide", context_length: 22,
+});
+applySceneTransitionPreset(compactBoundary, "inherit");
+assert.deepEqual(compactBoundary, {});
+assert.equal(transitionPresetLabel("soft_av"), "Soft AV");
 
 assert.equal(AUTO_SCENE_COLORS.length, 12);
 assert.deepEqual(
@@ -501,7 +531,12 @@ assert.doesNotMatch(editorSource, /\[\["Picture", 9\], \["Video", 3\], \["Audio"
 assert.match(editorSource, /Derived seed:/);
 assert.match(editorSource, /New random/);
 assert.match(editorSource, /Use derived/);
-assert.match(editorSource, /Continuation into scene/);
+assert.match(editorSource, /Incoming transition/);
+assert.match(editorSource, /Final assembly crossfade frames/);
+assert.match(editorSource, /Expert visual context/);
+assert.match(editorSource, /Expert audio context/);
+assert.match(editorSource, /Expert implementation/);
+assert.match(editorSource, /applySceneTransitionPreset/);
 assert.match(editorSource, /Boundary spatial proxy/);
 assert.match(editorSource, /Low-grid 5\/6 proxy · Guide/);
 assert.match(editorSource, /Latent 5\/6 proxy · AV/);
@@ -511,8 +546,6 @@ assert.match(editorSource, /Latent Guide · direct generated latent/);
 assert.match(editorSource, /Detail Guide · color injection/);
 assert.match(editorSource, /Masked AV · same shot/);
 assert.match(editorSource, /Feathered AV · experimental dual-stream feather/);
-assert.match(editorSource, /Video context/);
-assert.match(editorSource, /Audio context/);
 assert.match(editorSource, /0 · new visual/);
 assert.match(editorSource, /grid-template-columns:repeat\(4/);
 assert.match(editorSource, /Hide advanced/);
