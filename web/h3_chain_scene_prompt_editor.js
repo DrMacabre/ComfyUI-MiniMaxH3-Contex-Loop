@@ -76,7 +76,16 @@ function injectStyles() {
             --h3sp-border: color-mix(in srgb, var(--border-color, #555) 68%, #7891bf);
             --h3sp-text: var(--input-text, #eef1f7);
             --h3sp-muted: color-mix(in srgb, var(--h3sp-text) 58%, transparent);
-            --h3sp-accent: #84aaff;
+            /* Blend semantic foregrounds with the active ComfyUI text color.
+               This keeps the pastel identity in dark themes and makes the
+               same controls dark enough to read in light themes. */
+            --h3sp-accent: color-mix(in srgb, var(--h3sp-text) 38%, #4f83ff);
+            --h3sp-token-picture: color-mix(in srgb, var(--h3sp-text) 42%, #139be8);
+            --h3sp-token-video: color-mix(in srgb, var(--h3sp-text) 42%, #9355d6);
+            --h3sp-token-audio: color-mix(in srgb, var(--h3sp-text) 42%, #d47700);
+            --h3sp-token-subject: color-mix(in srgb, var(--h3sp-text) 42%, #26934a);
+            --h3sp-token-dialogue: color-mix(in srgb, var(--h3sp-text) 42%, #cf3976);
+            --h3sp-token-danger: color-mix(in srgb, var(--h3sp-text) 42%, #d44747);
             --h3sp-font-size: 18px;
             box-sizing:border-box; width:100%; height:100%; min-height:420px;
             display:flex; flex-direction:column; gap:8px; overflow:hidden; padding:10px;
@@ -126,14 +135,14 @@ function injectStyles() {
         .h3sp-token { display:inline-flex; align-items:center; gap:3px; max-width:320px;
             margin:0 1px; padding:1px 4px 1px 2px; border:1px solid currentColor;
             border-radius:5px; vertical-align:1px; line-height:1.25; cursor:pointer;
-            user-select:all; }
-        .h3sp-token-picture { color:#76c7ff; background:rgba(55,145,205,.14); }
-        .h3sp-token-video { color:#c7a0ff; background:rgba(133,82,195,.15); }
-        .h3sp-token-audio { color:#ffbd72; background:rgba(205,124,45,.14); }
-        .h3sp-token-subject { color:#8ed7a4; background:rgba(64,155,92,.14); }
-        .h3sp-token-dialogue { color:#ff9fc7; background:rgba(190,63,119,.13); }
-        .h3sp-token-unknown, .h3sp-token-inactive { color:#ff9999;
-            border-style:dashed; background:rgba(185,56,56,.12); }
+            user-select:all; background:color-mix(in srgb,currentColor 14%,transparent); }
+        .h3sp-token-picture { color:var(--h3sp-token-picture); }
+        .h3sp-token-video { color:var(--h3sp-token-video); }
+        .h3sp-token-audio { color:var(--h3sp-token-audio); }
+        .h3sp-token-subject { color:var(--h3sp-token-subject); }
+        .h3sp-token-dialogue { color:var(--h3sp-token-dialogue); }
+        .h3sp-token-unknown, .h3sp-token-inactive { color:var(--h3sp-token-danger);
+            border-style:dashed; }
         .h3sp-token-icon { width:16px; height:16px; display:inline-flex;
             flex:0 0 16px; color:currentColor; }
         .h3sp-token-icon svg { width:100%; height:100%; fill:none; stroke:currentColor;

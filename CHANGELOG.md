@@ -4,6 +4,11 @@ Newest first. This file keeps release history out of the onboarding README.
 
 ## v0.5.0 — Source Timeline and workflow clarity
 
+- Made titles, active controls, and rich reference tags derive their semantic
+  colors from the active ComfyUI foreground. Both scene prompt editors retain
+  their pastel dark-theme palette while gaining readable contrast in light
+  themes.
+
 - Added shared text-level Ctrl/Cmd+Z and redo history to both dedicated scene
   prompt editors. Undo now survives rich-tag DOM decoration, plain-text paste,
   toolbar insertion, Plan synchronization, and switching between rich and
