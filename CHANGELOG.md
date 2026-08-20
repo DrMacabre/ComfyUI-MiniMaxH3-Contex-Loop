@@ -2,7 +2,7 @@
 
 Newest first. This file keeps release history out of the onboarding README.
 
-## Unreleased — Light-theme prompt editor contrast
+## v0.4.15 — Light-theme prompt editor contrast
 
 - Made titles, active controls, and rich reference tags derive their semantic
   colors from the active ComfyUI foreground. Both scene prompt editors retain
