@@ -4,6 +4,7 @@ import {
     checkpointBranchRows,
     checkpointDeletionTitle,
     checkpointDependencyText,
+    checkpointRevisionKey,
     formatCheckpointBytes,
     selectedCheckpointRevision,
 } from "./h3_checkpoint_manager_core.mjs?v=0.5.1";
@@ -13,6 +14,7 @@ const PLAN_NAME = "MiniMaxH3ChainPlan";
 const RUN_PROPERTY = "h3_checkpoint_manager_run";
 const SCENE_PROPERTY = "h3_checkpoint_manager_scene";
 const REVISION_PROPERTY = "h3_checkpoint_manager_revision";
+const SHARED_COLORS = ["#6ea8ff", "#58c99d", "#bd8cff", "#e8a84f", "#f07f8c", "#55bfd0"];
 
 function nodeType(node) {
     return node?.comfyClass ?? node?.type ?? "";
@@ -70,6 +72,14 @@ function localTime(value) {
     return Number.isNaN(date.getTime()) ? String(value || "unknown") : date.toLocaleString();
 }
 
+function sharedColor(key) {
+    let hash = 0;
+    for (const character of String(key ?? "")) {
+        hash = ((hash * 31) + character.codePointAt(0)) >>> 0;
+    }
+    return SHARED_COLORS[hash % SHARED_COLORS.length];
+}
+
 async function jsonRequest(path, options = {}) {
     const response = await api.fetchApi(path, options);
     const payload = await response.json();
@@ -110,15 +120,25 @@ function injectStyles() {
       .h3cm-main { min-height:0; flex:1 1 auto; display:grid; grid-template-columns:minmax(310px,.9fr) minmax(390px,1.1fr); gap:8px; }
       .h3cm-panel { min-height:0; overflow:auto; padding:8px; border:1px solid var(--h3cm-border);
         border-radius:7px; background:color-mix(in srgb,var(--h3cm-panel) 90%,transparent); }
-      .h3cm-panel-title { margin-bottom:7px; font-weight:750; }
-      .h3cm-branch { margin-bottom:8px; padding:6px; border:1px solid color-mix(in srgb,var(--h3cm-border) 75%,transparent);
-        border-radius:6px; }
+      .h3cm-panel-title { display:flex; justify-content:space-between; gap:8px; margin-bottom:7px; font-weight:750; }
+      .h3cm-shared-legend { color:var(--h3cm-muted); font-size:10px; font-weight:500; }
+      .h3cm-branches { position:relative; }
+      .h3cm-branch { position:relative; z-index:1; margin-bottom:8px; padding:6px;
+        border:1px solid color-mix(in srgb,var(--h3cm-border) 75%,transparent); border-radius:6px; }
       .h3cm-branch-head { justify-content:space-between; margin-bottom:5px; }
       .h3cm-branch-active { color:var(--h3cm-accent); font-weight:700; }
-      .h3cm-branch-path { align-items:stretch; overflow:auto; padding-bottom:2px; }
+      .h3cm-branch-path { position:relative; z-index:3; align-items:stretch; overflow:auto; padding-bottom:2px; }
       .h3cm-arrow { align-self:center; color:var(--h3cm-muted); }
-      .h3cm-revision { min-width:112px; text-align:left; white-space:nowrap; }
+      .h3cm-revision { position:relative; min-width:112px; text-align:left; white-space:nowrap; }
       .h3cm-revision small { display:block; color:var(--h3cm-muted); font-size:10px; }
+      .h3cm-revision-shared { border-color:var(--h3cm-shared-color) !important;
+        box-shadow:inset 3px 0 0 var(--h3cm-shared-color); }
+      .h3cm-shared-label { display:block; width:max-content; margin:2px 0; padding:1px 5px;
+        border-radius:999px; background:color-mix(in srgb,var(--h3cm-shared-color) 23%,transparent);
+        color:color-mix(in srgb,var(--h3cm-shared-color) 72%,var(--h3cm-text)); font-size:9px; font-weight:750; }
+      .h3cm-shared-links { position:absolute; inset:0 auto auto 0; z-index:2; overflow:visible;
+        pointer-events:none; }
+      .h3cm-shared-link { fill:none; stroke-width:2; stroke-dasharray:4 3; opacity:.9; }
       .h3cm-detail { display:flex; flex-direction:column; gap:8px; }
       .h3cm-preview { width:100%; max-height:280px; min-height:150px; object-fit:contain; border-radius:6px; background:#08090c; }
       .h3cm-audio { width:100%; height:36px; }
@@ -151,7 +171,7 @@ function mount(node) {
         runs:[], runName:String(node.properties[RUN_PROPERTY] ?? ""), payload:null,
         scene:Number(node.properties[SCENE_PROPERTY]) || null,
         revision:String(node.properties[REVISION_PROPERTY] ?? ""),
-        selected:null, deletion:null, busy:false, requestToken:0,
+        selected:null, deletion:null, busy:false, requestToken:0, sharedLinkFrame:0,
     };
     const root = element("div", "h3cm-root");
     const head = element("div", "h3cm-head");
@@ -167,6 +187,7 @@ function mount(node) {
     const main = element("div", "h3cm-main");
     const branchesPanel = element("section", "h3cm-panel");
     const branchesTitle = element("div", "h3cm-panel-title", "Revision branches");
+    branchesTitle.append(element("span", "h3cm-shared-legend", "color + vertical link = shared clip"));
     const branches = element("div", "h3cm-branches");
     branchesPanel.append(branchesTitle, branches);
     const detail = element("section", "h3cm-panel h3cm-detail");
@@ -241,6 +262,13 @@ function mount(node) {
             branches.append(element("div", "h3cm-muted", "No versioned checkpoints were found."));
             return;
         }
+        const occurrences = new Map();
+        for (const branch of rows) {
+            for (const revision of branch.revisions) {
+                const key = checkpointRevisionKey(revision.scene, revision.revision);
+                occurrences.set(key, (occurrences.get(key) ?? 0) + 1);
+            }
+        }
         for (const branch of rows) {
             const row = element("div", "h3cm-branch");
             const header = element("div", "h3cm-branch-head");
@@ -250,11 +278,22 @@ function mount(node) {
             const path = element("div", "h3cm-branch-path");
             branch.revisions.forEach((revision, index) => {
                 if (index) path.append(element("span", "h3cm-arrow", "→"));
+                const key = checkpointRevisionKey(revision.scene, revision.revision);
+                const sharedCount = occurrences.get(key) ?? 1;
                 const card = button(
                     `S${revision.scene} · ${revision.revision.slice(0, 8)}`,
                     revision.prompt_preview || revision.scene_id,
                     () => selectRevision(revision), "h3cm-revision",
                 );
+                if (sharedCount > 1) {
+                    card.classList.add("h3cm-revision-shared");
+                    card.dataset.sharedKey = key;
+                    card.style.setProperty("--h3cm-shared-color", sharedColor(key));
+                    card.append(element(
+                        "span", "h3cm-shared-label",
+                        `shared ×${sharedCount}`,
+                    ));
+                }
                 card.append(element("small", "", `${revision.active ? "active" : "inactive"}${revision.ready ? "" : " · broken"}`));
                 if (state.selected?.scene === revision.scene && state.selected?.revision === revision.revision) {
                     card.classList.add("h3cm-revision-selected");
@@ -263,7 +302,57 @@ function mount(node) {
             });
             row.append(header, path);
             branches.append(row);
+            path.addEventListener("scroll", scheduleSharedLinks, {passive:true});
         }
+        scheduleSharedLinks();
+    }
+
+    function drawSharedLinks() {
+        branches.querySelector(".h3cm-shared-links")?.remove();
+        const cards = [...branches.querySelectorAll("[data-shared-key]")];
+        if (!cards.length) return;
+        const bounds = branches.getBoundingClientRect();
+        const width = Math.max(1, branches.scrollWidth);
+        const height = Math.max(1, branches.scrollHeight);
+        const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+        svg.classList.add("h3cm-shared-links");
+        svg.setAttribute("width", String(width));
+        svg.setAttribute("height", String(height));
+        svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+        svg.setAttribute("aria-hidden", "true");
+        const grouped = new Map();
+        for (const card of cards) {
+            const key = card.dataset.sharedKey;
+            if (!grouped.has(key)) grouped.set(key, []);
+            grouped.get(key).push(card);
+        }
+        for (const [key, members] of grouped) {
+            members.sort((left, right) =>
+                left.getBoundingClientRect().top - right.getBoundingClientRect().top);
+            for (let index = 1; index < members.length; index += 1) {
+                const previous = members[index - 1].getBoundingClientRect();
+                const current = members[index].getBoundingClientRect();
+                const x1 = previous.left + previous.width / 2 - bounds.left;
+                const y1 = previous.bottom - bounds.top;
+                const x2 = current.left + current.width / 2 - bounds.left;
+                const y2 = current.top - bounds.top;
+                const middle = y1 + (y2 - y1) / 2;
+                const link = document.createElementNS("http://www.w3.org/2000/svg", "path");
+                link.classList.add("h3cm-shared-link");
+                link.setAttribute("stroke", sharedColor(key));
+                link.setAttribute("d", `M ${x1} ${y1} C ${x1} ${middle}, ${x2} ${middle}, ${x2} ${y2}`);
+                svg.append(link);
+            }
+        }
+        if (svg.childNodes.length) branches.prepend(svg);
+    }
+
+    function scheduleSharedLinks() {
+        if (state.sharedLinkFrame) window.cancelAnimationFrame(state.sharedLinkFrame);
+        state.sharedLinkFrame = window.requestAnimationFrame(() => {
+            state.sharedLinkFrame = 0;
+            drawSharedLinks();
+        });
     }
 
     function addInspector(label, value) {
@@ -548,6 +637,15 @@ function mount(node) {
         return result;
     };
     node._h3CheckpointManagerRefresh = () => void refreshRuns();
+    const sharedLinksResizeObserver = typeof ResizeObserver === "function"
+        ? new ResizeObserver(scheduleSharedLinks) : null;
+    sharedLinksResizeObserver?.observe(branchesPanel);
+    const removed = node.onRemoved;
+    node.onRemoved = function () {
+        if (state.sharedLinkFrame) window.cancelAnimationFrame(state.sharedLinkFrame);
+        sharedLinksResizeObserver?.disconnect();
+        return removed?.apply(this, arguments);
+    };
     void refreshRuns();
 }
 
