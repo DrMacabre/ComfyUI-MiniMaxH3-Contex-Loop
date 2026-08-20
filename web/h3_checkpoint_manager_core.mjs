@@ -59,12 +59,13 @@ export function checkpointRevisionLineage(payload, selected) {
         if (seen.has(key)) return [];
         seen.add(key);
         reversed.push({
-            scene:Number(cursor.scene),
-            revision:String(cursor.revision ?? "").toLowerCase(),
+            scene: Number(cursor.scene),
+            revision: String(cursor.revision ?? "").toLowerCase(),
         });
         if (!cursor.parent) break;
         cursor = records.get(checkpointRevisionKey(
-            cursor.parent.scene, cursor.parent.revision));
+            cursor.parent.scene, cursor.parent.revision,
+        ));
         if (!cursor) return [];
     }
     const lineage = reversed.reverse();
@@ -88,7 +89,8 @@ export function checkpointDependencyText(item) {
 export function checkpointDeletionTitle(preview) {
     if (!preview) return "Select a checkpoint revision to inspect deletion safety.";
     if (preview.allowed) {
-        return `Safe leaf deletion · ${preview.owned_file_count} files · ${formatCheckpointBytes(preview.reclaimed_bytes)}`;
+        const action = preview.rollback ? "Safe active-tip rollback" : "Safe leaf deletion";
+        return `${action} · ${preview.owned_file_count} files · ${formatCheckpointBytes(preview.reclaimed_bytes)}`;
     }
     return (preview.blockers ?? []).join(" ") || "Deletion is blocked.";
 }

@@ -8,16 +8,87 @@ import {
     checkpointRevisionLineage,
     formatCheckpointBytes,
     selectedCheckpointRevision,
-} from "./h3_checkpoint_manager_core.mjs?v=0.5.7";
+} from "./h3_checkpoint_manager_core.mjs?v=0.5.5";
+import {
+    parsePlanJson,
+    planToJson,
+    promptValueToText,
+} from "./h3_chain_plan_core.mjs?v=0.5.5";
+import {applyCheckpointRevisionSet} from "./h3_chain_review_core.mjs?v=0.5.5";
+import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.5.5";
+import {
+    refreshRestoredPlanEditors,
+    restoreConnectedPolicyInputs,
+} from "./h3_plan_restore_core.mjs?v=0.5.5";
 
 const NODE_NAME = "MiniMaxH3ChainCheckpointManager";
+const PLAN_NAME = "MiniMaxH3ChainPlan";
+const START_NAME = "MiniMaxH3ChainLoopStart";
 const RUN_PROPERTY = "h3_checkpoint_manager_run";
 const SCENE_PROPERTY = "h3_checkpoint_manager_scene";
 const REVISION_PROPERTY = "h3_checkpoint_manager_revision";
 const SHARED_COLORS = ["#6ea8ff", "#58c99d", "#bd8cff", "#e8a84f", "#f07f8c", "#55bfd0"];
 
+function nodeType(node) {
+    return node?.comfyClass ?? node?.type ?? "";
+}
+
+function upstreamPlanNode(start) {
+    const queue = [start];
+    const seen = new Set();
+    while (queue.length) {
+        const current = queue.shift();
+        if (!current || seen.has(current)) continue;
+        seen.add(current);
+        if (current !== start && nodeType(current) === PLAN_NAME) return current;
+        for (const input of current.inputs ?? []) {
+            if (input.link == null) continue;
+            const link = graphLink(current.graph, input.link);
+            const candidate = link
+                ? current.graph?.getNodeById?.(link.origin_id) : null;
+            if (candidate) queue.push(candidate);
+        }
+    }
+    return null;
+}
+
 function widget(node, name) {
     return node?.widgets?.find((item) => item.name === name);
+}
+
+function graphLink(graph, linkId) {
+    return graph?.links?.[linkId] ?? graph?.links?.get?.(linkId) ?? null;
+}
+
+function connectedNode(start, wantedType) {
+    const queue = [start];
+    const seen = new Set();
+    while (queue.length) {
+        const current = queue.shift();
+        if (!current || seen.has(current)) continue;
+        seen.add(current);
+        if (current !== start && nodeType(current) === wantedType) return current;
+        for (const input of current.inputs ?? []) {
+            if (input.link == null) continue;
+            const link = graphLink(current.graph, input.link);
+            const candidate = link
+                ? current.graph?.getNodeById?.(link.origin_id) : null;
+            if (candidate) queue.push(candidate);
+        }
+        for (const output of current.outputs ?? []) {
+            for (const linkId of output.links ?? []) {
+                const link = graphLink(current.graph, linkId);
+                const candidate = link
+                    ? current.graph?.getNodeById?.(link.target_id) : null;
+                if (candidate) queue.push(candidate);
+            }
+        }
+    }
+    return null;
+}
+
+function publishCompanionPrompt(...args) {
+    return promptCompanionSync.publishCompanionPrompt?.(...args) ?? 0;
 }
 
 function element(tag, className = "", text = undefined) {
@@ -193,11 +264,18 @@ function mount(node) {
     const deletionBody = element("div");
     const deletionActions = element("div", "h3cm-delete-actions");
     const status = element("div", "h3cm-status");
-    const remove = button("Delete selected revision", "Delete this inactive leaf revision after confirmation", () => void deleteSelected(), "h3cm-delete-button");
+    const load = button("Load selected branch", "Restore this revision and its complete lineage into the connected Plan", () => void loadSelected());
+    const remove = button("Delete selected revision", "Delete an inactive leaf or roll back the active branch tip after confirmation", () => void deleteSelected(), "h3cm-delete-button");
+    load.disabled = true;
     remove.disabled = true;
-    deletionActions.append(status, remove);
+    deletionActions.append(load, status, remove);
     deletion.append(deletionTitle, deletionBody, deletionActions);
     root.append(head, runRow, scenes, main, deletion);
+
+    function activePlanRun() {
+        const plan = upstreamPlanNode(node);
+        return String(widget(plan, "run_name")?.value ?? "").trim();
+    }
 
     function persistSelection() {
         node.properties[RUN_PROPERTY] = state.runName;
@@ -219,8 +297,19 @@ function mount(node) {
         runSelect.disabled = state.busy;
         refresh.disabled = state.busy;
         open.disabled = state.busy || !state.runName;
+        load.disabled = state.busy || !canLoadSelected();
         remove.disabled = state.busy || !state.deletion?.allowed;
         if (message) status.textContent = message;
+    }
+
+    function selectedLineage() {
+        return checkpointRevisionLineage(state.payload, state.selected);
+    }
+
+    function canLoadSelected() {
+        const lineage = selectedLineage();
+        return Boolean(state.selected?.ready &&
+            lineage.length === Number(state.selected.scene));
     }
 
     function selectRevision(record, requestDeletion = true) {
@@ -412,6 +501,7 @@ function mount(node) {
         deletionBody.replaceChildren();
         deletion.classList.toggle("h3cm-delete-blocked", Boolean(state.deletion && !state.deletion.allowed));
         deletionTitle.textContent = checkpointDeletionTitle(state.deletion);
+        load.disabled = state.busy || !canLoadSelected();
         remove.disabled = state.busy || !state.deletion?.allowed;
         if (!state.deletion) return;
         const files = (state.deletion.files ?? []).filter((item) => item.exists);
@@ -430,14 +520,16 @@ function mount(node) {
             for (const dependent of state.deletion.dependents) {
                 const action = dependent.leaf
                     ? (dependent.active
-                        ? " · active leaf: restore another revision first"
+                        ? " · active tip: select to roll back"
                         : " · leaf: delete this first")
                     : "";
                 const item = element("li", "h3cm-dependent",
                     `${checkpointDependencyText(dependent)}${action}`);
                 item.title = dependent.leaf && !dependent.active
                     ? "Select this deletable leaf checkpoint"
-                    : "Select this dependent checkpoint to inspect its own descendants";
+                    : dependent.leaf
+                        ? "Select this active branch tip to inspect its rollback"
+                        : "Select this dependent checkpoint to inspect its own descendants";
                 item.addEventListener("click", () => {
                     const revision = selectedCheckpointRevision(
                         state.payload, dependent.scene, dependent.revision);
@@ -484,7 +576,6 @@ function mount(node) {
                 });
             if (token !== state.requestToken) return;
             state.deletion = payload;
-            status.textContent = "";
         } catch (error) {
             if (token !== state.requestToken) return;
             state.deletion = null;
@@ -539,7 +630,8 @@ function mount(node) {
         try {
             const payload = await jsonRequest("/minimax_h3_context_loop/runs");
             state.runs = payload.runs ?? [];
-            const preferred = state.runName;
+            const connected = activePlanRun();
+            const preferred = state.runName || connected;
             state.runName = state.runs.some((item) => item.run_name === preferred)
                 ? preferred : state.runs[0]?.run_name ?? "";
             runSelect.replaceChildren();
@@ -579,13 +671,151 @@ function mount(node) {
         }
     }
 
+    function restoreSavedPlanInputs(inputs, policyInputs = {}) {
+        const planNode = upstreamPlanNode(node);
+        if (!planNode || !inputs || typeof inputs !== "object") {
+            throw new Error("The saved run has no Plan inputs to restore.");
+        }
+        const names = Object.keys(inputs).sort((left, right) =>
+            Number(left === "plan_json") - Number(right === "plan_json"));
+        const graph = planNode.graph ?? app.graph;
+        const applied = [];
+        graph?.beforeChange?.();
+        try {
+            for (const name of names) {
+                const target = widget(planNode, name);
+                if (!target) continue;
+                target.value = inputs[name];
+                target.callback?.(inputs[name]);
+                applied.push(name);
+            }
+        } finally {
+            graph?.afterChange?.();
+        }
+        if (!applied.includes("plan_json")) {
+            throw new Error("The connected Plan does not expose an editable plan_json widget.");
+        }
+        restoreConnectedPolicyInputs(planNode, policyInputs);
+        refreshRestoredPlanEditors(planNode);
+        app.graph?.setDirtyCanvas?.(true, true);
+        return planNode;
+    }
+
+    function applyLoadedRevisions(planNode, revisions) {
+        const target = widget(planNode, "plan_json");
+        if (!target) throw new Error("The connected Plan has no plan_json control.");
+        const plan = applyCheckpointRevisionSet(
+            parsePlanJson(String(target.value ?? "")), revisions,
+        );
+        const value = planToJson(plan);
+        target.value = value;
+        target.callback?.(value);
+        refreshRestoredPlanEditors(planNode);
+        planNode.graph?.setDirtyCanvas?.(true, true);
+        for (const revision of revisions ?? []) {
+            const sceneIndex = Number(revision.scene) - 1;
+            if (sceneIndex < 0 || sceneIndex >= plan.shots.length) continue;
+            publishCompanionPrompt(
+                node, planNode, sceneIndex,
+                promptValueToText(plan.shots[sceneIndex]?.prompt),
+            );
+        }
+        return plan;
+    }
+
+    function prepareResume(scene) {
+        const start = connectedNode(node, START_NAME);
+        const startClip = widget(start, "start_clip");
+        if (!startClip) return false;
+        startClip.value = scene;
+        startClip.callback?.(scene);
+        const range = widget(start, "scene_range");
+        if (range) {
+            range.value = "";
+            range.callback?.("");
+        }
+        start.graph?.setDirtyCanvas?.(true, true);
+        return true;
+    }
+
+    async function loadSelected() {
+        const record = state.selected;
+        const lineage = selectedLineage();
+        if (!record || !canLoadSelected() || state.busy) return;
+        const planNode = upstreamPlanNode(node);
+        if (!planNode || !widget(planNode, "plan_json")) {
+            status.className = "h3cm-status h3cm-error";
+            status.textContent = "Connect the Checkpoint Manager to an editable H3 Chain Plan first.";
+            return;
+        }
+        const confirmed = window.confirm(
+            `Load ${state.runName} through scene ${record.scene} revision ${record.revision.slice(0, 8)}?\n\n` +
+            "The connected Plan will be restored from this saved run, this lineage will become active, and later active pointers will be cleared. Saved revision files are kept.",
+        );
+        if (!confirmed) return;
+        setBusy(true, "Loading saved Plan and checkpoint lineage…");
+        try {
+            const runQuery = new URLSearchParams({
+                run_name: state.runName,
+                include_assets: "false",
+            });
+            const runBody = await jsonRequest(
+                `/minimax_h3_context_loop/run?${runQuery.toString()}`,
+            );
+            const savedPlan = parsePlanJson(String(
+                runBody.plan_inputs?.plan_json ?? "",
+            ));
+            if (savedPlan.shots.length < Number(record.scene)) {
+                throw new Error(
+                    `The saved Plan has only ${savedPlan.shots.length} scenes.`,
+                );
+            }
+            const resumeScene = Number(record.scene) + 1;
+            if (resumeScene <= savedPlan.shots.length &&
+                    !widget(connectedNode(node, START_NAME), "start_clip")) {
+                throw new Error("Could not find the connected H3 Chain Loop Start node.");
+            }
+            const restored = await jsonRequest(
+                "/minimax_h3_context_loop/checkpoint-revisions/restore", {
+                    method:"POST", headers:{"Content-Type":"application/json"},
+                    body:JSON.stringify({
+                        run_name:state.runName,
+                        resume_scene:resumeScene,
+                        revisions:lineage,
+                    }),
+                });
+            const activePlan = restoreSavedPlanInputs(
+                runBody.plan_inputs,
+                restored.policy_inputs ?? runBody.policy_inputs,
+            );
+            const plan = applyLoadedRevisions(activePlan, restored.restored ?? []);
+            const canResume = resumeScene <= plan.shots.length;
+            if (canResume && !prepareResume(resumeScene)) {
+                throw new Error("Loaded the branch, but could not arm H3 Chain Loop Start.");
+            }
+            await refreshCheckpoints();
+            status.className = "h3cm-status";
+            status.textContent = canResume
+                ? `Loaded scenes 1–${record.scene}; Loop Start is armed for scene ${resumeScene}.`
+                : `Loaded the completed branch through final scene ${record.scene}.`;
+        } catch (error) {
+            status.className = "h3cm-status h3cm-error";
+            status.textContent = error.message;
+        } finally {
+            setBusy(false);
+        }
+    }
+
     async function deleteSelected() {
         const record = state.selected;
         const plan = state.deletion;
         if (!record || !plan?.allowed || state.busy) return;
         const confirmed = window.confirm(
-            `Permanently delete scene ${record.scene} revision ${record.revision.slice(0, 8)}?\n\n` +
+            `${plan.rollback ? "Roll back and permanently delete" : "Permanently delete"} scene ${record.scene} revision ${record.revision.slice(0, 8)}?\n\n` +
             `${plan.owned_file_count} owned files · ${formatCheckpointBytes(plan.reclaimed_bytes)}\n` +
+            `${plan.rollback ? (plan.rollback_to_scene > 0
+                ? `The active chain will roll back through scene ${plan.rollback_to_scene}. `
+                : "The run will have no active checkpoint scenes. ") : ""}` +
             "Run archives, references, prompt history, and assembled exports are kept. This cannot be undone.",
         );
         if (!confirmed) return;
@@ -597,6 +827,7 @@ function mount(node) {
                     body:JSON.stringify({run_name:state.runName, scene:record.scene,
                         revision:record.revision, snapshot:plan.snapshot}),
                 });
+            state.scene = payload.rollback ? payload.rollback_to_scene : state.scene;
             state.revision = "";
             await refreshCheckpoints();
             status.className = "h3cm-status";
@@ -627,6 +858,18 @@ function mount(node) {
         Math.max(Number(node.size?.[0]) || 0, 900),
         Math.max(Number(node.size?.[1]) || 0, 760),
     ]);
+    const connectionsChanged = node.onConnectionsChange;
+    node.onConnectionsChange = function () {
+        const result = connectionsChanged?.apply(this, arguments);
+        window.setTimeout(() => {
+            const connected = activePlanRun();
+            if (connected && connected !== state.runName) {
+                state.runName = connected;
+                void refreshRuns();
+            }
+        }, 0);
+        return result;
+    };
     node._h3CheckpointManagerRefresh = () => void refreshRuns();
     const sharedLinksResizeObserver = typeof ResizeObserver === "function"
         ? new ResizeObserver(scheduleSharedLinks) : null;

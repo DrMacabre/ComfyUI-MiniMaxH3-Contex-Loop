@@ -21,11 +21,11 @@ const payload = {
             created_at:"2026-08-20T10:00:00Z"},
         {scene:2, scene_id:"hall", revision:b, active:true,
             created_at:"2026-08-20T10:10:00Z", context_length:39,
-            audio_context_length:44, continuation_mode:"guide",
+            audio_context_length:44, continuation_mode:"guide", ready:true,
             parent:{scene:1, revision:a}},
         {scene:2, scene_id:"hall_alt", revision:c, active:false,
             created_at:"2026-08-20T10:20:00Z", context_length:0,
-            audio_context_length:0, continuation_mode:"guide",
+            audio_context_length:0, continuation_mode:"guide", ready:true,
             parent:{scene:1, revision:a}},
     ],
     branches: [
@@ -47,15 +47,18 @@ assert.equal(selectedCheckpointRevision(payload).revision, b,
 assert.equal(checkpointBranchRows(payload)[0].revisions[1].revision, b);
 assert.equal(checkpointBranchRows(payload)[1].revisions[0].revision, a,
     "a shared ancestor appears in every inferred branch that uses it");
-assert.deepEqual(checkpointRevisionLineage(payload, payload.revisions[1]), [
-    {scene:1, revision:a}, {scene:2, revision:b},
-]);
+assert.deepEqual(
+    checkpointRevisionLineage(payload, payload.revisions[1]),
+    [{scene:1, revision:a}, {scene:2, revision:b}],
+);
 assert.match(checkpointDependencyText(payload.revisions[1]),
     /Scene 2 · hall uses Video 39f \/ Audio 44f via guide/);
 assert.match(checkpointDependencyText(payload.revisions[2]),
     /structural continuation edge \(Video 0f \/ Audio 0f\)/);
 assert.match(checkpointDeletionTitle({allowed:true, owned_file_count:5,
     reclaimed_bytes:1536}), /Safe leaf deletion · 5 files · 1.5 KB/);
+assert.match(checkpointDeletionTitle({allowed:true, rollback:true,
+    owned_file_count:6, reclaimed_bytes:2048}), /Safe active-tip rollback/);
 assert.equal(checkpointDeletionTitle({allowed:false,
     blockers:["A child depends on it."]}), "A child depends on it.");
 
@@ -63,11 +66,15 @@ const source = fs.readFileSync(
     new URL("../web/h3_chain_checkpoint_manager.js", import.meta.url), "utf8",
 );
 assert.match(source, /MiniMaxH3ChainCheckpointManager/);
-assert.doesNotMatch(source, /MiniMaxH3ChainPlan/);
+assert.match(source, /MiniMaxH3ChainPlan/);
 assert.match(source, /selection_json/);
 assert.match(source, /checkpointRevisionLineage/);
 assert.match(source, /checkpoint-revisions\/delete-preview/);
 assert.match(source, /checkpoint-revisions\/delete/);
+assert.match(source, /checkpoint-revisions\/restore/);
+assert.match(source, /Load selected branch/);
+assert.match(source, /later active pointers will be cleared/);
+assert.match(source, /prepareResume\(resumeScene\)/);
 assert.match(source, /snapshot:plan\.snapshot/);
 assert.match(source, /window\.confirm/);
 assert.match(source, /Delete dependent leaves first/);
@@ -91,7 +98,7 @@ const backend = fs.readFileSync(
 );
 assert.match(backend, /class MiniMaxH3ChainCheckpointManager/);
 assert.match(backend,
-    /def passthrough\(self, selection_json=""\):/);
+    /def passthrough\(self, selection_json="", plan=None\):/);
 assert.match(backend, /_checkpoint_selection_manifest\(selection_json\)/);
 assert.match(backend, /RETURN_NAMES = \("selected_manifest",\)/);
 assert.doesNotMatch(

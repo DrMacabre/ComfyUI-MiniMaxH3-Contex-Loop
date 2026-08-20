@@ -9390,6 +9390,13 @@ class MiniMaxH3ChainCheckpointManager:
                     "tooltip": "Hidden serialized run and revision lineage "
                                "maintained by the Checkpoint Manager browser."}),
             },
+            "optional": {
+                "plan": (PLAN_TYPE, {
+                    "tooltip": "Connect the editable H3 Chain Plan when you "
+                               "want Load selected branch to restore that "
+                               "Plan. It is not required for checkpoint "
+                               "inspection, deletion, or deferred upscaling."}),
+            },
         }
 
     RETURN_TYPES = (MANIFEST_TYPE,)
@@ -9404,10 +9411,11 @@ class MiniMaxH3ChainCheckpointManager:
         "Browse checkpoint scenes and inferred revision branches across H3 "
         "runs; preview saved media, inspect exact video/audio context "
         "dependencies and storage, emit a complete selected branch for "
-        "standalone upscaling, and delete one inactive leaf revision at a "
-        "time after a complete deletion preview.")
+        "standalone upscaling, load any complete branch into a connected Plan, "
+        "delete inactive leaves, or roll back the active branch tip after a "
+        "complete deletion preview.")
 
-    def passthrough(self, selection_json=""):
+    def passthrough(self, selection_json="", plan=None):
         manifest = _checkpoint_selection_manifest(selection_json)
         return (manifest,)
 
@@ -14001,8 +14009,9 @@ async def _restore_checkpoint_revisions(request):
         if not run_name:
             raise ValueError("A non-empty H3 chain run_name is required.")
         resume_scene = int(body.get("resume_scene", 0))
-        if resume_scene < 2 or resume_scene > MAX_SHOTS:
-            raise ValueError("Resume scene must be between 2 and %d." % MAX_SHOTS)
+        if resume_scene < 2 or resume_scene > MAX_SHOTS + 1:
+            raise ValueError(
+                "Resume scene must be between 2 and %d." % (MAX_SHOTS + 1))
         selections = body.get("revisions")
         if not isinstance(selections, list):
             raise ValueError("Checkpoint recovery requires a revision list.")
@@ -14063,26 +14072,49 @@ async def _restore_checkpoint_revisions(request):
             _output_root(), "h3_chains", run_name, "checkpoints")
         originals = {}
         committed = []
-        try:
-            for scene, metadata, _metadata_path in loaded:
-                canonical = os.path.join(
-                    checkpoint_dir, "clip_%04d.json" % scene)
-                originals[canonical] = (_read_json(canonical)
-                                        if os.path.isfile(canonical) else None)
-                _atomic_json(canonical, metadata)
-                committed.append(canonical)
-        except Exception:
-            for canonical in reversed(committed):
-                original = originals.get(canonical)
-                try:
-                    if original is None:
-                        _safe_unlink(canonical)
-                    else:
-                        _atomic_json(canonical, original)
-                except Exception:
-                    _LOG.exception(
-                        "Could not roll back checkpoint pointer %s", canonical)
-            raise
+        retired = []
+        transaction = uuid.uuid4().hex
+        with checkpoint_run_lock(_output_root(), run_name):
+            try:
+                # Loading an earlier branch is a real rollback. Retire mutable
+                # pointers at and after the resume scene while preserving every
+                # immutable revision file for later branch switching.
+                for filename in sorted(os.listdir(checkpoint_dir)):
+                    match = re.fullmatch(r"clip_(\d{4})\.json", filename)
+                    if match is None or int(match.group(1)) < resume_scene:
+                        continue
+                    canonical = os.path.join(checkpoint_dir, filename)
+                    temporary = "%s.restore.%s.tmp" % (canonical, transaction)
+                    os.replace(canonical, temporary)
+                    retired.append((canonical, temporary))
+                for scene, metadata, _metadata_path in loaded:
+                    canonical = os.path.join(
+                        checkpoint_dir, "clip_%04d.json" % scene)
+                    originals[canonical] = (_read_json(canonical)
+                                            if os.path.isfile(canonical) else None)
+                    _atomic_json(canonical, metadata)
+                    committed.append(canonical)
+            except Exception:
+                for canonical in reversed(committed):
+                    original = originals.get(canonical)
+                    try:
+                        if original is None:
+                            _safe_unlink(canonical)
+                        else:
+                            _atomic_json(canonical, original)
+                    except Exception:
+                        _LOG.exception(
+                            "Could not roll back checkpoint pointer %s", canonical)
+                for canonical, temporary in reversed(retired):
+                    try:
+                        os.replace(temporary, canonical)
+                    except Exception:
+                        _LOG.exception(
+                            "Could not restore retired checkpoint pointer %s",
+                            canonical)
+                raise
+            for _canonical, temporary in retired:
+                _safe_unlink(temporary)
 
         restored = [
             _checkpoint_plan_revision(metadata["segment"])
@@ -14093,6 +14125,7 @@ async def _restore_checkpoint_revisions(request):
             "run_name": run_name,
             "resume_scene": resume_scene,
             "restored": restored,
+            "retired_later_pointers": len(retired),
             # The revision chain is authoritative.  The latest plan.json can
             # legitimately describe newer 0.5 policies than an older revision
             # selected here, so return the selected checkpoint policy values.

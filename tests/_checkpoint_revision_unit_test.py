@@ -136,10 +136,10 @@ async def check():
         new_one = "2" * 32
         old_two = "3" * 32
         new_two = "4" * 32
-        old_one_meta, _ = write_revision(run, 1, old_one, 101)
+        old_one_meta, old_one_files = write_revision(run, 1, old_one, 101)
         new_one_meta, new_one_files = write_revision(
             run, 1, new_one, 201, active=True)
-        old_two_meta, _ = write_revision(
+        old_two_meta, old_two_files = write_revision(
             run, 2, old_two, 102, predecessor=old_one_meta)
         new_two_meta, new_two_files = write_revision(
             run, 2, new_two, 202, active=True, predecessor=new_one_meta)
@@ -169,6 +169,10 @@ async def check():
         }]
         assert indexed[(2, new_two)]["parent"] == {
             "scene": 1, "revision": new_one}
+
+        future = "5" * 32
+        _future_meta, future_files = write_revision(
+            run, 3, future, 303, active=True, predecessor=new_two_meta)
 
         mismatched = await chain._restore_checkpoint_revisions(JsonRequest({
             "run_name": "revision_test",
@@ -200,7 +204,24 @@ async def check():
         active_two = json.loads((run / "checkpoints" / "clip_0002.json").read_text())
         assert active_one["segment"]["revision"] == old_one
         assert active_two["segment"]["revision"] == old_two
+        assert restored["retired_later_pointers"] == 1
+        assert not (run / "checkpoints" / "clip_0003.json").exists()
+        assert (run / "checkpoints" / ("clip_0003.%s.json" % future)).is_file()
         assert (run / "checkpoints" / ("clip_0001.%s.json" % new_one)).is_file()
+
+        future_preview = await chain._preview_checkpoint_revision_deletion(
+            JsonRequest({
+                "run_name": "revision_test", "scene": 3,
+                "revision": future,
+            }))
+        future_body = json.loads(future_preview.text)
+        assert future_body["allowed"] and not future_body["rollback"]
+        future_delete = await chain._delete_checkpoint_revision(JsonRequest({
+            "run_name": "revision_test", "scene": 3,
+            "revision": future, "snapshot": future_body["snapshot"],
+        }))
+        assert future_delete.status == 200
+        assert not any(path.exists() for path in future_files)
 
         active_delete = await chain._delete_checkpoint_revision(JsonRequest({
             "run_name": "revision_test", "scene": 1, "revision": old_one,
@@ -293,6 +314,45 @@ async def check():
         assert json.loads((run / "checkpoints" / "clip_0001.json").read_text())[
             "segment"]["revision"] == old_one
 
+        active_tip_preview = await chain._preview_checkpoint_revision_deletion(
+            JsonRequest({
+                "run_name": "revision_test", "scene": 2,
+                "revision": old_two,
+            }))
+        active_tip_body = json.loads(active_tip_preview.text)
+        assert active_tip_body["allowed"]
+        assert active_tip_body["rollback"]
+        assert active_tip_body["rollback_to_scene"] == 1
+        assert active_tip_body["owned_file_count"] == len(old_two_files) + 1
+        active_tip_delete = await chain._delete_checkpoint_revision(JsonRequest({
+            "run_name": "revision_test", "scene": 2,
+            "revision": old_two, "snapshot": active_tip_body["snapshot"],
+        }))
+        assert active_tip_delete.status == 200
+        active_tip_deleted = json.loads(active_tip_delete.text)
+        assert active_tip_deleted["rollback"]
+        assert active_tip_deleted["rollback_to_scene"] == 1
+        assert not (run / "checkpoints" / "clip_0002.json").exists()
+        assert not any(path.exists() for path in old_two_files)
+
+        root_tip_preview = await chain._preview_checkpoint_revision_deletion(
+            JsonRequest({
+                "run_name": "revision_test", "scene": 1,
+                "revision": old_one,
+            }))
+        root_tip_body = json.loads(root_tip_preview.text)
+        assert root_tip_body["allowed"] and root_tip_body["rollback"]
+        assert root_tip_body["rollback_to_scene"] == 0
+        root_tip_delete = await chain._delete_checkpoint_revision(JsonRequest({
+            "run_name": "revision_test", "scene": 1,
+            "revision": old_one, "snapshot": root_tip_body["snapshot"],
+        }))
+        assert root_tip_delete.status == 200
+        assert not (run / "checkpoints" / "clip_0001.json").exists()
+        assert not any(path.exists() for path in old_one_files)
+        empty_graph = chain.CheckpointGraphManager(
+            folder_paths.output_directory).graph("revision_test")
+        assert empty_graph["summary"]["revision_count"] == 0
 
 if __name__ == "__main__":
     asyncio.run(check())
