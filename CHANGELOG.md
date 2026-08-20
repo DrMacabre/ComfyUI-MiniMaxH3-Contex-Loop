@@ -2,6 +2,12 @@
 
 Newest first. This file keeps release history out of the onboarding README.
 
+## v0.4.19 — Cleaner shared-checkpoint links
+
+- Moved shared-revision connectors into a dedicated side gutter with thin
+  solid rails and short taps to each matching card, keeping lineage marks away
+  from branch names, revision text, and status labels.
+
 ## v0.4.18 — Review candidate batches and checkpoint refresh
 
 - Review Gate can now generate 1–20 different-seed takes for each scene,
