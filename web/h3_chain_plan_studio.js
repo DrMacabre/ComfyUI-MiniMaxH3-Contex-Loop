@@ -34,11 +34,11 @@ import {
     primaryTransitionOptions,
     sceneTransitionPreset,
     transitionPresetLabel,
-} from "./h3_policy_core.mjs?v=0.5.6";
+} from "./h3_policy_core.mjs?v=0.5.5";
 import {
     resolveAudioContextLength,
     resolveTransitionPolicy,
-} from "./h3_socket_presentation_core.mjs?v=0.5.6";
+} from "./h3_socket_presentation_core.mjs?v=0.5.5";
 import {
     locateStudioTimelineSecond,
     h3StudioGridMarkers,
@@ -942,6 +942,7 @@ function mount(node) {
             const selected = sceneTransitionPreset(
                 shot, planSettings.continuationMode,
                 planSettings.contextLength,
+                planSettings.audioContextLength,
             );
             let custom = incomingTransition.querySelector(
                 'option[value="custom"]',

@@ -30,11 +30,11 @@ import {
     primaryTransitionOptions,
     sceneTransitionPreset,
     transitionPresetLabel,
-} from "./h3_policy_core.mjs?v=0.5.6";
+} from "./h3_policy_core.mjs?v=0.5.5";
 import {
     resolveAudioContextLength,
     resolveTransitionPolicy,
-} from "./h3_socket_presentation_core.mjs?v=0.5.6";
+} from "./h3_socket_presentation_core.mjs?v=0.5.5";
 
 // This scene editor is an original implementation. Its quick @ reference and
 // # dialogue interactions are inspired by nkxx188/ComfyUI-MiniMaxH3-Easy,
@@ -877,6 +877,7 @@ function mountEditor(node) {
             const selected = sceneTransitionPreset(
                 shot, resolvedPlanSettings.continuationMode,
                 resolvedPlanSettings.contextLength,
+                resolvedPlanSettings.audioContextLength,
             );
             let custom = incomingTransition.querySelector(
                 'option[value="custom"]',
