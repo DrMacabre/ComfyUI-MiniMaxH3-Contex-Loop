@@ -2,7 +2,7 @@
 
 Newest first. This file keeps release history out of the onboarding README.
 
-## v0.5.0 — Source Timeline and workflow clarity
+## v0.5.1 — Checkpoint Manager and workflow clarity
 
 - Corrected the scheduled Guide 5/6 spatial proxy to reproduce the observed
   mixed-resolution chain operation: reduce the complete saved predecessor

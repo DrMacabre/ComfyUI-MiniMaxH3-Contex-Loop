@@ -6,7 +6,7 @@ import {
     checkpointDependencyText,
     formatCheckpointBytes,
     selectedCheckpointRevision,
-} from "./h3_checkpoint_manager_core.mjs?v=0.5.0";
+} from "./h3_checkpoint_manager_core.mjs?v=0.5.1";
 
 const NODE_NAME = "MiniMaxH3ChainCheckpointManager";
 const PLAN_NAME = "MiniMaxH3ChainPlan";
