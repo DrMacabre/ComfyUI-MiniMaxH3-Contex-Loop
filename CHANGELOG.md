@@ -2,6 +2,12 @@
 
 Newest first. This file keeps release history out of the onboarding README.
 
+## v0.4.17 — Shared checkpoint lineage visibility
+
+- Repeated checkpoint revisions now keep the existing branch layout while
+  receiving a consistent color label and a vertical connector between every
+  branch line that shares the same clip.
+
 ## v0.4.16 — Checkpoint Manager
 
 - Added a Plan-passthrough Checkpoint Manager that browses every saved run by
