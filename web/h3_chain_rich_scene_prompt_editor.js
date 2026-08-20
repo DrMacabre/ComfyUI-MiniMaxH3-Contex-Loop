@@ -6,16 +6,16 @@ import {
     promptTextToLines,
     promptValueToText,
     sharedPrompt,
-} from "./h3_chain_plan_core.mjs?v=0.4.13";
+} from "./h3_chain_plan_core.mjs?v=0.4.14";
 import {
     buildPromptAssistantContext,
     makePromptAssistRequest,
-} from "./h3_prompt_assistant_core.mjs?v=0.4.13";
-import {PromptAssistantClient} from "./h3_prompt_assistant_client.mjs?v=0.4.13";
+} from "./h3_prompt_assistant_core.mjs?v=0.4.14";
+import {PromptAssistantClient} from "./h3_prompt_assistant_client.mjs?v=0.4.14";
 import {
     directOptimizerConfigurationError,
     makeDirectPromptOptimizeRequest,
-} from "./h3_prompt_optimizer_core.mjs?v=0.4.13";
+} from "./h3_prompt_optimizer_core.mjs?v=0.4.14";
 import {
     openPromptOptimizerSettings,
     promptOptimizerBackend,
@@ -25,8 +25,8 @@ import {
 import {
     promptRevisionLabel,
     promptRevisionNavigation,
-} from "./h3_prompt_history_core.mjs?v=0.4.13";
-import {availableReferenceRecords} from "./h3_reference_preview_core.mjs?v=0.4.13";
+} from "./h3_prompt_history_core.mjs?v=0.4.14";
+import {availableReferenceRecords} from "./h3_reference_preview_core.mjs?v=0.4.14";
 import {
     PromptUndoHistory,
     RICH_PROMPT_GUIDES,
@@ -36,8 +36,8 @@ import {
     richGenerationMode,
     richGuideInstruction,
     tokenizeRichPrompt,
-} from "./h3_rich_prompt_editor_core.mjs?v=0.4.13";
-import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.4.13";
+} from "./h3_rich_prompt_editor_core.mjs?v=0.4.14";
+import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.4.14";
 
 const {publishCompanionScene, rebaseScenePrompt} = promptCompanionSync;
 function publishCompanionPrompt(...args) {

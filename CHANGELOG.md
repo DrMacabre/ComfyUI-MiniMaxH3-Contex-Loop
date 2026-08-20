@@ -2,7 +2,7 @@
 
 Newest first. This file keeps release history out of the onboarding README.
 
-## Unreleased — Prompt editor undo
+## v0.4.14 — Prompt editor undo
 
 - Added shared text-level Ctrl/Cmd+Z and redo history to both dedicated scene
   prompt editors. Undo now survives rich-tag DOM decoration, plain-text paste,
