@@ -116,6 +116,64 @@ This first release does not bulk-delete branches. The leaf-first workflow makes
 the exact context consequences visible and avoids silently orphaning later
 checkpoints.
 
+### Deferred upscale child runs
+
+After loading the complete branch you want in Checkpoint Manager, connect its
+Plan output to **MiniMax H3 Checkpoint Upscale Adapter**. The adapter verifies
+every active parent checkpoint and starts a separate recursive pass without
+changing the source run:
+
+```text
+Checkpoint Manager → Upscale Adapter → Upscale Current Scene
+                                      → backend graph
+                                      → Upscale Segment Save
+                                      → Upscale Loop End → Upscale Merger
+```
+
+**Upscale Current Scene** prefers the optional `denoised_output` saved by
+Segment + Checkpoint and falls back to the terminal sampler latent in older
+checkpoints. It exposes the joint H3 AV latent as well as separate video and
+audio latents:
+
+- Tr1dae/Mamad8 combined-style nodes can consume `source_latent` directly.
+- Video-only LBH-style nodes consume `source_video_latent`; recombine their
+  result with `source_audio_latent` before an H3 refinement pass when that graph
+  expects joint AV. Preserve the parent audio unless intentional audio
+  regeneration is part of the recipe.
+- LTX 2.5 is a decoded-video V2V path, not an H3-latent path. Decode the H3
+  source latent, run the LTX refinement/upscale graph, and send its raw frame
+  batch to Upscale Segment Save.
+
+Send the backend's decoded **raw** frame batch to both Segment Save and Loop
+End. They remove the parent scene's repeated context head exactly once, persist
+the delivered HQ segment, and carry optional HQ context to the next iteration.
+Set a distinct `profile` for each recipe so settings and outputs cannot collide.
+The profile folder is:
+
+```text
+output/h3_chains/<run_name>/upscaled/<profile>/
+├── segments/
+├── checkpoints/
+├── prompts/
+├── audio/
+├── partial/
+├── upscale_manifest.json
+└── final/
+```
+
+`save_latent` defaults off. Segment Save still writes a small verified
+safetensors checkpoint containing the assembly audio, so the child run remains
+resumable and mergeable without duplicating the much larger HQ sampler latent.
+Enable it only when you want to reopen/refine the HQ latent itself. The
+transient `upscaled_latent` connection on Loop End remains usable for scene
+continuity whether or not persistence is enabled.
+
+For new parent renders, connect SamplerCustomAdvanced `denoised_output` to
+Segment + Checkpoint's optional `denoised_latent` input. Existing checkpoints
+remain valid and use their terminal sampler output. Keep the parent branch
+until every selected child scene has been persisted; a completed child profile
+contains its own HQ video segments and audio needed by Upscale Merger.
+
 ## Run Manager
 
 Connect the active Plan output to **MiniMax H3 Run Manager**. It discovers runs
@@ -164,6 +222,7 @@ output/h3_chains/<run_name>/
 ├── checkpoints/clip_0001.<revision>.json
 ├── checkpoints/clip_0001.<revision>.safetensors
 ├── generated_audio/
+├── upscaled/<profile>/
 └── final/<filename>.mp4
 ```
 
