@@ -8,7 +8,7 @@ import {
     promptTextToLines,
     promptValueToText,
     sharedPrompt,
-} from "./h3_chain_plan_core.mjs?v=0.5.1";
+} from "./h3_chain_plan_core.mjs?v=0.5.2";
 import {
     PROMPT_ASSIST_DEFAULT_INSTRUCTIONS,
     PROMPT_ASSIST_MODES,
@@ -17,21 +17,21 @@ import {
     makePromptAssistRequest,
     promptSceneKey,
     promptSourceRevision,
-} from "./h3_prompt_assistant_core.mjs?v=0.5.1";
-import {PromptAssistantClient} from "./h3_prompt_assistant_client.mjs?v=0.5.1";
+} from "./h3_prompt_assistant_core.mjs?v=0.5.2";
+import {PromptAssistantClient} from "./h3_prompt_assistant_client.mjs?v=0.5.2";
 import {
     promptRevisionHelp,
     promptRevisionLabel,
     promptRevisionNavigation,
     promptRevisionTree,
-} from "./h3_prompt_history_core.mjs?v=0.5.1";
-import {availableReferenceRecords} from "./h3_reference_preview_core.mjs?v=0.5.1";
+} from "./h3_prompt_history_core.mjs?v=0.5.2";
+import {availableReferenceRecords} from "./h3_reference_preview_core.mjs?v=0.5.2";
 import {
     PromptUndoHistory,
     promptUndoDirection,
     tokenizeRichPrompt,
-} from "./h3_rich_prompt_editor_core.mjs?v=0.5.1";
-import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.5.1";
+} from "./h3_rich_prompt_editor_core.mjs?v=0.5.2";
+import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.5.2";
 
 const {publishCompanionScene, rebaseScenePrompt} = promptCompanionSync;
 function publishCompanionPrompt(...args) {

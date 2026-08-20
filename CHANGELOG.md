@@ -2,6 +2,12 @@
 
 Newest first. This file keeps release history out of the onboarding README.
 
+## v0.5.2 — Shared checkpoint lineage visibility
+
+- Repeated checkpoint revisions now keep the existing branch layout while
+  receiving a consistent color label and a vertical connector between every
+  branch line that shares the same clip.
+
 ## v0.5.1 — Checkpoint Manager and workflow clarity
 
 - Added experimental **Drift-Control AV** for recursive same-shot chains. It
