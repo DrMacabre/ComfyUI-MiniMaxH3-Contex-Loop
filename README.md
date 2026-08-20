@@ -107,6 +107,7 @@ metadata remain on disk.
 | Use `@tags`, motion references, or Source Timeline | [References and source media](https://github.com/ethanfel/ComfyUI-MiniMaxH3-Contex-Loop/wiki/References-and-Source-Media) |
 | Inpaint, outpaint, extend, or bridge footage | [Masked editing](https://github.com/ethanfel/ComfyUI-MiniMaxH3-Contex-Loop/wiki/Masked-Editing) |
 | Retry, resume, recover, or assemble later | [Review, resume, and recovery](https://github.com/ethanfel/ComfyUI-MiniMaxH3-Contex-Loop/wiki/Review-Resume-and-Recovery) |
+| Upscale a completed checkpoint branch | [Runs, review, and recovery](docs/RUNS_AND_RECOVERY.md#deferred-upscale-child-runs) |
 | Diagnose a problem | [Troubleshooting](https://github.com/ethanfel/ComfyUI-MiniMaxH3-Contex-Loop/wiki/Troubleshooting) |
 | Check where a feature came from | [Feature origins](https://github.com/ethanfel/ComfyUI-MiniMaxH3-Contex-Loop/wiki/Feature-Origins) |
 | Look up Plan fields and implementation details | [Advanced reference](https://github.com/ethanfel/ComfyUI-MiniMaxH3-Contex-Loop/wiki/Advanced-Reference) |
@@ -116,7 +117,10 @@ the [complete Plan format guide](H3_CHAIN_FORMAT_GUIDE.md).
 
 Checkpoint Manager identifies saved takes by scene and inferred branch, previews
 saved media and exact video/audio dependencies, and safely deletes inactive
-leaves one revision at a time. See [Runs, review, and recovery](docs/RUNS_AND_RECOVERY.md).
+leaves one revision at a time. Its Plan and Source Timeline pass-throughs can
+also launch a deferred checkpoint-backed upscale loop; each profile is isolated
+under `upscaled/<profile>`, and saving the large HQ latent is optional. See
+[Runs, review, and recovery](docs/RUNS_AND_RECOVERY.md).
 
 ## Origins and license
 

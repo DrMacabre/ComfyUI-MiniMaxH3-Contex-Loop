@@ -10180,6 +10180,11 @@ class MiniMaxH3ChainSegmentSave:
                                "It contains the retained repeated head followed "
                                "by the normal delivered frames and is saved as "
                                "a separate disk-backed assembly artifact."}),
+                "denoised_latent": ("LATENT", {
+                    "tooltip": "Optional SamplerCustomAdvanced denoised_output. "
+                               "Saved beside the terminal sampler output so a "
+                               "deferred learned upscaler can prefer explicit "
+                               "clean x0 while older checkpoints remain usable."}),
             },
             "hidden": {
                 "prompt": "PROMPT",
@@ -10205,7 +10210,8 @@ class MiniMaxH3ChainSegmentSave:
         return float("NaN")
 
     def save(self, state, images, sampled_latent, audio=None,
-             images_with_overlap=None, prompt=None, extra_pnginfo=None):
+             images_with_overlap=None, denoised_latent=None,
+             prompt=None, extra_pnginfo=None):
         if _st_save is None:
             raise RuntimeError("safetensors is required for H3 chain checkpoints.")
         plan = state["plan"]
@@ -10291,6 +10297,12 @@ class MiniMaxH3ChainSegmentSave:
             "video": parts[0],
             "audio": parts[1],
         }
+        if denoised_latent is not None:
+            denoised = _compact_latent(denoised_latent)["samples"]
+            tensors.update({
+                "denoised_video": denoised[0],
+                "denoised_audio": denoised[1],
+            })
         sample_rate = 0
         if audio is not None:
             waveform, sample_rate = _validate_audio(
@@ -10437,6 +10449,8 @@ class MiniMaxH3ChainSegmentSave:
                 "prompt_hash": str(shot["prompt_hash"]),
                 "seed": str(shot["seed"]),
                 "sample_rate": str(sample_rate),
+                "denoised_latent": (
+                    "true" if denoised_latent is not None else "false"),
                 "audio_with_overlap": str(
                     "audio_with_overlap" in tensors).lower(),
             })

@@ -2,6 +2,23 @@
 
 Newest first. This file keeps release history out of the onboarding README.
 
+## Unreleased — Deferred checkpoint upscaling
+
+- Added a backend-neutral recursive upscale child run: Checkpoint Manager Plan
+  passthrough → Upscale Adapter → Current Scene → H3/LTX/custom backend →
+  Segment Save → Loop End → Merger. Each profile is isolated under the parent
+  run's `upscaled/<profile>` folder with verified resume metadata.
+- Upscale Current Scene prefers an explicitly saved denoised H3 x0 and exposes
+  joint AV plus split video/audio latent routes for combined and video-only
+  learned H3 upscalers. Older terminal-latent checkpoints remain supported,
+  and decoded-video LTX 2.5 passes use the same orchestration.
+- Made persistence of the large HQ latent optional and off by default. A small
+  self-contained assembly/audio checkpoint is still written for reliable
+  resume and final merge.
+- Added a standalone 0.5 learned-H3 2x workflow with Chain Policy and Source
+  Timeline pass-through. It rebuilds scene conditioning, runs a Tr1dae
+  staggered pass-2 loop, and merges the isolated child profile.
+
 ## v0.5.5 — Modern editable-install metadata
 
 - Added an explicit setuptools build backend and disabled accidental discovery

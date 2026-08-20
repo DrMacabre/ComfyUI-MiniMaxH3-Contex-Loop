@@ -751,6 +751,83 @@ def validate_sequential_motion_ref(path):
     return workflow, plan
 
 
+def validate_deferred_h3_upscale(path):
+    workflow = load(path)
+    validate_links(workflow)
+    node_types = {item.get("type") for item in workflow["nodes"]}
+    required = {
+        "MiniMaxH3ChainPolicy",
+        "MiniMaxH3ChainCheckpointManager",
+        "MiniMaxH3ChainUpscaleAdapter",
+        "MiniMaxH3ChainUpscaleCurrent",
+        "MiniMaxH3LatentUpscaleCombined",
+        "MiniMaxH3Pass2StaggeredScheduler",
+        "SamplerCustomAdvanced",
+        "MiniMaxH3ChainUpscaleSegmentSave",
+        "MiniMaxH3ChainUpscaleLoopEnd",
+        "MiniMaxH3ChainUpscaleMerge",
+    }
+    assert required <= node_types
+    assert "MiniMaxH3ChainLoopStart" not in node_types
+    assert "MiniMaxH3ChainContext" not in node_types
+
+    plan = node(workflow, "MiniMaxH3ChainPlan")
+    policy = node(workflow, "MiniMaxH3ChainPolicy")
+    manager = node(workflow, "MiniMaxH3ChainCheckpointManager")
+    adapter = node(workflow, "MiniMaxH3ChainUpscaleAdapter")
+    current = node(workflow, "MiniMaxH3ChainUpscaleCurrent")
+    combined = node(workflow, "MiniMaxH3LatentUpscaleCombined")
+    scheduler = node(workflow, "MiniMaxH3Pass2StaggeredScheduler")
+    sampler = node(workflow, "SamplerCustomAdvanced")
+    saver = node(workflow, "MiniMaxH3ChainUpscaleSegmentSave")
+    loop_end = node(workflow, "MiniMaxH3ChainUpscaleLoopEnd")
+    merger = node(workflow, "MiniMaxH3ChainUpscaleMerge")
+
+    assert policy["widgets_values"] == ["guide", "generated", "off", "on"]
+    assert origin_for_input(
+        workflow, socket(plan["inputs"], "chain_policy")) == policy
+    assert socket(manager["outputs"], "plan")["links"] == [
+        socket(adapter["inputs"], "plan")["link"]]
+    assert socket(manager["outputs"], "source_timeline")["links"] == [
+        socket(adapter["inputs"], "source_timeline")["link"],
+        socket(merger["inputs"], "source_timeline")["link"],
+    ]
+    assert adapter["widgets_values"][0:2] == ["h3_learned_2x", "h3_latent"]
+    assert adapter["widgets_values"][3:7] == [1, 0, False, 18]
+    assert socket(adapter["outputs"], "flow")["links"] == [
+        socket(loop_end["inputs"], "flow")["link"]]
+    assert socket(current["outputs"], "source_latent")["links"] == [
+        socket(combined["inputs"], "samples")["link"]]
+    conditioner = node(workflow, "MiniMaxH3ImageToVideo")
+    for output_name, input_name in (
+            ("prompt", "prompt"), ("width", "width"),
+            ("height", "height"), ("raw_frames", "length")):
+        assert socket(current["outputs"], output_name)["links"] == [
+            socket(conditioner["inputs"], input_name)["link"]]
+    assert scheduler["widgets_values"] == [
+        4, 0.45, 7.0, "karras", 8, "normal"]
+    assert combined["widgets_values"][0] == "learned model"
+    assert combined["widgets_values"][2:] == [0.0, "independent", 0.0]
+    guider = node(workflow, "BasicGuider")
+    assert socket(combined["outputs"], "positive")["links"] == [
+        socket(guider["inputs"], "conditioning")["link"]]
+    assert node(workflow, "KSamplerSelect")["widgets_values"] == ["euler"]
+    assert socket(sampler["outputs"], "output")["links"]
+    assert socket(saver["inputs"], "images")["link"] is not None
+    assert socket(saver["inputs"], "upscaled_latent")["link"] is not None
+    assert socket(loop_end["inputs"], "images")["link"] is not None
+    assert socket(loop_end["inputs"], "upscaled_latent")["link"] is not None
+    assert socket(loop_end["outputs"], "manifest")["links"] == [
+        socket(merger["inputs"], "manifest")["link"]]
+    notes = "\n".join(
+        str(item.get("widgets_values", [""])[0])
+        for item in workflow["nodes"] if item.get("type") == "Note")
+    assert "Load selected branch" in notes
+    assert "save_latent is OFF" in notes
+    assert "ComfyUI-MiniMaxH3_LatentUpscaler" in notes
+    return workflow
+
+
 def main():
     assert EXAMPLES.joinpath("README.md").is_file()
     assert ARCHIVE.joinpath("README.md").is_file()
@@ -770,6 +847,8 @@ def main():
         EXAMPLES / "MiniMax H3 Ref2V - Studio Tagged Source Audio.json")
     sequential_path = (
         EXAMPLES / "EXPERIMENTAL MiniMax H3 Ref2V - Sequential Motion.json")
+    deferred_upscale_path = (
+        EXAMPLES / "MiniMax H3 Deferred Upscale - H3 Learned 2x.json")
     masked_inpaint_path = (
         EXAMPLES / "MiniMax H3 - Masked Video Inpaint.json")
     masked_ref_inpaint_path = (
@@ -788,6 +867,7 @@ def main():
         ref2v_tagged_path.name, ref2v_studio_path.name,
         ref2v_source_audio_path.name,
         sequential_path.name,
+        deferred_upscale_path.name,
         masked_inpaint_path.name,
         masked_ref_inpaint_path.name,
         masked_single_extension_path.name,
@@ -796,6 +876,8 @@ def main():
     }
     for path in EXAMPLES.glob("*.json"):
         workflow = load(path)
+        if path == deferred_upscale_path:
+            continue
         if path == masked_bridge_path:
             validate_links(workflow)
             continue
@@ -837,6 +919,7 @@ def main():
     ]
     sequential, _sequential_plan = validate_sequential_motion_ref(
         sequential_path)
+    deferred_upscale = validate_deferred_h3_upscale(deferred_upscale_path)
     masked_inpaint = load(masked_inpaint_path)
     masked_types = {item["type"] for item in masked_inpaint["nodes"]}
     assert {
@@ -988,9 +1071,9 @@ def main():
             ref2v_basic, ref2v_tagged, ref2v_studio, ref2v_source_audio,
             sequential, masked_inpaint, masked_ref_inpaint,
             masked_single_extension,
-            masked_chain_extension, masked_bridge)
+            masked_chain_extension, masked_bridge, deferred_upscale)
     }
-    assert len(uuids) == 15
+    assert len(uuids) == 16
 
     asset = EXAMPLES / "assets" / "jigen_market_garden_doom_opening.png"
     assert asset.is_file()
@@ -1016,7 +1099,8 @@ def main():
           "Tagged / Studio Tagged / source-timeline audio Ref2VA, "
           "experimental sequential-motion Ref2VA, masked video inpaint, "
           "picture-conditioned masked Ref2VA inpaint, "
-          "looped masked AV extension, and two-ended masked AV bridge; "
+          "looped masked AV extension, two-ended masked AV bridge, and "
+          "deferred learned H3 2x; "
           "valid links, bundled "
           "assets, timeline wiring, six-section prompts, restoration, and "
           "attribution pass")
