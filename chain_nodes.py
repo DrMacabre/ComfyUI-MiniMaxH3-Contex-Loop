@@ -3285,6 +3285,59 @@ def _reference_cache_descriptor(metadata: Any) -> dict[str, Any] | None:
         "tensors", "tensors_sha256")}
 
 
+def _adopt_reference_cache_for_run(
+        plan: dict[str, Any], metadata: Any) -> dict[str, Any]:
+    """Publish a self-contained run-local view of a global cache object."""
+    descriptor = _reference_cache_descriptor(metadata)
+    if descriptor is None:
+        raise ValueError("H3 reference cache cannot be adopted: invalid metadata.")
+    scene = int(metadata.get("scene", 0))
+    if scene < 1 or scene > len(plan["shots"]):
+        raise ValueError(
+            "H3 reference cache scene %d does not belong to this run." % scene)
+    source_tensors = _absolute_output_path(descriptor["tensors"])
+    expected_hash = descriptor["tensors_sha256"]
+    if (not os.path.isfile(source_tensors)
+            or _file_sha256(source_tensors) != expected_hash):
+        raise ValueError(
+            "H3 reference cache cannot be adopted: source tensors failed "
+            "integrity checks.")
+    root = os.path.abspath(os.path.join(_run_dir(plan), "reference_cache"))
+    run_root = os.path.abspath(_run_dir(plan))
+    if os.path.commonpath([run_root, root]) != run_root:
+        raise ValueError("H3 run-local reference cache escapes the run folder.")
+    signature = str(descriptor["signature"])
+    stem = "scene_%04d.%s" % (scene, signature[:24])
+    tensors_path = os.path.join(root, stem + ".safetensors")
+    metadata_path = os.path.join(root, stem + ".json")
+    os.makedirs(root, exist_ok=True)
+    if (not os.path.isfile(tensors_path)
+            or _file_sha256(tensors_path) != expected_hash):
+        temporary = "%s.%s.tmp" % (tensors_path, uuid.uuid4().hex)
+        try:
+            try:
+                os.link(source_tensors, temporary)
+            except OSError:
+                shutil.copy2(source_tensors, temporary)
+            if _file_sha256(temporary) != expected_hash:
+                raise ValueError(
+                    "Run-local H3 reference-cache copy failed verification.")
+            os.replace(temporary, tensors_path)
+        finally:
+            _safe_unlink(temporary)
+    adopted = _json_document(metadata)
+    adopted.update({
+        "run_name": str(plan["run_name"]),
+        "metadata": _relative_output_path(metadata_path),
+        "tensors": _relative_output_path(tensors_path),
+    })
+    _atomic_json(metadata_path, adopted)
+    # Re-open through the public descriptor path so Segment Save never records
+    # a run-local pointer that cannot be loaded independently.
+    return _load_reference_cache_descriptor(
+        _reference_cache_descriptor(adopted))
+
+
 def _load_reference_cache_descriptor(value: Any) -> dict[str, Any]:
     descriptor = _json_document(value)
     if _reference_cache_descriptor(descriptor) is None:
@@ -10931,6 +10984,15 @@ class MiniMaxH3ChainSegmentSave:
                 int(plan["compatibility"]["width"]),
                 int(plan["compatibility"]["height"]),
                 int(shot["raw_frames"]))
+            try:
+                if cache_metadata is not None:
+                    cache_metadata = _adopt_reference_cache_for_run(
+                        plan, cache_metadata)
+            except (OSError, TypeError, ValueError) as exc:
+                _LOG.warning(
+                    "H3 Chain could not adopt scene %d reference cache into "
+                    "the run folder: %s", index, exc)
+                cache_metadata = None
             cache_descriptor = _reference_cache_descriptor(cache_metadata)
             if cache_descriptor is not None:
                 segment["reference_cache"] = cache_descriptor

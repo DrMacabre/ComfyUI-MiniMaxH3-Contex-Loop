@@ -173,10 +173,26 @@ def main():
         cached_source = chain.MiniMaxH3ChainSegmentSave().save(
             state, source_images, av_latent(0.25), audio_for_frames(5),
             denoised_latent=av_latent(0.75))["result"][0]
-        assert cached_source["reference_cache"] == cache_descriptor
+        adopted_cache = cached_source["reference_cache"]
+        assert adopted_cache != cache_descriptor
+        assert adopted_cache["metadata"].startswith(
+            "h3_chains/upscale_test/reference_cache/")
+        assert adopted_cache["tensors"].startswith(
+            "h3_chains/upscale_test/reference_cache/")
+        assert chain._load_reference_cache_descriptor(
+            adopted_cache)["run_name"] == "upscale_test"
+        pathlib.Path(chain._absolute_output_path(
+            cache_descriptor["metadata"])).unlink()
+        pathlib.Path(chain._absolute_output_path(
+            cache_descriptor["tensors"])).unlink()
+        cached_manifest = dict(upscale_state["source_manifest"])
+        cached_manifest["segments"] = [
+            cached_source, cached_manifest["segments"][1]]
+        cached_upscale_state = dict(upscale_state)
+        cached_upscale_state["source_manifest"] = cached_manifest
         cached_conditioning = (
             upscale.MiniMaxH3ChainUpscaleReferenceConditioning().condition(
-                upscale_state, FakeClip(), "error"))
+                cached_upscale_state, FakeClip(), "error"))
         assert cached_conditioning[2] is True
         assert "restored Ref2VA cache" in cached_conditioning[3]
         cached_refs = cached_conditioning[0][0][1]["minimax_refs"]

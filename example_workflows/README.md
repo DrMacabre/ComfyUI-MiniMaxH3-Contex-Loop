@@ -80,12 +80,13 @@ sidecar, integrity record, partial manifest, and final merge remains under
 `output/h3_chains/<run>/upscaled/<profile>/`; enable latent saving only when
 the full HQ sampler latent itself is needed later. Current Tagged and Scheduled
 Ref2VA nodes save the active native VAE/audio reference blocks plus compact
-Qwen presentation frames under
-`output/h3_reference_cache/<reference-fingerprint>/`. The child workflow finds
-the matching scene from the source manifest alone: no Plan, registry, picture,
-video, or reference-audio wire is required. Runs created before this cache was
-introduced use the node's `text_only` fallback; select `error` when an exact
-cached Ref2VA pass is mandatory.
+Qwen presentation frames. Segment Save automatically adopts them under
+`output/h3_chains/<run>/reference_cache/` and records that run-local descriptor
+on the exact source revision. The child workflow therefore finds the matching
+scene from the source manifest alone: no Plan, registry, picture, video, or
+reference-audio wire is required. Runs created before this cache was introduced
+use the node's `text_only` fallback; select `error` when an exact cached Ref2VA
+pass is mandatory.
 
 The masked-video workflow uses the same Chain Loop, checkpoint/review, resume,
 and assembly path as the generation examples. A pack-native source-target node

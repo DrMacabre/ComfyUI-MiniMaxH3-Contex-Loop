@@ -181,6 +181,11 @@ a descriptor can discover a matching cache by `generation_fingerprint`, or
 use the node's `text_only` fallback. Select `error` when the second pass must
 not proceed without cached Ref2VA conditioning.
 
+Segment Save adopts each verified cache object into
+`output/h3_chains/<run_name>/reference_cache/` and records only that run-local
+descriptor. Copying or backing up the parent run therefore preserves everything
+required to rebuild pass-2 Ref2VA conditioning.
+
 Send the backend's decoded **raw** frame batch to both Segment Save and Loop
 End. They remove the parent scene's repeated context head exactly once, persist
 the delivered HQ segment, and carry optional HQ context to the next iteration.
@@ -274,6 +279,7 @@ output/h3_chains/<run_name>/
 ├── checkpoints/clip_0001.<revision>.json
 ├── checkpoints/clip_0001.<revision>.safetensors
 ├── generated_audio/
+├── reference_cache/
 ├── upscaled/<profile>/
 └── final/<filename>.mp4
 ```

@@ -129,10 +129,14 @@ execution of each scene, the wrapper stores the native H3 picture/video/audio
 reference blocks after VAE encoding, together with only the resized Qwen image
 or 2 fps video presentation needed to tokenize the same compiled prompt later.
 The cache is content-addressed by the registry fingerprint plus the scene's
-prompt, frame contract, canvas, and reference sizing mode:
+prompt, frame contract, canvas, and reference sizing mode. Ref2VA first writes
+to a reusable global staging store because it does not require a Plan or
+`run_name` input. Segment Save then hard-links (or copies when linking is not
+available) the verified tensors and publishes authoritative metadata inside
+the corresponding run:
 
 ```text
-output/h3_reference_cache/<reference-fingerprint>/
+output/h3_chains/<run-name>/reference_cache/
   scene_0001.<scene-contract>.safetensors
   scene_0001.<scene-contract>.json
 ```
@@ -140,7 +144,9 @@ output/h3_reference_cache/<reference-fingerprint>/
 The standalone deferred-upscale workflow reads `generation_fingerprint` from
 the selected checkpoint branch and restores the matching scene automatically.
 It does not need the source Plan or any original reference-media connection.
-The safetensors file is SHA-256 verified before use. Disable
+The checkpoint points only to the run-local descriptor, making the run folder
+self-contained for copying, backup, and later upscale. The safetensors file is
+SHA-256 verified before use. Disable
 `cache_for_upscale` only when the extra reference encode and disk cache are not
 wanted. Existing checkpoints made before this feature have no cache; the
 upscale conditioning node can either fall back to text-only conditioning or
