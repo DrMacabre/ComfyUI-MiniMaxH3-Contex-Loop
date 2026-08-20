@@ -759,6 +759,7 @@ def validate_deferred_h3_upscale(path):
         "MiniMaxH3ChainCheckpointManager",
         "MiniMaxH3ChainUpscaleAdapter",
         "MiniMaxH3ChainUpscaleCurrent",
+        "MiniMaxH3ChainUpscaleReferenceConditioning",
         "MiniMaxH3LatentUpscaleCombined",
         "MiniMaxH3Pass2StaggeredScheduler",
         "SamplerCustomAdvanced",
@@ -793,16 +794,20 @@ def validate_deferred_h3_upscale(path):
         socket(loop_end["inputs"], "flow")["link"]]
     assert socket(current["outputs"], "source_latent")["links"] == [
         socket(combined["inputs"], "samples")["link"]]
-    conditioner = node(workflow, "MiniMaxH3ImageToVideo")
-    for output_name, input_name in (
-            ("prompt", "prompt"), ("width", "width"),
-            ("height", "height"), ("raw_frames", "length")):
-        assert socket(current["outputs"], output_name)["links"] == [
-            socket(conditioner["inputs"], input_name)["link"]]
+    conditioner = node(
+        workflow, "MiniMaxH3ChainUpscaleReferenceConditioning")
+    assert socket(current["outputs"], "state")["links"][-1] == socket(
+        conditioner["inputs"], "state")["link"]
+    assert conditioner["widgets_values"] == ["text_only"]
+    assert socket(conditioner["outputs"], "positive")["links"] == [
+        socket(combined["inputs"], "positive")["link"]]
     assert scheduler["widgets_values"] == [
         4, 0.45, 7.0, "karras", 8, "normal"]
     assert combined["widgets_values"][0] == "learned model"
     assert combined["widgets_values"][2:] == [0.0, "independent", 0.0]
+    attention = node(workflow, "ModelAttentionBackend")
+    assert attention["mode"] == 4
+    assert "PYTORCH ATTENTION" in attention["title"]
     guider = node(workflow, "BasicGuider")
     assert socket(combined["outputs"], "positive")["links"] == [
         socket(guider["inputs"], "conditioning")["link"]]
@@ -818,8 +823,8 @@ def validate_deferred_h3_upscale(path):
         str(item.get("widgets_values", [""])[0])
         for item in workflow["nodes"] if item.get("type") == "Note")
     assert "selected_manifest cable is the entire parent-chain contract" in notes
-    assert "no Plan, Source Timeline, source audio, or external context" in notes
-    assert "does not require the original references" in notes
+    assert "no Plan, Source Timeline, source audio, external context" in notes
+    assert "AUTO-RESTORE finds its compact native H3 reference latents" in notes
     assert "save_latent is OFF" in notes
     assert "ComfyUI-MiniMaxH3_LatentUpscaler" in notes
     return workflow

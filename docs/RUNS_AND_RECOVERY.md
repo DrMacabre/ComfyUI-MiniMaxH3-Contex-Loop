@@ -171,6 +171,16 @@ audio latents:
   source latent, run the LTX refinement/upscale graph, and send its raw frame
   batch to Upscale Segment Save.
 
+For H3 pass-2 conditioning, **Upscale Reference Conditioning** first reads the
+exact cache descriptor recorded on the selected source revision. Tagged and
+Scheduled Ref2VA create that cache automatically: native H3 reference latents
+remain in safetensors while compact Qwen presentation frames allow the saved
+compiled prompt to be tokenized again. Thus the child graph needs no reference
+registry or original picture/video/audio connections. Older revisions without
+a descriptor can discover a matching cache by `generation_fingerprint`, or
+use the node's `text_only` fallback. Select `error` when the second pass must
+not proceed without cached Ref2VA conditioning.
+
 Send the backend's decoded **raw** frame batch to both Segment Save and Loop
 End. They remove the parent scene's repeated context head exactly once, persist
 the delivered HQ segment, and carry optional HQ context to the next iteration.

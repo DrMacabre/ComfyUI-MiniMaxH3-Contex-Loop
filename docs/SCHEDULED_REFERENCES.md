@@ -122,6 +122,30 @@ Do not create a fingerprint cycle when a scheduled entry consumes Current Shot,
 such as `source_audio_slice`. Source-track mode already fingerprints the full
 source waveform at Loop Start.
 
+## Automatic deferred-upscale cache
+
+Tagged and Scheduled Ref2VA enable `cache_for_upscale` by default. On the first
+execution of each scene, the wrapper stores the native H3 picture/video/audio
+reference blocks after VAE encoding, together with only the resized Qwen image
+or 2 fps video presentation needed to tokenize the same compiled prompt later.
+The cache is content-addressed by the registry fingerprint plus the scene's
+prompt, frame contract, canvas, and reference sizing mode:
+
+```text
+output/h3_reference_cache/<reference-fingerprint>/
+  scene_0001.<scene-contract>.safetensors
+  scene_0001.<scene-contract>.json
+```
+
+The standalone deferred-upscale workflow reads `generation_fingerprint` from
+the selected checkpoint branch and restores the matching scene automatically.
+It does not need the source Plan or any original reference-media connection.
+The safetensors file is SHA-256 verified before use. Disable
+`cache_for_upscale` only when the extra reference encode and disk cache are not
+wanted. Existing checkpoints made before this feature have no cache; the
+upscale conditioning node can either fall back to text-only conditioning or
+raise an explicit error.
+
 ## Patch priority
 
 If an older compatible H3 Motion Context copy wins process load order, insert

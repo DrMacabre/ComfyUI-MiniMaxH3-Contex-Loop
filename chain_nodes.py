@@ -3025,6 +3025,374 @@ def _replace_conditioning_presentation(
     return merged, status
 
 
+REFERENCE_CACHE_FORMAT = "h3_reference_cache_v1"
+
+
+def _reference_cache_signature(
+        fingerprint: str, scene: int, scene_count: int, prompt: str,
+        compiled_prompt: str, width: int, height: int, length: int,
+        ref_image_size: str, presentation_contract: Any = None) -> str:
+    return _fingerprint({
+        "format": REFERENCE_CACHE_FORMAT,
+        "reference_fingerprint": str(fingerprint),
+        "scene": int(scene),
+        "scene_count": int(scene_count),
+        "prompt": str(prompt),
+        "compiled_prompt": str(compiled_prompt),
+        "width": int(width),
+        "height": int(height),
+        "length": int(length),
+        "ref_image_size": str(ref_image_size),
+        "presentation": presentation_contract,
+    })
+
+
+def _reference_cache_paths(fingerprint: str, scene: int,
+                           signature: str) -> dict[str, str]:
+    safe_fingerprint = _safe_name(str(fingerprint), "references")
+    root = os.path.abspath(os.path.join(
+        _output_root(), "h3_reference_cache", safe_fingerprint))
+    output_root = os.path.abspath(_output_root())
+    if os.path.commonpath([output_root, root]) != output_root:
+        raise ValueError("H3 reference cache path escapes the output folder.")
+    stem = "scene_%04d.%s" % (int(scene), str(signature)[:24])
+    return {
+        "root": root,
+        "tensors": os.path.join(root, stem + ".safetensors"),
+        "metadata": os.path.join(root, stem + ".json"),
+    }
+
+
+def _reference_cache_presentation_contract(presentation: Any) -> Any:
+    if not isinstance(presentation, dict):
+        return None
+    return {
+        "version": presentation.get("version"),
+        "semantic_anchor_size": presentation.get("semantic_anchor_size"),
+        "semantic_anchor_mode": presentation.get("semantic_anchor_mode"),
+        "anchors": [{
+            "tag": item.get("tag"),
+            "timestamps": [str(value) for value in item.get("timestamps", ())],
+        } for item in presentation.get("anchors", ())
+            if isinstance(item, dict)],
+    }
+
+
+def _reference_cache_existing(paths: dict[str, str],
+                              signature: str) -> bool:
+    if not (os.path.isfile(paths["metadata"])
+            and os.path.isfile(paths["tensors"])):
+        return False
+    try:
+        metadata = _read_json(paths["metadata"])
+        return (
+            metadata.get("format") == REFERENCE_CACHE_FORMAT
+            and metadata.get("signature") == signature
+            and metadata.get("tensors_sha256") == _file_sha256(
+                paths["tensors"]))
+    except (OSError, ValueError, json.JSONDecodeError):
+        return False
+
+
+def _h3_encode_reference_audio(audio_vae: Any, audio: Any) -> tuple[Any, int]:
+    waveform, sample_rate = _validate_audio(
+        audio, "H3 reference-cache audio")
+    target_rate = int(getattr(audio_vae, "audio_sample_rate", 32000))
+    if sample_rate != target_rate:
+        try:
+            import torchaudio
+        except ImportError as exc:
+            raise RuntimeError(
+                "H3 reference caching needs torchaudio to resample audio.") from exc
+        waveform = torchaudio.functional.resample(
+            waveform, sample_rate, target_rate)
+    latent = audio_vae.encode(waveform[:1].movedim(1, -1))
+    return latent, int(latent.shape[-1])
+
+
+def _h3_reference_cache_payload(
+        vae: Any, audio_vae: Any, pictures: list[Any],
+        videos: list[dict[str, Any]], audios: list[Any], width: int,
+        height: int, length: int, ref_image_size: str,
+        semantic_presentation: Any = None
+        ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Encode the stock H3 Ref2VA payload before target-layout packing."""
+    frame_count = _h3_aligned_frame_count(length)
+    presentation_items: list[dict[str, Any]] = []
+    reference_blocks: list[dict[str, Any]] = []
+    for image in pictures:
+        resized = _h3_picture_presentation(
+            image, width, height, ref_image_size)
+        latent = vae.encode(resized)
+        presentation_items.append({"type": "image", "data": resized})
+        reference_blocks.append({
+            "kind": "image",
+            "latent_h": int(resized.shape[1]) // 16,
+            "latent_w": int(resized.shape[2]) // 16,
+            "latent": latent,
+        })
+    for source in videos:
+        video = source.get("video") if isinstance(source, dict) else None
+        paired_audio = source.get("audio") if isinstance(source, dict) else None
+        if (torch is None or not torch.is_tensor(video) or video.ndim != 4
+                or int(video.shape[0]) < 5 or int(video.shape[-1]) < 3):
+            raise ValueError(
+                "H3 reference cache received an invalid reference video.")
+        source_height, source_width = int(video.shape[1]), int(video.shape[2])
+        canvas_width, canvas_height = _h3_reference_canvas(
+            source_width, source_height)
+        if source_width * source_height < canvas_width * canvas_height:
+            canvas_width = max(32, round(source_width / 32) * 32)
+            canvas_height = max(32, round(source_height / 32) * 32)
+        frames = _resize(
+            video, canvas_width, canvas_height, "disabled")[:frame_count]
+        usable = int(frames.shape[0])
+        while usable >= 5 and usable % 17 != 5:
+            usable -= 1
+        if usable < 5:
+            raise ValueError(
+                "H3 reference videos need at least 5 usable frames.")
+        frames = frames[:usable]
+        latent = vae.encode(frames)
+        audio_latent, audio_ticks = (None, 0)
+        if paired_audio is not None:
+            audio_latent, audio_ticks = _h3_encode_reference_audio(
+                audio_vae, paired_audio)
+            presentation_items.append({"type": "audio"})
+        sample_indices = list(range(0, usable, FPS // 2))
+        presentation_items.append({
+            "type": "video",
+            "data": frames[sample_indices],
+            "timestamps": [index / 2.0 for index in range(
+                len(sample_indices))],
+        })
+        reference_blocks.append({
+            "kind": "video_audio" if audio_ticks else "video",
+            "latent_t": int(latent.shape[2]),
+            "latent_h": canvas_height // 16,
+            "latent_w": canvas_width // 16,
+            "ref_audio_t": audio_ticks,
+            "latent": latent,
+            "audio_latent": audio_latent,
+        })
+    for audio in audios:
+        audio_latent, audio_ticks = _h3_encode_reference_audio(
+            audio_vae, audio)
+        presentation_items.append({"type": "audio"})
+        reference_blocks.append({
+            "kind": "audio",
+            "ref_audio_t": audio_ticks,
+            "audio_latent": audio_latent,
+        })
+    if semantic_presentation is not None:
+        presentation_items, _status = _semantic_presentation_items(
+            semantic_presentation)
+    return presentation_items, reference_blocks
+
+
+def _cache_reference_scene(
+        *, fingerprint: str, scene: int, scene_count: int, prompt: str,
+        compiled_prompt: str, width: int, height: int, length: int,
+        ref_image_size: str, vae: Any, audio_vae: Any,
+        pictures: list[Any], videos: list[dict[str, Any]], audios: list[Any],
+        semantic_presentation: Any = None) -> str:
+    if _st_save is None or torch is None:
+        raise RuntimeError(
+            "safetensors and torch are required for H3 reference caching.")
+    presentation_contract = _reference_cache_presentation_contract(
+        semantic_presentation)
+    signature = _reference_cache_signature(
+        fingerprint, scene, scene_count, prompt, compiled_prompt, width,
+        height, length, ref_image_size, presentation_contract)
+    paths = _reference_cache_paths(fingerprint, scene, signature)
+    if _reference_cache_existing(paths, signature):
+        return "reference cache reused %s" % signature[:12]
+    presentation, blocks = _h3_reference_cache_payload(
+        vae, audio_vae, pictures, videos, audios, width, height, length,
+        ref_image_size, semantic_presentation)
+    tensors: dict[str, Any] = {}
+    public_presentation = []
+    for index, item in enumerate(presentation):
+        record = {"type": str(item["type"])}
+        if "timestamps" in item:
+            record["timestamps"] = [float(value) for value in item["timestamps"]]
+        data = item.get("data")
+        if data is not None:
+            key = "presentation_%03d" % index
+            tensors[key] = torch.clamp(
+                data.detach().cpu().float(), 0.0, 1.0).mul(255).round().to(
+                    torch.uint8).contiguous()
+            record["data_tensor"] = key
+        public_presentation.append(record)
+    public_blocks = []
+    for index, block in enumerate(blocks):
+        record = {key: value for key, value in block.items()
+                  if key not in ("latent", "audio_latent")}
+        for field in ("latent", "audio_latent"):
+            value = block.get(field)
+            if value is None:
+                continue
+            key = "block_%03d_%s" % (index, field)
+            tensors[key] = value.detach().cpu().contiguous()
+            record[field + "_tensor"] = key
+        public_blocks.append(record)
+    os.makedirs(paths["root"], exist_ok=True)
+    temporary = "%s.%s.tmp" % (paths["tensors"], uuid.uuid4().hex)
+    try:
+        _st_save(tensors, temporary, metadata={
+            "format": REFERENCE_CACHE_FORMAT,
+            "signature": signature,
+        })
+        os.replace(temporary, paths["tensors"])
+    finally:
+        _safe_unlink(temporary)
+    metadata = {
+        "format": REFERENCE_CACHE_FORMAT,
+        "signature": signature,
+        "reference_fingerprint": str(fingerprint),
+        "scene": int(scene),
+        "scene_count": int(scene_count),
+        "prompt": str(prompt),
+        "compiled_prompt": str(compiled_prompt),
+        "width": int(width),
+        "height": int(height),
+        "length": int(length),
+        "ref_image_size": str(ref_image_size),
+        "presentation_contract": presentation_contract,
+        "presentation": public_presentation,
+        "reference_blocks": public_blocks,
+        "metadata": _relative_output_path(paths["metadata"]),
+        "tensors": _relative_output_path(paths["tensors"]),
+        "tensors_sha256": _file_sha256(paths["tensors"]),
+        "created_at": datetime.now(timezone.utc).isoformat(
+            timespec="seconds").replace("+00:00", "Z"),
+    }
+    _atomic_json(paths["metadata"], metadata)
+    return "reference cache saved %s" % signature[:12]
+
+
+def _reference_cache_descriptor(metadata: Any) -> dict[str, Any] | None:
+    if not isinstance(metadata, dict) or metadata.get(
+            "format") != REFERENCE_CACHE_FORMAT:
+        return None
+    required = ("signature", "reference_fingerprint", "metadata", "tensors",
+                "tensors_sha256")
+    if not all(isinstance(metadata.get(key), str) and metadata.get(key)
+               for key in required):
+        return None
+    return {key: metadata[key] for key in (
+        "format", "signature", "reference_fingerprint", "metadata",
+        "tensors", "tensors_sha256")}
+
+
+def _load_reference_cache_descriptor(value: Any) -> dict[str, Any]:
+    descriptor = _json_document(value)
+    if _reference_cache_descriptor(descriptor) is None:
+        raise ValueError("H3 checkpoint reference-cache descriptor is invalid.")
+    metadata_path = _absolute_output_path(descriptor["metadata"])
+    if not os.path.isfile(metadata_path):
+        raise FileNotFoundError(
+            "H3 checkpoint reference-cache metadata is missing: %s" %
+            metadata_path)
+    metadata = _read_json(metadata_path)
+    expected = _reference_cache_descriptor(metadata)
+    if expected is None or expected != descriptor:
+        raise ValueError(
+            "H3 checkpoint reference-cache descriptor does not match disk.")
+    tensor_path = _absolute_output_path(descriptor["tensors"])
+    if (not os.path.isfile(tensor_path) or _file_sha256(tensor_path) !=
+            descriptor["tensors_sha256"]):
+        raise ValueError(
+            "H3 checkpoint reference-cache tensors failed integrity checks.")
+    return metadata
+
+
+def _find_reference_cache(
+        fingerprint: str, scene: int, scene_count: int, prompt: str,
+        width: int, height: int, length: int) -> dict[str, Any] | None:
+    if not str(fingerprint or "").strip():
+        return None
+    root = _reference_cache_paths(fingerprint, scene, "lookup")["root"]
+    if not os.path.isdir(root):
+        return None
+    candidates = []
+    prefix = "scene_%04d." % int(scene)
+    for filename in os.listdir(root):
+        if not (filename.startswith(prefix) and filename.endswith(".json")):
+            continue
+        path = os.path.join(root, filename)
+        try:
+            metadata = _read_json(path)
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+        if (metadata.get("format") != REFERENCE_CACHE_FORMAT
+                or metadata.get("reference_fingerprint") != str(fingerprint)
+                or int(metadata.get("scene", -1)) != int(scene)
+                or int(metadata.get("scene_count", -1)) != int(scene_count)
+                or metadata.get("prompt") != str(prompt)
+                or int(metadata.get("width", -1)) != int(width)
+                or int(metadata.get("height", -1)) != int(height)
+                or int(metadata.get("length", -1)) != int(length)):
+            continue
+        metadata.setdefault("metadata", _relative_output_path(path))
+        candidates.append((os.path.getmtime(path), metadata))
+    if not candidates:
+        return None
+    return max(candidates, key=lambda item: item[0])[1]
+
+
+def _conditioning_from_reference_cache(clip: Any,
+                                       metadata: dict[str, Any]) -> Any:
+    if _st_load is None or torch is None:
+        raise RuntimeError(
+            "safetensors and torch are required to load H3 reference cache.")
+    tensor_path = _absolute_output_path(metadata["tensors"])
+    expected = str(metadata.get("tensors_sha256") or "")
+    if (not os.path.isfile(tensor_path) or not expected
+            or _file_sha256(tensor_path) != expected):
+        raise ValueError("H3 reference cache failed its SHA-256 check.")
+    tensors = _st_load(tensor_path)
+    presentation = []
+    for record in metadata.get("presentation", ()):
+        item = {"type": str(record["type"])}
+        if "timestamps" in record:
+            item["timestamps"] = [float(value) for value in record["timestamps"]]
+        key = record.get("data_tensor")
+        if key:
+            if key not in tensors:
+                raise ValueError(
+                    "H3 reference cache is missing presentation tensor %s." % key)
+            item["data"] = tensors[key].float().div(255.0)
+        presentation.append(item)
+    blocks = []
+    for record in metadata.get("reference_blocks", ()):
+        block = {key: value for key, value in record.items()
+                 if not key.endswith("_tensor")}
+        for field in ("latent", "audio_latent"):
+            key = record.get(field + "_tensor")
+            if key:
+                if key not in tensors:
+                    raise ValueError(
+                        "H3 reference cache is missing %s tensor %s." %
+                        (field, key))
+                block[field] = tensors[key]
+            elif field == "audio_latent" and block.get("kind") == "video":
+                block[field] = None
+        blocks.append(block)
+    prompt = str(metadata.get("compiled_prompt") or "")
+    tokens = clip.tokenize(prompt, minimax_ref_items=presentation)
+    conditioning = clip.encode_from_tokens_scheduled(tokens)
+    if blocks:
+        try:
+            import node_helpers
+        except ImportError as exc:
+            raise RuntimeError(
+                "H3 reference cache conditioning requires ComfyUI node_helpers.") from exc
+        conditioning = node_helpers.conditioning_set_values(
+            conditioning, {"minimax_refs": blocks})
+    return conditioning
+
+
 def _derived_seed(base_seed: int, index: int, shot_id: str) -> int:
     payload = "%d:%d:%s" % (int(base_seed), int(index), shot_id)
     return int.from_bytes(hashlib.sha256(payload.encode("utf-8")).digest()[:8],
@@ -7323,6 +7691,13 @@ class MiniMaxH3ScheduledReferenceToVideo:
                                "supported reference capacity. Failures in CLIP, "
                                "VAE, sampling, or checkpoint execution remain "
                                "real execution errors."}),
+                "cache_for_upscale": ("BOOLEAN", {
+                    "default": True,
+                    "tooltip": "Automatically save the active scene's compact "
+                               "native H3 reference latents and Qwen preview "
+                               "frames. Deferred upscale workflows discover "
+                               "them from the checkpoint fingerprint without "
+                               "reconnecting the original reference media."}),
             },
         }
 
@@ -7361,7 +7736,7 @@ class MiniMaxH3ScheduledReferenceToVideo:
     def apply(self, clip, vae, audio_vae, reference_schedule, clip_index,
               clip_count, prompt, width, height, length,
               ref_image_size="match", state=None,
-              prompt_compliance="strict"):
+              prompt_compliance="strict", cache_for_upscale=True):
         if GraphBuilder is None:
             raise RuntimeError(
                 "Scheduled H3 Ref2VA requires ComfyUI GraphBuilder.")
@@ -7380,9 +7755,11 @@ class MiniMaxH3ScheduledReferenceToVideo:
             ref2va.set_input(
                 "ref_images.ref_image_%d" % index, entry["value"])
         slice_details = []
+        resolved_videos = []
         for index, entry in enumerate(bindings["videos"]):
             video, paired_audio, detail = _scheduled_video_reference_slice(
                 entry, state, clip_index, clip_count, length)
+            resolved_videos.append({"video": video, "audio": paired_audio})
             ref2va.set_input(
                 "ref_videos.ref_video_%d" % index, video)
             if paired_audio is not None:
@@ -7391,7 +7768,9 @@ class MiniMaxH3ScheduledReferenceToVideo:
                     paired_audio)
             if detail:
                 slice_details.append(detail)
+        resolved_audios = []
         for index, entry in enumerate(bindings["audios"]):
+            resolved_audios.append(entry["value"])
             ref2va.set_input(
                 "ref_audios.ref_audio_%d" % index, entry["value"])
         if isinstance(reference_schedule, dict) and reference_schedule.get(
@@ -7405,6 +7784,28 @@ class MiniMaxH3ScheduledReferenceToVideo:
         else:
             raise ValueError(
                 "Scheduled references have no valid schedule fingerprint.")
+        cache_runtime_ready = (
+            callable(getattr(vae, "encode", None))
+            and not isinstance(vae, (str, bytes))
+            and (not resolved_audios and not any(
+                item.get("audio") is not None for item in resolved_videos)
+                 or (callable(getattr(audio_vae, "encode", None))
+                     and not isinstance(audio_vae, (str, bytes)))))
+        if bool(cache_for_upscale) and cache_runtime_ready and (
+                bindings["pictures"] or resolved_videos or resolved_audios):
+            try:
+                cache_status = _cache_reference_scene(
+                    fingerprint=fingerprint, scene=clip_index,
+                    scene_count=clip_count, prompt=prompt,
+                    compiled_prompt=compiled, width=width, height=height,
+                    length=length, ref_image_size=ref_image_size, vae=vae,
+                    audio_vae=audio_vae,
+                    pictures=[entry["value"] for entry in bindings["pictures"]],
+                    videos=resolved_videos, audios=resolved_audios)
+                summary += "; " + cache_status
+            except Exception as exc:
+                _LOG.warning(
+                    "H3 scheduled reference cache was not saved: %s", exc)
         if slice_details:
             summary += "; " + "; ".join(slice_details)
         return {
@@ -7521,7 +7922,13 @@ class MiniMaxH3TaggedReferenceToVideo:
                            "picture_storyboard keeps each tagged image as a "
                            "separate Qwen-only <Picture N> and writes its "
                            "timestamps as approximate prompt instructions. "
-                           "Neither mode creates a VAE reference."}),
+                               "Neither mode creates a VAE reference."}),
+            "cache_for_upscale": ("BOOLEAN", {
+                "default": True,
+                "tooltip": "Automatically save compact native H3 reference "
+                           "latents and Qwen presentation frames for this "
+                           "scene. Deferred upscale discovers the cache from "
+                           "the source checkpoint fingerprint."}),
         }
         return {"required": ordered, "optional": optional}
 
@@ -7567,7 +7974,8 @@ class MiniMaxH3TaggedReferenceToVideo:
               clip_count, prompt, width, height, length,
               ref_image_size="match", state=None,
               reference_policy="strict", semantic_anchor_size="512",
-              semantic_anchor_mode="timestamped_video"):
+              semantic_anchor_mode="timestamped_video",
+              cache_for_upscale=True):
         if GraphBuilder is None:
             raise RuntimeError(
                 "Tagged H3 Ref2VA requires ComfyUI GraphBuilder.")
@@ -7587,6 +7995,7 @@ class MiniMaxH3TaggedReferenceToVideo:
                 "ref_images.ref_image_%d" % index, entry["value"])
         slice_details = []
         presentation_videos = []
+        resolved_videos = []
         for index, entry in enumerate(bindings["videos"]):
             video, paired_audio, detail = _scheduled_video_reference_slice(
                 entry, state, clip_index, clip_count, length)
@@ -7599,11 +8008,14 @@ class MiniMaxH3TaggedReferenceToVideo:
                 "video": video,
                 "paired_audio": paired_audio is not None,
             })
+            resolved_videos.append({"video": video, "audio": paired_audio})
             if detail:
                 slice_details.append(detail)
+        resolved_audios = []
         for index, entry in enumerate(bindings["audios"]):
             audio, detail = _tagged_audio_reference_value(
                 entry, state, clip_index, clip_count, length)
+            resolved_audios.append(audio)
             ref2va.set_input(
                 "ref_audios.ref_audio_%d" % index, audio)
             if detail:
@@ -7618,8 +8030,10 @@ class MiniMaxH3TaggedReferenceToVideo:
         else:
             raise ValueError(
                 "Tagged references have no valid reference fingerprint.")
+        cache_fingerprint = fingerprint
         positive = ref2va.out(0)
         semantic_anchors = bindings.get("semantic_anchors") or []
+        presentation = None
         if semantic_anchors:
             anchor_mode = _semantic_anchor_mode(semantic_anchor_mode)
             anchor_size = str(semantic_anchor_size)
@@ -7653,6 +8067,29 @@ class MiniMaxH3TaggedReferenceToVideo:
                 "semantic_anchor_mode": anchor_mode,
                 "semantic_anchor_size": anchor_size,
             })
+        cache_runtime_ready = (
+            callable(getattr(vae, "encode", None))
+            and not isinstance(vae, (str, bytes))
+            and (not resolved_audios and not any(
+                item.get("audio") is not None for item in resolved_videos)
+                 or (callable(getattr(audio_vae, "encode", None))
+                     and not isinstance(audio_vae, (str, bytes)))))
+        if bool(cache_for_upscale) and cache_runtime_ready and (
+                bindings["pictures"] or resolved_videos or resolved_audios
+                or semantic_anchors):
+            try:
+                cache_status = _cache_reference_scene(
+                    fingerprint=cache_fingerprint, scene=clip_index,
+                    scene_count=clip_count, prompt=prompt,
+                    compiled_prompt=compiled, width=width, height=height,
+                    length=length, ref_image_size=ref_image_size, vae=vae,
+                    audio_vae=audio_vae,
+                    pictures=[entry["value"] for entry in bindings["pictures"]],
+                    videos=resolved_videos, audios=resolved_audios,
+                    semantic_presentation=presentation)
+                summary += "; " + cache_status
+            except Exception as exc:
+                _LOG.warning("H3 tagged reference cache was not saved: %s", exc)
         if slice_details:
             summary += "; " + "; ".join(slice_details)
         return {
@@ -10487,6 +10924,16 @@ class MiniMaxH3ChainSegmentSave:
                 "checkpoint_sha256": _file_sha256(published_checkpoint),
                 "prompt_file_sha256": _file_sha256(published_prompt),
             }
+            cache_metadata = _find_reference_cache(
+                str(plan["compatibility"].get(
+                    "generation_fingerprint") or ""),
+                index, len(plan["shots"]), str(shot["prompt"]),
+                int(plan["compatibility"]["width"]),
+                int(plan["compatibility"]["height"]),
+                int(shot["raw_frames"]))
+            cache_descriptor = _reference_cache_descriptor(cache_metadata)
+            if cache_descriptor is not None:
+                segment["reference_cache"] = cache_descriptor
             context_spatial_proxy = _shot_context_spatial_proxy(shot)
             if context_spatial_proxy != "off":
                 segment["context_spatial_proxy"] = context_spatial_proxy

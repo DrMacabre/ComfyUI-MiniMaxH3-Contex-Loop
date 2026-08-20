@@ -64,23 +64,28 @@ embedded in the manifest.
 
 The loop uses Tr1dae's **MiniMax H3 Latent Upscale Combined 2x**, the learned
 clean-latent path, a four-step staggered refinement schedule at denoise 0.45,
-Euler, and locked parent audio. It rebuilds T2VA text conditioning from every
-saved scene prompt and sends the returned high-resolution conditioning into a
-new Guider. Install
+Euler, and locked parent audio. It restores the scene's automatic Ref2VA cache
+when available, otherwise falls back to text-only conditioning, then sends the
+returned high-resolution conditioning into a new Guider. Install
 [ComfyUI-MiniMaxH3_LatentUpscaler](https://github.com/Tr1dae/ComfyUI-MiniMaxH3_LatentUpscaler)
 before opening the graph.
+
+The included Comfy Kitchen attention override is bypassed intentionally. At
+learned 2x sizes, Sage prequantized attention can exceed its int32 tensor-stride
+range even with ample VRAM; the graph therefore keeps ComfyUI's PyTorch
+attention backend.
 
 `save_latent` is off by default. Every delivered HQ scene, prompt, audio
 sidecar, integrity record, partial manifest, and final merge remains under
 `output/h3_chains/<run>/upscaled/<profile>/`; enable latent saving only when
-the full HQ sampler latent itself is needed later. Reference-heavy Ref2VA
-second passes may need their original reference conditioning added to the
-backend body; this standalone graph intentionally reconstructs T2VA text
-conditioning only.
-The original reference files are optional for the low-denoise learned upscale,
-because the rendered subject and motion already live in the clean latent.
-Reconnect archived references only when intentionally rebuilding exact Ref2VA
-conditioning for the second pass.
+the full HQ sampler latent itself is needed later. Current Tagged and Scheduled
+Ref2VA nodes save the active native VAE/audio reference blocks plus compact
+Qwen presentation frames under
+`output/h3_reference_cache/<reference-fingerprint>/`. The child workflow finds
+the matching scene from the source manifest alone: no Plan, registry, picture,
+video, or reference-audio wire is required. Runs created before this cache was
+introduced use the node's `text_only` fallback; select `error` when an exact
+cached Ref2VA pass is mandatory.
 
 The masked-video workflow uses the same Chain Loop, checkpoint/review, resume,
 and assembly path as the generation examples. A pack-native source-target node

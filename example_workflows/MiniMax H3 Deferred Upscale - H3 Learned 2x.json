@@ -123,7 +123,8 @@
           "type": "H3_CHAIN_UPSCALE_STATE",
           "links": [
             5,
-            6
+            6,
+            16
           ]
         },
         {
@@ -156,23 +157,17 @@
         {
           "name": "prompt",
           "type": "STRING",
-          "links": [
-            16
-          ]
+          "links": null
         },
         {
           "name": "width",
           "type": "INT",
-          "links": [
-            17
-          ]
+          "links": null
         },
         {
           "name": "height",
           "type": "INT",
-          "links": [
-            18
-          ]
+          "links": null
         },
         {
           "name": "seed",
@@ -189,9 +184,7 @@
         {
           "name": "raw_frames",
           "type": "INT",
-          "links": [
-            19
-          ]
+          "links": null
         },
         {
           "name": "delivered_frames",
@@ -273,7 +266,7 @@
       ],
       "flags": {},
       "order": 5,
-      "mode": 0,
+      "mode": 4,
       "inputs": [
         {
           "name": "model",
@@ -290,7 +283,7 @@
           ]
         }
       ],
-      "title": "COMFY KITCHEN ATTENTION",
+      "title": "BYPASSED — USE PYTORCH ATTENTION",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.31.0",
@@ -440,7 +433,6 @@
           "name": "VAE",
           "type": "VAE",
           "links": [
-            14,
             15
           ]
         }
@@ -457,72 +449,36 @@
     },
     {
       "id": 11,
-      "type": "MiniMaxH3ImageToVideo",
+      "type": "MiniMaxH3ChainUpscaleReferenceConditioning",
       "pos": [
         900,
         400
       ],
       "size": [
         520,
-        430
+        300
       ],
       "flags": {},
       "order": 10,
       "mode": 0,
       "inputs": [
         {
+          "name": "state",
+          "type": "H3_CHAIN_UPSCALE_STATE",
+          "link": 16
+        },
+        {
           "name": "clip",
           "type": "CLIP",
           "link": 13
         },
         {
-          "name": "vae",
-          "type": "VAE",
-          "link": 14
-        },
-        {
-          "name": "first_frame",
-          "shape": 7,
-          "type": "IMAGE",
+          "name": "missing_cache",
+          "type": "COMBO",
+          "widget": {
+            "name": "missing_cache"
+          },
           "link": null
-        },
-        {
-          "name": "last_frame",
-          "shape": 7,
-          "type": "IMAGE",
-          "link": null
-        },
-        {
-          "name": "prompt",
-          "type": "STRING",
-          "widget": {
-            "name": "prompt"
-          },
-          "link": 16
-        },
-        {
-          "name": "width",
-          "type": "INT",
-          "widget": {
-            "name": "width"
-          },
-          "link": 17
-        },
-        {
-          "name": "height",
-          "type": "INT",
-          "widget": {
-            "name": "height"
-          },
-          "link": 18
-        },
-        {
-          "name": "length",
-          "type": "INT",
-          "widget": {
-            "name": "length"
-          },
-          "link": 19
         }
       ],
       "outputs": [
@@ -534,22 +490,27 @@
           ]
         },
         {
-          "name": "LATENT",
-          "type": "LATENT",
+          "name": "compiled_prompt",
+          "type": "STRING",
+          "links": null
+        },
+        {
+          "name": "reference_cache_used",
+          "type": "BOOLEAN",
+          "links": null
+        },
+        {
+          "name": "status",
+          "type": "STRING",
           "links": null
         }
       ],
-      "title": "REBUILD PASS-2 T2VA CONDITIONING",
+      "title": "AUTO-RESTORE PASS-2 REF2VA",
       "properties": {
-        "cnr_id": "comfy-core",
-        "ver": "0.30.0",
-        "Node name for S&R": "MiniMaxH3ImageToVideo"
+        "Node name for S&R": "MiniMaxH3ChainUpscaleReferenceConditioning"
       },
       "widgets_values": [
-        "Loaded from saved scene prompt",
-        544,
-        960,
-        124
+        "text_only"
       ],
       "color": "#346434",
       "bgcolor": "rgba(24,24,27,.9)"
@@ -1144,7 +1105,7 @@
         "Node name for S&R": "Note"
       },
       "widgets_values": [
-        "STANDALONE H3 CHECKPOINT UPSCALE\n\n1. Open Checkpoint Manager and select the saved run.\n2. Select the final scene of a COMPLETE branch. The single green selected_manifest cable is the entire parent-chain contract; no Plan, Source Timeline, source audio, or external context enters the upscale loop.\n3. Choose a unique profile in Upscale Adapter. start_clip=1/end_clip=0 processes all scenes.\n4. Queue. Each HQ scene is saved before the loop advances; Merger writes under output/h3_chains/<run>/upscaled/<profile>/final/.\n\nsave_latent is OFF by default. The sampler latent is still carried transiently between scenes, but only the small audio/assembly checkpoint is persisted. Enable it if you need to reopen the HQ latent later.\n\nLow-denoise learned upscale does not require the original references. To reproduce Ref2VA conditioning exactly, reconnect the archived reference media to a Ref2VA backend body. Merger normally recovers audio from the manifest; only legacy source-track runs without a recoverable Source Timeline need the original full AUDIO connected to Merger."
+        "STANDALONE H3 CHECKPOINT UPSCALE\n\n1. Open Checkpoint Manager and select the saved run.\n2. Select the final scene of a COMPLETE branch. The single green selected_manifest cable is the entire parent-chain contract; no Plan, Source Timeline, source audio, external context, or reference-media wires enter the upscale loop.\n3. Choose a unique profile in Upscale Adapter. start_clip=1/end_clip=0 processes all scenes.\n4. Queue. Each HQ scene is saved before the loop advances; Merger writes under output/h3_chains/<run>/upscaled/<profile>/final/.\n\nsave_latent is OFF by default. The sampler latent is still carried transiently between scenes, but only the small audio/assembly checkpoint is persisted. Enable it if you need to reopen the HQ latent later.\n\nTagged/Scheduled Ref2VA now saves a content-addressed scene cache automatically. AUTO-RESTORE finds its compact native H3 reference latents and Qwen presentation frames from the checkpoint fingerprint. Older runs and non-reference chains fall back to text-only by default; choose error on that node when an exact Ref2VA cache is mandatory. Merger normally recovers audio from the manifest; only legacy source-track runs without a recoverable Source Timeline need the original full AUDIO connected to Merger."
       ],
       "title": "HOW TO RUN"
     },
@@ -1169,7 +1130,7 @@
         "Node name for S&R": "Note"
       },
       "widgets_values": [
-        "REQUIRES\nhttps://github.com/Tr1dae/ComfyUI-MiniMaxH3_LatentUpscaler\nIts learned path also uses the sibling Mamad8 architecture pack and downloads the selected learned checkpoint on first use.\n\nThe graph uses the saved denoised x0 when present, otherwise the terminal sampler latent. Combined upscales the JOINT H3 AV latent, re-noises only video, locks pass-1 audio at audio_denoise=0, and returns resized conditioning. The Guider is rebuilt from that returned conditioning.\n\nDefaults: fixed learned 2x, staggered 4-step pass at denoise 0.45, Euler, no latent blur or sharpen. Adjust the pass-2 controls after validating one short profile. This workflow rebuilds T2VA text conditioning from the saved prompt; reference-heavy Ref2VA recipes may need their original reference conditioning wired into the backend body."
+        "REQUIRES\nhttps://github.com/Tr1dae/ComfyUI-MiniMaxH3_LatentUpscaler\nIts learned path also uses the sibling Mamad8 architecture pack and downloads the selected learned checkpoint on first use.\n\nThe graph uses the saved denoised x0 when present, otherwise the terminal sampler latent. Combined upscales the JOINT H3 AV latent, re-noises only video, locks pass-1 audio at audio_denoise=0, and returns resized conditioning. The Guider is rebuilt from that returned conditioning.\n\nDefaults: fixed learned 2x, staggered 4-step pass at denoise 0.45, Euler, no latent blur or sharpen. Adjust the pass-2 controls after validating one short profile. The Comfy Kitchen attention override is intentionally BYPASSED: learned 2x from a ~1 MP source can exceed Sage prequantized int32 stride limits, so use ComfyUI's PyTorch attention backend for this graph. Automatic Ref2VA caching is enabled by default on this pack's Tagged and Scheduled Ref2VA nodes; the source cache lives under output/h3_reference_cache/<fingerprint>/ and is reused without loading the original media."
       ],
       "title": "DEPENDENCY / PASS-2 NOTES"
     }
@@ -1268,16 +1229,8 @@
       9,
       0,
       11,
-      0,
-      "CLIP"
-    ],
-    [
-      14,
-      10,
-      0,
-      11,
       1,
-      "VAE"
+      "CLIP"
     ],
     [
       15,
@@ -1290,34 +1243,10 @@
     [
       16,
       4,
-      6,
+      0,
       11,
-      4,
-      "STRING"
-    ],
-    [
-      17,
-      4,
-      7,
-      11,
-      5,
-      "INT"
-    ],
-    [
-      18,
-      4,
-      8,
-      11,
-      6,
-      "INT"
-    ],
-    [
-      19,
-      4,
-      11,
-      11,
-      7,
-      "INT"
+      0,
+      "H3_CHAIN_UPSCALE_STATE"
     ],
     [
       20,

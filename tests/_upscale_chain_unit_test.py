@@ -53,6 +53,7 @@ def main():
     required = {
         "MiniMaxH3ChainUpscaleAdapter",
         "MiniMaxH3ChainUpscaleCurrent",
+        "MiniMaxH3ChainUpscaleReferenceConditioning",
         "MiniMaxH3ChainUpscaleSegmentSave",
         "MiniMaxH3ChainUpscaleLoopEnd",
         "MiniMaxH3ChainUpscaleMerge",
@@ -138,6 +139,50 @@ def main():
         assert torch.all(current[3]["samples"] == 0.75)
         assert current[7:10] == (32, 32, 7)
         assert "saved denoised x0" in current[-1]
+
+        class FakeVideoVAE:
+            def encode(self, images):
+                return torch.full(
+                    (1, 24, 2, int(images.shape[1]) // 16,
+                     int(images.shape[2]) // 16),
+                    0.625, dtype=torch.float32)
+
+        class FakeClip:
+            def tokenize(self, prompt, **kwargs):
+                return {"prompt": prompt, "presentation": kwargs.get(
+                    "minimax_ref_items", [])}
+
+            def encode_from_tokens_scheduled(self, tokens):
+                return [[torch.zeros((1, 1, 4)), {"tokens": tokens}]]
+
+        cache_status = chain._cache_reference_scene(
+            fingerprint="unit-test", scene=1, scene_count=2,
+            prompt=source["prompt"],
+            compiled_prompt=source["prompt"].replace(
+                "deferred upscale test", "<Picture 1> test"),
+            width=32, height=32, length=5, ref_image_size="match",
+            vae=FakeVideoVAE(), audio_vae=None,
+            pictures=[torch.ones((1, 32, 32, 3))], videos=[], audios=[])
+        assert "reference cache saved" in cache_status
+        cache_metadata = chain._find_reference_cache(
+            "unit-test", 1, 2, source["prompt"], 32, 32, 5)
+        cache_descriptor = chain._reference_cache_descriptor(cache_metadata)
+        assert cache_descriptor is not None
+        assert chain._load_reference_cache_descriptor(
+            cache_descriptor)["signature"] == cache_metadata["signature"]
+        cached_source = chain.MiniMaxH3ChainSegmentSave().save(
+            state, source_images, av_latent(0.25), audio_for_frames(5),
+            denoised_latent=av_latent(0.75))["result"][0]
+        assert cached_source["reference_cache"] == cache_descriptor
+        cached_conditioning = (
+            upscale.MiniMaxH3ChainUpscaleReferenceConditioning().condition(
+                upscale_state, FakeClip(), "error"))
+        assert cached_conditioning[2] is True
+        assert "restored Ref2VA cache" in cached_conditioning[3]
+        cached_refs = cached_conditioning[0][0][1]["minimax_refs"]
+        assert len(cached_refs) == 1
+        assert cached_refs[0]["kind"] == "image"
+        assert torch.all(cached_refs[0]["latent"] == 0.625)
 
         hq_images = torch.zeros((5, 64, 64, 3), dtype=torch.float32)
         saved_result = upscale.MiniMaxH3ChainUpscaleSegmentSave().save(

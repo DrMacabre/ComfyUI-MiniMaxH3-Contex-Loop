@@ -120,7 +120,11 @@ saved media and exact video/audio dependencies, and safely deletes inactive
 leaves one revision at a time. Its Plan and Source Timeline pass-throughs can
 remain connected in generation workflows, while its selected-manifest output
 launches a standalone deferred upscale loop with no source Plan. Each profile
-is isolated under `upscaled/<profile>`, and saving the large HQ latent is optional. See
+is isolated under `upscaled/<profile>`, and saving the large HQ latent is optional.
+Tagged and Scheduled Ref2VA also cache each active scene's native reference
+latents and compact Qwen presentation automatically; the upscale loop restores
+them from the checkpoint fingerprint without original reference-media wires.
+See
 [Runs, review, and recovery](docs/RUNS_AND_RECOVERY.md).
 
 ## Origins and license

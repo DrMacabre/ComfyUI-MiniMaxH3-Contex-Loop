@@ -449,6 +449,90 @@ class MiniMaxH3ChainUpscaleCurrent:
                 state.get("previous_latent"), status)
 
 
+class MiniMaxH3ChainUpscaleReferenceConditioning:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "state": (UPSCALE_STATE_TYPE, {
+                    "tooltip": "Current Upscale state. The node uses only the "
+                               "selected source branch, scene, prompt, and "
+                               "generation fingerprint to discover refs."}),
+                "clip": ("CLIP", {
+                    "tooltip": "MiniMax H3 text encoder used to rebuild the "
+                               "cached Ref2VA presentation at pass 2."}),
+                "missing_cache": (("text_only", "error"), {
+                    "default": "text_only",
+                    "tooltip": "text_only keeps non-reference and older runs "
+                               "usable when no matching cache exists. error "
+                               "requires the exact automatic Ref2VA cache."}),
+            },
+        }
+
+    RETURN_TYPES = ("CONDITIONING", "STRING", "BOOLEAN", "STRING")
+    RETURN_NAMES = (
+        "positive", "compiled_prompt", "reference_cache_used", "status")
+    OUTPUT_TOOLTIPS = (
+        "Pass-2 H3 conditioning rebuilt from cached native Ref2VA latents, or "
+        "text-only conditioning under the selected fallback policy.",
+        "Exact cached prompt after @tag compilation, or the saved source prompt.",
+        "True when native reference blocks and Qwen presentation were restored.",
+        "Scene-local cache lookup result and fingerprint summary.",
+    )
+    FUNCTION = "condition"
+    CATEGORY = "conditioning/minimax/contex_loop/upscale"
+    DESCRIPTION = (
+        "Automatically restore the exact scene-local H3 reference payload "
+        "saved during source Ref2VA generation. No Plan, reference registry, "
+        "source audio, or original image/video wires are needed in the "
+        "deferred upscale workflow.")
+
+    def condition(self, state, clip, missing_cache="text_only"):
+        source = _source_segment(state)
+        manifest = state["source_manifest"]
+        compatibility = manifest.get("compatibility") or {}
+        fingerprint = str(
+            compatibility.get("generation_fingerprint") or "")
+        scene = int(state["index"])
+        scene_count = len(manifest["segments"])
+        prompt = str(source.get("prompt") or "")
+        width = int(compatibility.get("width", 0))
+        height = int(compatibility.get("height", 0))
+        length = int(source.get("raw_frames", 0))
+        descriptor = source.get("reference_cache")
+        cached = (chain._load_reference_cache_descriptor(descriptor)
+                  if isinstance(descriptor, dict) else
+                  chain._find_reference_cache(
+                      fingerprint, scene, scene_count, prompt, width, height,
+                      length))
+        if cached is not None:
+            conditioning = chain._conditioning_from_reference_cache(
+                clip, cached)
+            compiled = str(cached.get("compiled_prompt") or prompt)
+            status = (
+                "scene %d/%d restored Ref2VA cache %s (%d blocks, %d "
+                "presentation items)" % (
+                    scene, scene_count, str(cached.get("signature") or "")[:12],
+                    len(cached.get("reference_blocks") or ()),
+                    len(cached.get("presentation") or ())))
+            return conditioning, compiled, True, status
+        if str(missing_cache) == "error":
+            raise FileNotFoundError(
+                "No automatic H3 reference cache matches source scene %d. "
+                "This branch may predate reference caching; render that source "
+                "scene once with Tagged/Scheduled Ref2VA cache_for_upscale "
+                "enabled, or choose text_only." % scene)
+        tokens = clip.tokenize(prompt)
+        conditioning = clip.encode_from_tokens_scheduled(tokens)
+        status = (
+            "scene %d/%d has no matching Ref2VA cache; rebuilt text-only "
+            "conditioning%s" % (
+                scene, scene_count,
+                " (generation fingerprint %s)" % fingerprint[:12]
+                if fingerprint else ""))
+        return conditioning, prompt, False, status
+
+
 class MiniMaxH3ChainUpscaleSegmentSave:
     @classmethod
     def INPUT_TYPES(cls):
@@ -972,6 +1056,8 @@ class MiniMaxH3ChainUpscaleMerge:
 UPSCALE_NODE_CLASS_MAPPINGS = {
     "MiniMaxH3ChainUpscaleAdapter": MiniMaxH3ChainUpscaleAdapter,
     "MiniMaxH3ChainUpscaleCurrent": MiniMaxH3ChainUpscaleCurrent,
+    "MiniMaxH3ChainUpscaleReferenceConditioning": (
+        MiniMaxH3ChainUpscaleReferenceConditioning),
     "MiniMaxH3ChainUpscaleSegmentSave": MiniMaxH3ChainUpscaleSegmentSave,
     "MiniMaxH3ChainUpscaleLoopEnd": MiniMaxH3ChainUpscaleLoopEnd,
     "MiniMaxH3ChainUpscaleMerge": MiniMaxH3ChainUpscaleMerge,
@@ -980,6 +1066,8 @@ UPSCALE_NODE_CLASS_MAPPINGS = {
 UPSCALE_NODE_DISPLAY_NAME_MAPPINGS = {
     "MiniMaxH3ChainUpscaleAdapter": "MiniMax H3 Checkpoint Upscale Adapter",
     "MiniMaxH3ChainUpscaleCurrent": "MiniMax H3 Upscale Current Scene",
+    "MiniMaxH3ChainUpscaleReferenceConditioning": (
+        "MiniMax H3 Upscale Reference Conditioning"),
     "MiniMaxH3ChainUpscaleSegmentSave": "MiniMax H3 Upscale Segment Save",
     "MiniMaxH3ChainUpscaleLoopEnd": "MiniMax H3 Upscale Loop End",
     "MiniMaxH3ChainUpscaleMerge": "MiniMax H3 Upscale Merger",
