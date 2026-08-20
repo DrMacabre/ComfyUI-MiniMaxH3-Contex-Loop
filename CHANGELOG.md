@@ -11,6 +11,20 @@ Newest first. This file keeps release history out of the onboarding README.
   **Low-grid 5/6 · Guide** instead of implying a simple RGB resize. Existing
   AV latent-prefix proxy behavior is unchanged.
 
+- Added a Plan-passthrough Checkpoint Manager that browses every saved run by
+  scene and inferred revision branch, previews saved video/audio, and exposes
+  prompts, seeds, frame counts, compatibility data, storage, lineage, and the
+  exact incoming video/audio context for each revision.
+- Added dependency-aware cleanup. Active revisions and revisions used by later
+  scenes are protected; the manager identifies every dependent scene and lets
+  users work backward from a leaf one revision at a time.
+- Added a two-step deletion contract shared with Review Gate. The server
+  previews every owned/shared file and preserved archive category, then rejects
+  confirmation if files, active pointers, or descendants changed in between.
+- New checkpoints persist creation time, effective continuation context, and a
+  stable branch identity so future runs need less lineage inference while old
+  checkpoint folders remain fully discoverable.
+
 - Made titles, active controls, and rich reference tags derive their semantic
   colors from the active ComfyUI foreground. Both scene prompt editors retain
   their pastel dark-theme palette while gaining readable contrast in light

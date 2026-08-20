@@ -112,6 +112,10 @@ metadata remain on disk.
 Repository-native references remain available under [`docs/`](docs/) and in
 the [complete Plan format guide](H3_CHAIN_FORMAT_GUIDE.md).
 
+Checkpoint Manager identifies saved takes by scene and inferred branch, previews
+saved media and exact video/audio dependencies, and safely deletes inactive
+leaves one revision at a time. See [Runs, review, and recovery](docs/RUNS_AND_RECOVERY.md).
+
 ## Origins and license
 
 This project began with **NikoDemon80's**
