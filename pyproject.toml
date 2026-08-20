@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "comfyui-minimaxh3-contex-loop"
 description = "Recursive, checkpointed MiniMax H3 scene loops with motion/audio context, audiovisual review, resume, and final assembly for ComfyUI."
-version = "0.4.19"
+version = "0.4.20"
 license = "GPL-3.0"
 license-files = ["LICENSE"]
 readme = "README.md"
