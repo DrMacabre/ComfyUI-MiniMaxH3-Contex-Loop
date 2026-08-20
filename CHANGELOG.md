@@ -2,6 +2,13 @@
 
 Newest first. This file keeps release history out of the onboarding README.
 
+## Unreleased — Prompt editor undo
+
+- Added shared text-level Ctrl/Cmd+Z and redo history to both dedicated scene
+  prompt editors. Undo now survives rich-tag DOM decoration, plain-text paste,
+  toolbar insertion, Plan synchronization, and switching between rich and
+  plain presentation.
+
 ## v0.4.13 — Native mask readiness gate
 
 - Fixed the masked-AV preflight after merged PR #15375 removed

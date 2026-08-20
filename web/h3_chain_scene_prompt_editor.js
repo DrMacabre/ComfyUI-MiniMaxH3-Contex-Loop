@@ -24,7 +24,11 @@ import {
     promptRevisionNavigation,
 } from "./h3_prompt_history_core.mjs?v=0.4.13";
 import {availableReferenceRecords} from "./h3_reference_preview_core.mjs?v=0.4.13";
-import {tokenizeRichPrompt} from "./h3_rich_prompt_editor_core.mjs?v=0.4.13";
+import {
+    PromptUndoHistory,
+    promptUndoDirection,
+    tokenizeRichPrompt,
+} from "./h3_rich_prompt_editor_core.mjs?v=0.4.13";
 import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.4.13";
 
 const {publishCompanionScene, rebaseScenePrompt} = promptCompanionSync;
@@ -615,6 +619,9 @@ function mount(node) {
             savePromise: null,
             error: "",
         },
+        undoByScene: new Map(),
+        promptUndo: null,
+        richInputType: "",
         pollTimer: null,
     };
     node._h3ScenePromptEditorState = state;
@@ -703,6 +710,22 @@ function mount(node) {
 
     function historySceneKey(runName, shotId) {
         return `${runName}\u0000${shotId}`;
+    }
+
+    function promptUndoForScene(shotId, text, {external = false} = {}) {
+        const key = historySceneKey(planRunName(), shotId);
+        let history = state.undoByScene.get(key);
+        if (!history) {
+            history = new PromptUndoHistory(text);
+            state.undoByScene.set(key, history);
+        } else if (external) {
+            // Plan Studio republishes the active prompt after non-prompt edits.
+            // Preserve undo when that synchronized text did not actually change.
+            history.align(text);
+        } else {
+            history.align(text);
+        }
+        return history;
     }
 
     async function historyRequest(query = {}, body = null) {
@@ -885,6 +908,9 @@ function mount(node) {
             history.revisionId = payload.revision.id;
             history.error = "";
             history.textarea.value = String(payload.revision.prompt ?? "");
+            state.promptUndo?.record(history.textarea.value, {
+                inputType: "insertReplacementText",
+            });
             renderRichEditorText(history.textarea.value);
             shot.prompt = promptTextToLines(history.textarea.value);
             writePlan(history.status);
@@ -1763,6 +1789,7 @@ function mount(node) {
         textarea.title = "This is the actual active scene prompt in the connected H3 Chain Plan.";
         textarea.classList.toggle("h3sp-hidden", state.decorated);
         state.promptTextarea = textarea;
+        state.promptUndo = promptUndoForScene(shotId, textarea.value);
 
         const {records} = availableReferenceRecords(
             node, state.active + 1, {prompt: [
@@ -1826,7 +1853,36 @@ function mount(node) {
         state.history.textarea = textarea;
         state.history.status = status;
 
-        textarea.addEventListener("input", () => {
+        const applyPromptUndo = (direction, target) => {
+            const text = state.promptUndo?.[direction]?.();
+            if (text == null) return false;
+            const richCaret = target === richEditor
+                ? selectionTextOffset(richEditor) : null;
+            textarea.value = text;
+            shot.prompt = promptTextToLines(text);
+            writePlan(status);
+            scheduleHistoryDraft(shotId, text);
+            renderRichEditorText(
+                text,
+                richCaret == null ? null : Math.min(richCaret, text.length),
+            );
+            if (target === textarea) textarea.setSelectionRange(text.length, text.length);
+            target.focus();
+            refreshAssistant();
+            return true;
+        };
+        const handlePromptUndo = (event, target) => {
+            const direction = promptUndoDirection(event);
+            if (!direction) return false;
+            event.preventDefault();
+            applyPromptUndo(direction, target);
+            return true;
+        };
+
+        textarea.addEventListener("input", (event) => {
+            state.promptUndo?.record(textarea.value, {
+                inputType:event.inputType || state.richInputType,
+            });
             shot.prompt = promptTextToLines(textarea.value);
             writePlan(status);
             scheduleHistoryDraft(shotId, textarea.value);
@@ -1834,7 +1890,9 @@ function mount(node) {
             refreshAssistant();
         });
         textarea.addEventListener("keydown", (event) => {
-            if (event.altKey && event.key === "ArrowLeft") {
+            if (handlePromptUndo(event, textarea)) {
+                return;
+            } else if (event.altKey && event.key === "ArrowLeft") {
                 event.preventDefault();
                 navigate(-1);
             } else if (event.altKey && event.key === "ArrowRight") {
@@ -1851,9 +1909,14 @@ function mount(node) {
             }
         });
 
-        richEditor.addEventListener("input", () => {
-            textarea.value = editorPlainText(richEditor);
-            textarea.dispatchEvent(new Event("input", {bubbles: true}));
+        richEditor.addEventListener("input", (event) => {
+            state.richInputType = event.inputType || "";
+            try {
+                textarea.value = editorPlainText(richEditor);
+                textarea.dispatchEvent(new Event("input", {bubbles: true}));
+            } finally {
+                state.richInputType = "";
+            }
         });
         richEditor.addEventListener("beforeinput", (event) => {
             if (event.inputType === "insertParagraph" || event.inputType === "insertLineBreak") {
@@ -1868,7 +1931,9 @@ function mount(node) {
         richEditor.addEventListener("copy", (event) => copyEditorSelection(richEditor, event));
         richEditor.addEventListener("cut", (event) => copyEditorSelection(richEditor, event, true));
         richEditor.addEventListener("keydown", (event) => {
-            if (event.altKey && event.key === "ArrowLeft") {
+            if (handlePromptUndo(event, richEditor)) {
+                return;
+            } else if (event.altKey && event.key === "ArrowLeft") {
                 event.preventDefault();
                 navigate(-1);
             } else if (event.altKey && event.key === "ArrowRight") {
@@ -2005,6 +2070,12 @@ function mount(node) {
     node._h3PromptCompanionSetScenePrompt = (planNode, index, text) => {
         if (planNode !== state.planNode || !state.plan?.shots?.[index]) return false;
         state.plan.shots[index].prompt = promptTextToLines(text);
+        const shotId = String(
+            state.plan.shots[index].id
+            || `clip_${String(index + 1).padStart(4, "0")}`,
+        );
+        const promptUndo = promptUndoForScene(shotId, text, {external:true});
+        if (index === state.active) state.promptUndo = promptUndo;
         if (index === state.active) {
             const textarea = root.querySelector(".h3sp-textarea");
             if (textarea && textarea.value !== text) {
