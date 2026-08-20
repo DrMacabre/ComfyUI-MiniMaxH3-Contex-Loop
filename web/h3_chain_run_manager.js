@@ -7,7 +7,7 @@ import {
     assetInputNumber,
     collectAssetBindings,
     nodeType,
-} from "./h3_run_assets_core.mjs?v=0.4.15";
+} from "./h3_run_assets_core.mjs?v=0.4.16";
 
 const NODE_NAME = "MiniMaxH3ChainRunManager";
 const PLAN_NAME = "MiniMaxH3ChainPlan";

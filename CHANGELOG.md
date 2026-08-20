@@ -2,7 +2,7 @@
 
 Newest first. This file keeps release history out of the onboarding README.
 
-## Unreleased — Checkpoint Manager
+## v0.4.16 — Checkpoint Manager
 
 - Added a Plan-passthrough Checkpoint Manager that browses every saved run by
   scene and inferred revision branch, previews saved video/audio, and exposes
