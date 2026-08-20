@@ -75,6 +75,7 @@ the completed predecessor.
 | `latent_guide` | direct sampled-latent guide rows; RGB fallback | 22 frames |
 | `detail_guide` | tapered chroma-noise guide rows | 22 frames |
 | `detail_av` | protected disposable video-latent noise taper; audio unchanged | 39 frames |
+| `drift_av` | per-evaluation next-sigma video mask with an 8+4 clean-seam taper | 39 frames |
 | `hard_av` | protected AV prefix | 39 frames |
 | `soft_av` | exact picture prefix with feathered audio release | 39 frames |
 
@@ -93,6 +94,14 @@ the final four steps. Audio and masks retain Hard AV semantics. The recipe
 version,
 parameters, and deterministic seed rule are part of `incoming_boundary`, so a
 resume cannot silently cross an implementation change.
+
+Drift-Control AV keeps the predecessor latent clean and changes only the
+disposable incoming prefix mask. For each model evaluation it resolves the next
+strictly lower scheduler sigma, applies `next/current` to the oldest eight
+video steps, and tapers the final four `.75/.50/.25/.00`. Chain Context's MODEL
+output couples the sampler-side inpaint blend to H3's per-row timestep mask;
+using only one of those paths would give the model a mislabeled prefix. The
+recipe is dependency-hashed and initially validated at 20 steps.
 
 ## Scene dependency contract
 

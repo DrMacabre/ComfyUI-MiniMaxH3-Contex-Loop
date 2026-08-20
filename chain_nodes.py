@@ -100,6 +100,7 @@ from .contracts_v05 import (
     CONTEXT_SPATIAL_PROXY_RECIPE,
     CONTINUATION_POLICIES,
     DETAIL_AV_RECIPE,
+    DRIFT_CONTROL_AV_RECIPE,
     DEPENDENCY_SCOPES,
     FINAL_AUDIO_POLICIES,
     GENERATED_CONTINUITY_POLICIES,
@@ -147,11 +148,13 @@ H3_CONTEXT_LENGTHS = (
 AUDIO_MODES = ("source_track", "generated_audio", "source_plus_timeline")
 CONTINUATION_MODES = (
     "guide", "tone_carry_guide", "latent_guide", "tapered_guide",
-    "masked_av", "tapered_av", "feathered_av", "audio_feathered_av")
+    "masked_av", "tapered_av", "feathered_av", "audio_feathered_av",
+    "drift_control_av")
 GUIDE_CONTINUATION_MODES = frozenset((
     "guide", "tone_carry_guide", "latent_guide", "tapered_guide"))
 MASKED_CONTINUATION_MODES = frozenset((
-    "masked_av", "tapered_av", "feathered_av", "audio_feathered_av"))
+    "masked_av", "tapered_av", "feathered_av", "audio_feathered_av",
+    "drift_control_av"))
 RGB_PROXY_GUIDE_MODES = frozenset((
     "guide", "tone_carry_guide", "tapered_guide"))
 REFERENCE_AUDIO_TIMELINE_MODES = ("standalone", "source_timeline")
@@ -296,7 +299,7 @@ def _resolved_transition_policy(value: Any) -> dict[str, Any]:
     preset = "legacy"
     for candidate in (
             "cut", "guide", "tone_guide", "latent_guide", "detail_guide",
-            "detail_av", "hard_av", "soft_av",
+            "detail_av", "drift_av", "hard_av", "soft_av",
             "audio_feather_av"):
         resolved = _contract_transition_policy(candidate)
         if (resolved["continuation_mode"] == mode and
@@ -329,6 +332,7 @@ def _transition_policy_display(value: Any) -> str:
         "latent_guide": "Latent Guide",
         "detail_guide": "Detail Guide",
         "detail_av": "Detail AV",
+        "drift_av": "Drift-Control AV",
         "hard_av": "Hard AV",
         "soft_av": "Soft AV",
         "audio_feather_av": "Audio Feather AV (legacy alias)",
@@ -343,6 +347,7 @@ def _transition_policy_display(value: Any) -> str:
         "tapered_av": "Tapered AV",
         "feathered_av": "Feathered AV",
         "audio_feathered_av": "Audio-Feathered AV",
+        "drift_control_av": "Drift-Control AV",
     }
     preset = str(policy["preset"])
     implementation = str(policy["continuation_mode"])
@@ -3470,6 +3475,9 @@ def _scene_dependency_record(
     if transition == "tapered_av":
         scopes["incoming_boundary"]["detail_av_recipe"] = dict(
             DETAIL_AV_RECIPE)
+    if transition == "drift_control_av":
+        scopes["incoming_boundary"]["drift_control_av_recipe"] = dict(
+            DRIFT_CONTROL_AV_RECIPE)
     fingerprints = {scope: _fingerprint(scopes[scope])
                     for scope in DEPENDENCY_SCOPES}
     generation_hash = _fingerprint({
@@ -4218,6 +4226,13 @@ def _normalize_plan(
                     "H3 Detail AV currently requires exactly %d context "
                     "frames (shot %d)." %
                     (int(DETAIL_AV_RECIPE["context_frames"]), index))
+            if (shot_continuation_mode == "drift_control_av" and
+                    shot_context_length != int(
+                        DRIFT_CONTROL_AV_RECIPE["context_frames"])):
+                raise ValueError(
+                    "H3 Drift-Control AV currently requires exactly %d "
+                    "context frames (shot %d)." %
+                    (int(DRIFT_CONTROL_AV_RECIPE["context_frames"]), index))
         if (shot_context_length and
                 shot_continuation_mode == "latent_guide"):
             if shot_context_length < 5:
@@ -7877,7 +7892,8 @@ class MiniMaxH3TransitionPolicy:
             "required": {
                 "preset": ((
                         "cut", "guide", "tone_guide", "latent_guide",
-                        "detail_guide", "detail_av", "hard_av", "soft_av"
+                        "detail_guide", "detail_av", "drift_av", "hard_av",
+                        "soft_av"
                 ), {
                     "default": "guide",
                     "tooltip": "Incoming-transition presets: Cut = "
@@ -7893,6 +7909,9 @@ class MiniMaxH3TransitionPolicy:
                                "Detail AV = disposable video-latent Gaussian "
                                "taper + hard AV mask + 39 frames "
                                "(experimental); "
+                               "Drift-Control AV = schedule-matched video "
+                               "prefix noise + an 8+4 clean-seam taper + "
+                               "39 frames (experimental 20-step baseline); "
                                "Hard AV = Masked AV + 39 frames; Soft AV = "
                                "hard picture + half-cosine audio release + "
                                "39 frames. The older dual-stream Feathered "
@@ -7911,7 +7930,9 @@ class MiniMaxH3TransitionPolicy:
                         "default": "guide",
                         "tooltip": "Expert only. Low-level continuation "
                                    "implementation used when override is on. "
-                                   "Detail AV resolves to tapered_av; Hard AV "
+                                   "Detail AV resolves to tapered_av; Drift-"
+                                   "Control AV resolves to drift_control_av; "
+                                   "Hard AV "
                                    "resolves to masked_av; Soft AV "
                                    "resolves to audio_feathered_av. The low-"
                                    "level feathered_av implementation softens "
@@ -7926,6 +7947,8 @@ class MiniMaxH3TransitionPolicy:
                                    "shared AV boundary: 39, 90, 141, 192, or "
                                    "243 frames. "
                                    "Detail AV v2 requires exactly 39 frames. "
+                                   "Drift-Control AV v1 also requires exactly "
+                                   "39 frames. "
                                    "Tapered Guide accepts any listed Guide "
                                    "length, but only 22 frames has published "
                                    "validation."}),
@@ -7964,6 +7987,10 @@ class MiniMaxH3TransitionPolicy:
         elif policy["preset"] == "detail_av":
             status += (
                 "; experimental preset; clean-boundary latent taper v2 at 39f")
+        elif policy["preset"] == "drift_av":
+            status += (
+                "; experimental preset; schedule-matched 8+4 mask at 39f; "
+                "20-step baseline")
         else:
             status += "; tested preset"
         return (policy, policy["continuation_mode"],
@@ -8152,8 +8179,8 @@ class MiniMaxH3ChainPlan:
                                "previous-scene video frames used to "
                                "continue motion. Use 22 for guide mode and 39 "
                                "for masked_av, tapered_av, feathered_av, or "
-                               "audio_feathered_av so the AV clocks "
-                               "meet exactly. "
+                               "audio_feathered_av/drift_control_av so the AV "
+                               "clocks meet exactly. "
                                "A scene's Advanced selector can override this; "
                                "blank inherits it and 0 starts a visually new scene. "
                                "Audio context is controlled separately. With head "
@@ -8296,6 +8323,11 @@ class MiniMaxH3ChainPlan:
                                "audio_feathered_av keeps the picture prefix "
                                "hard while releasing only the last eight "
                                "audio latent ticks with a half-cosine ramp. "
+                               "drift_control_av keeps the clean predecessor "
+                               "checkpoint unchanged but applies a per-model-"
+                               "evaluation, next-sigma video mask with an "
+                               "8+4 clean-seam taper; it requires the H3 MODEL "
+                               "to pass through Chain Context. "
                                "All AV modes "
                                "require video/head, context >= 5, "
                                "the Chain Context latent output wired to the "
@@ -9954,12 +9986,18 @@ class MiniMaxH3ChainContext:
                                "reuse their saved AV latent directly. It may be "
                                "left disconnected for visual-only context or "
                                "when generated continuity is off."}),
+                "model": ("MODEL", {
+                    "tooltip": "Required only by Drift-Control AV. Connect "
+                               "the MiniMax H3 MODEL before the sampler, then "
+                               "use Chain Context's model output for every "
+                               "sampler stage. Other continuation modes pass "
+                               "this MODEL through unchanged."}),
             }
         }
 
-    RETURN_TYPES = ("CONDITIONING", "INT", "BOOLEAN", "LATENT")
+    RETURN_TYPES = ("CONDITIONING", "INT", "BOOLEAN", "LATENT", "MODEL")
     RETURN_NAMES = ("conditioning", "trim_frames", "is_continuation",
-                    "latent")
+                    "latent", "model")
     OUTPUT_TOOLTIPS = (
         "Conditioning ready for the H3 guider/sampler: scene 1 passes through "
         "unless Existing Video Context seeds it; later scenes use their "
@@ -9972,18 +10010,23 @@ class MiniMaxH3ChainContext:
         "unchanged. In an AV mask mode its preserved prefix and nested "
         "denoise mask carry the previous scene into the current target. Wire "
         "this output to the sampler so Plan can switch safely.",
+        "H3 MODEL patched only while Drift-Control AV is active; otherwise "
+        "the optional input MODEL passes through unchanged. Connect this to "
+        "every sampler stage when the Plan contains Drift-Control AV.",
     )
     FUNCTION = "apply"
     CATEGORY = "conditioning/minimax/contex_loop"
     DESCRIPTION = ("Apply each scene's inherited or overridden RGB guide, "
                    "tone-carry RGB guide, latent guide, masked AV, full AV "
-                   "latent taper, feather, or audio-only "
+                   "latent taper, schedule-matched drift control, feather, or "
+                   "audio-only "
                    "AV feather, "
                    "including "
                    "independent guide audio carry and scene 1 Existing Video "
                    "Context.")
 
-    def apply(self, state, conditioning, vae, latent, audio_vae=None):
+    def apply(self, state, conditioning, vae, latent, audio_vae=None,
+              model=None):
         index = int(state["index"])
         plan = state["plan"]
         cfg = plan["compatibility"]
@@ -10002,19 +10045,33 @@ class MiniMaxH3ChainContext:
             and audio_context_length > 0)
         has_context = context_length > 0 or generated_audio_context
         if not has_context or (index == 1 and not external_first):
-            if any(
+            masked_required = any(
                     candidate.get(
                         "continuation_mode",
                         cfg.get("continuation_mode", "guide"))
                     in MASKED_CONTINUATION_MODES
                     and _shot_context_length(
                         candidate, int(cfg["context_length"])) > 0
-                    for candidate in plan["shots"]):
+                    for candidate in plan["shots"])
+            drift_required = any(
+                candidate.get(
+                    "continuation_mode",
+                    cfg.get("continuation_mode", "guide")) ==
+                "drift_control_av"
+                and _shot_context_length(
+                    candidate, int(cfg["context_length"])) > 0
+                for candidate in plan["shots"])
+            if masked_required:
                 # Fail before spending minutes on scene 1 if this ComfyUI
                 # cannot run a masked continuation required by a later scene.
                 from .masked_context import _require_h3_mask_support
 
                 _require_h3_mask_support()
+            if drift_required and model is None:
+                raise ValueError(
+                    "This Plan contains Drift-Control AV. Connect the H3 "
+                    "MODEL to Chain Context and route its model output through "
+                    "every sampler stage before generating scene 1.")
             if continuation_mode in MASKED_CONTINUATION_MODES:
                 prepared_conditioning = conditioning
             else:
@@ -10025,6 +10082,7 @@ class MiniMaxH3ChainContext:
                 0,
                 False,
                 latent,
+                model,
             )
         previous_frames = _previous_context_frames(
             state, vae, context_length)
@@ -10056,7 +10114,27 @@ class MiniMaxH3ChainContext:
                 detail_video_seed=detail_video_seed,
                 context_spatial_proxy=context_spatial_proxy,
             )
-            return (out_conditioning, trim, True, out_latent)
+            out_model = model
+            if continuation_mode == "drift_control_av":
+                if trim != int(DRIFT_CONTROL_AV_RECIPE["context_frames"]):
+                    raise RuntimeError(
+                        "H3 Drift-Control AV expected a %d-frame prefix, got "
+                        "%d." %
+                        (int(DRIFT_CONTROL_AV_RECIPE["context_frames"]), trim))
+                from .drift_control import install_drift_control_av_model
+
+                validated_steps = int(
+                    DRIFT_CONTROL_AV_RECIPE["validated_steps"])
+                if int(shot["steps"]) != validated_steps:
+                    _LOG.warning(
+                        "H3 Drift-Control AV scene %d uses %d steps; the "
+                        "initial validated baseline is %d steps. This run is "
+                        "experimental.",
+                        index, int(shot["steps"]), validated_steps)
+                out_model = install_drift_control_av_model(
+                    model, out_latent,
+                    int(DRIFT_CONTROL_AV_RECIPE["video_steps"]))
+            return (out_conditioning, trim, True, out_latent, out_model)
         previous_latent = (state.get("previous_latent")
                            if generated_audio_context else None)
         video_context_latent = (
@@ -10124,7 +10202,7 @@ class MiniMaxH3ChainContext:
             context_audio=previous_audio,
             video_context_latent=video_context_latent,
         )
-        return (out, trim, True, latent)
+        return (out, trim, True, latent, model)
 
 
 class MiniMaxH3ChainSegmentSave:

@@ -23,6 +23,7 @@ Version 0.5 replaces combined low-level choices with two explicit policies:
 | new `latent_guide` | Latent Guide | 22 frames |
 | new `tapered_guide` | Detail Guide | 22 frames |
 | new `tapered_av` | Detail AV (experimental) | 39 frames |
+| new `drift_control_av` | Drift-Control AV (experimental; MODEL routed through Chain Context) | 39 frames |
 | `masked_av` | Hard AV | 39 frames |
 | `audio_feathered_av` | Soft AV | 39 frames |
 | `feathered_av` | Expert override (experimental compatibility mode) | custom |

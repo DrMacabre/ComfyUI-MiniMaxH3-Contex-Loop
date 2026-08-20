@@ -16,6 +16,7 @@ except ImportError:  # Standalone unit tests import this module without a packag
 try:
     from .contracts_v05 import (
         AUDIO_POLICY_VERSION,
+        CONTINUATION_POLICIES,
         TRANSITION_POLICY_VERSION,
         TRANSITION_PRESETS,
         audio_policy,
@@ -26,6 +27,7 @@ try:
 except ImportError:  # Standalone unit tests import this module without a package.
     from contracts_v05 import (
         AUDIO_POLICY_VERSION,
+        CONTINUATION_POLICIES,
         TRANSITION_POLICY_VERSION,
         TRANSITION_PRESETS,
         audio_policy,
@@ -60,9 +62,7 @@ H3_CONTEXT_LENGTHS = (
     1, 5, 22, 39, 56, 73, 90, 107, 124,
     141, 158, 175, 192, 209, 226, 243,
 )
-CONTINUATION_MODES = (
-    "guide", "tone_carry_guide", "latent_guide", "tapered_guide",
-    "masked_av", "tapered_av", "feathered_av", "audio_feathered_av")
+CONTINUATION_MODES = tuple(CONTINUATION_POLICIES)
 
 
 def _safe_name(value: Any, fallback: str = "") -> str:

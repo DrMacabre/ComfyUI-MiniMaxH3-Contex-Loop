@@ -14,7 +14,7 @@ The two continuation engines and public masking path are capability-gated:
   generated predecessor's saved video latent and otherwise falls back to the
   RGB/VAE route. Tapered Guide alters only its disposable RGB context before
   VAE encoding;
-- `masked_av`, `tapered_av`, and `feathered_av` prefer native per-token H3 AV masks from PR
+- `masked_av`, `tapered_av`, `feathered_av`, and `drift_control_av` prefer native per-token H3 AV masks from PR
   #15375 and lazily install only missing mask-engine, payload, token-aligned
   inpaint-scale, and legacy sampler-bridge behavior when the masked path
   executes. It follows
@@ -22,6 +22,10 @@ The two continuation engines and public masking path are capability-gated:
   blending while internal H3 timesteps use pooled token-grid values. It still
   requires the native #15439 Add Guide / MultiRef core baseline; masked mode
   is not enabled on the older guide-fallback architecture.
+- `drift_control_av` additionally needs current ModelPatcher dynamic-mask and
+  apply-model-wrapper APIs. Chain Context installs both hooks on a cloned MODEL
+  and refuses an existing dynamic denoise-mask function rather than composing
+  two incompatible owners.
 - `MiniMaxH3ContexMaskedTarget` uses the same native-first per-token AV mask
   layer for arbitrary manual targets. It activates compatibility only when the
   node executes and does not require a separate MODEL patch node.

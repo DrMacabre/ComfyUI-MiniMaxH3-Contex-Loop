@@ -4,6 +4,15 @@ Newest first. This file keeps release history out of the onboarding README.
 
 ## v0.5.1 — Checkpoint Manager and workflow clarity
 
+- Added experimental **Drift-Control AV** for recursive same-shot chains. It
+  keeps predecessor checkpoints clean, but at every sampler evaluation moves
+  the disposable 39-frame video prefix to the next scheduler sigma using the
+  sampler's existing noise field. Eight video-latent steps receive the full
+  matched ratio and the final four taper `.75/.50/.25/.00` to an exact seam.
+  Chain Context now exposes an optional MODEL passthrough so the sampler blend
+  and H3 per-row timestep labels receive the same live mask. The 20-step path
+  is the initial validated baseline; existing continuation modes are unchanged.
+
 - Corrected the scheduled Guide 5/6 spatial proxy to reproduce the observed
   mixed-resolution chain operation: reduce the complete saved predecessor
   video latent, VAE-decode it on the 5/6 grid, select the delivered RGB tail,

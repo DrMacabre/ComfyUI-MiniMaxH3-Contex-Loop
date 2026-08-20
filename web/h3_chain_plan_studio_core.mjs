@@ -112,6 +112,7 @@ export function h3StudioGridMarkers(
 
     const avMode = [
         "masked_av", "tapered_av", "feathered_av", "audio_feathered_av",
+        "drift_control_av",
     ].includes(
         String(continuationMode ?? ""),
     );

@@ -60,6 +60,7 @@ node = chain.MiniMaxH3TransitionPolicy()
 preset_choices = node.INPUT_TYPES()["required"]["preset"][0]
 assert "soft_av" in preset_choices
 assert "detail_av" in preset_choices
+assert "drift_av" in preset_choices
 assert "audio_feather_av" not in preset_choices
 expected = {
     "cut": ("guide", 0),
@@ -68,6 +69,7 @@ expected = {
     "latent_guide": ("latent_guide", 22),
     "detail_guide": ("tapered_guide", 22),
     "detail_av": ("tapered_av", 39),
+    "drift_av": ("drift_control_av", 39),
     "hard_av": ("masked_av", 39),
     "soft_av": ("audio_feathered_av", 39),
     "audio_feather_av": ("audio_feathered_av", 39),
@@ -80,7 +82,7 @@ for preset, (mode, context) in expected.items():
     assert policy["expert_override"] is False
     assert output_mode == mode and output_context == context
     assert " -> " in status
-    if preset in ("tone_guide", "detail_guide", "detail_av"):
+    if preset in ("tone_guide", "detail_guide", "detail_av", "drift_av"):
         assert "experimental preset" in status
     else:
         assert "tested preset" in status
@@ -92,6 +94,10 @@ assert hard_status.startswith("Hard AV -> Masked AV + 39 frames")
 detail_av_status = node.build("detail_av")[3]
 assert detail_av_status.startswith("Detail AV -> Tapered AV + 39 frames")
 assert "clean-boundary latent taper v2" in detail_av_status
+drift_av_status = node.build("drift_av")[3]
+assert drift_av_status.startswith(
+    "Drift-Control AV -> Drift-Control AV + 39 frames")
+assert "schedule-matched 8+4 mask" in drift_av_status
 audio_feather_status = node.build("audio_feather_av")[3]
 assert audio_feather_status.startswith(
     "Audio Feather AV (legacy alias) -> Audio-Feathered AV + 39 frames")
@@ -161,6 +167,13 @@ except ValueError as exc:
 else:
     raise AssertionError("Detail AV accepted a non-v2 90-frame context")
 
+try:
+    node.build("drift_av", True, "drift_control_av", 90)
+except ValueError as exc:
+    assert "exactly 39" in str(exc)
+else:
+    raise AssertionError("Drift-Control AV accepted a non-v1 90-frame context")
+
 tapered_expert, tapered_mode, tapered_context, _ = node.build(
     "detail_guide", True, "tapered_guide", 39)
 assert tapered_mode == "tapered_guide" and tapered_context == 39
@@ -228,7 +241,7 @@ try:
 finally:
     chain.MiniMaxH3MotionContext = original_motion_context
 
-assert result == ("tapered-conditioning", 39, True, "target-latent")
+assert result == ("tapered-conditioning", 39, True, "target-latent", None)
 assert captured["context_length"] == 39
 assert tuple(captured["context_frames"].shape) == (39, 19, 31, 3)
 assert not torch.equal(captured["context_frames"], source[-39:])
@@ -259,7 +272,8 @@ try:
 finally:
     chain.MiniMaxH3MotionContext = original_motion_context
 
-assert tone_result == ("tapered-conditioning", 22, True, "target-latent")
+assert tone_result == (
+    "tapered-conditioning", 22, True, "target-latent", None)
 expected_tone = chain._apply_guide_tone_carry(source, tone_curve)
 assert torch.allclose(captured["context_frames"], expected_tone)
 assert float(captured["context_frames"].mean()) > float(source.mean())
@@ -307,9 +321,75 @@ finally:
     chain.MiniMaxH3MotionContext = original_motion_context
 
 assert latent_result == (
-    "tapered-conditioning", 22, True, "target-latent")
+    "tapered-conditioning", 22, True, "target-latent", None)
 assert captured["video_context_latent"] is original_latent
 assert captured["context_latent"] is original_latent
+
+# Drift-Control AV validates its MODEL path before scene 1 spends sampler time,
+# then patches only the active continuation scene after the hard AV prefix is
+# prepared. Other modes retain the same appended MODEL passthrough output.
+drift_policy = node.build("drift_av")[0]
+drift_plan = make_plan(drift_policy)
+drift_plan["shots"][1]["steps"] = 20
+masked_stub = types.ModuleType(PACKAGE + ".masked_context")
+masked_stub._require_h3_mask_support = lambda: True
+masked_stub.apply_masked_prefix = lambda **_kwargs: (
+    "drift-conditioning",
+    {"samples": [
+        torch.zeros((1, 16, 12, 2, 2)),
+        torch.zeros((1, 32, 2, 65)),
+    ]},
+    39,
+)
+drift_stub = types.ModuleType(PACKAGE + ".drift_control")
+drift_stub.install_drift_control_av_model = (
+    lambda model, _latent, prefix_steps:
+    ("patched-model", model, prefix_steps))
+sys.modules[masked_stub.__name__] = masked_stub
+sys.modules[drift_stub.__name__] = drift_stub
+try:
+    try:
+        chain.MiniMaxH3ChainContext().apply(
+            state={"index": 1, "plan": drift_plan},
+            conditioning="stock-conditioning",
+            vae=object(),
+            latent="target-latent",
+        )
+    except ValueError as exc:
+        assert "Connect the H3 MODEL" in str(exc)
+    else:
+        raise AssertionError(
+            "Drift-Control AV accepted a disconnected MODEL path")
+
+    first_result = chain.MiniMaxH3ChainContext().apply(
+        state={"index": 1, "plan": drift_plan},
+        conditioning="stock-conditioning",
+        vae=object(),
+        latent="target-latent",
+        model="h3-model",
+    )
+    assert first_result == (
+        "stock-conditioning", 0, False, "target-latent", "h3-model")
+    second_result = chain.MiniMaxH3ChainContext().apply(
+        state={
+            "index": 2,
+            "plan": drift_plan,
+            "previous_frames": source,
+            "previous_latent": original_latent,
+            "segments": [],
+        },
+        conditioning="stock-conditioning",
+        vae=object(),
+        latent="target-latent",
+        model="h3-model",
+    )
+    assert second_result[:3] == ("drift-conditioning", 39, True)
+    assert tuple(second_result[3]["samples"][0].shape) == (
+        1, 16, 12, 2, 2)
+    assert second_result[4] == ("patched-model", "h3-model", 12)
+finally:
+    sys.modules.pop(masked_stub.__name__, None)
+    sys.modules.pop(drift_stub.__name__, None)
 
 for invalid_context, invalid_encode, expected_message in (
         (1, "video", "at least 5"),
@@ -365,6 +445,7 @@ assert all(legacy_adapter.OUTPUT_TOOLTIPS)
 
 print(
     "transition policy: Cut/Guide/Tone Carry Guide/Latent Guide/Detail Guide/"
-    "Hard AV/Soft AV/Audio Feather AV presets, expert "
+    "Detail AV/Drift-Control AV/Hard AV/Soft AV/Audio Feather AV presets, "
+    "expert "
     "overrides, zero-context delivery, AV safety validation, legacy fallback "
     "and adapter, Plan resolution, and typed node registration pass")

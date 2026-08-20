@@ -35,7 +35,7 @@ assert.deepEqual(
     [
         "guide", "tone_carry_guide", "latent_guide", "tapered_guide",
         "masked_av", "tapered_av", "feathered_av",
-        "audio_feathered_av",
+        "audio_feathered_av", "drift_control_av",
     ],
 );
 assert.equal(H3_CONTEXT_LENGTHS.at(-1), 243);
@@ -102,6 +102,10 @@ assert.equal(
 assert.equal(
     sceneContinuationMode({continuation_mode: "audio_feathered_av"}, "guide"),
     "audio_feathered_av",
+);
+assert.equal(
+    sceneContinuationMode({continuation_mode: "drift_control_av"}, "guide"),
+    "drift_control_av",
 );
 assert.equal(
     sceneContinuationMode({continuation_mode: "feathered_av_rgb"}, "guide"),
@@ -285,6 +289,32 @@ assert.equal(
 );
 assert.equal(featheredContinuationTiming.shots[1].audioContextLength, 39);
 assert.deepEqual(featheredContinuationTiming.errors, []);
+
+const driftControlPlan = parsePlanJson(JSON.stringify({
+    shots: [
+        {id: "one", prompt: "Opening."},
+        {id: "two", prompt: "Continue.", continuation_mode: "drift_control_av"},
+    ],
+}));
+const driftControlTiming = calculatePlanTiming(driftControlPlan, {
+    contextLength: 39,
+    encodeMode: "video",
+    anchorMode: "head",
+    continuationMode: "guide",
+    defaultDurationSeconds: 5,
+});
+assert.equal(
+    driftControlTiming.shots[1].continuationMode,
+    "drift_control_av",
+);
+assert.deepEqual(driftControlTiming.errors, []);
+assert.match(calculatePlanTiming(driftControlPlan, {
+    contextLength: 90,
+    encodeMode: "video",
+    anchorMode: "head",
+    continuationMode: "guide",
+    defaultDurationSeconds: 5,
+}).errors.join("\n"), /Drift-Control AV currently requires exactly 39/);
 
 const latentGuideTiming = calculatePlanTiming({shots: [
     {id: "one", prompt: "Opening."},

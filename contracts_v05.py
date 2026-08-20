@@ -23,7 +23,8 @@ PAIRED_AUDIO_POLICIES = ("off", "embedded")
 CONTEXT_SPATIAL_PROXY_MODES = ("off", "rgb_5_6", "latent_5_6")
 CONTINUATION_POLICIES = (
     "guide", "tone_carry_guide", "latent_guide", "tapered_guide",
-    "masked_av", "tapered_av", "feathered_av", "audio_feathered_av")
+    "masked_av", "tapered_av", "feathered_av", "audio_feathered_av",
+    "drift_control_av")
 TRANSITION_CONTEXT_LENGTHS = (
     0, 1, 5, 22, 39, 56, 73, 90, 107, 124,
     141, 158, 175, 192, 209, 226, 243,
@@ -43,6 +44,25 @@ DETAIL_AV_RECIPE = {
     "ramp_steps": 4,
     "noise_scale": "match_latent_std",
     "seed_xor": 0xD37A11,
+}
+
+# Experimental recursive AV treatment.  Unlike Detail AV, this does not bake
+# static noise into the copied predecessor.  At each model evaluation it uses
+# the sampler's existing noise field and advances the video prefix to the next
+# scheduler sigma.  The oldest eight of the 12 carried video steps receive the
+# complete matched-noise ratio; the newest four taper .75/.50/.25/.00 so the
+# generated-future boundary remains exact.  Audio retains the selected Audio
+# Policy's normal hard/open mask.
+DRIFT_CONTROL_AV_RECIPE = {
+    "version": "h3_drift_control_av_v1",
+    "context_frames": 39,
+    "video_steps": 12,
+    "matched_steps": 8,
+    "taper_steps": 4,
+    "sigma_rule": "next_schedule_sigma_over_current_sigma",
+    "mask_quantization": 256,
+    "audio": "unchanged_policy_mask",
+    "validated_steps": 20,
 }
 
 # Boundary-only low-grid experiment reconstructed from a mixed-resolution
@@ -116,6 +136,11 @@ TRANSITION_PRESETS = {
         "continuation_mode": "tapered_av",
         "context_length": 39,
         "label": "Detail-preserving AV continuation (experimental)",
+    },
+    "drift_av": {
+        "continuation_mode": "drift_control_av",
+        "context_length": 39,
+        "label": "Drift-Control AV continuation (experimental)",
     },
     "hard_av": {
         "continuation_mode": "masked_av",
@@ -235,7 +260,7 @@ def transition_policy(
                 "H3 Latent Guide requires at least 5 context frames.")
         if (mode in (
                 "masked_av", "tapered_av", "feathered_av",
-                "audio_feathered_av"
+                "audio_feathered_av", "drift_control_av"
         ) and context > 0 and context not in AV_TRANSITION_CONTEXT_LENGTHS):
             raise ValueError(
                 "H3 AV transition implementations require an exact shared "
@@ -246,6 +271,11 @@ def transition_policy(
             raise ValueError(
                 "H3 Detail AV currently requires exactly 39 context frames "
                 "(or 0 to disable continuation).")
+        if (mode == "drift_control_av" and context not in (
+                0, int(DRIFT_CONTROL_AV_RECIPE["context_frames"]))):
+            raise ValueError(
+                "H3 Drift-Control AV currently requires exactly 39 context "
+                "frames (or 0 to disable continuation).")
         resolved["continuation_mode"] = mode
         resolved["context_length"] = context
     resolved["expert_override"] = expert

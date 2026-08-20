@@ -34,6 +34,13 @@ def main():
     }, "old_run")
     assert tapered_restore["continuation_mode"] == "tapered_guide"
 
+    drift_widgets = old_widgets + [0, "drift_control_av"]
+    drift_restore = _workflow_inputs({
+        "nodes": [{"type": "MiniMaxH3ChainPlan",
+                   "widgets_values": drift_widgets}],
+    }, "old_run")
+    assert drift_restore["continuation_mode"] == "drift_control_av"
+
     with tempfile.TemporaryDirectory() as temporary:
         root = pathlib.Path(temporary)
         exact = root / "h3_chains" / "variant_exact"

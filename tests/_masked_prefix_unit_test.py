@@ -969,7 +969,7 @@ def main():
     assert first_result[3] is target
     for av_mode in (
             "masked_av", "tapered_av", "feathered_av",
-            "audio_feathered_av"):
+            "audio_feathered_av", "drift_control_av"):
         for invalid_args, expected in (
             ((1, "video", "head"), "exact shared"),
             ((22, "video", "head"), "exact shared"),

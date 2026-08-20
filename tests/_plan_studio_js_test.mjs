@@ -78,6 +78,9 @@ assert.equal(audioFeatherGrid.av.audioTicks, 65);
 const detailAvGrid = h3StudioGridMarkers(345, 39, "tapered_av");
 assert.equal(detailAvGrid.av.exact, true);
 assert.equal(detailAvGrid.av.audioTicks, 65);
+const driftAvGrid = h3StudioGridMarkers(345, 39, "drift_control_av");
+assert.equal(driftAvGrid.av.exact, true);
+assert.equal(driftAvGrid.av.audioTicks, 65);
 assert.equal(h3StudioGridMarkers(344, 39, "guide").raw.onGrid, false);
 assert.equal(h3StudioGridMarkers(344, 39, "guide").av, null);
 

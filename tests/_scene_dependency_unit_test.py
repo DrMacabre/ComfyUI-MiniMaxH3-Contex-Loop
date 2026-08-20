@@ -165,6 +165,31 @@ assert detail_diffs == [{
     "regeneration_required": True,
 }]
 
+drift_plan = chain._normalize_plan(
+    json.dumps({"shots": [
+        {"id": "one", "prompt": "@actor opens.", "length": 90},
+        {"id": "two", "prompt": "@actor continues.", "length": 90},
+    ]}),
+    "drift-av-dependency-test", 64, 64, 39, "video", "head", "disabled",
+    "source_track", 39, 1.0, 20, 11, 18, "body:auto:v1", 0,
+    "drift_control_av", chain._contract_audio_policy("source", "on", "off"))
+drift_dependency = chain._scene_dependency_record(drift_plan, 2, None)
+assert drift_dependency["scopes"]["incoming_boundary"][
+    "drift_control_av_recipe"] == chain.DRIFT_CONTROL_AV_RECIPE
+changed_drift_dependency = json.loads(json.dumps(drift_dependency))
+changed_drift_dependency["scopes"]["incoming_boundary"][
+    "drift_control_av_recipe"]["taper_steps"] = 3
+drift_diffs = chain._scene_dependency_diffs(
+    changed_drift_dependency, drift_dependency)
+assert drift_diffs == [{
+    "scope": "incoming_boundary",
+    "scene": 2,
+    "field": "drift_control_av_recipe.taper_steps",
+    "saved": 3,
+    "current": 4,
+    "regeneration_required": True,
+}]
+
 # Spatial reset is scheduled on the incoming scene, not inherited globally.
 proxy_plan = chain._normalize_plan(
     json.dumps({"shots": [

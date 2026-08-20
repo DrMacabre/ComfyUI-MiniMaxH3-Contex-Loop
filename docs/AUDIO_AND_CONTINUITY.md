@@ -36,8 +36,9 @@ Latent Guide reuses the generated predecessor's sampled video-latent tail
 directly, while imported or incompatible context falls back to the normal
 RGB/VAE Guide route. Tapered Guide changes only the disposable video context
 passed to the Guide VAE. In the
-experimental `masked_av`, `tapered_av`, and `feathered_av` modes, Chain Context always places
-a video prefix inside the target latent. With Generated continuity on it also
+experimental `masked_av`, `tapered_av`, `feathered_av`, and
+`drift_control_av` modes, Chain Context always places a video prefix inside the
+target latent. With Generated continuity on it also
 places the matching audio prefix; `masked_av` protects that complete prefix and
 `tapered_av` protects a disposable video-only latent-noise copy of that prefix;
 `feathered_av` progressively denoises its final latent steps. With Generated
@@ -45,6 +46,23 @@ continuity off, the audio mask remains fully open even when final assembly uses
 `source_track`. For recursive scenes, enabled audio carry copies the previous
 sampler's audio latent directly. For scene 1 after Existing Video Context,
 carrying imported audio requires source audio and the H3 audio VAE.
+
+Experimental `drift_control_av` is a recursive picture-only treatment layered
+on the same 39-frame AV prefix. It does not bake random noise into a checkpoint
+or redraw noise between scenes. At each model evaluation, it uses the sampler's
+existing noise field and sets the prefix mask to `next_sigma / current_sigma`.
+The oldest eight of the 12 video-latent steps use that complete ratio; the last
+four multiply it by `.75`, `.50`, `.25`, and `.00`, leaving the actual seam
+clean. The same live mask drives both ComfyUI's inpaint blend and, through an
+apply-model hook, H3's internal per-row timestep labels. Audio remains exact or
+open according to Audio Policy.
+
+Select **Drift-Control AV**, connect the H3 MODEL to Chain Context's optional
+`model` input, and use its `model` output for every sampler stage. Chain Context
+stops before scene 1 when a Drift-Control Plan is missing that route. Do not put
+Differential Diffusion or another dynamic denoise-mask patch on the same MODEL
+path. The initial validated baseline is 39 frames and 20 sampling steps; other
+samplers, schedulers, step counts, and split-sigma paths remain experimental.
 
 The 0.5 **Soft AV** preset selects `audio_feathered_av`: all picture-prefix
 steps remain exact. With Generated continuity on, only the final eight carried
@@ -66,16 +84,23 @@ span with the predecessor's detected tone correction, Latent Guide uses the
 same span from the saved sampled video latent, Detail Guide uses the same span with an
 eight-frame chroma-noise exit taper, Detail AV uses a protected disposable
 39-frame video-latent copy with matched-variance Gaussian noise tapering from
-0.30 to a completely clean boundary while leaving audio exact, Hard AV uses a
-protected 39-frame prefix,
-and Soft AV keeps the picture exact while feathering only a carried-audio exit.
-With Generated continuity off, both AV presets carry picture only.
+0.30 to a completely clean boundary while leaving audio exact, Drift-Control
+AV applies schedule-matched noise to a clean carried prefix at every model
+evaluation, Hard AV uses a protected 39-frame prefix, and Soft AV keeps the
+picture exact while feathering only a carried-audio exit. With Generated
+continuity off, all AV presets carry picture only.
 Detail AV v2 is fixed to 39 frames. Its seed and complete recipe enter the
 incoming-boundary dependency fingerprint, its predecessor checkpoint is never
 mutated, and the entire treated prefix is trimmed before delivery. Advanced
 mode may pair either experimental Guide with another Guide context length; 22
 is the published baseline. Mixed plans must still use
 encode/anchor settings compatible with every AV-mask scene.
+
+Drift-Control AV v1 is also fixed to 39 frames. Its sigma rule, 8+4 temporal
+taper, mask quantization, audio behavior, and validated-step baseline enter the
+incoming-boundary dependency fingerprint. Changing the mode or recipe therefore
+requires regenerating that incoming scene, while the saved predecessor remains
+unchanged.
 
 ### Scheduled boundary spatial proxy
 

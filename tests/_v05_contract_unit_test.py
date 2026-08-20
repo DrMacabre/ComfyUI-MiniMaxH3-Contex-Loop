@@ -128,6 +128,7 @@ def main():
         "latent_guide": ("latent_guide", 22),
         "detail_guide": ("tapered_guide", 22),
         "detail_av": ("tapered_av", 39),
+        "drift_av": ("drift_control_av", 39),
         "hard_av": ("masked_av", 39),
         "soft_av": ("audio_feathered_av", 39),
         "audio_feather_av": ("audio_feathered_av", 39),
@@ -181,6 +182,14 @@ def main():
         raise AssertionError("90-frame Detail AV transition was accepted")
     try:
         contracts.transition_policy(
+            "drift_av", expert_override=True,
+            continuation_mode="drift_control_av", context_length=90)
+    except ValueError as exc:
+        assert "exactly 39" in str(exc)
+    else:
+        raise AssertionError("90-frame Drift-Control AV transition was accepted")
+    try:
+        contracts.transition_policy(
             "guide", expert_override=True,
             continuation_mode="latent_guide", context_length=1)
     except ValueError as exc:
@@ -207,6 +216,7 @@ def main():
     assert loop_optional[4:] == ["source_timeline"]
     appended_outputs = {
         "MiniMaxH3ChainCurrent": ["video_blend_frames"],
+        "MiniMaxH3ChainContext": ["model"],
     }
     for node_name, output_names in FIXTURE["positional_outputs"].items():
         observed = return_names(module, node_name)

@@ -59,6 +59,18 @@ def main():
     assert len(nodes(source_demo, "MiniMaxH3AudioPolicy")) == 1
     assert len(nodes(source_demo, "MiniMaxH3TransitionPolicy")) == 1
 
+    drift_plan = {
+        "pos": [100, 200],
+        "widgets_values": [
+            "{}", "drift", "", 960, 544, 39, "video", "head",
+            "disabled", "generated_audio", 39, 15.0, 20, 0, 18, 0,
+            "drift_control_av",
+        ],
+    }
+    drift_transition = migration._transition_policy_node(drift_plan)
+    assert drift_transition["widgets_values"] == [
+        "drift_av", False, "drift_control_av", 39]
+
     print("v0.5 workflow migration: additive and idempotent")
 
 
