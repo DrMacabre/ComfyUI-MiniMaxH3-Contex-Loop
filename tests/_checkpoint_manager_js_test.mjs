@@ -62,6 +62,13 @@ assert.match(source, /snapshot:plan\.snapshot/);
 assert.match(source, /window\.confirm/);
 assert.match(source, /Delete dependent leaves first/);
 assert.match(source, /shared, kept/);
+assert.match(source, /checkpointRevisionKey\(revision\.scene, revision\.revision\)/);
+assert.match(source, /`shared ×\$\{sharedCount\}`/);
+assert.match(source, /card\.dataset\.sharedKey = key/);
+assert.match(source, /createElementNS\("http:\/\/www\.w3\.org\/2000\/svg", "path"\)/);
+assert.match(source, /h3cm-shared-link/);
+assert.match(source, /new ResizeObserver\(scheduleSharedLinks\)/);
+assert.match(source, /sharedLinksResizeObserver\?\.disconnect\(\)/);
 assert.match(source, /Video \$\{record\.context_length\}f · Audio \$\{record\.audio_context_length\}f/);
 assert.match(source, /addDOMWidget\("h3_checkpoint_manager"/);
 
