@@ -22,14 +22,14 @@ import {
     setShotLengthMode,
     sharedPrompt,
     shotLengthMode,
-} from "./h3_chain_plan_core.mjs?v=0.5.4";
+} from "./h3_chain_plan_core.mjs?v=0.5.5";
 import {
     promptRevisionHelp,
     promptRevisionLabel,
     promptRevisionNavigation,
-} from "./h3_prompt_history_core.mjs?v=0.5.4";
-import {availableReferenceRecords} from "./h3_reference_preview_core.mjs?v=0.5.4";
-import {resolveTransitionPolicy} from "./h3_socket_presentation_core.mjs?v=0.5.4";
+} from "./h3_prompt_history_core.mjs?v=0.5.5";
+import {availableReferenceRecords} from "./h3_reference_preview_core.mjs?v=0.5.5";
+import {resolveTransitionPolicy} from "./h3_socket_presentation_core.mjs?v=0.5.5";
 import {
     locateStudioTimelineSecond,
     h3StudioGridMarkers,
@@ -38,8 +38,8 @@ import {
     studioCheckpointSignature,
     studioSceneStartSeconds,
     studioSourceSecond,
-} from "./h3_chain_plan_studio_core.mjs?v=0.5.4";
-import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.5.4";
+} from "./h3_chain_plan_studio_core.mjs?v=0.5.5";
+import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.5.5";
 
 const {connectedPromptEditors, publishCompanionScene} = promptCompanionSync;
 function publishCompanionPrompt(...args) {

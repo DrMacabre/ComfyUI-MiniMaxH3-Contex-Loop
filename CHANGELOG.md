@@ -2,6 +2,14 @@
 
 Newest first. This file keeps release history out of the onboarding README.
 
+## v0.5.5 — Modern editable-install metadata
+
+- Added an explicit setuptools build backend and disabled accidental discovery
+  of asset and workflow folders as Python packages, so `pip install -e .`
+  succeeds with current setuptools releases.
+- Replaced deprecated license metadata with its SPDX form while leaving the
+  repository's GPL v3 license text unchanged. Thanks to @ed45626 in PR #27.
+
 ## v0.5.4 — Cleaner shared-checkpoint links
 
 - Moved shared-revision connectors into a dedicated side gutter with thin
