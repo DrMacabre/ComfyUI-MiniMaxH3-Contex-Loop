@@ -421,15 +421,21 @@ assert chain.CHAIN_NODE_CLASS_MAPPINGS[
     "MiniMaxH3TransitionPolicy"] is chain.MiniMaxH3TransitionPolicy
 
 legacy_adapter = chain.MiniMaxH3Legacy04PolicyAdapter()
-legacy_audio, legacy_transition, legacy_status = legacy_adapter.build(
-    "source_plus_timeline", "feathered_av", 39)
+legacy_audio, legacy_transition, legacy_status, legacy_combined, legacy_audio_context = (
+    legacy_adapter.build(
+        "source_plus_timeline", "feathered_av", 39, 33))
 assert legacy_audio == chain.migrate_legacy_audio_mode("source_plus_timeline")
 assert legacy_transition["continuation_mode"] == "feathered_av"
 assert legacy_transition["context_length"] == 39
 assert legacy_transition["expert_override"] is True
-assert "legacy 0.4" in legacy_status
-matched_audio, matched_transition, _ = legacy_adapter.build(
+assert legacy_combined["audio_policy"] == legacy_audio
+assert legacy_combined["transition_policy"] == legacy_transition
+assert legacy_combined["audio_context_length"] == 33
+assert legacy_audio_context == 33
+assert "legacy / expert" in legacy_status
+matched = legacy_adapter.build(
     "generated_audio", "masked_av", 39)
+matched_audio, matched_transition = matched[:2]
 assert matched_audio == chain.migrate_legacy_audio_mode("generated_audio")
 assert matched_transition["preset"] == "hard_av"
 assert matched_transition["expert_override"] is False

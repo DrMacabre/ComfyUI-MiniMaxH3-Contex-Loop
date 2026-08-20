@@ -96,6 +96,7 @@ from .av_timing import (
 from .contracts_v05 import (
     AV_TRANSITION_CONTEXT_LENGTHS,
     AUDIO_POLICY_VERSION,
+    CHAIN_POLICY_VERSION,
     CONTEXT_SPATIAL_PROXY_MODES,
     CONTEXT_SPATIAL_PROXY_RECIPE,
     CONTINUATION_POLICIES,
@@ -104,6 +105,7 @@ from .contracts_v05 import (
     DEPENDENCY_SCOPES,
     FINAL_AUDIO_POLICIES,
     GENERATED_CONTINUITY_POLICIES,
+    PRIMARY_TRANSITION_PRESETS,
     PREFLIGHT_VERSION,
     SCENE_DEPENDENCY_VERSION,
     SOURCE_REFERENCE_POLICIES,
@@ -111,6 +113,8 @@ from .contracts_v05 import (
     TRANSITION_CONTEXT_LENGTHS,
     TRANSITION_POLICY_VERSION,
     audio_policy as _contract_audio_policy,
+    chain_policy as _contract_chain_policy,
+    compose_chain_policy as _contract_compose_chain_policy,
     migrate_continuation_mode,
     migrate_legacy_audio_mode,
     paired_audio_policy as _contract_paired_audio_policy,
@@ -183,6 +187,7 @@ LAZY_MOTION_SOURCE_TYPE = "H3_LAZY_MOTION_SOURCE"
 SOURCE_TIMELINE_TYPE = "H3_SOURCE_TIMELINE"
 AUDIO_POLICY_TYPE = "H3_AUDIO_POLICY"
 TRANSITION_POLICY_TYPE = "H3_TRANSITION_POLICY"
+CHAIN_POLICY_TYPE = "H3_CHAIN_POLICY"
 PREFLIGHT_TYPE = "H3_PREFLIGHT_REPORT"
 REFERENCE_SCHEDULE_VERSION = 1
 LAZY_MOTION_SOURCE_VERSION = 3
@@ -266,6 +271,18 @@ def _audio_policy_final(value: Any) -> str:
 
 def _paired_audio_policy(value: Any) -> str:
     return _contract_paired_audio_policy(value)
+
+
+def _validate_chain_policy(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError(
+            "H3 Chain Policy must come from MiniMax H3 Chain Policy or the "
+            "Legacy / Expert Policy adapter.")
+    if value.get("version") != CHAIN_POLICY_VERSION:
+        raise ValueError("H3 Chain Policy version is missing or obsolete.")
+    return _contract_compose_chain_policy(
+        value.get("audio_policy"), value.get("transition_policy"),
+        audio_context_length=value.get("audio_context_length", 22))
 
 
 def _validate_transition_policy(value: Any) -> dict[str, Any]:
@@ -4072,6 +4089,7 @@ def _normalize_plan(
     continuation_mode: str = "guide",
     audio_policy: Any = None,
     transition_policy: Any = None,
+    chain_policy: Any = None,
 ) -> dict[str, Any]:
     try:
         raw = json.loads(str(plan_json or ""))
@@ -4087,6 +4105,19 @@ def _normalize_plan(
         raise ValueError("H3 Chain Plan requires a non-empty 'shots' list.")
     if len(raw_shots) > MAX_SHOTS:
         raise ValueError("H3 Chain Plan supports at most %d shots." % MAX_SHOTS)
+
+    resolved_chain_policy = (
+        _validate_chain_policy(chain_policy)
+        if chain_policy is not None else None)
+    if resolved_chain_policy is not None:
+        if audio_policy is not None or transition_policy is not None:
+            raise ValueError(
+                "H3 Chain Plan accepts either chain_policy or the legacy "
+                "separate audio_policy/transition_policy inputs, not both.")
+        audio_policy = resolved_chain_policy["audio_policy"]
+        transition_policy = resolved_chain_policy["transition_policy"]
+        audio_context_length = int(
+            resolved_chain_policy["audio_context_length"])
 
     width, height = int(width), int(height)
     if width < 32 or height < 32 or width % 32 or height % 32:
@@ -7886,6 +7917,79 @@ class MiniMaxH3ChainExternalVideo:
         return (external_context, status)
 
 
+class MiniMaxH3ChainPolicy:
+    """Compact normal-user policy for transition and soundtrack intent."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "incoming_transition": (list(PRIMARY_TRANSITION_PRESETS), {
+                    "default": "guide",
+                    "tooltip": "Default boundary entering a scene: Visual "
+                               "Cut = no carried picture; Guide = 22-frame "
+                               "RGB continuation; Hard AV = protected "
+                               "39-frame picture/audio prefix; Soft AV = the "
+                               "same hard picture prefix with a short audio "
+                               "release. A scene can inherit or override this "
+                               "default in Plan Studio."}),
+                "final_audio": (list(FINAL_AUDIO_POLICIES), {
+                    "default": "generated",
+                    "tooltip": "Soundtrack muxed into the final MP4: H3's "
+                               "saved generated sound, the exact source "
+                               "track, or no soundtrack."}),
+                "source_reference": (list(SOURCE_REFERENCE_POLICIES), {
+                    "default": "off",
+                    "tooltip": "On exposes the exact source-timeline audio "
+                               "window to the generation graph. This is "
+                               "independent of the final soundtrack."}),
+                "generated_continuity": (
+                    list(GENERATED_CONTINUITY_POLICIES), {
+                        "default": "on",
+                        "tooltip": "On carries the previous sampled audio "
+                                   "latent across scene boundaries. Guide uses "
+                                   "the tested automatic 22-frame sound "
+                                   "context; AV follows its exact shared video "
+                                   "boundary. Off leaves target audio fully "
+                                   "denoisable. This does not select the final "
+                                   "soundtrack."}),
+            },
+        }
+
+    RETURN_TYPES = (CHAIN_POLICY_TYPE, "STRING")
+    RETURN_NAMES = ("chain_policy", "status")
+    OUTPUT_TOOLTIPS = (
+        "Combined 0.5 policy to connect to Chain Plan's chain_policy input.",
+        "Resolved transition, soundtrack, source-reference, and generated-"
+        "continuity summary.",
+    )
+    FUNCTION = "build"
+    CATEGORY = "conditioning/minimax/contex_loop/policies"
+    DESCRIPTION = (
+        "Set the normal 0.5 transition and audio intent in one place. Plan "
+        "stores the same canonical Audio and Transition Policy records used "
+        "by older 0.5 workflows, so changing graph topology alone does not "
+        "change checkpoint compatibility."
+    )
+
+    def build(self, incoming_transition="guide", final_audio="generated",
+              source_reference="off", generated_continuity="on"):
+        policy = _contract_chain_policy(
+            incoming_transition, final_audio, source_reference,
+            generated_continuity)
+        transition_status = _transition_policy_display({
+            "transition_policy": policy["transition_policy"]})
+        audio_status = _audio_policy_summary({
+            "audio_policy": policy["audio_policy"]})
+        source_need = (
+            "source timeline required"
+            if _audio_policy_requires_source({
+                "audio_policy": policy["audio_policy"]})
+            else "no source timeline required")
+        return policy, "%s; %s; %s; audio context automatic" % (
+            transition_status, audio_status, source_need)
+
+
 class MiniMaxH3TransitionPolicy:
     @classmethod
     def INPUT_TYPES(cls):
@@ -7967,7 +8071,7 @@ class MiniMaxH3TransitionPolicy:
         "Human-readable preset, implementation, context, and validation tier.",
     )
     FUNCTION = "build"
-    CATEGORY = "conditioning/minimax/contex_loop/policies"
+    CATEGORY = "conditioning/minimax/contex_loop/policies/legacy/separate"
     DESCRIPTION = (
         "Resolve a human-facing incoming-transition preset to the exact "
         "continuation implementation and context length used by Plan. Expert "
@@ -8020,34 +8124,49 @@ class MiniMaxH3Legacy04PolicyAdapter:
                     "tooltip": "Legacy 0.4 global visual overlap. This is "
                                "paired with continuation_mode and translated "
                                "into a typed 0.5 Transition Policy."}),
+                "audio_context_length": ("INT", {
+                    "default": 22, "min": 0, "max": 240,
+                    "tooltip": "Legacy / expert generated-audio overlap in "
+                               "24-fps video-frame units. Guide can use this "
+                               "independently of visual context. AV treats "
+                               "zero as disabled and any positive value as "
+                               "enabled for the exact shared video boundary."}),
             },
         }
 
-    RETURN_TYPES = (AUDIO_POLICY_TYPE, TRANSITION_POLICY_TYPE, "STRING")
-    RETURN_NAMES = ("audio_policy", "transition_policy", "status")
+    RETURN_TYPES = (
+        AUDIO_POLICY_TYPE, TRANSITION_POLICY_TYPE, "STRING",
+        CHAIN_POLICY_TYPE, "INT")
+    RETURN_NAMES = (
+        "audio_policy", "transition_policy", "status", "chain_policy",
+        "audio_context_length")
     OUTPUT_TOOLTIPS = (
         "Typed 0.5 Audio Policy equivalent to the selected 0.4 audio_mode.",
         "Typed 0.5 Transition Policy equivalent to the selected raw mode and "
         "context pair.",
         "Human-readable summary of the translated legacy settings.",
+        "One-wire combined policy carrying all translated legacy settings.",
+        "Resolved legacy audio-context length for inspection or old wiring.",
     )
     FUNCTION = "build"
     CATEGORY = "conditioning/minimax/contex_loop/policies/legacy"
     DESCRIPTION = (
-        "Compatibility adapter for the combined audio mode and raw incoming-"
-        "transition controls formerly shown on the 0.4 Plan node. New 0.5 "
-        "workflows should use Audio Policy and Transition Policy directly."
+        "Compatibility and expert adapter for the combined audio mode, raw "
+        "incoming-transition implementation, visual context, and audio "
+        "context formerly shown on the 0.4 Plan node. New workflows should "
+        "connect its chain_policy output, or use the compact Chain Policy."
     )
 
     def build(self, audio_mode="generated_audio",
-              continuation_mode="guide", context_length=22):
+              continuation_mode="guide", context_length=22,
+              audio_context_length=22):
         audio = migrate_legacy_audio_mode(audio_mode)
         mode = str(continuation_mode)
         context = int(context_length)
         matched_preset = None
         for candidate in (
                 "cut", "guide", "tone_guide", "latent_guide",
-                "detail_guide", "detail_av", "hard_av", "soft_av",
+                "detail_guide", "detail_av", "drift_av", "hard_av", "soft_av",
                 "audio_feather_av"):
             resolved = _contract_transition_policy(candidate)
             if (resolved["continuation_mode"] == mode and
@@ -8059,9 +8178,12 @@ class MiniMaxH3Legacy04PolicyAdapter:
             expert_override=matched_preset is None,
             continuation_mode=mode,
             context_length=context)
-        status = "legacy 0.4: audio=%s; transition=%s/%df" % (
-            audio_mode, mode, context)
-        return (audio, transition, status)
+        combined = _contract_compose_chain_policy(
+            audio, transition, audio_context_length=audio_context_length)
+        status = "legacy / expert: audio=%s; transition=%s/%df; audio=%df" % (
+            audio_mode, mode, context, int(audio_context_length))
+        return (audio, transition, status, combined,
+                int(audio_context_length))
 
 
 class MiniMaxH3AudioPolicy:
@@ -8100,7 +8222,7 @@ class MiniMaxH3AudioPolicy:
         "and source requirement summary.",
     )
     FUNCTION = "build"
-    CATEGORY = "conditioning/minimax/contex_loop/policies"
+    CATEGORY = "conditioning/minimax/contex_loop/policies/legacy/separate"
     DESCRIPTION = (
         "Define final soundtrack, exact source-audio reference, and generated "
         "audio-latent continuity independently. Connect this to Plan. Tagged "
@@ -8357,6 +8479,14 @@ class MiniMaxH3ChainPlan:
                                "Transition Policy. It overrides the legacy "
                                "context_length and continuation_mode widgets "
                                "with one resolved incoming-transition preset."}),
+                "chain_policy": (CHAIN_POLICY_TYPE, {
+                    "tooltip": "Recommended compact 0.5 control from MiniMax "
+                               "H3 Chain Policy. It combines transition, final "
+                               "soundtrack, source-audio reference, generated "
+                               "audio continuity, and automatic audio context "
+                               "in one connection. Do not connect the separate "
+                               "audio_policy or transition_policy inputs at "
+                               "the same time."}),
             },
         }
 
@@ -8388,7 +8518,7 @@ class MiniMaxH3ChainPlan:
               base_seed, segment_crf, video_blend_frames=0,
               continuation_mode="guide",
               plan_json_input=None, audio_policy=None,
-              transition_policy=None):
+              transition_policy=None, chain_policy=None):
         effective_plan_json = (
             plan_json_input
             if isinstance(plan_json_input, str) and plan_json_input.strip()
@@ -8400,7 +8530,7 @@ class MiniMaxH3ChainPlan:
             anchor_mode, crop, audio_mode, audio_context_length,
             default_duration_seconds, default_steps, base_seed, segment_crf,
             generation_fingerprint, video_blend_frames, continuation_mode,
-            audio_policy, transition_policy)
+            audio_policy, transition_policy, chain_policy)
         return (plan, plan["summary"], len(plan["shots"]),
                 plan["compatibility"]["width"],
                 plan["compatibility"]["height"],
@@ -14481,6 +14611,7 @@ if (PromptServer is not None and web is not None and
 
 
 CHAIN_NODE_CLASS_MAPPINGS = {
+    "MiniMaxH3ChainPolicy": MiniMaxH3ChainPolicy,
     "MiniMaxH3TransitionPolicy": MiniMaxH3TransitionPolicy,
     "MiniMaxH3Legacy04PolicyAdapter": MiniMaxH3Legacy04PolicyAdapter,
     "MiniMaxH3AudioPolicy": MiniMaxH3AudioPolicy,
@@ -14527,10 +14658,12 @@ CHAIN_NODE_CLASS_MAPPINGS = {
 }
 
 CHAIN_NODE_DISPLAY_NAME_MAPPINGS = {
-    "MiniMaxH3TransitionPolicy": "MiniMax H3 Transition Policy",
+    "MiniMaxH3ChainPolicy": "MiniMax H3 Chain Policy",
+    "MiniMaxH3TransitionPolicy": (
+        "MiniMax H3 Legacy Separate Transition Policy"),
     "MiniMaxH3Legacy04PolicyAdapter": (
-        "MiniMax H3 Legacy 0.4 Policy Adapter"),
-    "MiniMaxH3AudioPolicy": "MiniMax H3 Audio Policy",
+        "MiniMax H3 Legacy / Expert Policy (0.4)"),
+    "MiniMaxH3AudioPolicy": "MiniMax H3 Legacy Separate Audio Policy",
     "MiniMaxH3ChainPlan": "MiniMax H3 Contex Loop Plan",
     "MiniMaxH3ChainScenePromptEditor": "MiniMax H3 Scene Prompt Editor",
     "MiniMaxH3ChainRichScenePromptEditor": (
