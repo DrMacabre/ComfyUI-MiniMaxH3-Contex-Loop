@@ -104,7 +104,10 @@ For a first run:
 3. Choose an audio mode. For a prerecorded song, connect the same full track to
    Loop Start, Current Shot, and Assemble.
 4. Queue the workflow. Review Gate pauses after every safely saved scene.
-5. Approve, edit and retry, reroll the seed, or approve and stop.
+5. Approve, edit and retry, reroll the seed, or approve and stop. To compare
+   several takes per scene, set Review Gate's optional `candidate_count` above
+   1 (or convert it to an input and connect an INT node); the Gate generates
+   the candidates automatically and continues from the exact take you select.
 6. Assemble the completed or partial manifest.
 
 Existing output files are preserved. Assemble adds `_001`, `_002`, and so on
