@@ -373,7 +373,26 @@ const invalidProxyTiming = calculatePlanTiming({shots: [
     anchorMode: "head",
     continuationMode: "masked_av",
 });
-assert.match(invalidProxyTiming.errors.join("\n"), /RGB 5\/6 boundary proxy/);
+assert.match(
+    invalidProxyTiming.errors.join("\n"),
+    /Low-grid 5\/6 boundary proxy/,
+);
+
+const sceneOneProxyTiming = calculatePlanTiming({shots: [
+    {id: "one", prompt: "One.", length: 90,
+        context_spatial_proxy: "rgb_5_6"},
+    {id: "two", prompt: "Two.", length: 90},
+]}, {
+    contextLength: 5,
+    audioContextLength: 5,
+    encodeMode: "video",
+    anchorMode: "head",
+    continuationMode: "guide",
+});
+assert.match(
+    sceneOneProxyTiming.errors.join("\n"),
+    /Scene 1 cannot use a 5\/6 boundary proxy/,
+);
 
 const sharedOnlyPlan = parsePlanJson(JSON.stringify({
     prompt_prefix: "Shared identity and direction.",
@@ -454,7 +473,7 @@ assert.match(editorSource, /New random/);
 assert.match(editorSource, /Use derived/);
 assert.match(editorSource, /Continuation into scene/);
 assert.match(editorSource, /Boundary spatial proxy/);
-assert.match(editorSource, /RGB 5\/6 proxy · Guide/);
+assert.match(editorSource, /Low-grid 5\/6 proxy · Guide/);
 assert.match(editorSource, /Latent 5\/6 proxy · AV/);
 assert.match(editorSource, /context_spatial_proxy/);
 assert.match(editorSource, /Guide · new shot/);

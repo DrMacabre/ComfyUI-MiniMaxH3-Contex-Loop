@@ -122,7 +122,7 @@ assert.match(source, /state\.plan\.shots\.push\(makeShot\(state\.plan\.shots\)\)
 assert.match(source, /state\.active = state\.plan\.shots\.length - 1/);
 assert.match(source, /field\("Continuation", continuation\)/);
 assert.match(source, /field\("Boundary spatial proxy", spatialProxy\)/);
-assert.match(source, /RGB 5\/6 proxy · Guide/);
+assert.match(source, /Low-grid 5\/6 proxy · Guide/);
 assert.match(source, /Latent 5\/6 proxy · AV/);
 assert.match(source, /context_spatial_proxy/);
 assert.match(source, /field\("Context V \/ A", contextPair\)/);

@@ -486,14 +486,56 @@ def main():
     print("masked prefix: imported video/audio retain the VAE fallback path")
 
     chain = _load("chain_nodes")
-    rgb_proxy_source = torch.rand((2, 64, 96, 3), dtype=torch.float32)
-    rgb_proxy_source_copy = rgb_proxy_source.clone()
-    rgb_proxy_result, rgb_proxy_size = chain._rgb_context_spatial_proxy(
-        rgb_proxy_source)
     assert chain._context_spatial_proxy_size(1376, 768) == (1152, 640)
-    assert rgb_proxy_size == (64, 64)
-    assert tuple(rgb_proxy_result.shape) == (2, 64, 64, 3)
-    assert torch.equal(rgb_proxy_source, rgb_proxy_source_copy)
+
+    # Guide must reproduce the mixed-resolution operation in latent space:
+    # full saved 48x86 predecessor -> complete 40x72 decode -> delivered tail.
+    low_grid_video = torch.randn(
+        (1, 4, 7, 48, 86), dtype=torch.float32)
+    low_grid_source_copy = low_grid_video.clone()
+    low_grid_previous = {"samples": NestedTensor((
+        low_grid_video, torch.zeros((1, 32, 2, 37)),
+    ))}
+
+    class LowGridDecodeVAE:
+        def __init__(self):
+            self.shape = None
+            self.input = None
+
+        def decode(self, latent):
+            self.shape = tuple(latent.shape)
+            self.input = latent.detach().clone()
+            decoded = torch.zeros((22, 2, 3, 3), dtype=torch.float32)
+            for frame_index in range(22):
+                decoded[frame_index].fill_(float(frame_index))
+            return decoded
+
+    low_grid_vae = LowGridDecodeVAE()
+    low_grid_result, low_grid_size = chain._low_grid_guide_context({
+        "previous_latent": low_grid_previous,
+        "segments": [{
+            "index": 1, "raw_frames": 22, "delivered_frames": 17,
+        }],
+    }, low_grid_vae, 5, 1376, 768)
+    assert low_grid_vae.shape == (1, 4, 7, 40, 72)
+    assert low_grid_size == (1152, 640)
+    assert tuple(low_grid_result.shape) == (5, 2, 3, 3)
+    assert float(low_grid_result[0, 0, 0, 0]) == 17.0
+    assert float(low_grid_result[-1, 0, 0, 0]) == 21.0
+    assert torch.equal(low_grid_video, low_grid_source_copy)
+
+    native_low_grid_video = torch.randn(
+        (1, 4, 7, 40, 72), dtype=torch.float32)
+    native_low_grid_vae = LowGridDecodeVAE()
+    chain._low_grid_guide_context({
+        "previous_latent": {"samples": NestedTensor((
+            native_low_grid_video, torch.zeros((1, 32, 2, 37)),
+        ))},
+        "segments": [{
+            "index": 1, "raw_frames": 22, "delivered_frames": 17,
+        }],
+    }, native_low_grid_vae, 5, 1376, 768)
+    assert torch.equal(native_low_grid_vae.input, native_low_grid_video)
 
     class ReviewInterrupted(BaseException):
         pass

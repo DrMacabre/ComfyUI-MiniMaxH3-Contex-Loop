@@ -222,7 +222,7 @@ guide_proxy_plan = chain._normalize_plan(
 assert guide_proxy_plan["shots"][1]["context_spatial_proxy"] == "rgb_5_6"
 
 for invalid_proxy, mode, expected in (
-        ("rgb_5_6", "masked_av", "RGB 5/6"),
+        ("rgb_5_6", "masked_av", "low-grid 5/6"),
         ("latent_5_6", "guide", "latent 5/6")):
     try:
         chain._normalize_plan(

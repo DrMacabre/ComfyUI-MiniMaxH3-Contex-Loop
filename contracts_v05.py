@@ -45,18 +45,24 @@ DETAIL_AV_RECIPE = {
     "seed_xor": 0xD37A11,
 }
 
-# Boundary-only low-pass experiment reconstructed from a mixed-resolution
+# Boundary-only low-grid experiment reconstructed from a mixed-resolution
 # chain: a 1376x768 target carried a predecessor generated at 1152x640.  The
-# ratio is expressed on the H3 latent grid so other canvases retain valid
-# multiples of 32.  Only the disposable incoming context copy is transformed;
-# generated scenes and checkpoint/assembly artifacts keep the Plan canvas.
+# Guide recipe spatially reduces the complete saved predecessor video latent,
+# decodes that disposable 5/6 latent at its native 1152x640 canvas, then lets
+# Motion Context restore only the requested RGB tail to the target canvas.
+# This deliberately keeps the nonlinear low-grid VAE decode that a simple RGB
+# resize cannot reproduce.  AV keeps its cheaper latent down/up prefix filter.
+# Generated scenes and checkpoint/assembly artifacts keep the Plan canvas.
 CONTEXT_SPATIAL_PROXY_RECIPE = {
-    "version": "h3_context_spatial_proxy_v1",
+    "version": "h3_context_spatial_proxy_v2",
     "scale_numerator": 5,
     "scale_denominator": 6,
     "pixel_alignment": 32,
-    "rgb_downsample": "lanczos",
-    "rgb_restore": "motion_context_lanczos",
+    "guide_source": "saved_predecessor_video_latent",
+    "guide_latent_downsample": "area",
+    "guide_decode": "full_low_grid_stream",
+    "guide_tail": "delivered_frames",
+    "guide_restore": "motion_context_lanczos",
     "latent_downsample": "area",
     "latent_restore": "bilinear",
     "preserve_latent_statistics": False,

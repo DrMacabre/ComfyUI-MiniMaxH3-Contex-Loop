@@ -3117,20 +3117,105 @@ def _context_spatial_proxy_size(width: int, height: int) -> tuple[int, int]:
     return scaled(width), scaled(height)
 
 
-def _rgb_context_spatial_proxy(frames: Any) -> tuple[Any, tuple[int, int]]:
-    """Create the low-resolution RGB context copy restored by Guide later."""
-    if torch is None or not torch.is_tensor(frames) or frames.ndim != 4:
+def _low_grid_guide_context(
+        state: dict[str, Any], vae: Any, requested: int,
+        target_width: int, target_height: int) -> tuple[Any, tuple[int, int]]:
+    """Decode the predecessor through a disposable 5/6 video-latent grid.
+
+    This mirrors the mixed-resolution chain that motivated the experiment:
+    reduce the *complete* saved predecessor latent from 48x86 to 40x72,
+    decode it natively at 1152x640, then select the delivered tail.  Motion
+    Context performs the later RGB resize to the current target canvas.  A
+    post-decode RGB resize is not equivalent because it skips the VAE's
+    nonlinear low-grid decode.
+    """
+    if torch is None:
+        raise RuntimeError("H3 low-grid Guide requires PyTorch.")
+    requested = int(requested)
+    if requested <= 0:
         raise ValueError(
-            "H3 RGB context spatial proxy requires IMAGE "
-            "[frames,height,width,channels].")
-    height, width = int(frames.shape[1]), int(frames.shape[2])
-    proxy_width, proxy_height = _context_spatial_proxy_size(width, height)
-    if (proxy_width, proxy_height) == (width, height):
-        return frames.detach().contiguous().clone(), (
-            proxy_width, proxy_height)
-    return (_resize(
-        frames, proxy_width, proxy_height, "disabled"),
-        (proxy_width, proxy_height))
+            "H3 low-grid Guide requires a positive context length.")
+    previous_latent = state.get("previous_latent")
+    streams = (_streams_from_latent(previous_latent)
+               if previous_latent is not None else [])
+    if not streams:
+        raise ValueError(
+            "H3 low-grid Guide requires the saved sampled predecessor "
+            "latent; imported Existing Video Context is not eligible.")
+    source_video = streams[0]
+    if torch.is_tensor(source_video) and source_video.ndim == 4:
+        source_video = source_video.unsqueeze(0)
+    if (not torch.is_tensor(source_video) or source_video.ndim != 5
+            or not source_video.is_floating_point()):
+        raise ValueError(
+            "H3 low-grid Guide predecessor video latent must be floating "
+            "point [B,C,T,H,W], got %s." %
+            (tuple(getattr(source_video, "shape", ())),))
+
+    batch, channels, steps, source_latent_height, source_latent_width = (
+        int(value) for value in source_video.shape)
+    if batch != 1:
+        raise ValueError(
+            "H3 low-grid Guide supports H3 batch size 1, got %d." % batch)
+    proxy_width, proxy_height = _context_spatial_proxy_size(
+        int(target_width), int(target_height))
+    proxy_latent_width = max(1, proxy_width // 16)
+    proxy_latent_height = max(1, proxy_height // 16)
+    if ((source_latent_height, source_latent_width)
+            == (proxy_latent_height, proxy_latent_width)):
+        # Preserve an already-native 40x72 predecessor bit-for-bit. This is
+        # the exact path taken by the original mixed-resolution checkpoint.
+        reduced = source_video.detach().contiguous().clone()
+    else:
+        source = source_video.permute(0, 2, 1, 3, 4).reshape(
+            batch * steps, channels,
+            source_latent_height, source_latent_width)
+        reduced = torch.nn.functional.interpolate(
+            source.float(),
+            size=(proxy_latent_height, proxy_latent_width),
+            mode="area",
+        ).to(device=source_video.device, dtype=source_video.dtype)
+        reduced = reduced.reshape(
+            batch, steps, channels, proxy_latent_height,
+            proxy_latent_width).permute(0, 2, 1, 3, 4).contiguous()
+
+    decoded = vae.decode(reduced)
+    if not torch.is_tensor(decoded):
+        raise ValueError(
+            "H3 low-grid Guide video VAE returned %r instead of IMAGE."
+            % type(decoded))
+    if decoded.ndim == 5:
+        decoded = decoded.reshape(
+            -1, decoded.shape[-3], decoded.shape[-2], decoded.shape[-1])
+    if decoded.ndim != 4:
+        raise ValueError(
+            "H3 low-grid Guide video VAE returned image shape %s; expected "
+            "[frames,height,width,channels]." % (tuple(decoded.shape),))
+
+    segments = state.get("segments")
+    segment = segments[-1] if isinstance(segments, list) and segments else None
+    if not isinstance(segment, dict):
+        raise ValueError(
+            "H3 low-grid Guide requires predecessor segment metadata to "
+            "separate its delivered frames from its incoming overlap.")
+    raw_frames = int(segment.get("raw_frames", 0))
+    delivered_frames = int(segment.get("delivered_frames", 0))
+    trim_frames = raw_frames - delivered_frames
+    if (raw_frames <= 0 or delivered_frames <= 0 or trim_frames < 0
+            or int(decoded.shape[0]) != raw_frames):
+        raise ValueError(
+            "H3 low-grid Guide predecessor latent decoded to %d frames, but "
+            "segment metadata declares %d raw / %d delivered frames." %
+            (int(decoded.shape[0]), raw_frames, delivered_frames))
+    delivered = decoded[trim_frames:trim_frames + delivered_frames]
+    if requested > int(delivered.shape[0]):
+        raise ValueError(
+            "H3 low-grid Guide requests %d context frames, but predecessor "
+            "clip %d delivers only %d." %
+            (requested, int(segment.get("index", 0)),
+             int(delivered.shape[0])))
+    return (_tensor_cpu_clone(delivered[-requested:]),
+            (proxy_width, proxy_height))
 
 
 def _plan_context_storage_length(plan: dict[str, Any]) -> int:
@@ -4093,17 +4178,18 @@ def _normalize_plan(
             if (shot_context_spatial_proxy == "rgb_5_6" and
                     shot_continuation_mode not in RGB_PROXY_GUIDE_MODES):
                 raise ValueError(
-                    "Shot %d RGB 5/6 context spatial proxy requires Guide, "
-                    "Tone Carry Guide, or Detail Guide continuation." % index)
+                    "Shot %d low-grid 5/6 context spatial proxy requires "
+                    "Guide, Tone Carry Guide, or Detail Guide continuation."
+                    % index)
             if (shot_context_spatial_proxy == "latent_5_6" and
                     shot_continuation_mode not in MASKED_CONTINUATION_MODES):
                 raise ValueError(
                     "Shot %d latent 5/6 context spatial proxy requires an "
                     "AV continuation mode." % index)
-            if shot_context_spatial_proxy == "latent_5_6" and index == 1:
+            if shot_context_spatial_proxy != "off" and index == 1:
                 raise ValueError(
-                    "Shot 1 cannot use the latent 5/6 context spatial proxy: "
-                    "Existing Video Context has no sampled predecessor latent.")
+                    "Shot 1 cannot use a 5/6 context spatial proxy: Existing "
+                    "Video Context has no sampled predecessor latent.")
         if (shot_context_length and
                 shot_continuation_mode in MASKED_CONTINUATION_MODES):
             if shot_context_length not in AV_TRANSITION_CONTEXT_LENGTHS:
@@ -9935,6 +10021,19 @@ class MiniMaxH3ChainContext:
         if (generated_audio_context and previous_latent is None
                 and previous_audio is None and not external_first):
             raise ValueError("H3 chain continuation has no previous AV latent.")
+        if context_spatial_proxy == "rgb_5_6":
+            previous_frames, proxy_size = _low_grid_guide_context(
+                state, vae, context_length,
+                int(cfg["width"]), int(cfg["height"]))
+            _LOG.info(
+                "H3 Chain low-grid Guide proxy: scene %d decoded the full "
+                "saved predecessor latent at %dx%d, selected its final %d "
+                "delivered frames, then Motion Context restores them to "
+                "%dx%d before Guide VAE encoding. Saved artifacts remain "
+                "untouched.",
+                index, int(proxy_size[0]), int(proxy_size[1]),
+                int(previous_frames.shape[0]),
+                int(cfg["width"]), int(cfg["height"]))
         if continuation_mode == "tone_carry_guide" and context_length > 0:
             tone_carry = _recover_state_guide_tone_carry(state)
             if tone_carry is not None:
@@ -9961,18 +10060,6 @@ class MiniMaxH3ChainContext:
                 min(_TAPERED_GUIDE_RAMP_FRAMES,
                     int(previous_frames.shape[0])),
                 _TAPERED_GUIDE_ALPHA_END, noise_seed)
-        if context_spatial_proxy == "rgb_5_6":
-            original_height = int(previous_frames.shape[1])
-            original_width = int(previous_frames.shape[2])
-            previous_frames, proxy_size = _rgb_context_spatial_proxy(
-                previous_frames)
-            _LOG.info(
-                "H3 Chain RGB context spatial proxy: scene %d boundary "
-                "%dx%d -> %dx%d; Motion Context restores the proxy to "
-                "%dx%d before VAE encoding. Saved scenes remain full size.",
-                index, original_width, original_height,
-                int(proxy_size[0]), int(proxy_size[1]),
-                int(cfg["width"]), int(cfg["height"]))
         out, trim = MiniMaxH3MotionContext().apply(
             conditioning=conditioning,
             vae=vae,

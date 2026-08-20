@@ -667,7 +667,7 @@ export function calculatePlanTiming(plan, settings = {}) {
                 "guide", "tone_carry_guide", "tapered_guide",
             ].includes(continuationMode)) {
                 rowErrors.push(
-                    "RGB 5/6 boundary proxy requires Guide, Tone Carry Guide, or Detail Guide.",
+                    "Low-grid 5/6 boundary proxy requires Guide, Tone Carry Guide, or Detail Guide.",
                 );
             }
             if (contextSpatialProxy === "latent_5_6" && ![
@@ -678,9 +678,9 @@ export function calculatePlanTiming(plan, settings = {}) {
                     "Latent 5/6 boundary proxy requires an AV continuation mode.",
                 );
             }
-            if (contextSpatialProxy === "latent_5_6" && index === 1) {
+            if (index === 1) {
                 rowErrors.push(
-                    "Scene 1 cannot use a latent boundary proxy because imported context has no sampled predecessor latent.",
+                    "Scene 1 cannot use a 5/6 boundary proxy because imported context has no sampled predecessor latent.",
                 );
             }
         }

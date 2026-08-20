@@ -1009,7 +1009,7 @@ function mount(node) {
         const spatialProxy = element("select");
         for (const [value, label] of [
             ["", "Off · native context"],
-            ["rgb_5_6", "RGB 5/6 proxy · Guide"],
+            ["rgb_5_6", "Low-grid 5/6 proxy · Guide"],
             ["latent_5_6", "Latent 5/6 proxy · AV"],
         ]) {
             const option = element("option", "", label);
@@ -1017,7 +1017,7 @@ function mount(node) {
             spatialProxy.append(option);
         }
         spatialProxy.value = shot.context_spatial_proxy ?? "";
-        spatialProxy.title = "Scheduled only on the incoming boundary of this scene. RGB 5/6 is for Guide modes; Latent 5/6 is for AV modes. A 1376×768 context uses a 1152×640 proxy, then returns to native target geometry. Audio, output scenes, checkpoints, and assembly are not resized.";
+        spatialProxy.title = "Scheduled only on incoming boundaries for scenes 2+. Low-grid 5/6 reduces the full saved predecessor video latent to the proxy grid, VAE-decodes it there, and lets Motion Context restore the selected Guide tail; 1376×768 uses 1152×640 (48×86 → 40×72 latent). This exact low-grid decode costs extra preparation time and peak memory. Latent 5/6 is the cheaper copied-prefix latent filter for AV. Audio, outputs, checkpoints, and assembly stay native size.";
         spatialProxy.addEventListener("change", () => {
             if (spatialProxy.value) shot.context_spatial_proxy = spatialProxy.value;
             else delete shot.context_spatial_proxy;

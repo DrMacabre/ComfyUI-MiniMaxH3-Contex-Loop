@@ -92,9 +92,17 @@ to burn in or needs a controlled spatial reset:
 }
 ```
 
-`rgb_5_6` is available for Guide, Tone Carry Guide, and Detail Guide. It
-downscales only the copied RGB context (1376×768 becomes 1152×640); Motion
-Context restores that copy to the target geometry before VAE encoding.
+`rgb_5_6` is shown as **Low-grid 5/6 · Guide** and is available for Guide,
+Tone Carry Guide, and Detail Guide on scenes 2 and later. It reduces the
+complete saved predecessor video latent (for example, 86×48 becomes 72×40),
+VAE-decodes that disposable stream natively at 1152×640, and selects the
+requested delivered RGB tail. Motion Context then restores that tail to
+1376×768 before the normal Guide encode. This preserves the nonlinear
+low-grid VAE decode observed in the source mixed-resolution experiment; it is
+not merely an RGB resize.
+Because it VAE-decodes the predecessor stream once more, Low-grid Guide uses
+more preparation time and peak memory than native Guide. Schedule it only on
+boundaries where the reset is wanted.
 `latent_5_6` is available for AV modes. It downscales and restores only the
 copied video-prefix latent (86×48 becomes 72×40 and returns to 86×48). It does
 not filter the paired audio prefix. Neither mode resizes generated frames,

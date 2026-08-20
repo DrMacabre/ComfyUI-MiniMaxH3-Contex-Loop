@@ -4,6 +4,13 @@ Newest first. This file keeps release history out of the onboarding README.
 
 ## v0.5.0 — Source Timeline and workflow clarity
 
+- Corrected the scheduled Guide 5/6 spatial proxy to reproduce the observed
+  mixed-resolution chain operation: reduce the complete saved predecessor
+  video latent, VAE-decode it on the 5/6 grid, select the delivered RGB tail,
+  and only then restore it through Motion Context. The UI now calls this
+  **Low-grid 5/6 · Guide** instead of implying a simple RGB resize. Existing
+  AV latent-prefix proxy behavior is unchanged.
+
 - Made titles, active controls, and rich reference tags derive their semantic
   colors from the active ComfyUI foreground. Both scene prompt editors retain
   their pastel dark-theme palette while gaining readable contrast in light

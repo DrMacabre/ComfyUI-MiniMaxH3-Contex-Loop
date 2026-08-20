@@ -78,7 +78,7 @@ def main():
     assert contracts.CONTEXT_SPATIAL_PROXY_MODES == (
         "off", "rgb_5_6", "latent_5_6")
     assert contracts.CONTEXT_SPATIAL_PROXY_RECIPE[
-        "version"] == "h3_context_spatial_proxy_v1"
+        "version"] == "h3_context_spatial_proxy_v2"
     dependency_shape = contracts.scene_dependency_shape()
     assert dependency_shape["version"] == contracts.SCENE_DEPENDENCY_VERSION
     assert tuple(dependency_shape["scopes"]) == contracts.DEPENDENCY_SCOPES
