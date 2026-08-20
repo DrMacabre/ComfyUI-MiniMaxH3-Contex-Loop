@@ -18,7 +18,7 @@ import math
 
 import torch
 
-from .contracts_v05 import DETAIL_AV_RECIPE
+from .contracts_v05 import CONTEXT_SPATIAL_PROXY_RECIPE, DETAIL_AV_RECIPE
 from .nodes import (
     AV_RUN_GRID,
     AUDIO_HZ,
@@ -31,6 +31,56 @@ from .nodes import (
 
 
 _LOG = logging.getLogger("minimax_h3_context_loop.masked_prefix")
+
+
+def _latent_context_spatial_proxy(video_prefix):
+    """Low-pass a copied AV prefix through the fixed 5/6 latent canvas.
+
+    Time, channels, dtype, device, and final target geometry are unchanged.
+    Only this disposable copy is filtered; the predecessor checkpoint remains
+    byte-for-byte untouched.
+    """
+    if not torch.is_tensor(video_prefix) or video_prefix.ndim != 5:
+        raise ValueError(
+            "h3_context_spatial_proxy: video prefix must be "
+            "[B,C,T,H,W], got %s." %
+            (tuple(getattr(video_prefix, "shape", ())),))
+    if not video_prefix.is_floating_point():
+        raise ValueError(
+            "h3_context_spatial_proxy: video prefix must be floating point.")
+
+    batch, channels, steps, latent_height, latent_width = (
+        int(value) for value in video_prefix.shape)
+    alignment = int(CONTEXT_SPATIAL_PROXY_RECIPE["pixel_alignment"])
+    numerator = int(CONTEXT_SPATIAL_PROXY_RECIPE["scale_numerator"])
+    denominator = int(CONTEXT_SPATIAL_PROXY_RECIPE["scale_denominator"])
+
+    def proxy_latent_size(value):
+        pixels = int(value) * 16
+        units = max(1, int(round(
+            pixels * numerator / float(denominator * alignment))))
+        return max(1, units * alignment // 16)
+
+    proxy_height = proxy_latent_size(latent_height)
+    proxy_width = proxy_latent_size(latent_width)
+    if (proxy_height, proxy_width) == (latent_height, latent_width):
+        return video_prefix.detach().contiguous().clone(), (
+            proxy_height, proxy_width)
+
+    source = video_prefix.permute(0, 2, 1, 3, 4).reshape(
+        batch * steps, channels, latent_height, latent_width)
+    work = source.float()
+    reduced = torch.nn.functional.interpolate(
+        work, size=(proxy_height, proxy_width), mode="area")
+    restored = torch.nn.functional.interpolate(
+        reduced, size=(latent_height, latent_width), mode="bilinear",
+        align_corners=False)
+    restored = restored.to(
+        device=video_prefix.device, dtype=video_prefix.dtype)
+    restored = restored.reshape(
+        batch, steps, channels, latent_height, latent_width).permute(
+            0, 2, 1, 3, 4).contiguous()
+    return restored, (proxy_height, proxy_width)
 
 
 def _detail_av_alpha(position, step_count):
@@ -442,6 +492,7 @@ def apply_masked_prefix(
     preserve_audio_prefix=True,
     detail_video_taper=False,
     detail_video_seed=0,
+    context_spatial_proxy="off",
 ):
     """Return conditioning, masked target latent, and repeated trim length."""
     _require_h3_mask_support()
@@ -480,6 +531,26 @@ def apply_masked_prefix(
         raise ValueError(
             "h3_masked_prefix: video prefix consumes the whole target latent."
         )
+
+    context_spatial_proxy = str(context_spatial_proxy or "off").strip().lower()
+    if context_spatial_proxy == "latent_5_6":
+        if previous_latent is None:
+            raise ValueError(
+                "h3_context_spatial_proxy: latent 5/6 requires a sampled "
+                "predecessor latent; imported RGB context is not eligible.")
+        original_height = int(video_prefix.shape[3])
+        original_width = int(video_prefix.shape[4])
+        video_prefix, proxy_size = _latent_context_spatial_proxy(video_prefix)
+        video_source += " + 5/6 latent spatial proxy"
+        _LOG.info(
+            "h3_context_spatial_proxy: AV boundary latent %dx%d -> %dx%d "
+            "-> %dx%d; audio and saved predecessor are unchanged.",
+            original_width, original_height, int(proxy_size[1]),
+            int(proxy_size[0]), original_width, original_height)
+    elif context_spatial_proxy != "off":
+        raise ValueError(
+            "h3_context_spatial_proxy: masked AV accepts only off or "
+            "latent_5_6, got %r." % context_spatial_proxy)
 
     detail_scale = None
     detail_alphas = ()

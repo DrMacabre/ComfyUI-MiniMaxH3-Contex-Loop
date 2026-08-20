@@ -1006,6 +1006,24 @@ function mount(node) {
             writePlan();
             renderStatus();
         });
+        const spatialProxy = element("select");
+        for (const [value, label] of [
+            ["", "Off · native context"],
+            ["rgb_5_6", "RGB 5/6 proxy · Guide"],
+            ["latent_5_6", "Latent 5/6 proxy · AV"],
+        ]) {
+            const option = element("option", "", label);
+            option.value = value;
+            spatialProxy.append(option);
+        }
+        spatialProxy.value = shot.context_spatial_proxy ?? "";
+        spatialProxy.title = "Scheduled only on the incoming boundary of this scene. RGB 5/6 is for Guide modes; Latent 5/6 is for AV modes. A 1376×768 context uses a 1152×640 proxy, then returns to native target geometry. Audio, output scenes, checkpoints, and assembly are not resized.";
+        spatialProxy.addEventListener("change", () => {
+            if (spatialProxy.value) shot.context_spatial_proxy = spatialProxy.value;
+            else delete shot.context_spatial_proxy;
+            writePlan();
+            renderStatus();
+        });
         const form = element("div", "h3studio-form");
         form.append(
             field("Scene ID", id), field("Length", lengthControl),
@@ -1013,6 +1031,7 @@ function mount(node) {
             field("Context V / A", contextPair),
             field("Blend entering scene", blendFrames),
             field("Continuation", continuation),
+            field("Boundary spatial proxy", spatialProxy),
         );
 
         if (state.promptEditors.length) {

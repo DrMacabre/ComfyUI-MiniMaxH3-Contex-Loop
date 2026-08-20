@@ -6,6 +6,7 @@ import {
     AV_CONTEXT_LENGTHS,
     AUTO_SCENE_COLORS,
     CONTINUATION_MODES,
+    CONTEXT_SPATIAL_PROXY_MODES,
     H3_CONTEXT_LENGTHS,
     automaticSceneColor,
     calculatePlanTiming,
@@ -39,6 +40,9 @@ assert.deepEqual(
 );
 assert.equal(H3_CONTEXT_LENGTHS.at(-1), 243);
 assert.deepEqual(AV_CONTEXT_LENGTHS, [39, 90, 141, 192, 243]);
+assert.deepEqual(CONTEXT_SPATIAL_PROXY_MODES, [
+    "off", "rgb_5_6", "latent_5_6",
+]);
 assert.equal(new Set(AUTO_SCENE_COLORS).size, AUTO_SCENE_COLORS.length);
 assert.equal(automaticSceneColor(0), AUTO_SCENE_COLORS[0]);
 assert.equal(automaticSceneColor(12), AUTO_SCENE_COLORS[0]);
@@ -340,6 +344,37 @@ assert.equal(audioOnlyTiming.shots[1].audioContextLength, 33);
 assert.equal(audioOnlyTiming.shots[1].deliveredFrames, 192);
 assert.deepEqual(audioOnlyTiming.errors, []);
 
+const scheduledProxyTiming = calculatePlanTiming({shots: [
+    {id: "one", prompt: "One.", length: 90},
+    {id: "two", prompt: "Two.", length: 90},
+    {id: "three", prompt: "Three.", length: 90},
+    {id: "four", prompt: "Four.", length: 90,
+        context_spatial_proxy: "latent_5_6"},
+]}, {
+    contextLength: 39,
+    audioContextLength: 39,
+    encodeMode: "video",
+    anchorMode: "head",
+    continuationMode: "masked_av",
+});
+assert.deepEqual(scheduledProxyTiming.errors, []);
+assert.deepEqual(
+    scheduledProxyTiming.shots.map((shot) => shot.contextSpatialProxy),
+    ["off", "off", "off", "latent_5_6"],
+);
+const invalidProxyTiming = calculatePlanTiming({shots: [
+    {id: "one", prompt: "One.", length: 90},
+    {id: "two", prompt: "Two.", length: 90,
+        context_spatial_proxy: "rgb_5_6"},
+]}, {
+    contextLength: 39,
+    audioContextLength: 39,
+    encodeMode: "video",
+    anchorMode: "head",
+    continuationMode: "masked_av",
+});
+assert.match(invalidProxyTiming.errors.join("\n"), /RGB 5\/6 boundary proxy/);
+
 const sharedOnlyPlan = parsePlanJson(JSON.stringify({
     prompt_prefix: "Shared identity and direction.",
     shots: [{id: "shared_only", prompt: ""}],
@@ -418,6 +453,10 @@ assert.match(editorSource, /Derived seed:/);
 assert.match(editorSource, /New random/);
 assert.match(editorSource, /Use derived/);
 assert.match(editorSource, /Continuation into scene/);
+assert.match(editorSource, /Boundary spatial proxy/);
+assert.match(editorSource, /RGB 5\/6 proxy · Guide/);
+assert.match(editorSource, /Latent 5\/6 proxy · AV/);
+assert.match(editorSource, /context_spatial_proxy/);
 assert.match(editorSource, /Guide · new shot/);
 assert.match(editorSource, /Latent Guide · direct generated latent/);
 assert.match(editorSource, /Detail Guide · color injection/);

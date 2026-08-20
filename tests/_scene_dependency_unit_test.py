@@ -165,6 +165,80 @@ assert detail_diffs == [{
     "regeneration_required": True,
 }]
 
+# Spatial reset is scheduled on the incoming scene, not inherited globally.
+proxy_plan = chain._normalize_plan(
+    json.dumps({"shots": [
+        {"id": "one", "prompt": "one", "length": 90},
+        {"id": "two", "prompt": "two", "length": 90},
+        {"id": "three", "prompt": "three", "length": 90},
+        {"id": "four", "prompt": "four", "length": 90,
+         "context_spatial_proxy": "latent_5_6"},
+    ]}),
+    "scheduled-proxy-test", 1376, 768, 39, "video", "head", "disabled",
+    "source_track", 39, 1.0, 8, 11, 18, "body:auto:v1", 0,
+    "masked_av", chain._contract_audio_policy("source", "on", "off"))
+assert all("context_spatial_proxy" not in shot
+           for shot in proxy_plan["shots"][:3])
+assert proxy_plan["shots"][3]["context_spatial_proxy"] == "latent_5_6"
+assert chain._context_spatial_proxy_size(1376, 768) == (1152, 640)
+scene3_proxy_dependency = chain._scene_dependency_record(proxy_plan, 3, None)
+scene4_proxy_dependency = chain._scene_dependency_record(proxy_plan, 4, None)
+assert "context_spatial_proxy" not in scene3_proxy_dependency[
+    "scopes"]["incoming_boundary"]
+assert scene4_proxy_dependency["scopes"]["incoming_boundary"][
+    "context_spatial_proxy"] == "latent_5_6"
+assert scene4_proxy_dependency["scopes"]["incoming_boundary"][
+    "context_spatial_proxy_recipe"] == chain.CONTEXT_SPATIAL_PROXY_RECIPE
+
+native_plan = chain._normalize_plan(
+    json.dumps({"shots": [
+        {"id": name, "prompt": name, "length": 90}
+        for name in ("one", "two", "three", "four")
+    ]}),
+    "scheduled-proxy-test", 1376, 768, 39, "video", "head", "disabled",
+    "source_track", 39, 1.0, 8, 11, 18, "body:auto:v1", 0,
+    "masked_av", chain._contract_audio_policy("source", "on", "off"))
+assert chain._history_hash(proxy_plan, 3) == chain._history_hash(native_plan, 3)
+assert chain._history_hash(proxy_plan, 4) != chain._history_hash(native_plan, 4)
+assert chain._scene_dependency_diffs(
+    chain._scene_dependency_record(native_plan, 3, None),
+    scene3_proxy_dependency) == []
+proxy_diffs = chain._scene_dependency_diffs(
+    chain._scene_dependency_record(native_plan, 4, None),
+    scene4_proxy_dependency)
+assert proxy_diffs
+assert all(item["scene"] == 4 and item["scope"] == "incoming_boundary"
+           and item["regeneration_required"] for item in proxy_diffs)
+
+guide_proxy_plan = chain._normalize_plan(
+    json.dumps({"shots": [
+        {"id": "one", "prompt": "one", "length": 39},
+        {"id": "two", "prompt": "two", "length": 39,
+         "context_spatial_proxy": "rgb_5_6"},
+    ]}),
+    "rgb-proxy-test", 1376, 768, 5, "video", "head", "disabled",
+    "source_track", 5, 1.0, 8, 11, 18, "body:auto:v1", 0,
+    "guide", chain._contract_audio_policy("source", "on", "off"))
+assert guide_proxy_plan["shots"][1]["context_spatial_proxy"] == "rgb_5_6"
+
+for invalid_proxy, mode, expected in (
+        ("rgb_5_6", "masked_av", "RGB 5/6"),
+        ("latent_5_6", "guide", "latent 5/6")):
+    try:
+        chain._normalize_plan(
+            json.dumps({"shots": [
+                {"id": "one", "prompt": "one", "length": 90},
+                {"id": "two", "prompt": "two", "length": 90,
+                 "context_spatial_proxy": invalid_proxy},
+            ]}),
+            "invalid-proxy", 64, 64, 39, "video", "head", "disabled",
+            "source_track", 39, 1.0, 8, 11, 18, "body:auto:v1", 0,
+            mode, chain._contract_audio_policy("source", "on", "off"))
+    except ValueError as exc:
+        assert expected in str(exc)
+    else:
+        raise AssertionError("incompatible context spatial proxy was accepted")
+
 print("H3 scene dependencies: scene-local PCM, boundary isolation, assembly exclusion, and structured diffs pass")
 
 

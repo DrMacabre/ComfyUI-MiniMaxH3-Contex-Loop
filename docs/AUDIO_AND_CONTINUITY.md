@@ -77,6 +77,31 @@ mode may pair either experimental Guide with another Guide context length; 22
 is the published baseline. Mixed plans must still use
 encode/anchor settings compatible with every AV-mask scene.
 
+### Scheduled boundary spatial proxy
+
+`context_spatial_proxy` is an optional **per-scene incoming-boundary** setting.
+It is off when absent, so it can be scheduled only where a long chain begins
+to burn in or needs a controlled spatial reset:
+
+```json
+{
+  "id": "scene_4",
+  "continuation_mode": "masked_av",
+  "context_length": 39,
+  "context_spatial_proxy": "latent_5_6"
+}
+```
+
+`rgb_5_6` is available for Guide, Tone Carry Guide, and Detail Guide. It
+downscales only the copied RGB context (1376×768 becomes 1152×640); Motion
+Context restores that copy to the target geometry before VAE encoding.
+`latent_5_6` is available for AV modes. It downscales and restores only the
+copied video-prefix latent (86×48 becomes 72×40 and returns to 86×48). It does
+not filter the paired audio prefix. Neither mode resizes generated frames,
+saved checkpoints, predecessor state, or assembly output. The fixed recipe is
+stored in the incoming-scene dependency, so enabling it for scene 4 leaves
+scenes 2 and 3 valid but requires scene 4 and its successors to be regenerated.
+
 ## Source Timeline wiring
 
 Register picture and sound once. New workflows pass a typed descriptor instead

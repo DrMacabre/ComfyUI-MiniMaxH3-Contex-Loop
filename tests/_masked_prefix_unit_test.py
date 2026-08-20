@@ -142,6 +142,17 @@ def main():
     masked = _load("masked_context")
     masked._require_h3_mask_support = lambda: None
 
+    # The fixed AV recipe reproduces the observed 1376x768 -> 1152x640
+    # experiment in latent space without changing time or final geometry.
+    proxy_source = torch.randn((1, 4, 3, 48, 86), dtype=torch.float32)
+    proxy_source_copy = proxy_source.clone()
+    proxy_result, proxy_shape = masked._latent_context_spatial_proxy(
+        proxy_source)
+    assert proxy_shape == (40, 72)
+    assert proxy_result.shape == proxy_source.shape
+    assert not torch.equal(proxy_result, proxy_source)
+    assert torch.equal(proxy_source, proxy_source_copy)
+
     target_frames = 192
     target_video_steps = 57
     target_audio_steps = 320
@@ -206,6 +217,25 @@ def main():
     assert torch.all(video_mask[:, :, prefix_video_steps:] == 1.0)
     assert not torch.count_nonzero(audio_mask[..., :prefix_audio_steps])
     assert torch.all(audio_mask[..., prefix_audio_steps:] == 1.0)
+
+    _, proxy_out, proxy_trim = masked.apply_masked_prefix(
+        conditioning=conditioning,
+        vae=UnexpectedVideoVAE(),
+        latent=target,
+        previous_frames=frames,
+        context_length=39,
+        crop="disabled",
+        previous_latent=previous,
+        context_spatial_proxy="latent_5_6",
+    )
+    proxy_video, proxy_audio = proxy_out["samples"].unbind()
+    assert proxy_trim == 39
+    # This tiny fixture only changes one latent spatial axis, while proving
+    # that the paired sound is copied exactly and never spatially filtered.
+    assert proxy_video.shape == video.shape
+    assert torch.equal(
+        proxy_audio[..., :prefix_audio_steps],
+        previous_audio[..., -prefix_audio_steps:])
 
     # Detail AV perturbs only a disposable copy of the carried 12-step video
     # prefix. Audio, masks, target latent, and accepted predecessor stay exact.
@@ -456,6 +486,14 @@ def main():
     print("masked prefix: imported video/audio retain the VAE fallback path")
 
     chain = _load("chain_nodes")
+    rgb_proxy_source = torch.rand((2, 64, 96, 3), dtype=torch.float32)
+    rgb_proxy_source_copy = rgb_proxy_source.clone()
+    rgb_proxy_result, rgb_proxy_size = chain._rgb_context_spatial_proxy(
+        rgb_proxy_source)
+    assert chain._context_spatial_proxy_size(1376, 768) == (1152, 640)
+    assert rgb_proxy_size == (64, 64)
+    assert tuple(rgb_proxy_result.shape) == (2, 64, 64, 3)
+    assert torch.equal(rgb_proxy_source, rgb_proxy_source_copy)
 
     class ReviewInterrupted(BaseException):
         pass

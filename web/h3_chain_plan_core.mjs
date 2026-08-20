@@ -9,6 +9,9 @@ export const CONTINUATION_MODES = Object.freeze([
     "guide", "tone_carry_guide", "latent_guide", "tapered_guide",
     "masked_av", "tapered_av", "feathered_av", "audio_feathered_av",
 ]);
+export const CONTEXT_SPATIAL_PROXY_MODES = Object.freeze([
+    "off", "rgb_5_6", "latent_5_6",
+]);
 const RETIRED_CONTINUATION_MODES = Object.freeze({
     feathered_av_rgb: "feathered_av",
 });
@@ -647,6 +650,41 @@ export function calculatePlanTiming(plan, settings = {}) {
             rowErrors.push(error.message);
         }
 
+        const contextSpatialProxy = String(
+            shot.context_spatial_proxy ?? "off",
+        ).trim().toLowerCase() || "off";
+        if (!CONTEXT_SPATIAL_PROXY_MODES.includes(contextSpatialProxy)) {
+            rowErrors.push(
+                `Unknown boundary spatial proxy “${contextSpatialProxy}”.`,
+            );
+        } else if (contextSpatialProxy !== "off") {
+            if (sceneContext <= 0) {
+                rowErrors.push(
+                    "Boundary spatial proxy requires positive video context.",
+                );
+            }
+            if (contextSpatialProxy === "rgb_5_6" && ![
+                "guide", "tone_carry_guide", "tapered_guide",
+            ].includes(continuationMode)) {
+                rowErrors.push(
+                    "RGB 5/6 boundary proxy requires Guide, Tone Carry Guide, or Detail Guide.",
+                );
+            }
+            if (contextSpatialProxy === "latent_5_6" && ![
+                "masked_av", "tapered_av", "feathered_av",
+                "audio_feathered_av",
+            ].includes(continuationMode)) {
+                rowErrors.push(
+                    "Latent 5/6 boundary proxy requires an AV continuation mode.",
+                );
+            }
+            if (contextSpatialProxy === "latent_5_6" && index === 1) {
+                rowErrors.push(
+                    "Scene 1 cannot use a latent boundary proxy because imported context has no sampled predecessor latent.",
+                );
+            }
+        }
+
         let rawFrames = 0;
         try {
             rawFrames = sceneRawFrames(shot, planDefaultDuration);
@@ -684,6 +722,7 @@ export function calculatePlanTiming(plan, settings = {}) {
             )
                 ? sceneContext : sceneAudioContext,
             continuationMode,
+            contextSpatialProxy,
             errors: rowErrors,
         });
         stitchedFrames += deliveredFrames;

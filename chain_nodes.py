@@ -96,6 +96,8 @@ from .av_timing import (
 from .contracts_v05 import (
     AV_TRANSITION_CONTEXT_LENGTHS,
     AUDIO_POLICY_VERSION,
+    CONTEXT_SPATIAL_PROXY_MODES,
+    CONTEXT_SPATIAL_PROXY_RECIPE,
     CONTINUATION_POLICIES,
     DETAIL_AV_RECIPE,
     DEPENDENCY_SCOPES,
@@ -145,6 +147,8 @@ GUIDE_CONTINUATION_MODES = frozenset((
     "guide", "tone_carry_guide", "latent_guide", "tapered_guide"))
 MASKED_CONTINUATION_MODES = frozenset((
     "masked_av", "tapered_av", "feathered_av", "audio_feathered_av"))
+RGB_PROXY_GUIDE_MODES = frozenset((
+    "guide", "tone_carry_guide", "tapered_guide"))
 REFERENCE_AUDIO_TIMELINE_MODES = ("standalone", "source_timeline")
 MOTION_REFERENCE_SHORT_EDGES = ("384", "512", "768", "source")
 
@@ -3086,6 +3090,49 @@ def _shot_video_blend_frames(shot: dict[str, Any],
     return resolved
 
 
+def _shot_context_spatial_proxy(shot: dict[str, Any]) -> str:
+    """Resolve one scene's optional boundary-only spatial proxy."""
+    value = shot.get("context_spatial_proxy")
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return "off"
+    resolved = str(value).strip().lower()
+    if resolved not in CONTEXT_SPATIAL_PROXY_MODES:
+        raise ValueError(
+            "H3 scene context spatial proxy must be one of %s." %
+            (CONTEXT_SPATIAL_PROXY_MODES,))
+    return resolved
+
+
+def _context_spatial_proxy_size(width: int, height: int) -> tuple[int, int]:
+    """Return the recipe's aligned 5/6 proxy canvas."""
+    alignment = int(CONTEXT_SPATIAL_PROXY_RECIPE["pixel_alignment"])
+    numerator = int(CONTEXT_SPATIAL_PROXY_RECIPE["scale_numerator"])
+    denominator = int(CONTEXT_SPATIAL_PROXY_RECIPE["scale_denominator"])
+
+    def scaled(value: int) -> int:
+        units = max(1, int(round(
+            int(value) * numerator / float(denominator * alignment))))
+        return units * alignment
+
+    return scaled(width), scaled(height)
+
+
+def _rgb_context_spatial_proxy(frames: Any) -> tuple[Any, tuple[int, int]]:
+    """Create the low-resolution RGB context copy restored by Guide later."""
+    if torch is None or not torch.is_tensor(frames) or frames.ndim != 4:
+        raise ValueError(
+            "H3 RGB context spatial proxy requires IMAGE "
+            "[frames,height,width,channels].")
+    height, width = int(frames.shape[1]), int(frames.shape[2])
+    proxy_width, proxy_height = _context_spatial_proxy_size(width, height)
+    if (proxy_width, proxy_height) == (width, height):
+        return frames.detach().contiguous().clone(), (
+            proxy_width, proxy_height)
+    return (_resize(
+        frames, proxy_width, proxy_height, "disabled"),
+        (proxy_width, proxy_height))
+
+
 def _plan_context_storage_length(plan: dict[str, Any]) -> int:
     """Tail length checkpoints retain for all transitions in this plan."""
     cfg = plan["compatibility"]
@@ -3115,6 +3162,9 @@ def _legacy_history_contract(
             contract["context_length"] = shot["context_length"]
         if "audio_context_length" in shot:
             contract["audio_context_length"] = shot["audio_context_length"]
+        if "context_spatial_proxy" in shot:
+            contract["context_spatial_proxy"] = shot[
+                "context_spatial_proxy"]
         shots.append(contract)
     return {
         "version": PLAN_VERSION,
@@ -3261,6 +3311,7 @@ def _scene_dependency_record(
             shot, int(compatibility.get("video_blend_frames", 0)), context))
     transition = str(shot.get(
         "continuation_mode", compatibility.get("continuation_mode", "guide")))
+    context_spatial_proxy = _shot_context_spatial_proxy(shot)
     external_hash = str(compatibility.get("external_context_hash") or "")
     if index == 1 and not external_hash:
         context = 0
@@ -3320,6 +3371,12 @@ def _scene_dependency_record(
         # pre-fix masked scene cannot be resumed as if it used the new clocks.
         scopes["incoming_boundary"]["masked_audio_contract"] = (
             MASKED_AUDIO_CONTRACT)
+    if context_spatial_proxy != "off":
+        scopes["incoming_boundary"].update({
+            "context_spatial_proxy": context_spatial_proxy,
+            "context_spatial_proxy_recipe": dict(
+                CONTEXT_SPATIAL_PROXY_RECIPE),
+        })
     if transition == "tapered_av":
         scopes["incoming_boundary"]["detail_av_recipe"] = dict(
             DETAIL_AV_RECIPE)
@@ -4024,6 +4081,29 @@ def _normalize_plan(
             raise ValueError(
                 "Shot %d has unknown H3 continuation mode %r." %
                 (index, shot_continuation_mode))
+        try:
+            shot_context_spatial_proxy = _shot_context_spatial_proxy(item)
+        except ValueError as exc:
+            raise ValueError("Shot %d: %s" % (index, exc)) from exc
+        if shot_context_spatial_proxy != "off":
+            if shot_context_length <= 0:
+                raise ValueError(
+                    "Shot %d context spatial proxy requires a positive "
+                    "context_length." % index)
+            if (shot_context_spatial_proxy == "rgb_5_6" and
+                    shot_continuation_mode not in RGB_PROXY_GUIDE_MODES):
+                raise ValueError(
+                    "Shot %d RGB 5/6 context spatial proxy requires Guide, "
+                    "Tone Carry Guide, or Detail Guide continuation." % index)
+            if (shot_context_spatial_proxy == "latent_5_6" and
+                    shot_continuation_mode not in MASKED_CONTINUATION_MODES):
+                raise ValueError(
+                    "Shot %d latent 5/6 context spatial proxy requires an "
+                    "AV continuation mode." % index)
+            if shot_context_spatial_proxy == "latent_5_6" and index == 1:
+                raise ValueError(
+                    "Shot 1 cannot use the latent 5/6 context spatial proxy: "
+                    "Existing Video Context has no sampled predecessor latent.")
         if (shot_context_length and
                 shot_continuation_mode in MASKED_CONTINUATION_MODES):
             if shot_context_length not in AV_TRANSITION_CONTEXT_LENGTHS:
@@ -4152,6 +4232,10 @@ def _normalize_plan(
             # Assembly-only: deliberately excluded from predecessor history,
             # but retained in the editable scene declaration and manifest.
             shot["video_blend_frames"] = shot_video_blend_frames
+        if shot_context_spatial_proxy != "off":
+            # Boundary-only and deliberately scene-local: absence leaves this
+            # scene and all other incoming boundaries unchanged.
+            shot["context_spatial_proxy"] = shot_context_spatial_proxy
         shots.append(shot)
         stitched_frames += delivered_frames
 
@@ -4490,7 +4574,9 @@ def _effective_editor_plan(plan: dict[str, Any]) -> dict[str, Any]:
              **({"audio_context_length": shot["audio_context_length"]}
                 if "audio_context_length" in shot else {}),
              **({"video_blend_frames": shot["video_blend_frames"]}
-                if "video_blend_frames" in shot else {}))
+                if "video_blend_frames" in shot else {}),
+             **({"context_spatial_proxy": shot["context_spatial_proxy"]}
+                if "context_spatial_proxy" in shot else {}))
             for shot in plan["shots"]],
     }
 
@@ -5020,7 +5106,8 @@ def _public_segment(value: dict[str, Any]) -> dict[str, Any]:
         "scene_dependency",
         "prompt_prefix", "scene_prompt", "prompt", "prompt_hash", "archives",
         "seed", "steps", "continuation_mode", "context_length",
-        "audio_context_length", "guide_tone_carry",
+        "audio_context_length", "context_spatial_proxy",
+        "guide_tone_carry",
         "guide_tone_input_applied",
         "sample_rate", "segment_sha256",
         "checkpoint_sha256", "prompt_file_sha256", "predecessor_revision",
@@ -9774,6 +9861,7 @@ class MiniMaxH3ChainContext:
             shot, int(cfg["audio_context_length"]), context_length)
         continuation_mode = shot.get(
             "continuation_mode", cfg.get("continuation_mode", "guide"))
+        context_spatial_proxy = _shot_context_spatial_proxy(shot)
         external_first = index == 1 and bool(state.get("external_context"))
         generated_audio_context = (
             continuation_mode in GUIDE_CONTINUATION_MODES
@@ -9833,6 +9921,7 @@ class MiniMaxH3ChainContext:
                 preserve_audio_prefix=preserve_audio_prefix,
                 detail_video_taper=(continuation_mode == "tapered_av"),
                 detail_video_seed=detail_video_seed,
+                context_spatial_proxy=context_spatial_proxy,
             )
             return (out_conditioning, trim, True, out_latent)
         previous_latent = (state.get("previous_latent")
@@ -9872,6 +9961,18 @@ class MiniMaxH3ChainContext:
                 min(_TAPERED_GUIDE_RAMP_FRAMES,
                     int(previous_frames.shape[0])),
                 _TAPERED_GUIDE_ALPHA_END, noise_seed)
+        if context_spatial_proxy == "rgb_5_6":
+            original_height = int(previous_frames.shape[1])
+            original_width = int(previous_frames.shape[2])
+            previous_frames, proxy_size = _rgb_context_spatial_proxy(
+                previous_frames)
+            _LOG.info(
+                "H3 Chain RGB context spatial proxy: scene %d boundary "
+                "%dx%d -> %dx%d; Motion Context restores the proxy to "
+                "%dx%d before VAE encoding. Saved scenes remain full size.",
+                index, original_width, original_height,
+                int(proxy_size[0]), int(proxy_size[1]),
+                int(cfg["width"]), int(cfg["height"]))
         out, trim = MiniMaxH3MotionContext().apply(
             conditioning=conditioning,
             vae=vae,
@@ -10213,6 +10314,9 @@ class MiniMaxH3ChainSegmentSave:
                 "checkpoint_sha256": _file_sha256(published_checkpoint),
                 "prompt_file_sha256": _file_sha256(published_prompt),
             }
+            context_spatial_proxy = _shot_context_spatial_proxy(shot)
+            if context_spatial_proxy != "off":
+                segment["context_spatial_proxy"] = context_spatial_proxy
             if incoming_guide_tone is not None:
                 segment["guide_tone_input_applied"] = True
             if guide_tone_carry is not None:

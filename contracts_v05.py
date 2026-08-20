@@ -20,6 +20,7 @@ FINAL_AUDIO_POLICIES = ("generated", "source", "none")
 SOURCE_REFERENCE_POLICIES = ("off", "on")
 GENERATED_CONTINUITY_POLICIES = ("off", "on")
 PAIRED_AUDIO_POLICIES = ("off", "embedded")
+CONTEXT_SPATIAL_PROXY_MODES = ("off", "rgb_5_6", "latent_5_6")
 CONTINUATION_POLICIES = (
     "guide", "tone_carry_guide", "latent_guide", "tapered_guide",
     "masked_av", "tapered_av", "feathered_av", "audio_feathered_av")
@@ -42,6 +43,23 @@ DETAIL_AV_RECIPE = {
     "ramp_steps": 4,
     "noise_scale": "match_latent_std",
     "seed_xor": 0xD37A11,
+}
+
+# Boundary-only low-pass experiment reconstructed from a mixed-resolution
+# chain: a 1376x768 target carried a predecessor generated at 1152x640.  The
+# ratio is expressed on the H3 latent grid so other canvases retain valid
+# multiples of 32.  Only the disposable incoming context copy is transformed;
+# generated scenes and checkpoint/assembly artifacts keep the Plan canvas.
+CONTEXT_SPATIAL_PROXY_RECIPE = {
+    "version": "h3_context_spatial_proxy_v1",
+    "scale_numerator": 5,
+    "scale_denominator": 6,
+    "pixel_alignment": 32,
+    "rgb_downsample": "lanczos",
+    "rgb_restore": "motion_context_lanczos",
+    "latent_downsample": "area",
+    "latent_restore": "bilinear",
+    "preserve_latent_statistics": False,
 }
 
 LEGACY_AUDIO_MODE_POLICIES = {

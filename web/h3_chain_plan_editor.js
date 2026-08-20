@@ -938,12 +938,33 @@ function mountEditor(node) {
             sceneContinuationMode(shot, planContinuationMode);
             syncPlan();
         });
+        const spatialProxy = element("select", "h3c-spatial-proxy");
+        for (const [value, label] of [
+            ["", "Off · native context"],
+            ["rgb_5_6", "RGB 5/6 proxy · Guide"],
+            ["latent_5_6", "Latent 5/6 proxy · AV"],
+        ]) {
+            const option = element("option", "", label);
+            option.value = value;
+            spatialProxy.append(option);
+        }
+        spatialProxy.value = shot.context_spatial_proxy ?? "";
+        spatialProxy.title = "Scheduled only on the boundary entering this scene. RGB 5/6 sends Guide context through a 5/6-size copy before Motion Context restores it; Latent 5/6 sends only the copied AV video prefix through the equivalent latent down/up pass. For example, 1376×768 uses a 1152×640 proxy. Audio, generated output, checkpoints, and assembly remain at their native size. Leave Off on scenes that do not need the reset.";
+        spatialProxy.addEventListener("change", () => {
+            if (spatialProxy.value) {
+                shot.context_spatial_proxy = spatialProxy.value;
+            } else {
+                delete shot.context_spatial_proxy;
+            }
+            syncPlan();
+        });
         advanced.append(
             field("Steps (blank = default)", steps),
             field("Video context", context),
             field("Audio context", audioContext),
             field("Blend entering scene", blendFrames),
             field("Continuation into scene", continuation),
+            field("Boundary spatial proxy", spatialProxy),
         );
         card.append(
             head,
