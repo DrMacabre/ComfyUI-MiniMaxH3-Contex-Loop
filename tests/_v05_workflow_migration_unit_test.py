@@ -26,6 +26,16 @@ def input_names(node):
     return [item["name"] for item in node.get("inputs", [])]
 
 
+def assert_original_names_first(workflow):
+    for item in workflow["nodes"]:
+        title = item.get("title")
+        if title is None:
+            continue
+        original = migration.original_node_name(item["type"])
+        assert title == original or title.startswith(original + " — "), (
+            item["id"], item["type"], title, original)
+
+
 def main():
     archived = load(
         "example_workflows/Archive/"
@@ -34,6 +44,7 @@ def main():
         node["id"]: node["type"] for node in archived["nodes"]}
     migrated = migration.migrate(
         copy.deepcopy(archived), "custom-v0.4-studio.json")
+    assert_original_names_first(migrated)
 
     for node_id, node_type in original_identity.items():
         match = next(node for node in migrated["nodes"]
@@ -71,6 +82,7 @@ def main():
         "example_workflows/"
         "MiniMax H3 Ref2V - Studio Tagged Source Audio.json")
     migration.migrate(source_demo, migration.SOURCE_AUDIO_DEMO)
+    assert_original_names_first(source_demo)
     stable_demo = copy.deepcopy(source_demo)
     migration.migrate(source_demo, migration.SOURCE_AUDIO_DEMO)
     assert source_demo == stable_demo
@@ -104,6 +116,15 @@ def main():
     assert mismatched_audio["widgets_values"] == [
         "generated_audio", "masked_av", 39, 22]
     assert mismatch_output == 0
+
+    assert [path.name for path in migration.active_paths()] == list(
+        migration.MAINTAINED_DEMOS)
+    for path in migration.active_paths():
+        maintained = json.loads(path.read_text(encoding="utf-8"))
+        stable_maintained = copy.deepcopy(maintained)
+        migration.migrate(maintained, path.name)
+        assert maintained == stable_maintained, path.name
+        assert_original_names_first(maintained)
 
     print("v0.5 workflow migration: compact, exact, and idempotent")
 

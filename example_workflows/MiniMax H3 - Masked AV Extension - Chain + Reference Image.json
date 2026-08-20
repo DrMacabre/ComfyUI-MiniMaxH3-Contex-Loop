@@ -28,7 +28,7 @@
           ]
         }
       ],
-      "title": "H3 MODEL — REQUIRED",
+      "title": "Load Diffusion Model — H3 MODEL — REQUIRED",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -63,7 +63,7 @@
           ]
         }
       ],
-      "title": "H3 TEXT ENCODER",
+      "title": "Load CLIP — H3 TEXT ENCODER",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -99,7 +99,7 @@
           ]
         }
       ],
-      "title": "Sampler algorithm",
+      "title": "KSamplerSelect — Sampler algorithm",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -133,7 +133,7 @@
           ]
         }
       ],
-      "title": "H3 Video VAE",
+      "title": "Load VAE — H3 Video VAE",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -169,7 +169,7 @@
           ]
         }
       ],
-      "title": "H3 Audio VAE",
+      "title": "Load VAE — H3 Audio VAE",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -195,7 +195,7 @@
       "mode": 0,
       "inputs": [],
       "outputs": [],
-      "title": "REF2VA SIX-SECTION PROMPT FORMAT",
+      "title": "Note — REF2VA SIX-SECTION PROMPT FORMAT",
       "properties": {},
       "widgets_values": [
         "REF2VA PROMPT FORMAT — SIX SECTIONS\n\n1. subject_definitions:\n2. summary:\n3. retention_analysis:\n4. detailed_description:\n5. overall_soundscape:\n6. non_diegetic_music:\n\nWrite stable @tags in the Plan. Tagged Ref2VA activates only registered @tags present in the resolved scene prompt and compiles them to native <Picture N> labels; it does not insert definitions for you."
@@ -328,7 +328,7 @@
           "links": null
         }
       ],
-      "title": "LOOP START / RESUME",
+      "title": "MiniMax H3 Contex Loop Start — LOOP START / RESUME",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -539,7 +539,7 @@
           "links": null
         }
       ],
-      "title": "CURRENT REF2V SCENE — PROMPT / SEED / TIMING",
+      "title": "MiniMax H3 Contex Loop Current Shot — CURRENT REF2V SCENE — PROMPT / SEED / TIMING",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -586,7 +586,7 @@
           "links": null
         }
       ],
-      "title": "RECOVERY: ASSEMBLE WITHOUT RENDERING",
+      "title": "MiniMax H3 Contex Loop Assemble — RECOVERY: ASSEMBLE WITHOUT RENDERING",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -669,7 +669,7 @@
           ]
         }
       ],
-      "title": "Per-shot noise seed",
+      "title": "RandomNoise — Per-shot noise seed",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -801,7 +801,7 @@
           "links": null
         }
       ],
-      "title": "TAGGED REF2VA — @crabs + MASKED AV PREFIX",
+      "title": "MiniMax H3 Tagged Ref2VA — TAGGED REF2VA — @crabs + MASKED AV PREFIX",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.4.0",
@@ -851,7 +851,7 @@
           ]
         }
       ],
-      "title": "LIGHTX2V TURBO — 8 STEP V1.0",
+      "title": "Load LoRA — LIGHTX2V TURBO — 8 STEP V1.0",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -932,7 +932,7 @@
           ]
         }
       ],
-      "title": "MASKED AV CONTEXT — PRESERVE PREFIX / GENERATE FUTURE",
+      "title": "MiniMax H3 Contex Loop Context — MASKED AV CONTEXT — PRESERVE PREFIX / GENERATE FUTURE",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -1089,7 +1089,7 @@
           ]
         }
       ],
-      "title": "Loop guider",
+      "title": "Basic Guider — Loop guider",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -1135,7 +1135,7 @@
           ]
         }
       ],
-      "title": "Per-shot scheduler steps",
+      "title": "BasicScheduler — Per-shot scheduler steps",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -1205,7 +1205,7 @@
           "links": null
         }
       ],
-      "title": "H3 sampler — SINGLE LOOP BODY",
+      "title": "SamplerCustomAdvanced — H3 sampler — SINGLE LOOP BODY",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -1248,7 +1248,7 @@
           ]
         }
       ],
-      "title": "Decode current clip frames",
+      "title": "VAE Decode — Decode current clip frames",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -1291,7 +1291,7 @@
           ]
         }
       ],
-      "title": "Decode current clip audio",
+      "title": "VAE Decode Audio — Decode current clip audio",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -1379,7 +1379,7 @@
           "links": null
         }
       ],
-      "title": "TRIM CONTEXT / AUTO-RESOLVE SCENE BLEND",
+      "title": "MiniMax H3 Contex Loop Trim — TRIM CONTEXT / AUTO-RESOLVE SCENE BLEND",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -1452,7 +1452,7 @@
           "links": null
         }
       ],
-      "title": "SAVE DELIVERED + BLEND-READY SEGMENTS",
+      "title": "MiniMax H3 Contex Loop Segment + Checkpoint — SAVE DELIVERED + BLEND-READY SEGMENTS",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -1497,7 +1497,7 @@
           "links": null
         }
       ],
-      "title": "FINAL ASSEMBLY — 5-FRAME VISUAL BLEND",
+      "title": "MiniMax H3 Contex Loop Assemble — FINAL ASSEMBLY — 5-FRAME VISUAL BLEND",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -1542,7 +1542,7 @@
           ]
         }
       ],
-      "title": "COMFY KITCHEN ATTENTION",
+      "title": "ModelAttentionBackend — COMFY KITCHEN ATTENTION",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.31.0",
@@ -1604,7 +1604,7 @@
           "links": null
         }
       ],
-      "title": "RECOVERY: LOAD ALL SAVED CLIPS",
+      "title": "MiniMax H3 Contex Loop Load Manifest — RECOVERY: LOAD ALL SAVED CLIPS",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -1631,7 +1631,7 @@
       "mode": 0,
       "inputs": [],
       "outputs": [],
-      "title": "RECOVERY / ASSEMBLE LATER",
+      "title": "Note — RECOVERY / ASSEMBLE LATER",
       "properties": {
         "Node name for S&R": "Note"
       },
@@ -1657,7 +1657,7 @@
       "mode": 0,
       "inputs": [],
       "outputs": [],
-      "title": "REF2V STUDIO TAGGED — HOW TO USE",
+      "title": "Note — REF2V STUDIO TAGGED — HOW TO USE",
       "properties": {
         "Node name for S&R": "Note"
       },
@@ -1697,7 +1697,7 @@
           "links": null
         }
       ],
-      "title": "@crabs — CC0 CONTINUITY IMAGE",
+      "title": "Load Image — @crabs — CC0 CONTINUITY IMAGE",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.31.0",
@@ -1765,7 +1765,7 @@
           "links": null
         }
       ],
-      "title": "@crabs — ACTIVE IN ALL EXTENSION PROMPTS",
+      "title": "MiniMax H3 Tagged Picture Ref — @crabs — ACTIVE IN ALL EXTENSION PROMPTS",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.4.0",
@@ -1830,7 +1830,7 @@
           "links": null
         }
       ],
-      "title": "REVIEW GATE — APPROVE / EDIT+RETRY / REROLL / STOP",
+      "title": "MiniMax H3 Contex Loop Review Gate — REVIEW GATE — APPROVE / EDIT+RETRY / REROLL / STOP",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.4.0",
@@ -1915,7 +1915,7 @@
           "links": null
         }
       ],
-      "title": "LOOP END — ADVANCE REF2V SCENE",
+      "title": "MiniMax H3 Contex Loop End — LOOP END — ADVANCE REF2V SCENE",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -1942,7 +1942,7 @@
       "mode": 0,
       "inputs": [],
       "outputs": [],
-      "title": "REF2V PROMPT / IMAGE SOURCE",
+      "title": "Note — REF2V PROMPT / IMAGE SOURCE",
       "properties": {
         "Node name for S&R": "Note"
       },
@@ -2007,7 +2007,7 @@
           ]
         }
       ],
-      "title": "PLAN STUDIO — TIMELINE / REVISIONS / PREVIEWS",
+      "title": "MiniMax H3 Plan Studio (Experimental) — PLAN STUDIO — TIMELINE / REVISIONS / PREVIEWS",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -2069,7 +2069,7 @@
           ]
         }
       ],
-      "title": "RUN MANAGER — RESTORE PLAN + REFERENCE ASSETS",
+      "title": "MiniMax H3 Run Manager — RUN MANAGER — RESTORE PLAN + REFERENCE ASSETS",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.4.0",
@@ -2201,7 +2201,7 @@
           "links": null
         }
       ],
-      "title": "THREE-SCENE REF2VA MASKED EXTENSION PLAN",
+      "title": "MiniMax H3 Contex Loop Plan — THREE-SCENE REF2VA MASKED EXTENSION PLAN",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -2286,7 +2286,7 @@
           "links": null
         }
       ],
-      "title": "CC0 SOLDIER CRABS SOURCE VIDEO",
+      "title": "Load Video (Upload) 🎥🅥🅗🅢 — CC0 SOLDIER CRABS SOURCE VIDEO",
       "properties": {
         "cnr_id": "comfyui-videohelpersuite",
         "Node name for S&R": "VHS_LoadVideo",
@@ -2374,7 +2374,7 @@
           "links": null
         }
       ],
-      "title": "CC0 SOURCE VIDEO → MASKED SCENE 1 PREFIX",
+      "title": "MiniMax H3 Existing Video Context — CC0 SOURCE VIDEO → MASKED SCENE 1 PREFIX",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "Node name for S&R": "MiniMaxH3ChainExternalVideo",
@@ -2416,7 +2416,7 @@
           "links": null
         }
       ],
-      "title": "0.5 CHAIN POLICY",
+      "title": "MiniMax H3 Chain Policy — 0.5 CHAIN POLICY",
       "properties": {
         "Node name for S&R": "MiniMaxH3ChainPolicy"
       },

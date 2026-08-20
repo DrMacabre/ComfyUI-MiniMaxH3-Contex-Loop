@@ -28,7 +28,7 @@
           ]
         }
       ],
-      "title": "H3 MODEL — REQUIRED",
+      "title": "Load Diffusion Model — H3 MODEL — REQUIRED",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -63,7 +63,7 @@
           ]
         }
       ],
-      "title": "H3 TEXT ENCODER",
+      "title": "Load CLIP — H3 TEXT ENCODER",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -99,7 +99,7 @@
           ]
         }
       ],
-      "title": "Sampler algorithm",
+      "title": "KSamplerSelect — Sampler algorithm",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -133,7 +133,7 @@
           ]
         }
       ],
-      "title": "H3 Video VAE",
+      "title": "Load VAE — H3 Video VAE",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -168,7 +168,7 @@
           ]
         }
       ],
-      "title": "H3 Audio VAE",
+      "title": "Load VAE — H3 Audio VAE",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -194,7 +194,7 @@
       "mode": 0,
       "inputs": [],
       "outputs": [],
-      "title": "PROMPT SOURCE / ATTRIBUTION",
+      "title": "Note — PROMPT SOURCE / ATTRIBUTION",
       "properties": {
         "Node name for S&R": "Note"
       },
@@ -220,7 +220,7 @@
       "mode": 0,
       "inputs": [],
       "outputs": [],
-      "title": "T2VA PROMPT FORMAT",
+      "title": "Note — T2VA PROMPT FORMAT",
       "properties": {},
       "widgets_values": [
         "T2VA PROMPT FORMAT\n\nT2VA begins directly with these three fields in this exact order—there is no Picture alignment instruction:\n\nintegrated_multimodal_description: [Shot 1] Describe visible style, composition, subjects, actions, camera movement, dialogue, and synchronized diegetic events.\n\noverall_soundscape: Summarize ambience, physical sounds, and non-verbal human sounds.\n\nnon_diegetic_music: Describe audience-only music, or use N/A.\n\nFor a chained continuation, explicitly continue the incoming pose, action phase, camera position and motion, lighting, environment, object states, ambience, and speaker identity. Do not re-establish or reset the shot unless a cut is intentional."
@@ -353,7 +353,7 @@
           "links": null
         }
       ],
-      "title": "LOOP START — NO EXTERNAL CONTINUATION",
+      "title": "MiniMax H3 Contex Loop Start — LOOP START — NO EXTERNAL CONTINUATION",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -564,7 +564,7 @@
           "links": null
         }
       ],
-      "title": "CURRENT T2V SCENE — PROMPT / SEED / TIMING",
+      "title": "MiniMax H3 Contex Loop Current Shot — CURRENT T2V SCENE — PROMPT / SEED / TIMING",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -611,7 +611,7 @@
           "links": null
         }
       ],
-      "title": "RECOVERY: ASSEMBLE WITHOUT RENDERING",
+      "title": "MiniMax H3 Contex Loop Assemble — RECOVERY: ASSEMBLE WITHOUT RENDERING",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -694,7 +694,7 @@
           ]
         }
       ],
-      "title": "Per-shot noise seed",
+      "title": "RandomNoise — Per-shot noise seed",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -791,7 +791,7 @@
           ]
         }
       ],
-      "title": "CORE H3 T2VA — EMPTY GRID DEFINES AV SHAPES",
+      "title": "MiniMax H3 Image to Video — CORE H3 T2VA — EMPTY GRID DEFINES AV SHAPES",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -836,7 +836,7 @@
           ]
         }
       ],
-      "title": "LIGHTX2V TURBO — 8 STEP V1.0",
+      "title": "Load LoRA — LIGHTX2V TURBO — 8 STEP V1.0",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -917,7 +917,7 @@
           ]
         }
       ],
-      "title": "AUTO CONTEXT — clip 1 bypass / continuation",
+      "title": "MiniMax H3 Contex Loop Context — AUTO CONTEXT — clip 1 bypass / continuation",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -1074,7 +1074,7 @@
           ]
         }
       ],
-      "title": "Loop guider",
+      "title": "Basic Guider — Loop guider",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -1120,7 +1120,7 @@
           ]
         }
       ],
-      "title": "Per-shot scheduler steps",
+      "title": "BasicScheduler — Per-shot scheduler steps",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -1190,7 +1190,7 @@
           "links": null
         }
       ],
-      "title": "H3 sampler — SINGLE LOOP BODY",
+      "title": "SamplerCustomAdvanced — H3 sampler — SINGLE LOOP BODY",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -1233,7 +1233,7 @@
           ]
         }
       ],
-      "title": "Decode current clip frames",
+      "title": "VAE Decode — Decode current clip frames",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -1276,7 +1276,7 @@
           ]
         }
       ],
-      "title": "Decode current clip audio",
+      "title": "VAE Decode Audio — Decode current clip audio",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -1364,7 +1364,7 @@
           "links": null
         }
       ],
-      "title": "TRIM CONTEXT / AUTO-RESOLVE SCENE BLEND",
+      "title": "MiniMax H3 Contex Loop Trim — TRIM CONTEXT / AUTO-RESOLVE SCENE BLEND",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -1437,7 +1437,7 @@
           "links": null
         }
       ],
-      "title": "SAVE DELIVERED + BLEND-READY SEGMENTS",
+      "title": "MiniMax H3 Contex Loop Segment + Checkpoint — SAVE DELIVERED + BLEND-READY SEGMENTS",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -1482,7 +1482,7 @@
           "links": null
         }
       ],
-      "title": "FINAL ASSEMBLY — 5-FRAME VISUAL BLEND",
+      "title": "MiniMax H3 Contex Loop Assemble — FINAL ASSEMBLY — 5-FRAME VISUAL BLEND",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -1527,7 +1527,7 @@
           ]
         }
       ],
-      "title": "COMFY KITCHEN ATTENTION",
+      "title": "ModelAttentionBackend — COMFY KITCHEN ATTENTION",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.31.0",
@@ -1633,7 +1633,7 @@
           "links": null
         }
       ],
-      "title": "TWO-SCENE SOURCE-INPAINT LOOP — 311 DELIVERED FRAMES",
+      "title": "MiniMax H3 Contex Loop Plan — TWO-SCENE SOURCE-INPAINT LOOP — 311 DELIVERED FRAMES",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -1719,7 +1719,7 @@
           ]
         }
       ],
-      "title": "PLAN STUDIO — TIMELINE / REVISIONS / PREVIEWS",
+      "title": "MiniMax H3 Plan Studio (Experimental) — PLAN STUDIO — TIMELINE / REVISIONS / PREVIEWS",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -1788,7 +1788,7 @@
           "links": null
         }
       ],
-      "title": "RECOVERY: LOAD ALL SAVED CLIPS",
+      "title": "MiniMax H3 Contex Loop Load Manifest — RECOVERY: LOAD ALL SAVED CLIPS",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -1815,7 +1815,7 @@
       "mode": 0,
       "inputs": [],
       "outputs": [],
-      "title": "RECOVERY / ASSEMBLE LATER",
+      "title": "Note — RECOVERY / ASSEMBLE LATER",
       "properties": {
         "Node name for S&R": "Note"
       },
@@ -1890,7 +1890,7 @@
           "links": null
         }
       ],
-      "title": "LOOP END — ADVANCE T2V SCENE",
+      "title": "MiniMax H3 Contex Loop End — LOOP END — ADVANCE T2V SCENE",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -1953,7 +1953,7 @@
           "links": null
         }
       ],
-      "title": "REVIEW GATE — APPROVE / EDIT+RETRY / REROLL / STOP",
+      "title": "MiniMax H3 Contex Loop Review Gate — REVIEW GATE — APPROVE / EDIT+RETRY / REROLL / STOP",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.4.0",
@@ -1989,7 +1989,7 @@
       "mode": 0,
       "inputs": [],
       "outputs": [],
-      "title": "T2V STUDIO — HOW TO USE",
+      "title": "Note — T2V STUDIO — HOW TO USE",
       "properties": {
         "Node name for S&R": "Note"
       },
@@ -2053,7 +2053,7 @@
           "links": null
         }
       ],
-      "title": "CC0 2015 SOLDIER CRABS — SOURCE AV",
+      "title": "Load Video (Upload) 🎥🅥🅗🅢 — CC0 2015 SOLDIER CRABS — SOURCE AV",
       "properties": {
         "cnr_id": "comfyui-videohelpersuite",
         "Node name for S&R": "VHS_LoadVideo",
@@ -2162,7 +2162,7 @@
           ]
         }
       ],
-      "title": "FRAME-LOCK CURRENT LOOP SCENE TO SOURCE AV",
+      "title": "MiniMax H3 Masking · Loop Source AV Target — FRAME-LOCK CURRENT LOOP SCENE TO SOURCE AV",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "Node name for S&R": "MiniMaxH3ContexLoopSourceAVTarget",
@@ -2223,7 +2223,7 @@
         "preserve source audio",
         "H3 exact (causal/token max)"
       ],
-      "title": "APPLY SPATIAL MASK — SOURCE AUDIO PRESERVED"
+      "title": "MiniMax H3 Masking · Apply Target Mask — APPLY SPATIAL MASK — SOURCE AUDIO PRESERVED"
     },
     {
       "id": 1953,
@@ -2259,7 +2259,7 @@
         "soldier_crabs_inpaint_mask.png",
         "red"
       ],
-      "title": "STATIC MASK — REPLACE WITH TRACKED MASK BATCH"
+      "title": "Load Image (as Mask) — STATIC MASK — REPLACE WITH TRACKED MASK BATCH"
     },
     {
       "id": 1954,
@@ -2320,7 +2320,7 @@
         true,
         "white = generate"
       ],
-      "title": "PREVIEW EXACT H3 32PX MASK CELLS"
+      "title": "MiniMax H3 Masking · Grid Preview — PREVIEW EXACT H3 32PX MASK CELLS"
     },
     {
       "id": 1955,
@@ -2354,7 +2354,7 @@
         "Node name for S&R": "PreviewImage"
       },
       "widgets_values": [],
-      "title": "Verify generated 32×32 cells"
+      "title": "Preview Image — Verify generated 32×32 cells"
     },
     {
       "id": 1956,
@@ -2388,7 +2388,7 @@
         "Node name for S&R": "PreviewAny"
       },
       "widgets_values": [],
-      "title": "SOURCE AV ALIGNMENT STATUS"
+      "title": "Preview as Text — SOURCE AV ALIGNMENT STATUS"
     },
     {
       "id": 1957,
@@ -2435,7 +2435,7 @@
           "links": null
         }
       ],
-      "title": "SLICE TRACKED MASK TO CURRENT LOOP SCENE",
+      "title": "MiniMax H3 Masking · Loop Mask Slice — SLICE TRACKED MASK TO CURRENT LOOP SCENE",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "Node name for S&R": "MiniMaxH3ContexLoopMaskSlice",
@@ -2476,7 +2476,7 @@
           "links": null
         }
       ],
-      "title": "0.5 CHAIN POLICY",
+      "title": "MiniMax H3 Chain Policy — 0.5 CHAIN POLICY",
       "properties": {
         "Node name for S&R": "MiniMaxH3ChainPolicy"
       },

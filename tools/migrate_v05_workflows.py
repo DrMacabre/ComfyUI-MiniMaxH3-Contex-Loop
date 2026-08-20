@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""Migrate maintained H3 Chain workflow JSON to the compact 0.5 topology.
+"""Migrate maintained H3 demo workflow JSON to the compact 0.5 topology.
 
 The sampling body and existing generation settings stay untouched. Normal
 audio and boundary intent is collapsed to one Chain Policy wire. Settings that
 cannot be represented by the four supported compact transition presets are
 preserved exactly through one Legacy / Expert Policy node. The source-audio
-reference demo also adopts the single typed Source Timeline route.
+reference demo also adopts the single typed Source Timeline route. Every
+custom demo title starts with the node's registered display name so the graph
+still teaches the real node names.
 """
 
 from __future__ import annotations
@@ -19,6 +21,100 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 EXAMPLES = ROOT / "example_workflows"
 SOURCE_AUDIO_DEMO = "MiniMax H3 Ref2V - Studio Tagged Source Audio.json"
+MAINTAINED_DEMOS = (
+    "EXPERIMENTAL MiniMax H3 Ref2V - Sequential Motion.json",
+    "MiniMax H3 - Masked AV Bridge - Two Clips.json",
+    "MiniMax H3 - Masked AV Extension - Chain + Reference Image.json",
+    "MiniMax H3 - Masked AV Extension - Single Clip.json",
+    "MiniMax H3 - Masked Video Inpaint.json",
+    "MiniMax H3 FL2V - Normal.json",
+    "MiniMax H3 I2V - Normal.json",
+    "MiniMax H3 I2V - Studio.json",
+    "MiniMax H3 Ref2V - Basic.json",
+    "MiniMax H3 Ref2V - Masked Video Inpaint.json",
+    SOURCE_AUDIO_DEMO,
+    "MiniMax H3 Ref2V - Studio Tagged.json",
+    "MiniMax H3 Ref2V - Tagged.json",
+    "MiniMax H3 T2V - Normal.json",
+    "MiniMax H3 T2V - Studio.json",
+)
+
+# Exact display names exposed by ComfyUI's /object_info for every node type
+# used by the maintained demos when this migration was authored. Types whose
+# display_name is null (and frontend-only nodes such as Note) intentionally
+# fall back to their canonical class type below.
+NODE_DISPLAY_NAMES = {
+    "BasicGuider": "Basic Guider",
+    "CLIPLoader": "Load CLIP",
+    "LoadAudio": "Load Audio",
+    "LoadImage": "Load Image",
+    "LoadImageMask": "Load Image (as Mask)",
+    "LoadVideo": "Load Video",
+    "LoraLoaderModelOnly": "Load LoRA",
+    "MiniMaxH3ChainAssemble": "MiniMax H3 Contex Loop Assemble",
+    "MiniMaxH3ChainContext": "MiniMax H3 Contex Loop Context",
+    "MiniMaxH3ChainCurrent": "MiniMax H3 Contex Loop Current Shot",
+    "MiniMaxH3ChainExternalVideo": "MiniMax H3 Existing Video Context",
+    "MiniMaxH3ChainFirstSceneImage": "MiniMax H3 Frame Gate",
+    "MiniMaxH3ChainFrameIndexSwitch": "MiniMax H3 Frame Index Switch",
+    "MiniMaxH3ChainLoopEnd": "MiniMax H3 Contex Loop End",
+    "MiniMaxH3ChainLoopStart": "MiniMax H3 Contex Loop Start",
+    "MiniMaxH3ChainManifestLoad": "MiniMax H3 Contex Loop Load Manifest",
+    "MiniMaxH3ChainPlan": "MiniMax H3 Contex Loop Plan",
+    "MiniMaxH3ChainPlanStudio": "MiniMax H3 Plan Studio (Experimental)",
+    "MiniMaxH3ChainPolicy": "MiniMax H3 Chain Policy",
+    "MiniMaxH3ChainPreflight": "MiniMax H3 Chain Preflight",
+    "MiniMaxH3ChainReview": "MiniMax H3 Contex Loop Review Gate",
+    "MiniMaxH3ChainRunManager": "MiniMax H3 Run Manager",
+    "MiniMaxH3ChainScenePromptEditor": "MiniMax H3 Scene Prompt Editor",
+    "MiniMaxH3ChainSegmentSave": (
+        "MiniMax H3 Contex Loop Segment + Checkpoint"),
+    "MiniMaxH3ContexLoopMaskSlice": (
+        "MiniMax H3 Masking · Loop Mask Slice"),
+    "MiniMaxH3ContexLoopSourceAVTarget": (
+        "MiniMax H3 Masking · Loop Source AV Target"),
+    "MiniMaxH3ContexMaskGridPreview": (
+        "MiniMax H3 Masking · Grid Preview"),
+    "MiniMaxH3ContexMaskedAVBridge": (
+        "MiniMax H3 Masking · Two-Clip AV Bridge"),
+    "MiniMaxH3ContexMaskedTarget": (
+        "MiniMax H3 Masking · Apply Target Mask"),
+    "MiniMaxH3ImageToVideo": "MiniMax H3 Image to Video",
+    "MiniMaxH3LoopTrim": "MiniMax H3 Contex Loop Trim",
+    "MiniMaxH3PatchPriority": "MiniMax H3 Patch Priority",
+    "MiniMaxH3ReferenceToVideo": "MiniMax H3 Reference to Video",
+    "MiniMaxH3ReferenceVideoPrepare": "MiniMax H3 Reference Video Prep",
+    "MiniMaxH3SourceTimeline": "MiniMax H3 Source Timeline",
+    "MiniMaxH3TaggedAudioReference": "MiniMax H3 Tagged Audio Ref",
+    "MiniMaxH3TaggedPictureReference": "MiniMax H3 Tagged Picture Ref",
+    "MiniMaxH3TaggedReferenceToVideo": "MiniMax H3 Tagged Ref2VA",
+    "MiniMaxH3TaggedVideoReference": "MiniMax H3 Tagged Video Ref",
+    "PreviewAny": "Preview as Text",
+    "PreviewImage": "Preview Image",
+    "UNETLoader": "Load Diffusion Model",
+    "VAEDecode": "VAE Decode",
+    "VAEDecodeAudio": "VAE Decode Audio",
+    "VAELoader": "Load VAE",
+    "VHS_LoadVideo": "Load Video (Upload) 🎥🅥🅗🅢",
+}
+
+
+def original_node_name(node_type: str) -> str:
+    """Return the registered display name, or the canonical class type."""
+    return NODE_DISPLAY_NAMES.get(node_type, node_type)
+
+
+def _prefix_custom_titles(workflow: dict[str, Any]) -> None:
+    """Keep demo guidance while making the real node name visible first."""
+    for node in workflow.get("nodes", []):
+        if "title" not in node:
+            continue
+        original = original_node_name(str(node.get("type", "Node")))
+        custom = str(node.get("title", "")).strip()
+        prefix = original + " — "
+        if custom == original or custom.startswith(prefix):
+            continue
+        node["title"] = original if not custom else prefix + custom
 
 
 def _node(workflow: dict[str, Any], node_type: str) -> dict[str, Any] | None:
@@ -459,22 +555,20 @@ def _migrate_source_audio_demo(workflow: dict[str, Any], graph: Graph) -> None:
 
 
 def migrate(workflow: dict[str, Any], name: str) -> dict[str, Any]:
-    if _node(workflow, "MiniMaxH3ChainPlan") is None:
-        return workflow
-    graph = Graph(workflow)
-    _add_chain_policy(workflow, graph)
-    _add_preflight(workflow, graph)
-    _wire_scene_resolved_trim(workflow, graph)
-    if name == SOURCE_AUDIO_DEMO:
-        _migrate_source_audio_demo(workflow, graph)
-    graph.finish()
+    if _node(workflow, "MiniMaxH3ChainPlan") is not None:
+        graph = Graph(workflow)
+        _add_chain_policy(workflow, graph)
+        _add_preflight(workflow, graph)
+        _wire_scene_resolved_trim(workflow, graph)
+        if name == SOURCE_AUDIO_DEMO:
+            _migrate_source_audio_demo(workflow, graph)
+        graph.finish()
+    _prefix_custom_titles(workflow)
     return workflow
 
 
 def active_paths() -> list[Path]:
-    return sorted(path for path in EXAMPLES.glob("*.json")
-                  if _node(json.loads(path.read_text(encoding="utf-8")),
-                           "MiniMaxH3ChainPlan") is not None)
+    return [EXAMPLES / name for name in MAINTAINED_DEMOS]
 
 
 def main() -> int:
