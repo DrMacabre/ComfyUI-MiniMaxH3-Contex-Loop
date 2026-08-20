@@ -28,11 +28,14 @@ export function selectedCheckpointRevision(payload, scene = null, revision = "")
     }
     const sceneRevisions = Number.isInteger(wantedScene)
         ? revisions.filter((item) => Number(item.scene) === wantedScene) : [];
+    const deepest = (items) => [...items].sort((left, right) =>
+        Number(right.scene) - Number(left.scene) ||
+        String(right.created_at).localeCompare(String(left.created_at)))[0];
     return sceneRevisions.find((item) => item.active)
         ?? sceneRevisions.sort((left, right) =>
             String(right.created_at).localeCompare(String(left.created_at)))[0]
-        ?? revisions.find((item) => item.active)
-        ?? revisions[0]
+        ?? deepest(revisions.filter((item) => item.active))
+        ?? deepest(revisions)
         ?? null;
 }
 

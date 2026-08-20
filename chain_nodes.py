@@ -13906,8 +13906,9 @@ def _checkpoint_selection_manifest(value: Any) -> dict[str, Any] | None:
     if len(lineage) != len(shots):
         raise ValueError(
             "Checkpoint Manager selected a partial branch through scene %d; "
-            "upscaling requires the complete %d-scene branch." %
-            (len(lineage), len(shots)))
+            "upscaling requires the complete %d-scene branch. Select scene "
+            "%d at the right-hand tip of the desired branch." %
+            (len(lineage), len(shots), len(shots)))
 
     loaded = []
     compatibility = None

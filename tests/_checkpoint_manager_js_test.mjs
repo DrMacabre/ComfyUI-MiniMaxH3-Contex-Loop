@@ -42,6 +42,8 @@ assert.equal(formatCheckpointBytes(2 * 1024 ** 3), "2.00 GB");
 assert.equal(checkpointRevisionKey(2, c.toUpperCase()), `2:${c}`);
 assert.equal(selectedCheckpointRevision(payload, 2, c).revision, c);
 assert.equal(selectedCheckpointRevision(payload, 2).revision, b);
+assert.equal(selectedCheckpointRevision(payload).revision, b,
+    "default selection is the deepest active branch tip");
 assert.equal(checkpointBranchRows(payload)[0].revisions[1].revision, b);
 assert.equal(checkpointBranchRows(payload)[1].revisions[0].revision, a,
     "a shared ancestor appears in every inferred branch that uses it");

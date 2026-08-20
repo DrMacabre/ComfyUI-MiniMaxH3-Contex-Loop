@@ -8,7 +8,7 @@ import {
     checkpointRevisionLineage,
     formatCheckpointBytes,
     selectedCheckpointRevision,
-} from "./h3_checkpoint_manager_core.mjs?v=0.5.6";
+} from "./h3_checkpoint_manager_core.mjs?v=0.5.7";
 
 const NODE_NAME = "MiniMaxH3ChainCheckpointManager";
 const PLAN_NAME = "MiniMaxH3ChainPlan";
@@ -180,6 +180,7 @@ function mount(node) {
         scene:Number(node.properties[SCENE_PROPERTY]) || null,
         revision:String(node.properties[REVISION_PROPERTY] ?? ""),
         selected:null, deletion:null, busy:false, requestToken:0, sharedLinkFrame:0,
+        initialRefresh:true,
     };
     const root = element("div", "h3cm-root");
     const head = element("div", "h3cm-head");
@@ -531,8 +532,18 @@ function mount(node) {
         try {
             const query = new URLSearchParams({run_name:state.runName});
             state.payload = await jsonRequest(`/minimax_h3_context_loop/checkpoints?${query}`);
-            const selected = selectedCheckpointRevision(
+            let selected = selectedCheckpointRevision(
                 state.payload, state.scene, state.revision);
+            if (state.initialRefresh) {
+                const activeTip = selectedCheckpointRevision(state.payload);
+                if (checkpointRevisionLineage(
+                        state.payload, activeTip).length >
+                        checkpointRevisionLineage(
+                            state.payload, selected).length) {
+                    selected = activeTip;
+                }
+                state.initialRefresh = false;
+            }
             status.className = "h3cm-status";
             status.textContent = state.payload.summary?.broken_count
                 ? `${state.payload.summary.broken_count} broken revision${state.payload.summary.broken_count === 1 ? "" : "s"} found`
