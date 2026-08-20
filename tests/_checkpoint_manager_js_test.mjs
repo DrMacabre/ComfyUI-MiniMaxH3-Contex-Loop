@@ -7,6 +7,7 @@ import {
     checkpointDeletionTitle,
     checkpointDependencyText,
     checkpointRevisionKey,
+    checkpointRevisionLineage,
     formatCheckpointBytes,
     selectedCheckpointRevision,
 } from "../web/h3_checkpoint_manager_core.mjs";
@@ -20,10 +21,12 @@ const payload = {
             created_at:"2026-08-20T10:00:00Z"},
         {scene:2, scene_id:"hall", revision:b, active:true,
             created_at:"2026-08-20T10:10:00Z", context_length:39,
-            audio_context_length:44, continuation_mode:"guide"},
+            audio_context_length:44, continuation_mode:"guide",
+            parent:{scene:1, revision:a}},
         {scene:2, scene_id:"hall_alt", revision:c, active:false,
             created_at:"2026-08-20T10:20:00Z", context_length:0,
-            audio_context_length:0, continuation_mode:"guide"},
+            audio_context_length:0, continuation_mode:"guide",
+            parent:{scene:1, revision:a}},
     ],
     branches: [
         {id:"active", label:"Active branch", active:true,
@@ -42,6 +45,9 @@ assert.equal(selectedCheckpointRevision(payload, 2).revision, b);
 assert.equal(checkpointBranchRows(payload)[0].revisions[1].revision, b);
 assert.equal(checkpointBranchRows(payload)[1].revisions[0].revision, a,
     "a shared ancestor appears in every inferred branch that uses it");
+assert.deepEqual(checkpointRevisionLineage(payload, payload.revisions[1]), [
+    {scene:1, revision:a}, {scene:2, revision:b},
+]);
 assert.match(checkpointDependencyText(payload.revisions[1]),
     /Scene 2 · hall uses Video 39f \/ Audio 44f via guide/);
 assert.match(checkpointDependencyText(payload.revisions[2]),
@@ -56,6 +62,8 @@ const source = fs.readFileSync(
 );
 assert.match(source, /MiniMaxH3ChainCheckpointManager/);
 assert.match(source, /MiniMaxH3ChainPlan/);
+assert.match(source, /selection_json/);
+assert.match(source, /checkpointRevisionLineage/);
 assert.match(source, /checkpoint-revisions\/delete-preview/);
 assert.match(source, /checkpoint-revisions\/delete/);
 assert.match(source, /snapshot:plan\.snapshot/);
@@ -81,7 +89,8 @@ const backend = fs.readFileSync(
 );
 assert.match(backend, /class MiniMaxH3ChainCheckpointManager/);
 assert.match(backend,
-    /def passthrough\(self, plan, source_timeline=None\):\s+return \(plan, source_timeline\)/);
+    /def passthrough\(self, selection_json="", plan=None, source_timeline=None\):/);
+assert.match(backend, /_checkpoint_selection_manifest\(selection_json\)/);
 assert.doesNotMatch(
     backend.slice(
         backend.indexOf("class MiniMaxH3ChainCheckpointManager"),
@@ -90,4 +99,4 @@ assert.doesNotMatch(
     /ExecutionBlocker/,
 );
 
-console.log("H3 Checkpoint Manager frontend: branches, inspection and guarded deletion pass");
+console.log("H3 Checkpoint Manager frontend: branches, manifest selection, inspection and guarded deletion pass");

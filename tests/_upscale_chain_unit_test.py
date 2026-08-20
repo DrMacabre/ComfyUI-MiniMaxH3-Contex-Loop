@@ -67,6 +67,12 @@ def main():
                 assert str(options.get("tooltip") or "").strip(), (
                     name, input_name)
         assert len(node.OUTPUT_TOOLTIPS) == len(node.RETURN_TYPES), name
+    manager_schema = package.NODE_CLASS_MAPPINGS[
+        "MiniMaxH3ChainCheckpointManager"].INPUT_TYPES()
+    assert "plan" in manager_schema["optional"]
+    assert "selection_json" in manager_schema["required"]
+    assert "plan" not in upscale.MiniMaxH3ChainUpscaleAdapter.INPUT_TYPES()[
+        "required"]
 
     with tempfile.TemporaryDirectory() as temporary:
         folder_paths.output_directory = temporary
@@ -107,9 +113,22 @@ def main():
             assert {"video", "audio", "denoised_video", "denoised_audio"} <= set(
                 saved.keys())
 
+        selection = json.dumps({
+            "run_name": "upscale_test",
+            "lineage": [
+                {"scene": 1, "revision": source["revision"]},
+                {"scene": 2, "revision": source_2["revision"]},
+            ],
+        })
+        manager = chain.MiniMaxH3ChainCheckpointManager()
+        assert manager.passthrough("")[2] is None
+        selected_manifest = manager.passthrough(selection)[2]
+        assert selected_manifest["clip_count"] == 2
+
         adapter = upscale.MiniMaxH3ChainUpscaleAdapter()
         flow, upscale_state, source_manifest, _status = adapter.adapt(
-            plan, "quality", "h3_latent", '{"scale":2}', 1, 1, False, 18)
+            selected_manifest, "quality", "h3_latent", '{"scale":2}',
+            1, 1, False, 18)
         assert source_manifest["segments"][0]["revision"] == source["revision"]
         assert source_manifest["segments"][1]["revision"] == source_2["revision"]
         current = upscale.MiniMaxH3ChainUpscaleCurrent().current(upscale_state)
@@ -136,7 +155,8 @@ def main():
         assert partial["format"] == "h3_chain_upscale_partial_manifest_v1"
 
         flow, upscale_state, source_manifest, _status = adapter.adapt(
-            plan, "quality", "h3_latent", '{"scale":2}', 2, 0, False, 18)
+            selected_manifest, "quality", "h3_latent", '{"scale":2}',
+            2, 0, False, 18)
         assert len(upscale_state["segments"]) == 1
         current = upscale.MiniMaxH3ChainUpscaleCurrent().current(upscale_state)
         assert current[4] == 2
@@ -161,7 +181,8 @@ def main():
             "upscaled" / "quality" / "final")
 
         _flow, latent_state, _manifest, _ = adapter.adapt(
-            plan, "archive_latent", "h3_latent", "{}", 1, 0, True, 18)
+            selected_manifest, "archive_latent", "h3_latent", "{}",
+            1, 0, True, 18)
         try:
             upscale.MiniMaxH3ChainUpscaleSegmentSave().save(
                 latent_state, hq_images)

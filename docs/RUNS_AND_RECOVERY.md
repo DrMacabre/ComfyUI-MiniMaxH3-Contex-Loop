@@ -144,12 +144,11 @@ checkpoints.
 
 ### Deferred upscale child runs
 
-After loading the complete branch you want in Checkpoint Manager, connect its
-Plan and, for 0.5 source-backed runs, Source Timeline outputs to **MiniMax H3
-Checkpoint Upscale Adapter**. The adapter uses the same source-dependency
-verification as Manifest Load, then starts a separate recursive pass without
-changing the source run. Only the path-backed recovery descriptor is embedded;
-decoded source media is not retained across recursive iterations:
+Select the final scene of the complete branch you want in Checkpoint Manager,
+then connect its **selected_manifest** output to **MiniMax H3 Checkpoint Upscale
+Adapter**. The manager verifies the immutable lineage and embeds recovery-only
+compatibility and Source Timeline metadata directly. No source Plan, Chain
+Policy, or decoded source media is retained by the recursive upscale graph:
 
 ```text
 Checkpoint Manager → Upscale Adapter → Upscale Current Scene
@@ -201,8 +200,9 @@ Segment + Checkpoint's optional `denoised_latent` input. Existing checkpoints
 remain valid and use their terminal sampler output. Keep the parent branch
 until every selected child scene has been persisted; a completed child profile
 contains its own HQ video segments and audio needed by Upscale Merger.
-Upscale Merger accepts the same optional Source Timeline pass-through and can
-also reconstruct it from the embedded parent manifest.
+Upscale Merger reconstructs a recoverable Source Timeline from the embedded
+parent manifest. Legacy source-track runs without that descriptor still need
+their original full AUDIO connected to the merger.
 
 ## Run Manager
 

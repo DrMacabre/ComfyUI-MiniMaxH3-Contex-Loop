@@ -9385,14 +9385,16 @@ class MiniMaxH3ChainCheckpointManager:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "plan": (PLAN_TYPE, {
-                    "tooltip": "Connect the active H3 Chain Plan to preselect "
-                               "its run. The Checkpoint Manager inspects "
-                               "revision branches and performs confirmed, "
-                               "dependency-safe cleanup; execution passes the "
-                               "Plan through unchanged."}),
+                "selection_json": ("STRING", {
+                    "default": "",
+                    "tooltip": "Hidden serialized run and revision lineage "
+                               "maintained by the Checkpoint Manager browser."}),
             },
             "optional": {
+                "plan": (PLAN_TYPE, {
+                    "tooltip": "Optional generation-workflow passthrough. It "
+                               "only preselects the Plan's run and is not "
+                               "needed for checkpoint upscaling."}),
                 "source_timeline": (SOURCE_TIMELINE_TYPE, {
                     "tooltip": "Optional 0.5 Source Timeline pass-through. "
                                "Checkpoint inspection never materializes or "
@@ -9400,23 +9402,26 @@ class MiniMaxH3ChainCheckpointManager:
             },
         }
 
-    RETURN_TYPES = (PLAN_TYPE, SOURCE_TIMELINE_TYPE)
-    RETURN_NAMES = ("plan", "source_timeline")
+    RETURN_TYPES = (PLAN_TYPE, SOURCE_TIMELINE_TYPE, MANIFEST_TYPE)
+    RETURN_NAMES = ("plan", "source_timeline", "selected_manifest")
     OUTPUT_TOOLTIPS = (
-        "The connected Plan, unchanged. This is a management companion and "
-        "never blocks or pauses execution.",
+        "The optional connected Plan, unchanged, for generation workflows.",
         "The optional 0.5 Source Timeline, unchanged.",
+        "The complete selected checkpoint lineage as a verified manifest. "
+        "Connect this directly to Checkpoint Upscale Adapter.",
     )
     FUNCTION = "passthrough"
     CATEGORY = "conditioning/minimax/contex_loop"
     DESCRIPTION = (
         "Browse checkpoint scenes and inferred revision branches across H3 "
         "runs; preview saved media, inspect exact video/audio context "
-        "dependencies and storage, and delete one inactive leaf revision at "
-        "a time after a complete deletion preview.")
+        "dependencies and storage, emit a complete selected branch for "
+        "standalone upscaling, and delete one inactive leaf revision at a "
+        "time after a complete deletion preview.")
 
-    def passthrough(self, plan, source_timeline=None):
-        return (plan, source_timeline)
+    def passthrough(self, selection_json="", plan=None, source_timeline=None):
+        manifest = _checkpoint_selection_manifest(selection_json)
+        return (plan, source_timeline, manifest)
 
 
 class MiniMaxH3ChainFirstSceneImage:
@@ -13871,6 +13876,108 @@ def _load_checkpoint_revision(
         raise ValueError("Checkpoint revision id does not match its metadata.")
     _verify_segment_artifacts(segment, index)
     return metadata, metadata_path
+
+
+def _checkpoint_selection_manifest(value: Any) -> dict[str, Any] | None:
+    """Build one immutable complete branch directly from manager selection."""
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    selection = _json_document(value)
+    if not isinstance(selection, dict):
+        raise ValueError(
+            "Checkpoint Manager selection is not a JSON object. Select a "
+            "complete branch again.")
+    run_name = _safe_name(selection.get("run_name"), "")
+    if not run_name:
+        raise ValueError("Checkpoint Manager selection has no saved run.")
+    lineage = selection.get("lineage")
+    if not isinstance(lineage, list) or not lineage:
+        raise ValueError(
+            "Checkpoint Manager has no selected checkpoint lineage.")
+
+    plan_path = _run_archive_paths({"run_name": run_name})["plan"]
+    if not os.path.isfile(plan_path):
+        raise FileNotFoundError(
+            "Selected H3 run has no archived recovery Plan: %s" % plan_path)
+    archived_plan = _read_json(plan_path)
+    shots = archived_plan.get("shots") if isinstance(archived_plan, dict) else None
+    if not isinstance(shots, list) or not shots:
+        raise ValueError("Selected H3 run has no valid archived scene list.")
+    if len(lineage) != len(shots):
+        raise ValueError(
+            "Checkpoint Manager selected a partial branch through scene %d; "
+            "upscaling requires the complete %d-scene branch." %
+            (len(lineage), len(shots)))
+
+    loaded = []
+    compatibility = None
+    prompt_prefix = None
+    for index, item in enumerate(lineage, start=1):
+        if not isinstance(item, dict) or int(item.get("scene", 0)) != index:
+            raise ValueError(
+                "Checkpoint Manager lineage must contain contiguous scenes "
+                "1 through %d." % len(shots))
+        metadata, _metadata_path = _load_checkpoint_revision(
+            run_name, index, item.get("revision"))
+        current_compatibility = metadata.get("compatibility")
+        if not isinstance(current_compatibility, dict):
+            raise ValueError(
+                "Selected checkpoint scene %d has no compatibility record."
+                % index)
+        if compatibility is None:
+            compatibility = current_compatibility
+        elif _canonical_json(current_compatibility) != _canonical_json(
+                compatibility):
+            raise ValueError(
+                "Selected checkpoint revisions use different compatibility "
+                "settings.")
+        segment = metadata["segment"]
+        current_prefix = str(segment.get("prompt_prefix") or "")
+        if prompt_prefix is None:
+            prompt_prefix = current_prefix
+        elif current_prefix != prompt_prefix:
+            raise ValueError(
+                "Selected checkpoint revisions use different shared prompts.")
+        if loaded:
+            predecessor = loaded[-1]["segment"]
+            expected_revision = str(
+                segment.get("predecessor_revision") or "")
+            expected_hash = str(
+                segment.get("predecessor_checkpoint_sha256") or "")
+            if expected_revision and expected_revision != str(
+                    predecessor.get("revision") or ""):
+                raise ValueError(
+                    "Selected scene %d was generated from another scene %d "
+                    "revision." % (index, index - 1))
+            if expected_hash and expected_hash != str(
+                    predecessor.get("checkpoint_sha256") or ""):
+                raise ValueError(
+                    "Selected scene %d was generated from another scene %d "
+                    "checkpoint." % (index, index - 1))
+        loaded.append(metadata)
+
+    segments = [_public_segment(item["segment"]) for item in loaded]
+    total_frames = sum(int(item["delivered_frames"]) for item in segments)
+    manifest = {
+        "format": "h3_chain_manifest_v3",
+        "run_name": run_name,
+        "plan_hash": str(loaded[-1].get("plan_hash") or
+                         archived_plan.get("plan_hash") or ""),
+        "prompt_prefix": str(prompt_prefix or ""),
+        "compatibility": _json_document(compatibility),
+        "clip_count": len(segments),
+        "total_delivered_frames": total_frames,
+        "duration_seconds": total_frames / float(FPS),
+        "segments": segments,
+    }
+    archives = _available_run_archives({"run_name": run_name})
+    if archives:
+        manifest["archives"] = archives
+    for key in ("prelude", "source_timeline"):
+        if isinstance(archived_plan.get(key), dict):
+            manifest[key] = _json_document(archived_plan[key])
+    _validate_manifest(manifest)
+    return manifest
 
 
 def _checkpoint_plan_revision(segment: dict[str, Any]) -> dict[str, Any]:

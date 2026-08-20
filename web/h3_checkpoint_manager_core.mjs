@@ -46,6 +46,30 @@ export function checkpointBranchRows(payload) {
     }));
 }
 
+export function checkpointRevisionLineage(payload, selected) {
+    const records = checkpointRevisionMap(payload);
+    let cursor = selected ?? null;
+    const reversed = [];
+    const seen = new Set();
+    while (cursor) {
+        const key = checkpointRevisionKey(cursor.scene, cursor.revision);
+        if (seen.has(key)) return [];
+        seen.add(key);
+        reversed.push({
+            scene:Number(cursor.scene),
+            revision:String(cursor.revision ?? "").toLowerCase(),
+        });
+        if (!cursor.parent) break;
+        cursor = records.get(checkpointRevisionKey(
+            cursor.parent.scene, cursor.parent.revision));
+        if (!cursor) return [];
+    }
+    const lineage = reversed.reverse();
+    if (!lineage.length || lineage[0].scene !== 1) return [];
+    if (lineage.some((item, index) => item.scene !== index + 1)) return [];
+    return lineage;
+}
+
 export function checkpointDependencyText(item) {
     const scene = Number(item?.scene) || 0;
     const id = String(item?.scene_id ?? `clip_${String(scene).padStart(4, "0")}`);

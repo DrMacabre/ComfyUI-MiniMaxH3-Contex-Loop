@@ -87,12 +87,13 @@ def _profile_config(backend: str, recipe_json: str, save_latent: bool,
     return value
 
 
-def _source_manifest(plan: dict[str, Any], source_timeline: Any = None,
-                     source_audio: Any = None) -> dict[str, Any]:
-    completed = chain._load_resume_state(
-        plan, len(plan["shots"]) + 1,
-        source_timeline=source_timeline, source_audio=source_audio)
-    manifest = chain._manifest_from_state(completed)
+def _verified_source_manifest(value: dict[str, Any]) -> dict[str, Any]:
+    manifest = chain._json_document(value)
+    if not isinstance(manifest, dict):
+        raise ValueError(
+            "Checkpoint Upscale Adapter requires a selected branch manifest "
+            "from Checkpoint Manager.")
+    chain._validate_manifest(manifest)
     if isinstance(manifest.get("prelude"), dict):
         raise ValueError(
             "Deferred upscale does not yet support an existing-video prelude. "
@@ -279,9 +280,9 @@ class MiniMaxH3ChainUpscaleAdapter:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "plan": (chain.PLAN_TYPE, {
-                    "tooltip": "Plan passed through Checkpoint Manager after the "
-                               "desired complete branch is made active."}),
+                "source_manifest": (chain.MANIFEST_TYPE, {
+                    "tooltip": "Verified complete branch emitted directly by "
+                               "Checkpoint Manager. No source Plan is needed."}),
                 "profile": ("STRING", {
                     "default": "h3_2x",
                     "tooltip": "Child output folder under this run's upscaled directory."}),
@@ -309,17 +310,6 @@ class MiniMaxH3ChainUpscaleAdapter:
                     "default": 18, "min": 0, "max": 51,
                     "tooltip": "H.264 quality for persisted HQ scene segments."}),
             },
-            "optional": {
-                "source_audio": ("AUDIO", {
-                    "tooltip": "Same source track used by source_track plans; "
-                               "validates the selected parent branch."}),
-                "external_context": (chain.EXTERNAL_CONTEXT_TYPE, {
-                    "tooltip": "Same imported context used by the parent chain."}),
-                "source_timeline": (chain.SOURCE_TIMELINE_TYPE, {
-                    "tooltip": "0.5 source timeline passed through Checkpoint "
-                               "Manager. It verifies source-reference scenes "
-                               "without retaining decoded media in the loop."}),
-            },
             "hidden": {"initial_state": (UPSCALE_STATE_TYPE,)},
         }
 
@@ -334,35 +324,19 @@ class MiniMaxH3ChainUpscaleAdapter:
     )
     FUNCTION = "adapt"
     CATEGORY = "conditioning/minimax/contex_loop/upscale"
-    DESCRIPTION = ("Turn the complete active checkpoint branch into a resumable "
-                   "child upscale loop without modifying the source run.")
+    DESCRIPTION = ("Turn Checkpoint Manager's selected complete branch into a "
+                   "resumable child upscale loop without a source Plan or "
+                   "changes to the source run.")
 
     @classmethod
     def IS_CHANGED(cls, *args, **kwargs):
         return float("NaN")
 
-    def adapt(self, plan, profile, backend, recipe_json, start_clip, end_clip,
-              save_latent, segment_crf, source_audio=None,
-              external_context=None, source_timeline=None, initial_state=None):
+    def adapt(self, source_manifest, profile, backend, recipe_json,
+              start_clip, end_clip, save_latent, segment_crf,
+              initial_state=None):
         if initial_state is None:
-            prepared = chain._plan_with_external_context(plan, external_context)
-            runtime_timeline = None
-            if source_timeline is None and isinstance(
-                    plan.get("source_timeline"), dict):
-                source_timeline = chain._source_timeline_from_recovery(
-                    plan["source_timeline"])
-            if source_timeline is not None and source_audio is not None:
-                raise ValueError(
-                    "H3 Upscale Adapter accepts Source Timeline or legacy "
-                    "source_audio, not both.")
-            if source_timeline is not None:
-                prepared, runtime_timeline = chain._plan_with_source_timeline(
-                    prepared, source_timeline)
-            else:
-                prepared = chain._plan_with_source_audio(prepared, source_audio)
-            manifest = _source_manifest(
-                prepared, source_timeline=runtime_timeline,
-                source_audio=(source_audio if runtime_timeline is None else None))
+            manifest = _verified_source_manifest(source_manifest)
             total = len(manifest["segments"])
             start = int(start_clip)
             stop = total if int(end_clip) == 0 else int(end_clip)
@@ -388,8 +362,10 @@ class MiniMaxH3ChainUpscaleAdapter:
         else:
             state = dict(initial_state)
             manifest = state["source_manifest"]
-            if str(manifest.get("plan_hash")) != str(plan.get("plan_hash")):
-                raise ValueError("Source H3 plan changed during upscale recursion.")
+            if _source_hash(_verified_source_manifest(source_manifest)) != str(
+                    state["source_manifest_hash"]):
+                raise ValueError(
+                    "Selected checkpoint branch changed during upscale recursion.")
         status = ("upscale %s scene %d/%d; range %d:%d; backend=%s; HQ latent %s" %
                   (state["profile"], int(state["index"]),
                    len(state["source_manifest"]["segments"]),
@@ -795,12 +771,10 @@ class MiniMaxH3ChainUpscaleLoopEnd:
                 else:
                     node.set_input(key, value)
         graph.lookup_node(open_node).set_input("initial_state", next_state)
-        # Once the first iteration has reduced recovery inputs to the embedded
-        # parent manifest, do not keep large source media dependencies alive in
-        # every recursive child graph.
-        for name in ("external_context", "source_timeline", "source_audio"):
-            if name in start_info.get("inputs", {}):
-                graph.lookup_node(open_node).set_input(name, None)
+        # Recurse with the already verified immutable document rather than the
+        # external manager link; the manager browser is bootstrap-only.
+        graph.lookup_node(open_node).set_input(
+            "source_manifest", next_state["source_manifest"])
         recurse = graph.lookup_node("Recurse")
         return {"result": tuple(recurse.out(index)
                                 for index in range(len(self.RETURN_TYPES))),

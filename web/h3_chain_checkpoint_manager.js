@@ -5,9 +5,10 @@ import {
     checkpointDeletionTitle,
     checkpointDependencyText,
     checkpointRevisionKey,
+    checkpointRevisionLineage,
     formatCheckpointBytes,
     selectedCheckpointRevision,
-} from "./h3_checkpoint_manager_core.mjs?v=0.5.5";
+} from "./h3_checkpoint_manager_core.mjs?v=0.5.6";
 
 const NODE_NAME = "MiniMaxH3ChainCheckpointManager";
 const PLAN_NAME = "MiniMaxH3ChainPlan";
@@ -168,6 +169,12 @@ function mount(node) {
     node._h3CheckpointManagerMounted = true;
     injectStyles();
     node.properties ??= {};
+    const selectionWidget = widget(node, "selection_json");
+    if (selectionWidget) {
+        selectionWidget.hidden = true;
+        selectionWidget.type = "hidden";
+        selectionWidget.computeSize = () => [0, -4];
+    }
     const state = {
         runs:[], runName:String(node.properties[RUN_PROPERTY] ?? ""), payload:null,
         scene:Number(node.properties[SCENE_PROPERTY]) || null,
@@ -223,6 +230,15 @@ function mount(node) {
         node.properties[RUN_PROPERTY] = state.runName;
         node.properties[SCENE_PROPERTY] = state.scene;
         node.properties[REVISION_PROPERTY] = state.revision;
+        if (selectionWidget) {
+            const lineage = checkpointRevisionLineage(
+                state.payload, state.selected);
+            selectionWidget.value = (
+                state.runName && lineage.length
+                    ? JSON.stringify({run_name:state.runName, lineage})
+                    : ""
+            );
+        }
     }
 
     function setBusy(value, message = "") {

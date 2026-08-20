@@ -57,9 +57,10 @@ recursive Motion Context.
 
 [`MiniMax H3 Deferred Upscale - H3 Learned 2x.json`](<MiniMax H3 Deferred Upscale - H3 Learned 2x.json>)
 is a standalone second-pass workflow: it contains no first-pass generation
-loop. Use Checkpoint Manager inside it to select a completed saved branch and
-load that exact Plan, then queue the child upscale profile. Its 0.5 Chain
-Policy and Source Timeline wiring preserve the selected parent contract.
+loop or source Plan. Select the final scene of a complete branch in Checkpoint
+Manager, then queue the child upscale profile. The manager emits that verified
+immutable lineage directly; recovery-only Source Timeline metadata stays
+embedded in the manifest.
 
 The loop uses Tr1dae's **MiniMax H3 Latent Upscale Combined 2x**, the learned
 clean-latent path, a four-step staggered refinement schedule at denoise 0.45,
@@ -76,6 +77,10 @@ the full HQ sampler latent itself is needed later. Reference-heavy Ref2VA
 second passes may need their original reference conditioning added to the
 backend body; this standalone graph intentionally reconstructs T2VA text
 conditioning only.
+The original reference files are optional for the low-denoise learned upscale,
+because the rendered subject and motion already live in the clean latent.
+Reconnect archived references only when intentionally rebuilding exact Ref2VA
+conditioning for the second pass.
 
 The masked-video workflow uses the same Chain Loop, checkpoint/review, resume,
 and assembly path as the generation examples. A pack-native source-target node

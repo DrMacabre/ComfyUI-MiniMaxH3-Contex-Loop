@@ -118,8 +118,9 @@ the [complete Plan format guide](H3_CHAIN_FORMAT_GUIDE.md).
 Checkpoint Manager identifies saved takes by scene and inferred branch, previews
 saved media and exact video/audio dependencies, and safely deletes inactive
 leaves one revision at a time. Its Plan and Source Timeline pass-throughs can
-also launch a deferred checkpoint-backed upscale loop; each profile is isolated
-under `upscaled/<profile>`, and saving the large HQ latent is optional. See
+remain connected in generation workflows, while its selected-manifest output
+launches a standalone deferred upscale loop with no source Plan. Each profile
+is isolated under `upscaled/<profile>`, and saving the large HQ latent is optional. See
 [Runs, review, and recovery](docs/RUNS_AND_RECOVERY.md).
 
 ## Origins and license

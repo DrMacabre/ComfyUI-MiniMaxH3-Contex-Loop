@@ -756,7 +756,6 @@ def validate_deferred_h3_upscale(path):
     validate_links(workflow)
     node_types = {item.get("type") for item in workflow["nodes"]}
     required = {
-        "MiniMaxH3ChainPolicy",
         "MiniMaxH3ChainCheckpointManager",
         "MiniMaxH3ChainUpscaleAdapter",
         "MiniMaxH3ChainUpscaleCurrent",
@@ -768,11 +767,11 @@ def validate_deferred_h3_upscale(path):
         "MiniMaxH3ChainUpscaleMerge",
     }
     assert required <= node_types
+    assert "MiniMaxH3ChainPlan" not in node_types
+    assert "MiniMaxH3ChainPolicy" not in node_types
     assert "MiniMaxH3ChainLoopStart" not in node_types
     assert "MiniMaxH3ChainContext" not in node_types
 
-    plan = node(workflow, "MiniMaxH3ChainPlan")
-    policy = node(workflow, "MiniMaxH3ChainPolicy")
     manager = node(workflow, "MiniMaxH3ChainCheckpointManager")
     adapter = node(workflow, "MiniMaxH3ChainUpscaleAdapter")
     current = node(workflow, "MiniMaxH3ChainUpscaleCurrent")
@@ -783,15 +782,10 @@ def validate_deferred_h3_upscale(path):
     loop_end = node(workflow, "MiniMaxH3ChainUpscaleLoopEnd")
     merger = node(workflow, "MiniMaxH3ChainUpscaleMerge")
 
-    assert policy["widgets_values"] == ["guide", "generated", "off", "on"]
-    assert origin_for_input(
-        workflow, socket(plan["inputs"], "chain_policy")) == policy
-    assert socket(manager["outputs"], "plan")["links"] == [
-        socket(adapter["inputs"], "plan")["link"]]
-    assert socket(manager["outputs"], "source_timeline")["links"] == [
-        socket(adapter["inputs"], "source_timeline")["link"],
-        socket(merger["inputs"], "source_timeline")["link"],
-    ]
+    assert socket(manager["inputs"], "plan")["link"] is None
+    assert socket(manager["outputs"], "plan")["links"] is None
+    assert socket(manager["outputs"], "selected_manifest")["links"] == [
+        socket(adapter["inputs"], "source_manifest")["link"]]
     assert adapter["widgets_values"][0:2] == ["h3_learned_2x", "h3_latent"]
     assert adapter["widgets_values"][3:7] == [1, 0, False, 18]
     assert socket(adapter["outputs"], "flow")["links"] == [
@@ -822,7 +816,8 @@ def validate_deferred_h3_upscale(path):
     notes = "\n".join(
         str(item.get("widgets_values", [""])[0])
         for item in workflow["nodes"] if item.get("type") == "Note")
-    assert "Load selected branch" in notes
+    assert "no source Plan is used" in notes
+    assert "does not require the original references" in notes
     assert "save_latent is OFF" in notes
     assert "ComfyUI-MiniMaxH3_LatentUpscaler" in notes
     return workflow
