@@ -13,6 +13,7 @@ from typing import Any
 SOURCE_TIMELINE_VERSION = "h3_source_timeline_v1"
 AUDIO_POLICY_VERSION = "h3_audio_policy_v1"
 TRANSITION_POLICY_VERSION = "h3_transition_policy_v1"
+CHAIN_POLICY_VERSION = "h3_chain_policy_v1"
 SCENE_DEPENDENCY_VERSION = "h3_scene_dependency_v1"
 PREFLIGHT_VERSION = "h3_preflight_v1"
 
@@ -20,6 +21,8 @@ FINAL_AUDIO_POLICIES = ("generated", "source", "none")
 SOURCE_REFERENCE_POLICIES = ("off", "on")
 GENERATED_CONTINUITY_POLICIES = ("off", "on")
 PAIRED_AUDIO_POLICIES = ("off", "embedded")
+PRIMARY_TRANSITION_PRESETS = ("cut", "guide", "hard_av", "soft_av")
+DEFAULT_AUDIO_CONTEXT_LENGTH = 22
 CONTEXT_SPATIAL_PROXY_MODES = ("off", "rgb_5_6", "latent_5_6")
 CONTINUATION_POLICIES = (
     "guide", "tone_carry_guide", "latent_guide", "tapered_guide",
@@ -208,6 +211,70 @@ def audio_policy(
         "source_reference": source,
         "generated_continuity": continuity,
     }
+
+
+def compose_chain_policy(
+    audio: dict[str, Any],
+    transition: dict[str, Any],
+    *,
+    audio_context_length: int = DEFAULT_AUDIO_CONTEXT_LENGTH,
+) -> dict[str, Any]:
+    """Combine validated 0.5 policies without changing their stored shape.
+
+    The combined record is an authoring and wiring convenience. Plan consumes
+    its two canonical child records and the legacy-compatible audio-context
+    value, then persists the same compatibility fields as separate policy
+    nodes. This keeps checkpoint hashes independent of workflow topology.
+    """
+    if not isinstance(audio, dict) or audio.get("version") != AUDIO_POLICY_VERSION:
+        raise ValueError("H3 Chain Policy requires a current Audio Policy.")
+    resolved_audio = audio_policy(
+        audio.get("final_audio"), audio.get("source_reference"),
+        audio.get("generated_continuity"))
+    if (not isinstance(transition, dict) or
+            transition.get("version") != TRANSITION_POLICY_VERSION):
+        raise ValueError("H3 Chain Policy requires a current Transition Policy.")
+    resolved_transition = transition_policy(
+        transition.get("preset"),
+        expert_override=bool(transition.get("expert_override", False)),
+        continuation_mode=transition.get("continuation_mode"),
+        context_length=transition.get("context_length"))
+    if isinstance(audio_context_length, bool):
+        raise ValueError(
+            "H3 Chain Policy audio context must be between 0 and 240 frames.")
+    try:
+        resolved_audio_context = int(audio_context_length)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "H3 Chain Policy audio context must be between 0 and 240 frames."
+        ) from exc
+    if resolved_audio_context < 0 or resolved_audio_context > 240:
+        raise ValueError(
+            "H3 Chain Policy audio context must be between 0 and 240 frames.")
+    return {
+        "version": CHAIN_POLICY_VERSION,
+        "audio_policy": resolved_audio,
+        "transition_policy": resolved_transition,
+        "audio_context_length": resolved_audio_context,
+    }
+
+
+def chain_policy(
+    incoming_transition: str,
+    final_audio: str,
+    source_reference: str,
+    generated_continuity: str,
+) -> dict[str, Any]:
+    """Build the compact normal-user policy from its four semantic choices."""
+    preset = str(incoming_transition)
+    if preset not in PRIMARY_TRANSITION_PRESETS:
+        raise ValueError(
+            "H3 Chain Policy incoming transition must be one of %s." %
+            (PRIMARY_TRANSITION_PRESETS,))
+    return compose_chain_policy(
+        audio_policy(final_audio, source_reference, generated_continuity),
+        transition_policy(preset),
+        audio_context_length=DEFAULT_AUDIO_CONTEXT_LENGTH)
 
 
 def paired_audio_policy(value: str | bool) -> str:

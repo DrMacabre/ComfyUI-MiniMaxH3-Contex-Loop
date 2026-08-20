@@ -73,6 +73,7 @@ def main():
     assert contracts.SOURCE_TIMELINE_VERSION == "h3_source_timeline_v1"
     assert contracts.AUDIO_POLICY_VERSION == "h3_audio_policy_v1"
     assert contracts.TRANSITION_POLICY_VERSION == "h3_transition_policy_v1"
+    assert contracts.CHAIN_POLICY_VERSION == "h3_chain_policy_v1"
     assert contracts.SCENE_DEPENDENCY_VERSION == "h3_scene_dependency_v1"
     assert contracts.PREFLIGHT_VERSION == "h3_preflight_v1"
     assert contracts.CONTEXT_SPATIAL_PROXY_MODES == (
@@ -120,6 +121,56 @@ def main():
         assert "paired-audio" in str(exc)
     else:
         raise AssertionError("unknown paired-audio policy was accepted")
+
+    assert contracts.PRIMARY_TRANSITION_PRESETS == (
+        "cut", "guide", "hard_av", "soft_av")
+    compact = contracts.chain_policy(
+        "soft_av", "source", "on", "off")
+    assert compact == {
+        "version": contracts.CHAIN_POLICY_VERSION,
+        "audio_policy": {
+            "version": contracts.AUDIO_POLICY_VERSION,
+            "final_audio": "source",
+            "source_reference": "on",
+            "generated_continuity": "off",
+        },
+        "transition_policy": {
+            "version": contracts.TRANSITION_POLICY_VERSION,
+            "preset": "soft_av",
+            "label": "Soft continuation (hard picture, soft audio)",
+            "continuation_mode": "audio_feathered_av",
+            "context_length": 39,
+            "expert_override": False,
+        },
+        "audio_context_length": contracts.DEFAULT_AUDIO_CONTEXT_LENGTH,
+    }
+    # The stored numeric value remains stable even when continuity is off;
+    # that independent audio-policy axis gates it at runtime. This preserves
+    # the compatibility hash of an equivalent pair of existing 0.5 nodes.
+    assert compact["audio_context_length"] == 22
+    expert_transition = contracts.transition_policy(
+        "guide", expert_override=True,
+        continuation_mode="feathered_av", context_length=39)
+    composed = contracts.compose_chain_policy(
+        contracts.audio_policy("generated", "off", "on"),
+        expert_transition, audio_context_length=0)
+    assert composed["transition_policy"] == expert_transition
+    assert composed["audio_context_length"] == 0
+    try:
+        contracts.chain_policy(
+            "detail_av", "generated", "off", "on")
+    except ValueError as exc:
+        assert "incoming transition" in str(exc)
+    else:
+        raise AssertionError("advanced transition leaked into compact policy")
+    try:
+        contracts.compose_chain_policy(
+            compact["audio_policy"], compact["transition_policy"],
+            audio_context_length=241)
+    except ValueError as exc:
+        assert "between 0 and 240" in str(exc)
+    else:
+        raise AssertionError("invalid combined audio context was accepted")
 
     expected_presets = {
         "cut": ("guide", 0),
