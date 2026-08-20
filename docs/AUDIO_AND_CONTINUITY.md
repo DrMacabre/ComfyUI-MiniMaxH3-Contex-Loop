@@ -260,11 +260,13 @@ full AV overlap privately to Segment Save. Connect Trim's AUDIO output directly;
 there is no second overlap-audio socket.
 
 `images_with_overlap` exposes an additional visual stream containing the
-retained repeated context selected by `retain_overlap_frames`. In 0.5 chains,
-wire **Current Shot → video_blend_frames** into that input. A scene-level
+retained repeated context selected by the active scene state. In 0.5 chains,
+wire **Current Shot → state** to **Loop Trim → state**. A scene-level
 `video_blend_frames` value controls the boundary entering that scene; blank
-inherits the Plan default and explicit `0` keeps a hard cut. This assembly-only
-setting does not alter diffusion, the normal clean images output, or audio.
+inherits the Plan default and explicit `0` keeps a hard cut. The manual
+`retain_overlap_frames` input and both blend integer outputs are legacy routes.
+This assembly-only setting does not alter diffusion, the normal clean images
+output, or audio.
 
 All continuation modes return the prefix length as `trim_frames`. In AV mask
 modes those leading frames come from target-latent rows rather than persistent

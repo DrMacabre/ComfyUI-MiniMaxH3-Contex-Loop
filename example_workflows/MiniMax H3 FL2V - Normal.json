@@ -2,7 +2,7 @@
   "id": "46a25be1-4bfd-4bb5-aa7b-4d4ca322f3c2",
   "revision": 0,
   "last_node_id": 1951,
-  "last_link_id": 96,
+  "last_link_id": 97,
   "nodes": [
     {
       "id": 1,
@@ -379,7 +379,8 @@
             41,
             46,
             82,
-            86
+            86,
+            97
           ]
         },
         {
@@ -464,9 +465,7 @@
         {
           "name": "video_blend_frames",
           "type": "INT",
-          "links": [
-            80
-          ]
+          "links": null
         }
       ],
       "title": "CURRENT FL2V SCENE — PROMPT / SEED / TIMING",
@@ -1189,7 +1188,13 @@
           "widget": {
             "name": "retain_overlap_frames"
           },
-          "link": 80
+          "link": null
+        },
+        {
+          "name": "state",
+          "type": "H3_CHAIN_STATE",
+          "link": 97,
+          "shape": 7
         }
       ],
       "outputs": [
@@ -1222,7 +1227,7 @@
           "links": null
         }
       ],
-      "title": "TRIM 22 CONTEXT FRAMES / RETAIN 5 FOR BLEND",
+      "title": "TRIM CONTEXT / AUTO-RESOLVE SCENE BLEND",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -2783,14 +2788,6 @@
       "H3_CHAIN_PLAN"
     ],
     [
-      80,
-      1702,
-      14,
-      132,
-      3,
-      "INT"
-    ],
-    [
       81,
       132,
       2,
@@ -2917,6 +2914,14 @@
       1701,
       0,
       "H3_CHAIN_PLAN"
+    ],
+    [
+      97,
+      1702,
+      0,
+      132,
+      4,
+      "H3_CHAIN_STATE"
     ]
   ],
   "groups": [

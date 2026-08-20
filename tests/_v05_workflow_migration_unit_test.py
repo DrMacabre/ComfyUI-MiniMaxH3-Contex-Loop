@@ -44,6 +44,15 @@ def main():
     studio = nodes(migrated, "MiniMaxH3ChainPlanStudio")[0]
     assert {"source_timeline", "source_audio", "tagged_references",
             "reference_schedule"}.issubset(input_names(studio))
+    current = nodes(migrated, "MiniMaxH3ChainCurrent")[0]
+    trim = nodes(migrated, "MiniMaxH3LoopTrim")[0]
+    state_input = next(item for item in trim["inputs"]
+                       if item["name"] == "state")
+    state_link = next(item for item in migrated["links"]
+                      if item[0] == state_input["link"])
+    assert state_link[1:3] == [current["id"], 0]
+    assert next(item for item in trim["inputs"]
+                if item["name"] == "retain_overlap_frames")["link"] is None
 
     stable = copy.deepcopy(migrated)
     migration.migrate(migrated, "custom-v0.4-studio.json")

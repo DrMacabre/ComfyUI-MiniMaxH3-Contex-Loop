@@ -963,8 +963,36 @@ def main():
     assert delivered[:, 0, 0, 0].tolist() == list(range(4, 10))
     assert with_overlap[:, 0, 0, 0].tolist() == list(range(10))
     assert retained == 4
+    scene_state = {
+        "index": 2,
+        "plan": {
+            "shots": [{}, {"video_blend_frames": 3}],
+            "compatibility": {"video_blend_frames": 0},
+        },
+    }
+    delivered, _, with_overlap, retained = trim_node.trim(
+        numbered, 4, retain_overlap_frames=0, state=scene_state)
+    assert delivered[:, 0, 0, 0].tolist() == list(range(4, 10))
+    assert with_overlap[:, 0, 0, 0].tolist() == list(range(1, 10))
+    assert retained == 3
+    first_scene_state = {
+        "index": 1,
+        "plan": {
+            "shots": [{
+                "raw_frames": 6,
+                "delivered_frames": 6,
+                "video_blend_frames": 39,
+            }],
+            "compatibility": {"video_blend_frames": 39},
+        },
+    }
+    delivered, _, with_overlap, retained = trim_node.trim(
+        numbered[4:], 0, retain_overlap_frames=39, state=first_scene_state)
+    assert delivered[:, 0, 0, 0].tolist() == list(range(4, 10))
+    assert with_overlap[:, 0, 0, 0].tolist() == list(range(4, 10))
+    assert retained == 0
     print("trim: AV tails frame-locked; optional visual overlap is clamped and "
-          "does not alter the hard-trim output")
+          "scene state overrides the legacy Plan-default wire")
 
     real_st_load = chain._st_load
     try:

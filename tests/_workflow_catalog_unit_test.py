@@ -111,9 +111,10 @@ def validate_v05_topology(workflow):
     current = node(workflow, "MiniMaxH3ChainCurrent")
     trim = node(workflow, "MiniMaxH3LoopTrim")
     retain = socket(trim["inputs"], "retain_overlap_frames")
-    assert origin_for_input(workflow, retain) == current
-    assert socket(current["outputs"], "video_blend_frames")["links"] == [
-        retain["link"]]
+    trim_state = socket(trim["inputs"], "state")
+    assert retain["link"] is None
+    assert origin_for_input(workflow, trim_state) == current
+    assert socket(current["outputs"], "video_blend_frames")["links"] is None
     assert socket(plan["outputs"], "video_blend_frames")["links"] is None
 
     start = node(workflow, "MiniMaxH3ChainLoopStart")
@@ -311,7 +312,8 @@ def validate_t2v(path, editor_type, expected_blend):
 
     trim = node(workflow, "MiniMaxH3LoopTrim")
     saver = node(workflow, "MiniMaxH3ChainSegmentSave")
-    assert socket(trim["inputs"], "retain_overlap_frames")["link"] is not None
+    assert socket(trim["inputs"], "retain_overlap_frames")["link"] is None
+    assert socket(trim["inputs"], "state")["link"] is not None
     assert socket(trim["outputs"], "images_with_overlap")["links"]
     assert socket(saver["inputs"], "images_with_overlap")["link"] is not None
 
@@ -402,7 +404,8 @@ def validate_i2v(path, editor_type, expected_blend):
 
     trim = node(workflow, "MiniMaxH3LoopTrim")
     saver = node(workflow, "MiniMaxH3ChainSegmentSave")
-    assert socket(trim["inputs"], "retain_overlap_frames")["link"] is not None
+    assert socket(trim["inputs"], "retain_overlap_frames")["link"] is None
+    assert socket(trim["inputs"], "state")["link"] is not None
     assert socket(saver["inputs"], "images_with_overlap")["link"] is not None
     notes = "\n".join(
         str(item.get("widgets_values", [""])[0])
@@ -714,8 +717,8 @@ def validate_sequential_motion_ref(path):
     assert socket(motion["inputs"], "previous")["link"] is not None
     assert socket(wrapper["inputs"], "references")["link"] == (
         socket(motion["outputs"], "references")["links"][0])
-    assert socket(wrapper["inputs"], "state")["link"] == (
-        socket(current["outputs"], "state")["links"][-1])
+    assert origin_for_input(
+        workflow, socket(wrapper["inputs"], "state")) == current
     assert socket(wrapper["inputs"], "clip_index")["link"] is not None
     assert socket(wrapper["inputs"], "clip_count")["link"] is not None
     assert socket(plan_node["inputs"], "generation_fingerprint")["link"] == (

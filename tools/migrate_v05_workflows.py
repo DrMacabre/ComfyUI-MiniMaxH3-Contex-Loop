@@ -338,6 +338,39 @@ def _add_preflight(workflow: dict[str, Any], graph: Graph) -> None:
                       kind)
 
 
+def _wire_scene_resolved_trim(
+        workflow: dict[str, Any], graph: Graph) -> None:
+    """Make Loop Trim resolve blend policy from the active scene state.
+
+    Plan's integer output is only the inherited default. Current Shot's old
+    integer output is scene-resolved, but maintaining two same-typed wires made
+    it easy to connect the default and silently lose a scene override. The 0.5
+    route carries state instead, so Loop Trim owns the one authoritative
+    resolution step.
+    """
+    current = _node(workflow, "MiniMaxH3ChainCurrent")
+    trim = _node(workflow, "MiniMaxH3LoopTrim")
+    if current is None or trim is None:
+        return
+    state_input = graph.add_input(trim, "state", "H3_CHAIN_STATE")
+    state_link_id = state_input.get("link")
+    state_link = (graph.links.get(int(state_link_id))
+                  if state_link_id is not None else None)
+    already_resolved = bool(
+        state_link is not None
+        and int(state_link[1]) == int(current["id"])
+        and int(state_link[2]) == 0)
+    if not already_resolved:
+        graph.connect(
+            current, 0, trim, trim["inputs"].index(state_input),
+            "H3_CHAIN_STATE")
+    retain = next((item for item in trim.get("inputs", [])
+                   if item.get("name") == "retain_overlap_frames"), None)
+    if retain is not None and retain.get("link") is not None:
+        graph.remove_link(int(retain["link"]))
+    trim["title"] = "TRIM CONTEXT / AUTO-RESOLVE SCENE BLEND"
+
+
 def _migrate_source_audio_demo(workflow: dict[str, Any], graph: Graph) -> None:
     revised = _replace_text(
         workflow,
@@ -414,6 +447,7 @@ def migrate(workflow: dict[str, Any], name: str) -> dict[str, Any]:
     graph = Graph(workflow)
     _add_policies(workflow, graph)
     _add_preflight(workflow, graph)
+    _wire_scene_resolved_trim(workflow, graph)
     if name == SOURCE_AUDIO_DEMO:
         _migrate_source_audio_demo(workflow, graph)
     graph.finish()

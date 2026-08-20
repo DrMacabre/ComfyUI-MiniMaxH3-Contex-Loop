@@ -83,7 +83,9 @@ instead of silently padding or stretching them.
 
 Loop Trim's `images_with_overlap` output exposes part of the repeated visual
 context while leaving its normal images and audio fully trimmed. Connect
-**Current Shot → video_blend_frames** to Loop Trim's
-`retain_overlap_frames`; this resolves each incoming scene's optional
-`video_blend_frames` override, or the Plan default when the scene value is
-blank. Scene N controls the N−1→N boundary. Keep it at `0` for a hard boundary.
+**Current Shot → state** to **Loop Trim → state**. Loop Trim then resolves each
+incoming scene's optional `video_blend_frames` override, or the Plan default
+when the scene value is blank. Scene N controls the N−1→N boundary. Keep it at
+`0` for a hard boundary. The old Plan/default and Current Shot/resolved integer
+outputs remain compatibility sockets only; do not wire either one in a 0.5
+workflow.

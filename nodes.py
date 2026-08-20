@@ -742,12 +742,16 @@ class MiniMaxH3LoopTrim:
                                "from picture duration by about 8ms."}),
                 "retain_overlap_frames": ("INT", {
                     "default": 0, "min": 0, "max": 4096,
-                    "tooltip": "Optional visual-only overlap for an external "
-                               "stitcher. 0 keeps the normal hard-trim output "
-                               "only. A positive value makes the extra image "
-                               "output retain up to that many of the final "
-                               "repeated context frames. Audio always removes "
-                               "the complete overlap."}),
+                    "tooltip": "Legacy/manual visual overlap for an external "
+                               "stitcher. In a 0.5 chain, connect Current "
+                               "Shot's state output below and this integer is "
+                               "ignored; Loop Trim then resolves the exact "
+                               "per-scene blend from the Plan automatically."}),
+                "state": ("H3_CHAIN_STATE", {
+                    "tooltip": "Recommended 0.5 chain route: connect Current "
+                               "Shot's state output. Loop Trim reads the active "
+                               "scene's resolved blend directly, so a Plan "
+                               "default can never override a per-scene value."}),
             },
         }
 
@@ -769,10 +773,12 @@ class MiniMaxH3LoopTrim:
     FUNCTION = "trim"
     CATEGORY = "conditioning/minimax/contex_loop"
     DESCRIPTION = ("Remove the leading pinned frames from a decoded H3 clip, "
-                   "trimming picture and sound by the same duration.")
+                   "trimming picture and sound by the same duration. In 0.5 "
+                   "chains, Current Shot state also resolves the scene blend "
+                   "without a separate default-versus-scene integer wire.")
 
     def trim(self, images, trim_frames, audio=None, fps=24.0, match_tail=True,
-             retain_overlap_frames=0):
+             retain_overlap_frames=0, state=None):
         n = max(0, int(trim_frames))
         total = int(images.shape[0])
         if n >= total:
@@ -780,7 +786,70 @@ class MiniMaxH3LoopTrim:
                 "h3_motion_context: asked to trim %d frames from a %d frame clip"
                 % (n, total))
         out_images = images[n:] if n else images
-        retained = min(n, max(0, int(retain_overlap_frames)))
+        requested_retained = max(0, int(retain_overlap_frames))
+        if state is not None:
+            if not isinstance(state, dict):
+                raise ValueError(
+                    "h3_motion_context: Loop Trim state is not a chain state.")
+            plan = state.get("plan")
+            if not isinstance(plan, dict):
+                raise ValueError(
+                    "h3_motion_context: Loop Trim state has no Plan.")
+            try:
+                index = int(state["index"])
+                shot = plan["shots"][index - 1]
+                compatibility = plan["compatibility"]
+            except (KeyError, IndexError, TypeError, ValueError) as exc:
+                raise ValueError(
+                    "h3_motion_context: Loop Trim state has no valid current "
+                    "scene.") from exc
+            configured = shot.get("video_blend_frames")
+            if configured is None or (
+                    isinstance(configured, str) and not configured.strip()):
+                configured = compatibility.get("video_blend_frames", 0)
+            if isinstance(configured, bool) or (
+                    isinstance(configured, float)
+                    and not configured.is_integer()):
+                raise ValueError(
+                    "h3_motion_context: current scene blend must be a whole "
+                    "number of frames.")
+            try:
+                requested_retained = int(configured)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "h3_motion_context: current scene blend must be a whole "
+                    "number of frames.") from exc
+            if requested_retained < 0:
+                raise ValueError(
+                    "h3_motion_context: current scene blend cannot be "
+                    "negative.")
+            # Match Segment Save's effective-blend contract.  A Plan can carry
+            # a non-zero default into scene 1 even though scene 1 has no
+            # repeated prefix; similarly, runtime trimming remains the final
+            # authority if a decoder returns less overlap than configured.
+            # Missing raw/delivered fields are allowed for legacy states and
+            # tests, where trim_frames is the only available overlap count.
+            raw_frames = shot.get("raw_frames")
+            delivered_frames = shot.get("delivered_frames")
+            if raw_frames is None or delivered_frames is None:
+                repeated_frames = n
+            else:
+                try:
+                    repeated_frames = max(
+                        0, int(raw_frames) - int(delivered_frames))
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(
+                        "h3_motion_context: current scene has invalid raw or "
+                        "delivered frame counts.") from exc
+            requested_retained = min(
+                requested_retained, n, repeated_frames)
+            manual = max(0, int(retain_overlap_frames))
+            if manual != requested_retained:
+                _LOG.info(
+                    "h3_motion_context: Loop Trim resolved scene %d blend "
+                    "from chain state (%d frames); legacy/manual value %d "
+                    "was ignored", index, requested_retained, manual)
+        retained = min(n, requested_retained)
         overlap_images = images[n - retained:] if retained else out_images
 
         out_audio = audio

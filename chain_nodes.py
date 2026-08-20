@@ -8287,9 +8287,10 @@ class MiniMaxH3ChainPlan:
                                "can override it; blank inherits this value, "
                                "capped to that scene's context, and 0 makes a "
                                "hard cut. A positive value requires head "
-                               "anchors. Connect Current Shot's resolved "
-                               "video_blend_frames output to Loop Trim's "
-                               "retain_overlap_frames and Loop Trim's "
+                               "anchors. In a 0.5 workflow, connect Current "
+                               "Shot's state output to Loop Trim's state input; "
+                               "Loop Trim resolves this default plus any scene "
+                               "override automatically. Connect Loop Trim's "
                                "images_with_overlap output to Segment Save. "
                                "Final and partial videos are re-encoded with a "
                                "linear cumulative blend; audio timing and the "
@@ -8369,9 +8370,9 @@ class MiniMaxH3ChainPlan:
         "Number of scenes in the plan.",
         "Validated generation width; connect to the stock H3 conditioning node.",
         "Validated generation height; connect to the stock H3 conditioning node.",
-        "Legacy Plan-wide default blend length. New 0.5 workflows connect "
-        "Current Shot's resolved per-scene video_blend_frames output to Loop "
-        "Trim instead.",
+        "Legacy Plan-wide default blend length. It cannot represent a "
+        "per-scene override because Plan has no active scene. Do not connect "
+        "it to Loop Trim in 0.5; connect Current Shot state to Loop Trim state.",
     )
     FUNCTION = "build"
     CATEGORY = "conditioning/minimax/contex_loop"
@@ -9795,9 +9796,9 @@ class MiniMaxH3ChainCurrent:
         "or capped to the target H3 audio grid when alignment is enabled. It is "
         "empty when the Plan Audio Policy has Source reference=off.",
         "Current scene timing, delivered frames, source window, and seed.",
-        "Resolved visible blend at the boundary entering this scene. Connect "
-        "to Loop Trim retain_overlap_frames. Scene overrides inherit the "
-        "Plan default when blank.",
+        "Legacy resolved blend integer. New 0.5 workflows connect Current "
+        "Shot state to Loop Trim state, which resolves scene overrides "
+        "internally. This output remains for older workflows and diagnostics.",
     )
     FUNCTION = "current"
     CATEGORY = "conditioning/minimax/contex_loop"
@@ -10293,9 +10294,9 @@ class MiniMaxH3ChainSegmentSave:
             if images_with_overlap is None:
                 raise ValueError(
                     "H3 chain clip %d needs %d retained blend frames. Connect "
-                    "Current Shot video_blend_frames to Loop Trim "
-                    "retain_overlap_frames, then connect images_with_overlap "
-                    "to Segment Save." % (index, blend_frames))
+                    "Current Shot state to Loop Trim state, then connect "
+                    "images_with_overlap to Segment Save." %
+                    (index, blend_frames))
             blend_count = int(images_with_overlap.shape[0])
             expected_blend_count = expected_frames + blend_frames
             if blend_count != expected_blend_count:

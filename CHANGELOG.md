@@ -7,6 +7,11 @@ Newest first. This file keeps release history out of the onboarding README.
 - Repeated checkpoint revisions now keep the existing branch layout while
   receiving a consistent color label and a vertical connector between every
   branch line that shares the same clip.
+- Loop Trim now resolves `video_blend_frames` from Current Shot state. This
+  removes the ambiguous Plan-default versus per-scene integer wiring that could
+  discard the requested overlap and fail Segment Save only after sampling.
+  Legacy integer sockets remain compatible, while maintained 0.5 workflows and
+  the migration tool use the authoritative state route.
 
 ## v0.5.1 — Checkpoint Manager and workflow clarity
 
