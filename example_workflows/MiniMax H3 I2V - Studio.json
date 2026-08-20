@@ -1589,18 +1589,6 @@
       "mode": 0,
       "inputs": [
         {
-          "name": "audio_policy",
-          "type": "H3_AUDIO_POLICY",
-          "link": null,
-          "shape": 7
-        },
-        {
-          "name": "transition_policy",
-          "type": "H3_TRANSITION_POLICY",
-          "link": null,
-          "shape": 7
-        },
-        {
           "name": "chain_policy",
           "type": "H3_CHAIN_POLICY",
           "link": 89,
@@ -2652,7 +2640,7 @@
       1948,
       0,
       1700,
-      2,
+      0,
       "H3_CHAIN_POLICY"
     ]
   ],

@@ -16,9 +16,8 @@ function widget(name, value) {
 
 const graph = {
     links: {
-        10: {origin_id: 2, target_id: 1},
-        11: {origin_id: 3, target_id: 1},
-        12: {origin_id: 4, target_id: 3},
+        10: {origin_id: 3, target_id: 1},
+        12: {origin_id: 2, target_id: 3},
     },
     _nodes: [],
     beforeCount: 0,
@@ -33,19 +32,17 @@ const plan = {
     id: 1,
     type: "MiniMaxH3ChainPlan",
     graph,
-    inputs: [
-        {name: "audio_policy", link: 10},
-        {name: "transition_policy", link: 11},
-    ],
+    inputs: [{name: "chain_policy", link: 10}],
     widgets: [],
     _h3ChainEditorRefresh() { this.refreshCount = (this.refreshCount ?? 0) + 1; },
 };
 const audio = {
     id: 2,
-    type: "MiniMaxH3AudioPolicy",
+    type: "MiniMaxH3ChainPolicy",
     graph,
     inputs: [],
     widgets: [
+        widget("incoming_transition", "guide"),
         widget("final_audio", "generated"),
         widget("source_reference", "off"),
         widget("generated_continuity", "on"),
@@ -57,18 +54,6 @@ const reroute = {
     graph,
     inputs: [{name: "", link: 12}],
     widgets: [],
-};
-const transition = {
-    id: 4,
-    type: "MiniMaxH3TransitionPolicy",
-    graph,
-    inputs: [],
-    widgets: [
-        widget("preset", "guide"),
-        widget("expert_override", false),
-        widget("expert_continuation_mode", "guide"),
-        widget("expert_context_length", 22),
-    ],
 };
 const sceneEditor = {
     id: 5,
@@ -88,7 +73,7 @@ const studio = {
     graph,
     _h3PlanStudioRefresh() { this.refreshCount = (this.refreshCount ?? 0) + 1; },
 };
-graph._nodes.push(plan, audio, reroute, transition, sceneEditor, richEditor, studio);
+graph._nodes.push(plan, audio, reroute, sceneEditor, richEditor, studio);
 
 const result = restoreConnectedPolicyInputs(plan, {
     audio_policy: {
@@ -97,23 +82,19 @@ const result = restoreConnectedPolicyInputs(plan, {
         generated_continuity: "off",
     },
     transition_policy: {
-        preset: "soft_av",
-        expert_override: true,
-        expert_continuation_mode: "feathered_av",
+        preset: "soft_av", expert_override: false,
+        expert_continuation_mode: "audio_feathered_av",
         expert_context_length: 39,
     },
-});
+}, {audio_context_length: 39});
 assert.deepEqual(result, {
     applied: ["audio_policy", "transition_policy"],
     unavailable: [],
 });
-assert.deepEqual(audio.widgets.map((item) => item.value), ["source", "on", "off"]);
-assert.deepEqual(
-    transition.widgets.map((item) => item.value),
-    ["soft_av", true, "feathered_av", 39],
-);
+assert.deepEqual(audio.widgets.map((item) => item.value), [
+    "soft_av", "source", "on", "off",
+]);
 assert.ok(audio.widgets.every((item) => item.callbackValue === item.value));
-assert.ok(transition.widgets.every((item) => item.callbackValue === item.value));
 assert.equal(graph.beforeCount, 1);
 assert.equal(graph.afterCount, 1);
 
@@ -128,7 +109,7 @@ const missing = restoreConnectedPolicyInputs(plan, {
     audio_policy: {final_audio: "generated"},
 });
 assert.deepEqual(missing.applied, []);
-assert.match(missing.unavailable[0], /audio_policy.*no connected/);
+assert.match(missing.unavailable[0], /chain_policy.*connect/);
 
 const compactGraph = {
     links: {
@@ -202,4 +183,4 @@ assert.deepEqual(compactPolicy.widgets.map((item) => item.value), [
     "source_plus_timeline", "drift_control_av", 39, 17,
 ]);
 
-console.log("H3 Plan restore: compact, legacy/expert, separate policies and prompt refresh pass");
+console.log("H3 Plan restore: one-wire compact, 0.4 legacy/expert, and prompt refresh pass");

@@ -40,7 +40,6 @@ spec.loader.exec_module(chain)
 
 
 def make_plan(context=5):
-    policy = chain._contract_audio_policy("source", "on", "off")
     return chain._normalize_plan(
         json.dumps({"shots": [
             {"id": "one", "prompt": "@actor opens.", "length": 39},
@@ -48,7 +47,7 @@ def make_plan(context=5):
         ]}),
         "dependency-test", 64, 64, context, "video", "head", "disabled",
         "source_track", context, 1.0, 8, 11, 18, "body:auto:v1", 0,
-        "guide", policy)
+        "guide")
 
 
 def audio(values):
@@ -121,8 +120,7 @@ masked_plan = chain._normalize_plan(
     ]}),
     "masked-dependency-test", 64, 64, 39, "video", "head", "disabled",
     "source_track", 39, 1.0, 8, 11, 18, "body:auto:v1", 0,
-    "audio_feathered_av",
-    chain._contract_audio_policy("source", "on", "off"))
+    "audio_feathered_av")
 masked_dependency = chain._scene_dependency_record(masked_plan, 2, None)
 assert masked_dependency["scopes"]["incoming_boundary"][
     "masked_audio_contract"] == "raw_source_window_v2"
@@ -147,7 +145,7 @@ detail_plan = chain._normalize_plan(
     ]}),
     "detail-av-dependency-test", 64, 64, 39, "video", "head", "disabled",
     "source_track", 39, 1.0, 8, 11, 18, "body:auto:v1", 0,
-    "tapered_av", chain._contract_audio_policy("source", "on", "off"))
+    "tapered_av")
 detail_dependency = chain._scene_dependency_record(detail_plan, 2, None)
 assert detail_dependency["scopes"]["incoming_boundary"][
     "detail_av_recipe"] == chain.DETAIL_AV_RECIPE
@@ -172,7 +170,7 @@ drift_plan = chain._normalize_plan(
     ]}),
     "drift-av-dependency-test", 64, 64, 39, "video", "head", "disabled",
     "source_track", 39, 1.0, 20, 11, 18, "body:auto:v1", 0,
-    "drift_control_av", chain._contract_audio_policy("source", "on", "off"))
+    "drift_control_av")
 drift_dependency = chain._scene_dependency_record(drift_plan, 2, None)
 assert drift_dependency["scopes"]["incoming_boundary"][
     "drift_control_av_recipe"] == chain.DRIFT_CONTROL_AV_RECIPE
@@ -201,7 +199,7 @@ proxy_plan = chain._normalize_plan(
     ]}),
     "scheduled-proxy-test", 1376, 768, 39, "video", "head", "disabled",
     "source_track", 39, 1.0, 8, 11, 18, "body:auto:v1", 0,
-    "masked_av", chain._contract_audio_policy("source", "on", "off"))
+    "masked_av")
 assert all("context_spatial_proxy" not in shot
            for shot in proxy_plan["shots"][:3])
 assert proxy_plan["shots"][3]["context_spatial_proxy"] == "latent_5_6"
@@ -222,7 +220,7 @@ native_plan = chain._normalize_plan(
     ]}),
     "scheduled-proxy-test", 1376, 768, 39, "video", "head", "disabled",
     "source_track", 39, 1.0, 8, 11, 18, "body:auto:v1", 0,
-    "masked_av", chain._contract_audio_policy("source", "on", "off"))
+    "masked_av")
 assert chain._history_hash(proxy_plan, 3) == chain._history_hash(native_plan, 3)
 assert chain._history_hash(proxy_plan, 4) != chain._history_hash(native_plan, 4)
 assert chain._scene_dependency_diffs(
@@ -243,7 +241,7 @@ guide_proxy_plan = chain._normalize_plan(
     ]}),
     "rgb-proxy-test", 1376, 768, 5, "video", "head", "disabled",
     "source_track", 5, 1.0, 8, 11, 18, "body:auto:v1", 0,
-    "guide", chain._contract_audio_policy("source", "on", "off"))
+    "guide")
 assert guide_proxy_plan["shots"][1]["context_spatial_proxy"] == "rgb_5_6"
 
 for invalid_proxy, mode, expected in (
@@ -258,7 +256,7 @@ for invalid_proxy, mode, expected in (
             ]}),
             "invalid-proxy", 64, 64, 39, "video", "head", "disabled",
             "source_track", 39, 1.0, 8, 11, 18, "body:auto:v1", 0,
-            mode, chain._contract_audio_policy("source", "on", "off"))
+            mode)
     except ValueError as exc:
         assert expected in str(exc)
     else:
@@ -271,7 +269,6 @@ print("H3 scene dependencies: scene-local PCM, boundary isolation, assembly excl
 with tempfile.TemporaryDirectory() as temporary:
     root = pathlib.Path(temporary)
     chain._output_root = lambda: str(root)
-    policy = chain._contract_audio_policy("generated", "off", "on")
     resume_plan = chain._normalize_plan(
         json.dumps({"shots": [
             {"id": "one", "prompt": "saved prompt", "length": 22},
@@ -279,7 +276,7 @@ with tempfile.TemporaryDirectory() as temporary:
         ]}),
         "dependency-resume", 64, 64, 5, "video", "head", "disabled",
         "generated_audio", 5, 1.0, 8, 9, 18, "body:auto:v1", 0,
-        "guide", policy)
+        "guide")
     resume_plan = chain._plan_with_source_audio(resume_plan, None)
     saved_dependency = chain._scene_dependency_record(resume_plan, 1, None)
     paths = chain._artifact_paths(resume_plan, 1)

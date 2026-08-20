@@ -856,8 +856,10 @@ def main():
         mixed_state, conditioning, VideoVAE(), target)
     assert mixed_result[1:3] == (39, True)
     assert "noise_mask" in mixed_result[3]
-    no_carry_policy = chain.MiniMaxH3AudioPolicy().build(
-        "source", "on", "off")[0]
+    no_carry_policy = chain._contract_compose_chain_policy(
+        chain._contract_audio_policy("source", "on", "off"),
+        chain._contract_transition_policy("soft_av"),
+        audio_context_length=39)
     no_carry_plan = chain._normalize_plan(
         json.dumps({"shots": [
             {"id": "one", "prompt": "first", "length": 192},

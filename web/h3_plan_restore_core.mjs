@@ -5,22 +5,6 @@ import {
     transitionPresetName,
 } from "./h3_policy_core.mjs?v=0.5.5";
 
-const POLICY_SPECS = Object.freeze({
-    audio_policy: Object.freeze({
-        nodeType: "MiniMaxH3AudioPolicy",
-        widgets: Object.freeze([
-            "final_audio", "source_reference", "generated_continuity",
-        ]),
-    }),
-    transition_policy: Object.freeze({
-        nodeType: "MiniMaxH3TransitionPolicy",
-        widgets: Object.freeze([
-            "preset", "expert_override", "expert_continuation_mode",
-            "expert_context_length",
-        ]),
-    }),
-});
-
 const CHAIN_POLICY_NODE = "MiniMaxH3ChainPolicy";
 const LEGACY_POLICY_NODE = "MiniMaxH3Legacy04PolicyAdapter";
 
@@ -176,8 +160,8 @@ function restoreLegacyPolicy(node, policyInputs, planInputs,
     if (complete) applied.push("transition_policy");
 }
 
-/** Restore normalized 0.5 policy records onto the policy node already wired
- * into Plan. Connections are never replaced or invented. */
+/** Restore normalized policy records onto the one-wire policy node already
+ * connected to Plan. Connections are never replaced or invented. */
 export function restoreConnectedPolicyInputs(
     planNode, policyInputs, planInputs = {},
 ) {
@@ -204,30 +188,10 @@ export function restoreConnectedPolicyInputs(
             legacy.graph?.setDirtyCanvas?.(true, true);
             return {applied, unavailable};
         }
-        for (const [inputName, spec] of Object.entries(POLICY_SPECS)) {
-            const values = policyInputs[inputName];
-            if (!values || typeof values !== "object") continue;
-            const origin = linkedInputOrigin(planNode, inputName);
-            const policyNode = findUpstreamType(origin, spec.nodeType);
-            if (!policyNode) {
-                unavailable.push(`${inputName} (no connected ${spec.nodeType})`);
-                continue;
-            }
-            let complete = true;
-            for (const name of spec.widgets) {
-                if (!Object.hasOwn(values, name)) continue;
-                const widget = widgetByName(policyNode, name);
-                if (!widget) {
-                    unavailable.push(`${inputName}.${name}`);
-                    complete = false;
-                    continue;
-                }
-                widget.value = values[name];
-                widget.callback?.(values[name]);
-            }
-            policyNode.graph?.setDirtyCanvas?.(true, true);
-            if (complete) applied.push(inputName);
-        }
+        unavailable.push(
+            "chain_policy (connect MiniMax H3 Chain Policy or the 0.4 "
+            + "Legacy / Expert adapter)",
+        );
     } finally {
         graph?.afterChange?.();
     }

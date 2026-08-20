@@ -64,8 +64,8 @@ generated continuity. Saved 0.4 widget values retain their old behavior.
 
 Normal workflows author both contracts through `h3_chain_policy_v1`, a
 one-wire wrapper. Plan immediately expands it back into the canonical Audio
-Policy and Transition Policy records before hashing, so equivalent old and new
-graphs produce the same Plan compatibility record. The compact node derives
+Policy and Transition Policy records before hashing, so compatibility follows
+resolved behavior rather than the authoring graph. The compact node derives
 audio overlap from the selected boundary (Cut 0, Guide 22, AV 39). An
 independent numeric audio overlap is a Legacy / Expert setting.
 
@@ -138,8 +138,8 @@ value, and whether regeneration is required.
 - Plan's retired `audio_mode`, `continuation_mode`, `context_length`, and
   `audio_context_length` widgets remain serialized for 0.4 compatibility but
   are hidden in the normal 0.5 presentation. Legacy / Expert Policy exposes
-  those choices as an explicit compatibility route and emits the combined
-  one-wire policy plus the two positional typed-policy outputs.
+  those choices as an explicit compatibility route and emits one combined
+  policy output.
 - New policy fields are appended or introduced through frontend-backed
   migration rather than inserted into old positional layouts.
 - Legacy `audio_mode`, full AUDIO fan-out, direct media paths, and manual

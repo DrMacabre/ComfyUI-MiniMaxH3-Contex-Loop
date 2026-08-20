@@ -80,7 +80,6 @@ def write_fixture(path, frame_count=50, source_fps=25):
 
 
 def make_plan(run_name):
-    policy = chain._contract_audio_policy("source", "on", "off")
     return chain._normalize_plan(
         json.dumps({"shots": [
             {"id": "one", "prompt": "@motion begins.", "length": 22},
@@ -88,7 +87,7 @@ def make_plan(run_name):
         ]}),
         run_name, 64, 64, 5, "video", "head", "disabled",
         "source_track", 5, 1.0, 8, 7, 18, "model-stack", 0,
-        "guide", policy)
+        "guide")
 
 
 with tempfile.TemporaryDirectory() as temporary:

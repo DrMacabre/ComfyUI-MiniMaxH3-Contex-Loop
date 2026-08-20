@@ -48,9 +48,9 @@ python tools/migrate_v05_workflows.py --check /path/to/workflow.json
 
 With no paths, the tool checks or migrates the maintained active examples. It
 is idempotent: running it again does not add duplicate policy, preflight, or
-timeline nodes. Existing separate Audio Policy + Transition Policy nodes are
-collapsed to one Chain Policy when their exact values fit the normal presets;
-otherwise they are replaced by one exact Legacy / Expert Policy adapter.
+timeline nodes. Exact 0.4 settings become one Chain Policy when they fit the
+normal presets; other implementation/context pairs become one exact Legacy /
+Expert Policy adapter.
 
 ## Source-media rewiring
 
@@ -97,8 +97,7 @@ their generic hash fallback.
 ## Compatibility guarantee
 
 The migration tool does not renumber the sampling body or change its node
-types. It may replace orphaned policy-only authoring nodes with the one-wire
-equivalent. Loop Start's original optional socket order is preserved so
+types. Loop Start's original optional socket order is preserved so
 numerical 0.4 workflow slots still deserialize correctly. Legacy full-AUDIO
 fan-out, direct media paths, Plan widgets, and archived examples remain
 accepted throughout the 0.5 release.

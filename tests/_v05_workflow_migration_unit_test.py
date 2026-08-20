@@ -46,6 +46,8 @@ def main():
     assert compact[0]["widgets_values"] == [
         "guide", "generated", "off", "on"]
     plan = nodes(migrated, "MiniMaxH3ChainPlan")[0]
+    assert "audio_policy" not in input_names(plan)
+    assert "transition_policy" not in input_names(plan)
     assert next(item for item in plan["inputs"]
                 if item["name"] == "chain_policy")["link"] is not None
     studio = nodes(migrated, "MiniMaxH3ChainPlanStudio")[0]
@@ -94,14 +96,14 @@ def main():
     assert drift_policy["type"] == "MiniMaxH3Legacy04PolicyAdapter"
     assert drift_policy["widgets_values"] == [
         "generated_audio", "drift_control_av", 39, 39]
-    assert drift_output == 3
+    assert drift_output == 0
 
     mismatched_audio, mismatch_output = migration._chain_policy_node(
         drift_plan, ("generated", "off", "on"), "masked_av", 39, 22)
     assert mismatched_audio["type"] == "MiniMaxH3Legacy04PolicyAdapter"
     assert mismatched_audio["widgets_values"] == [
         "generated_audio", "masked_av", 39, 22]
-    assert mismatch_output == 3
+    assert mismatch_output == 0
 
     print("v0.5 workflow migration: compact, exact, and idempotent")
 

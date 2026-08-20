@@ -43,10 +43,15 @@ PLAN_JSON = json.dumps({
 
 
 def make_plan(audio_mode="generated_audio", policy=None):
+    combined = None
+    if policy is not None:
+        combined = chain._contract_compose_chain_policy(
+            policy, chain._contract_transition_policy("guide"),
+            audio_context_length=22)
     return chain._normalize_plan(
         PLAN_JSON, "audio-policy-test", 64, 64, 22,
         "video", "head", "disabled", audio_mode, 22,
-        1.0, 8, 7, 18, "model-stack", 0, "guide", policy)
+        1.0, 8, 7, 18, "model-stack", 0, "guide", combined)
 
 
 legacy_expected = {
@@ -63,8 +68,8 @@ for mode, expected in legacy_expected.items():
         resolved["final_audio"], resolved["source_reference"],
         resolved["generated_continuity"]) == expected
 
-node = chain.MiniMaxH3AudioPolicy()
-default_policy, default_status = node.build()
+default_policy = chain._contract_audio_policy("generated", "off", "on")
+default_status = chain._audio_policy_summary({"audio_policy": default_policy})
 assert default_policy == {
     "version": chain.AUDIO_POLICY_VERSION,
     "final_audio": "generated",
@@ -72,10 +77,9 @@ assert default_policy == {
     "generated_continuity": "on",
 }
 assert "final=generated/ref=off/carry=on" in default_status
-assert "no source timeline required" in default_status
-assert node.RETURN_TYPES == (chain.AUDIO_POLICY_TYPE, "STRING")
 
-custom_policy, custom_status = node.build("source", "off", "on")
+custom_policy = chain._contract_audio_policy("source", "off", "on")
+custom_status = chain._audio_policy_summary({"audio_policy": custom_policy})
 custom = make_plan("generated_audio", custom_policy)
 assert custom["compatibility"]["audio_mode"] == "custom"
 assert custom["compatibility"]["audio_policy"] == custom_policy
@@ -83,10 +87,9 @@ assert chain._audio_policy_final(custom) == "source"
 assert not chain._audio_policy_uses_source_reference(custom)
 assert chain._audio_policy_uses_generated_continuity(custom)
 assert chain._audio_policy_requires_source(custom)
-assert "source timeline required" in custom_status
 assert "audio=final=source/ref=off/carry=on" in custom["summary"]
 
-silent_policy, _ = node.build("none", "off", "on")
+silent_policy = chain._contract_audio_policy("none", "off", "on")
 silent = make_plan("source_track", silent_policy)
 assert silent["compatibility"]["audio_mode"] == "custom"
 assert chain._audio_policy_final(silent) == "none"
@@ -109,7 +112,7 @@ prepared_custom = chain._plan_with_source_audio(custom, source_audio)
 assert prepared_custom["compatibility"]["source_audio_hash"] == (
     chain._audio_fingerprint(source_audio))
 
-reference_policy, _ = node.build("none", "on", "off")
+reference_policy = chain._contract_audio_policy("none", "on", "off")
 reference_plan = make_plan("generated_audio", reference_policy)
 prepared_reference = chain._plan_with_source_audio(
     reference_plan, source_audio)
@@ -148,11 +151,10 @@ else:
 plan_inputs = chain.MiniMaxH3ChainPlan.INPUT_TYPES()
 assert plan_inputs["required"]["audio_mode"][1]["default"] == (
     "generated_audio")
-assert plan_inputs["optional"]["audio_policy"][0] == chain.AUDIO_POLICY_TYPE
-assert chain.CHAIN_NODE_CLASS_MAPPINGS[
-    "MiniMaxH3AudioPolicy"] is chain.MiniMaxH3AudioPolicy
+assert "audio_policy" not in plan_inputs["optional"]
+assert "MiniMaxH3AudioPolicy" not in chain.CHAIN_NODE_CLASS_MAPPINGS
 
 print(
     "audio policy: exact legacy migration, independent final/reference/carry "
     "axes, source requirements, Current Shot slicing, paired-reference policy, "
-    "new defaults, and typed node registration pass")
+    "new defaults, and one-wire-only Plan surface pass")

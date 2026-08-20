@@ -11,10 +11,9 @@ Version 0.5 separates three independent decisions:
 | Generated continuity | `on`, `off` | Whether the previous sampled audio latent continues into the next scene |
 
 Set these three axes and the default incoming boundary on the single **Chain
-Policy** node. Its one output connects to Plan. The older separate Audio Policy
-and Transition Policy nodes remain loadable for existing graphs; use **Legacy /
-Expert Policy** when a raw implementation or independent audio overlap is
-actually required.
+Policy** node. Its one output connects to Plan. Use **Legacy / Expert Policy**
+only for a genuine 0.4 import, a raw implementation, or an independent audio
+overlap.
 
 For a prerecorded song or dialogue performance that must remain exact, choose
 Source final audio and enable Source reference. For a short voice/timbre

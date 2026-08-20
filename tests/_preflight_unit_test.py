@@ -41,7 +41,12 @@ spec.loader.exec_module(chain)
 
 
 def make_plan(run_name):
-    policy = chain._contract_audio_policy("source", "on", "off")
+    policy = chain._contract_compose_chain_policy(
+        chain._contract_audio_policy("source", "on", "off"),
+        chain._contract_transition_policy(
+            "guide", expert_override=True,
+            continuation_mode="guide", context_length=5),
+        audio_context_length=5)
     return chain._normalize_plan(
         json.dumps({"shots": [
             {"id": "one", "prompt": "Opening action.", "length": 22},
@@ -83,16 +88,17 @@ def deferred_timeline(frames):
 
 
 def semantic_plan(prompt):
-    policy = chain._contract_audio_policy("generated", "off", "on")
-    transition = chain.MiniMaxH3TransitionPolicy().build(
-        "cut", False, "guide", 0)[0]
+    policy = chain._contract_compose_chain_policy(
+        chain._contract_audio_policy("generated", "off", "on"),
+        chain._contract_transition_policy("cut"),
+        audio_context_length=0)
     return chain._normalize_plan(
         json.dumps({"shots": [{
             "id": "semantic", "prompt": prompt, "length": 124,
         }]}),
         "semantic_preflight", 64, 64, 1, "video", "head", "disabled",
         "generated_audio", 0, 5.0, 8, 7, 18, "stack:auto:v1", 0,
-        "guide", policy, transition)
+        "guide", policy)
 
 
 with tempfile.TemporaryDirectory() as temporary:

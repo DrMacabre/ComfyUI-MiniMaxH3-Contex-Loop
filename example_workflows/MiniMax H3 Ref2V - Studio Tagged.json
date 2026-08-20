@@ -2274,18 +2274,6 @@
           "link": 96
         },
         {
-          "name": "audio_policy",
-          "type": "H3_AUDIO_POLICY",
-          "link": null,
-          "shape": 7
-        },
-        {
-          "name": "transition_policy",
-          "type": "H3_TRANSITION_POLICY",
-          "link": null,
-          "shape": 7
-        },
-        {
           "name": "chain_policy",
           "type": "H3_CHAIN_POLICY",
           "link": 104,
@@ -2970,7 +2958,7 @@
       1952,
       0,
       1700,
-      4,
+      2,
       "H3_CHAIN_POLICY"
     ]
   ],

@@ -34,13 +34,14 @@ function node(id, type, inputs = [], outputs = [], widgets = []) {
     };
 }
 
-const audioPolicy = node(1, "MiniMaxH3AudioPolicy", [], [["audio_policy", [10]]], [
+const audioPolicy = node(1, CHAIN_POLICY_NODE, [], [["chain_policy", [10]]], [
+    ["incoming_transition", "guide"],
     ["final_audio", "generated"],
     ["source_reference", "off"],
     ["generated_continuity", "on"],
 ]);
 const plan = node(2, "MiniMaxH3ChainPlan", [
-    ["audio_policy", 10], ["transition_policy", null], ["chain_policy", null],
+    ["chain_policy", 10],
 ], [
     ["plan", [11]], ["summary", null], ["clip_count", null],
     ["video_blend_frames", null],
@@ -63,7 +64,7 @@ assert.deepEqual(resolveAudioPolicy(start), {
     finalAudio: "generated",
     sourceReference: "off",
     generatedContinuity: "on",
-    source: "typed",
+    source: "compact",
 });
 assert.equal(hasSourceTimeline(start), false);
 const planPresentation = presentationForNode(plan, false);
@@ -78,8 +79,6 @@ assert.equal(planPresentation.hiddenWidgets.has("video_blend_frames"), true);
 assert.equal(planPresentation.hiddenOutputs.has("summary"), true);
 assert.equal(planPresentation.hiddenOutputs.has("clip_count"), true);
 assert.equal(planPresentation.hiddenOutputs.has("video_blend_frames"), true);
-assert.equal(planPresentation.hiddenInputs.has("audio_policy"), true);
-assert.equal(planPresentation.hiddenInputs.has("transition_policy"), true);
 assert.equal(presentationForNode(plan, true).hiddenWidgets.size, 0);
 
 const inputOrder = start.inputs.map((slot) => slot.name);
@@ -128,42 +127,20 @@ assert.equal(linkedStatus.outputs[1].hidden, false,
     "existing diagnostic links stay visible and untouched");
 assert.deepEqual(linkedStatus.outputs[1].links, [22]);
 
-const transition = node(7, "MiniMaxH3TransitionPolicy", [], [
-    ["transition_policy", null], ["continuation_mode", null],
-    ["context_length", null], ["status", null],
-], [
-    ["preset", "guide"], ["expert_override", false],
-    ["expert_continuation_mode", "guide"], ["expert_context_length", 22],
-]);
-let transitionPresentation = presentationForNode(transition, false);
-assert.equal(transitionPresentation.hiddenWidgets.has("expert_context_length"), true);
-transition.widgets.find((item) => item.name === "expert_override").value = true;
-transitionPresentation = presentationForNode(transition, false);
-assert.equal(transitionPresentation.hiddenWidgets.has("expert_context_length"), false);
-
-plan.inputs.find((slot) => slot.name === "transition_policy").link = 23;
-plan.graph._nodes.push(transition);
-transition.graph = plan.graph;
-plan.graph.links[23] = {origin_id: 7, target_id: 2};
-transition.widgets.find((item) => item.name === "expert_override").value = false;
-transition.widgets.find((item) => item.name === "preset").value = "soft_av";
 assert.deepEqual(resolveTransitionPolicy(plan), {
     known: true,
-    preset: "soft_av",
-    continuationMode: "audio_feathered_av",
-    contextLength: 39,
+    preset: "guide",
+    continuationMode: "guide",
+    contextLength: 22,
     expertOverride: false,
-    source: "typed",
+    source: "compact",
 });
-assert.deepEqual(policyPlanConsumers(transition), [plan]);
 
 const unrelatedPlan = node(9, "MiniMaxH3ChainPlan", [
-    ["audio_policy", null], ["transition_policy", null],
+    ["chain_policy", null],
 ]);
 plan.graph._nodes.push(unrelatedPlan);
 unrelatedPlan.graph = plan.graph;
-assert.deepEqual(policyPlanConsumers(transition), [plan],
-    "only directly connected Plans are invalidated");
 assert.deepEqual(policyPlanConsumers(audioPolicy), [plan]);
 
 const compactPolicy = node(10, CHAIN_POLICY_NODE, [], [
@@ -173,7 +150,7 @@ const compactPolicy = node(10, CHAIN_POLICY_NODE, [], [
     ["source_reference", "on"], ["generated_continuity", "off"],
 ]);
 const compactPlan = node(11, "MiniMaxH3ChainPlan", [
-    ["audio_policy", null], ["transition_policy", null], ["chain_policy", 31],
+    ["chain_policy", 31],
 ], [["plan", [32]]], [
     ["audio_context_length", 91],
 ]);
@@ -206,69 +183,8 @@ assert.equal(
     presentationForNode(compactPolicy, false).hiddenOutputs.has("status"), true,
 );
 
-transition.widgets.find((item) => item.name === "preset").value = "audio_feather_av";
-assert.deepEqual(resolveTransitionPolicy(plan), {
-    known: true,
-    preset: "audio_feather_av",
-    continuationMode: "audio_feathered_av",
-    contextLength: 39,
-    expertOverride: false,
-    source: "typed",
-});
-
-transition.widgets.find((item) => item.name === "preset").value = "detail_guide";
-assert.deepEqual(resolveTransitionPolicy(plan), {
-    known: true,
-    preset: "detail_guide",
-    continuationMode: "tapered_guide",
-    contextLength: 22,
-    expertOverride: false,
-    source: "typed",
-});
-
-transition.widgets.find((item) => item.name === "preset").value = "detail_av";
-assert.deepEqual(resolveTransitionPolicy(plan), {
-    known: true,
-    preset: "detail_av",
-    continuationMode: "tapered_av",
-    contextLength: 39,
-    expertOverride: false,
-    source: "typed",
-});
-
-transition.widgets.find((item) => item.name === "preset").value = "drift_av";
-assert.deepEqual(resolveTransitionPolicy(plan), {
-    known: true,
-    preset: "drift_av",
-    continuationMode: "drift_control_av",
-    contextLength: 39,
-    expertOverride: false,
-    source: "typed",
-});
-
-transition.widgets.find((item) => item.name === "preset").value = "tone_guide";
-assert.deepEqual(resolveTransitionPolicy(plan), {
-    known: true,
-    preset: "tone_guide",
-    continuationMode: "tone_carry_guide",
-    contextLength: 22,
-    expertOverride: false,
-    source: "typed",
-});
-
-transition.widgets.find((item) => item.name === "preset").value = "latent_guide";
-assert.deepEqual(resolveTransitionPolicy(plan), {
-    known: true,
-    preset: "latent_guide",
-    continuationMode: "latent_guide",
-    contextLength: 22,
-    expertOverride: false,
-    source: "typed",
-});
-
 const legacyAdapter = node(8, "MiniMaxH3Legacy04PolicyAdapter", [], [
-    ["audio_policy", null], ["transition_policy", null], ["status", null],
-    ["chain_policy", null], ["audio_context_length", null],
+    ["chain_policy", null], ["status", null],
 ], [
     ["audio_mode", "source_plus_timeline"],
     ["continuation_mode", "masked_av"], ["context_length", 56],

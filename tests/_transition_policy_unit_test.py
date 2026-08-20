@@ -49,15 +49,45 @@ PLAN_JSON = json.dumps({
 
 def make_plan(policy=None, *, encode_mode="video", anchor_mode="head",
               context_length=22, continuation_mode="guide"):
+    combined = None
+    if policy is not None:
+        combined = chain._contract_compose_chain_policy(
+            chain.migrate_legacy_audio_mode("generated_audio"), policy,
+            audio_context_length=int(policy["context_length"]))
     return chain._normalize_plan(
         PLAN_JSON, "transition-policy-test", 64, 64, context_length,
         encode_mode, anchor_mode, "disabled", "generated_audio", 22,
         3.0, 8, 7, 18, "model-stack", 0, continuation_mode,
-        None, policy)
+        combined)
 
 
-node = chain.MiniMaxH3TransitionPolicy()
-preset_choices = node.INPUT_TYPES()["required"]["preset"][0]
+def build_transition(preset="guide", expert_override=False,
+                     expert_continuation_mode="guide",
+                     expert_context_length=22):
+    policy = chain._contract_transition_policy(
+        preset, expert_override=expert_override,
+        continuation_mode=expert_continuation_mode,
+        context_length=expert_context_length)
+    status = chain._transition_policy_display({"transition_policy": policy})
+    if policy["expert_override"]:
+        status += "; expert override"
+    elif policy["preset"] in ("tone_guide", "detail_guide"):
+        status += "; experimental preset; published baseline 22f"
+    elif policy["preset"] == "detail_av":
+        status += "; experimental preset; clean-boundary latent taper v2 at 39f"
+    elif policy["preset"] == "drift_av":
+        status += (
+            "; experimental preset; schedule-matched 8+4 mask at 39f; "
+            "20-step baseline")
+    else:
+        status += "; tested preset"
+    return (policy, policy["continuation_mode"],
+            int(policy["context_length"]), status)
+
+
+preset_choices = (
+    "cut", "guide", "tone_guide", "latent_guide", "detail_guide",
+    "detail_av", "drift_av", "hard_av", "soft_av")
 assert "soft_av" in preset_choices
 assert "detail_av" in preset_choices
 assert "drift_av" in preset_choices
@@ -75,7 +105,7 @@ expected = {
     "audio_feather_av": ("audio_feathered_av", 39),
 }
 for preset, (mode, context) in expected.items():
-    policy, output_mode, output_context, status = node.build(preset)
+    policy, output_mode, output_context, status = build_transition(preset)
     assert policy["preset"] == preset
     assert policy["continuation_mode"] == mode
     assert policy["context_length"] == context
@@ -87,18 +117,18 @@ for preset, (mode, context) in expected.items():
     else:
         assert "tested preset" in status
 
-soft_status = node.build("soft_av")[3]
+soft_status = build_transition("soft_av")[3]
 assert soft_status.startswith("Soft AV -> Audio-Feathered AV + 39 frames")
-hard_status = node.build("hard_av")[3]
+hard_status = build_transition("hard_av")[3]
 assert hard_status.startswith("Hard AV -> Masked AV + 39 frames")
-detail_av_status = node.build("detail_av")[3]
+detail_av_status = build_transition("detail_av")[3]
 assert detail_av_status.startswith("Detail AV -> Tapered AV + 39 frames")
 assert "clean-boundary latent taper v2" in detail_av_status
-drift_av_status = node.build("drift_av")[3]
+drift_av_status = build_transition("drift_av")[3]
 assert drift_av_status.startswith(
     "Drift-Control AV -> Drift-Control AV + 39 frames")
 assert "schedule-matched 8+4 mask" in drift_av_status
-audio_feather_status = node.build("audio_feather_av")[3]
+audio_feather_status = build_transition("audio_feather_av")[3]
 assert audio_feather_status.startswith(
     "Audio Feather AV (legacy alias) -> Audio-Feathered AV + 39 frames")
 
@@ -108,7 +138,7 @@ assert legacy["compatibility"]["context_length"] == 39
 assert legacy["compatibility"]["continuation_mode"] == "masked_av"
 assert chain._transition_policy_summary(legacy) == "hard_av/masked_av/39f"
 
-cut_policy = node.build("cut")[0]
+cut_policy = build_transition("cut")[0]
 cut = make_plan(cut_policy)
 assert cut["compatibility"]["context_length"] == 0
 assert cut["compatibility"].get("continuation_mode", "guide") == "guide"
@@ -120,7 +150,7 @@ assert cut["total_delivered_frames"] == 146
 assert "context=0/guide" in cut["summary"]
 assert "transition=cut/guide/0f" in cut["summary"]
 
-hard_policy = node.build("hard_av")[0]
+hard_policy = build_transition("hard_av")[0]
 hard = make_plan(hard_policy, context_length=22, continuation_mode="guide")
 assert hard["compatibility"]["context_length"] == 39
 assert hard["compatibility"]["continuation_mode"] == "masked_av"
@@ -128,7 +158,7 @@ assert hard["shots"][1]["generation_start_frame"] == 34
 assert hard["shots"][1]["delivered_frames"] == 34
 assert hard["total_delivered_frames"] == 107
 
-expert, expert_mode, expert_context, expert_status = node.build(
+expert, expert_mode, expert_context, expert_status = build_transition(
     "guide", True, "feathered_av", 39)
 assert expert_mode == "feathered_av" and expert_context == 39
 assert expert["preset"] == "guide"
@@ -138,14 +168,14 @@ expert_plan = make_plan(expert)
 assert expert_plan["compatibility"]["context_length"] == 39
 assert expert_plan["compatibility"]["continuation_mode"] == "feathered_av"
 
-migrated_expert, migrated_mode, migrated_context, migrated_status = node.build(
+migrated_expert, migrated_mode, migrated_context, migrated_status = build_transition(
     "soft_av", True, "feathered_av_rgb", 39)
 assert migrated_mode == "feathered_av" and migrated_context == 39
 assert migrated_expert["expert_override"] is True
 assert "Feathered AV" in migrated_status
 
 try:
-    node.build("guide", True, "masked_av", 1)
+    build_transition("guide", True, "masked_av", 1)
 except ValueError as exc:
     assert "exact shared" in str(exc)
 else:
@@ -153,7 +183,7 @@ else:
 
 for off_grid in (5, 22, 56, 73):
     try:
-        node.build("soft_av", True, "audio_feathered_av", off_grid)
+        build_transition("soft_av", True, "audio_feathered_av", off_grid)
     except ValueError as exc:
         assert "39, 90, 141, 192, or 243" in str(exc)
     else:
@@ -161,20 +191,20 @@ for off_grid in (5, 22, 56, 73):
             "off-grid AV expert override %d was accepted" % off_grid)
 
 try:
-    node.build("detail_av", True, "tapered_av", 90)
+    build_transition("detail_av", True, "tapered_av", 90)
 except ValueError as exc:
     assert "exactly 39" in str(exc)
 else:
     raise AssertionError("Detail AV accepted a non-v2 90-frame context")
 
 try:
-    node.build("drift_av", True, "drift_control_av", 90)
+    build_transition("drift_av", True, "drift_control_av", 90)
 except ValueError as exc:
     assert "exactly 39" in str(exc)
 else:
     raise AssertionError("Drift-Control AV accepted a non-v1 90-frame context")
 
-tapered_expert, tapered_mode, tapered_context, _ = node.build(
+tapered_expert, tapered_mode, tapered_context, _ = build_transition(
     "detail_guide", True, "tapered_guide", 39)
 assert tapered_mode == "tapered_guide" and tapered_context == 39
 assert tapered_expert["expert_override"] is True
@@ -248,7 +278,7 @@ assert not torch.equal(captured["context_frames"], source[-39:])
 assert captured["context_latent"] is original_latent
 assert captured["video_context_latent"] is None
 
-tone_policy = node.build("tone_guide")[0]
+tone_policy = build_transition("tone_guide")[0]
 tone_curve = {
     "version": "h3_guide_tone_carry_v1",
     "points": [[0.0, 0.0], [0.25, 0.27], [0.75, 0.77], [1.0, 1.0]],
@@ -300,7 +330,7 @@ corrected_guide = chain._apply_guide_tone_carry(
     guide_generated, detected_tone)
 assert float(corrected_guide[-1].mean()) > float(guide_generated[-1].mean())
 
-latent_policy = node.build("latent_guide")[0]
+latent_policy = build_transition("latent_guide")[0]
 captured.clear()
 chain.MiniMaxH3MotionContext = CapturingMotionContext
 try:
@@ -328,7 +358,7 @@ assert captured["context_latent"] is original_latent
 # Drift-Control AV validates its MODEL path before scene 1 spends sampler time,
 # then patches only the active continuation scene after the hard AV prefix is
 # prepared. Other modes retain the same appended MODEL passthrough output.
-drift_policy = node.build("drift_av")[0]
+drift_policy = build_transition("drift_av")[0]
 drift_plan = make_plan(drift_policy)
 drift_plan["shots"][1]["steps"] = 20
 masked_stub = types.ModuleType(PACKAGE + ".masked_context")
@@ -413,17 +443,14 @@ else:
     raise AssertionError("hard AV preset accepted before anchoring")
 
 plan_inputs = chain.MiniMaxH3ChainPlan.INPUT_TYPES()
-assert plan_inputs["optional"]["transition_policy"][0] == (
-    chain.TRANSITION_POLICY_TYPE)
-assert node.RETURN_TYPES == (
-    chain.TRANSITION_POLICY_TYPE, "STRING", "INT", "STRING")
-assert chain.CHAIN_NODE_CLASS_MAPPINGS[
-    "MiniMaxH3TransitionPolicy"] is chain.MiniMaxH3TransitionPolicy
+assert "transition_policy" not in plan_inputs["optional"]
+assert "MiniMaxH3TransitionPolicy" not in chain.CHAIN_NODE_CLASS_MAPPINGS
 
 legacy_adapter = chain.MiniMaxH3Legacy04PolicyAdapter()
-legacy_audio, legacy_transition, legacy_status, legacy_combined, legacy_audio_context = (
-    legacy_adapter.build(
-        "source_plus_timeline", "feathered_av", 39, 33))
+legacy_combined, legacy_status = legacy_adapter.build(
+    "source_plus_timeline", "feathered_av", 39, 33)
+legacy_audio = legacy_combined["audio_policy"]
+legacy_transition = legacy_combined["transition_policy"]
 assert legacy_audio == chain.migrate_legacy_audio_mode("source_plus_timeline")
 assert legacy_transition["continuation_mode"] == "feathered_av"
 assert legacy_transition["context_length"] == 39
@@ -431,16 +458,16 @@ assert legacy_transition["expert_override"] is True
 assert legacy_combined["audio_policy"] == legacy_audio
 assert legacy_combined["transition_policy"] == legacy_transition
 assert legacy_combined["audio_context_length"] == 33
-assert legacy_audio_context == 33
 assert "legacy / expert" in legacy_status
 matched = legacy_adapter.build(
-    "generated_audio", "masked_av", 39)
-matched_audio, matched_transition = matched[:2]
+    "generated_audio", "masked_av", 39)[0]
+matched_audio = matched["audio_policy"]
+matched_transition = matched["transition_policy"]
 assert matched_audio == chain.migrate_legacy_audio_mode("generated_audio")
 assert matched_transition["preset"] == "hard_av"
 assert matched_transition["expert_override"] is False
 matched_audio_feather = legacy_adapter.build(
-    "generated_audio", "audio_feathered_av", 39)[1]
+    "generated_audio", "audio_feathered_av", 39)[0]["transition_policy"]
 assert matched_audio_feather["preset"] == "soft_av"
 assert matched_audio_feather["expert_override"] is False
 assert chain.CHAIN_NODE_CLASS_MAPPINGS[
@@ -454,4 +481,4 @@ print(
     "Detail AV/Drift-Control AV/Hard AV/Soft AV/Audio Feather AV presets, "
     "expert "
     "overrides, zero-context delivery, AV safety validation, legacy fallback "
-    "and adapter, Plan resolution, and typed node registration pass")
+    "and adapter, Plan resolution, and one-wire registration pass")

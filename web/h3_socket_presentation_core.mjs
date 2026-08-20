@@ -5,11 +5,9 @@ import {
     transitionPresetName,
 } from "./h3_policy_core.mjs?v=0.5.5";
 
-export const AUDIO_POLICY_NODE = "MiniMaxH3AudioPolicy";
 export const CHAIN_POLICY_NODE = "MiniMaxH3ChainPolicy";
 export const LEGACY_POLICY_NODE = "MiniMaxH3Legacy04PolicyAdapter";
 export const PLAN_NODE = "MiniMaxH3ChainPlan";
-export const TRANSITION_POLICY_NODE = "MiniMaxH3TransitionPolicy";
 
 const CONDITIONAL_SOURCE_AUDIO_NODES = new Set([
     "MiniMaxH3ChainLoopStart",
@@ -24,9 +22,6 @@ const ASSEMBLE_NODE = "MiniMaxH3ChainAssemble";
 
 const ADVANCED_OUTPUTS = Object.freeze({
     MiniMaxH3ChainPolicy: ["status"],
-    MiniMaxH3TransitionPolicy: [
-        "continuation_mode", "context_length", "status",
-    ],
     MiniMaxH3ChainPlan: ["summary", "clip_count", "video_blend_frames"],
     MiniMaxH3ChainPlanStudio: ["status", "report_json"],
     MiniMaxH3ChainPreflight: ["status", "report_json"],
@@ -74,15 +69,9 @@ function linkedOrigin(node, input) {
 
 export function policyPlanConsumers(policyNode) {
     const type = nodeType(policyNode);
-    const inputNames = type === CHAIN_POLICY_NODE
-        ? ["chain_policy"]
-        : type === AUDIO_POLICY_NODE
-        ? ["audio_policy"]
-        : type === TRANSITION_POLICY_NODE
-            ? ["transition_policy"]
-            : type === LEGACY_POLICY_NODE
-                ? ["chain_policy", "audio_policy", "transition_policy"]
-                : [];
+    const inputNames = (type === CHAIN_POLICY_NODE
+            || type === LEGACY_POLICY_NODE)
+        ? ["chain_policy"] : [];
     if (!inputNames.length) return [];
     const graph = policyNode?.graph;
     return (graph?._nodes ?? []).filter((candidate) =>
@@ -130,7 +119,7 @@ function audioPolicyFromWidgets(node) {
         };
     }
     const type = nodeType(node);
-    if (type !== AUDIO_POLICY_NODE && type !== CHAIN_POLICY_NODE) return null;
+    if (type !== CHAIN_POLICY_NODE) return null;
     const finalAudio = widgetByName(node, "final_audio")?.value;
     const sourceReference = widgetByName(node, "source_reference")?.value;
     const generatedContinuity = widgetByName(node, "generated_continuity")?.value;
@@ -141,7 +130,7 @@ function audioPolicyFromWidgets(node) {
         finalAudio: String(finalAudio),
         sourceReference: String(sourceReference),
         generatedContinuity: String(generatedContinuity),
-        source: type === CHAIN_POLICY_NODE ? "compact" : "typed",
+        source: "compact",
     };
 }
 
@@ -168,9 +157,6 @@ export function resolveAudioPolicy(start) {
             node, inputByName(node, "chain_policy"));
         const compact = audioPolicyFromWidgets(compactNode);
         if (compact) return compact;
-        const policyNode = linkedOrigin(node, inputByName(node, "audio_policy"));
-        const typed = audioPolicyFromWidgets(policyNode);
-        if (typed) return typed;
         const legacy = legacyAudioPolicy(node);
         if (legacy) return legacy;
     }
@@ -238,23 +224,7 @@ function transitionPolicyFromWidgets(node) {
             expertOverride: false, source: "compact",
         };
     }
-    if (type !== TRANSITION_POLICY_NODE) return null;
-    const preset = String(widgetByName(node, "preset")?.value ?? "");
-    const pair = transitionPreset(preset);
-    if (!pair) return null;
-    const expertOverride = Boolean(
-        widgetByName(node, "expert_override")?.value);
-    const continuationMode = expertOverride
-        ? String(widgetByName(node, "expert_continuation_mode")?.value ?? "")
-        : pair.continuationMode;
-    const contextLength = expertOverride
-        ? Number(widgetByName(node, "expert_context_length")?.value)
-        : pair.contextLength;
-    if (!continuationMode || !Number.isInteger(contextLength)) return null;
-    return {
-        known: true, preset, continuationMode, contextLength,
-        expertOverride, source: "typed",
-    };
+    return null;
 }
 
 function legacyTransitionPolicy(plan) {
@@ -281,10 +251,6 @@ export function resolveTransitionPolicy(start) {
             node, inputByName(node, "chain_policy"));
         const compact = transitionPolicyFromWidgets(compactNode);
         if (compact) return compact;
-        const policyNode = linkedOrigin(
-            node, inputByName(node, "transition_policy"));
-        const typed = transitionPolicyFromWidgets(policyNode);
-        if (typed) return typed;
         const legacy = legacyTransitionPolicy(node);
         if (legacy) return legacy;
     }
@@ -348,11 +314,6 @@ function advancedWidgetNames(node, policy) {
         names.add("crop");
         names.add("video_blend_frames");
     }
-    if (nodeType(node) === TRANSITION_POLICY_NODE
-            && !Boolean(widgetByName(node, "expert_override")?.value)) {
-        names.add("expert_continuation_mode");
-        names.add("expert_context_length");
-    }
     if (nodeType(node) === CURRENT_NODE
             && policy.known && policy.sourceReference !== "on") {
         names.add("align_audio_reference");
@@ -368,10 +329,6 @@ export function presentationForNode(node, showAdvanced = false) {
     if (!showAdvanced) {
         for (const name of advancedOutputNames(node)) hiddenOutputs.add(name);
         for (const name of advancedWidgetNames(node, policy)) hiddenWidgets.add(name);
-        if (nodeType(node) === PLAN_NODE) {
-            hiddenInputs.add("audio_policy");
-            hiddenInputs.add("transition_policy");
-        }
         const sourceAudio = inputByName(node, "source_audio");
         if (sourceAudio && !sourceAudioInputNeeded(node, policy)) {
             hiddenInputs.add("source_audio");

@@ -105,8 +105,8 @@ def validate_v05_topology(workflow):
     assert policy["widgets_values"] == [expected_transition, *expected_audio]
     assert origin_for_input(
         workflow, socket(plan["inputs"], "chain_policy")) == policy
-    assert socket(plan["inputs"], "audio_policy")["link"] is None
-    assert socket(plan["inputs"], "transition_policy")["link"] is None
+    assert not any(item.get("name") in {"audio_policy", "transition_policy"}
+                   for item in plan["inputs"])
 
     current = node(workflow, "MiniMaxH3ChainCurrent")
     trim = node(workflow, "MiniMaxH3LoopTrim")
@@ -976,8 +976,6 @@ def main():
                 "MiniMaxH3ChainRunManager",
                 "MiniMaxH3ChainPreflight",
                 "MiniMaxH3ChainPolicy",
-                "MiniMaxH3AudioPolicy",
-                "MiniMaxH3TransitionPolicy",
             })
 
     assert generation_types(t2v_normal) == generation_types(t2v_studio)

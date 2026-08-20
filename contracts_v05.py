@@ -221,10 +221,9 @@ def compose_chain_policy(
 ) -> dict[str, Any]:
     """Combine validated 0.5 policies without changing their stored shape.
 
-    The combined record is an authoring and wiring convenience. Plan consumes
-    its two canonical child records and the legacy-compatible audio-context
-    value, then persists the same compatibility fields as separate policy
-    nodes. This keeps checkpoint hashes independent of workflow topology.
+    Plan consumes the two canonical child records and the legacy-compatible
+    audio-context value, then persists behavior-only compatibility fields.
+    This keeps checkpoint hashes independent of workflow topology.
     """
     if not isinstance(audio, dict) or audio.get("version") != AUDIO_POLICY_VERSION:
         raise ValueError("H3 Chain Policy requires a current Audio Policy.")

@@ -45,14 +45,13 @@ PLAN_JSON = json.dumps({
 })
 
 
-def make_plan(*, audio=None, transition=None, combined=None,
-              audio_context_length=22):
+def make_plan(*, combined=None, audio_context_length=22):
     return chain._normalize_plan(
         PLAN_JSON, "compact-policy-test", 64, 64, 22,
         "video", "head", "disabled", "generated_audio",
         audio_context_length,
         3.0, 8, 7, 18, "model-stack", 0, "guide",
-        audio, transition, combined)
+        combined)
 
 
 node = chain.MiniMaxH3ChainPolicy()
@@ -72,42 +71,27 @@ assert "final=source/ref=on/carry=off" in status
 assert "source timeline required" in status
 assert "audio context automatic (39f)" in status
 
-separate_plan = make_plan(
-    audio=combined["audio_policy"],
-    transition=combined["transition_policy"], audio_context_length=39)
 combined_plan = make_plan(combined=combined)
-assert combined_plan["compatibility"] == separate_plan["compatibility"]
-assert combined_plan["plan_hash"] == separate_plan["plan_hash"]
 assert "chain_policy" not in combined_plan["compatibility"]
 
-try:
-    make_plan(
-        audio=combined["audio_policy"],
-        transition=combined["transition_policy"],
-        combined=combined)
-except ValueError as exc:
-    assert "either chain_policy" in str(exc)
-    assert "not both" in str(exc)
-else:
-    raise AssertionError("Plan accepted compact and separate policies together")
-
 legacy = chain.MiniMaxH3Legacy04PolicyAdapter()
-legacy_result = legacy.build(
+legacy_combined, legacy_status = legacy.build(
     "source_plus_timeline", "feathered_av", 39, 33)
-assert legacy.RETURN_NAMES[:3] == (
-    "audio_policy", "transition_policy", "status")
-assert legacy.RETURN_NAMES[3:] == (
-    "chain_policy", "audio_context_length")
-assert legacy_result[3]["audio_policy"] == legacy_result[0]
-assert legacy_result[3]["transition_policy"] == legacy_result[1]
-assert legacy_result[3]["audio_context_length"] == 33
-assert legacy_result[4] == 33
-legacy_plan = make_plan(combined=legacy_result[3])
+assert legacy.RETURN_NAMES == ("chain_policy", "status")
+assert legacy_combined["audio_policy"] == chain.migrate_legacy_audio_mode(
+    "source_plus_timeline")
+assert legacy_combined["transition_policy"]["continuation_mode"] == (
+    "feathered_av")
+assert legacy_combined["audio_context_length"] == 33
+assert "legacy / expert" in legacy_status
+legacy_plan = make_plan(combined=legacy_combined)
 assert legacy_plan["compatibility"]["audio_context_length"] == 33
 assert legacy_plan["compatibility"]["continuation_mode"] == "feathered_av"
 
 plan_inputs = chain.MiniMaxH3ChainPlan.INPUT_TYPES()
 assert plan_inputs["optional"]["chain_policy"][0] == chain.CHAIN_POLICY_TYPE
+assert "audio_policy" not in plan_inputs["optional"]
+assert "transition_policy" not in plan_inputs["optional"]
 assert chain.CHAIN_NODE_CLASS_MAPPINGS[
     "MiniMaxH3ChainPolicy"] is chain.MiniMaxH3ChainPolicy
 assert chain.CHAIN_NODE_DISPLAY_NAME_MAPPINGS[
@@ -115,5 +99,5 @@ assert chain.CHAIN_NODE_DISPLAY_NAME_MAPPINGS[
 
 print(
     "compact chain policy: primary semantic choices, one-wire Plan input, "
-    "exact separate-policy compatibility hash, conflict rejection, and "
-    "expanded legacy/expert adapter pass")
+    "canonical compatibility records, and one-output 0.4 legacy/expert "
+    "adapter pass")
