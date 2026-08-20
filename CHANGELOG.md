@@ -4,6 +4,11 @@ Newest first. This file keeps release history out of the onboarding README.
 
 ## v0.5.0 — Source Timeline and workflow clarity
 
+- Added shared text-level Ctrl/Cmd+Z and redo history to both dedicated scene
+  prompt editors. Undo now survives rich-tag DOM decoration, plain-text paste,
+  toolbar insertion, Plan synchronization, and switching between rich and
+  plain presentation.
+
 - Added a maintained two-scene Ref2V masked-inpaint demo that uses the bundled
   CC0 crab picture as replacement appearance while keeping the source movie as
   the authoritative joint AV target. Documented its exact mask-contract

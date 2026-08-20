@@ -30,9 +30,11 @@ import {
 } from "./h3_prompt_history_core.mjs?v=0.5.0";
 import {availableReferenceRecords} from "./h3_reference_preview_core.mjs?v=0.5.0";
 import {
+    PromptUndoHistory,
     RICH_PROMPT_GUIDES,
     normalizeRichGuide,
     optimizerSource,
+    promptUndoDirection,
     richGenerationMode,
     richGuideInstruction,
     tokenizeRichPrompt,
@@ -488,6 +490,7 @@ function mount(node) {
             showArchived:false},
         optimizer:{client:null, preparing:false, requestId:null, meta:null, origins:new Map(), providers:null,
             abortController:null, activeBackend:null, error:"", message:"", pendingResult:null},
+        undoByScene:new Map(), promptUndo:null,
         popover:null, popoverTimer:null, pollTimer:null,
     };
     node._h3RichPromptState = state;
@@ -544,6 +547,35 @@ function mount(node) {
 
     function historySceneKey(runName, shotId) {
         return `${runName}\u0000${shotId}`;
+    }
+
+    function promptUndoForScene(shotId, text, {external = false} = {}) {
+        const key = historySceneKey(planRunName(), shotId);
+        let history = state.undoByScene.get(key);
+        if (!history) {
+            history = new PromptUndoHistory(text);
+            state.undoByScene.set(key, history);
+        } else if (external) {
+            // Plan Studio republishes the active prompt after non-prompt edits.
+            // Preserve undo when that synchronized text did not actually change.
+            history.align(text);
+        } else {
+            history.align(text);
+        }
+        return history;
+    }
+
+    function recordPromptReplacement(sceneIndex, shot, text) {
+        const shotId = String(
+            shot?.id || `clip_${String(sceneIndex + 1).padStart(4, "0")}`,
+        );
+        const current = promptValueToText(
+            shot?.prompt, `Scene ${sceneIndex + 1} prompt`,
+        );
+        const history = promptUndoForScene(shotId, current);
+        history.record(text, {inputType:"insertReplacementText"});
+        if (sceneIndex === state.active) state.promptUndo = history;
+        return history;
     }
 
     async function historyRequest(query = {}, body = null) {
@@ -768,6 +800,7 @@ function mount(node) {
             state.history.data = payload.history;
             state.history.revisionId = payload.revision.id;
             const text = String(payload.revision.prompt ?? "");
+            recordPromptReplacement(state.active, shot, text);
             shot.prompt = promptTextToLines(text);
             renderEditorText(text);
             writePlan("Loaded prompt version");
@@ -882,18 +915,19 @@ function mount(node) {
         if (caret != null) restoreCaret(state.editor, caret);
     }
 
-    function saveEditorInput() {
+    function saveEditorInput(event) {
         const shot = state.plan?.shots?.[state.active];
         if (!shot || !state.editor) return;
         const shotId = String(shot.id || `clip_${String(state.active + 1).padStart(4, "0")}`);
         const text = editorPlainText(state.editor);
+        state.promptUndo?.record(text, {inputType:event?.inputType});
         shot.prompt = promptTextToLines(text);
         writePlan();
         scheduleHistoryDraft(shotId, text);
-        // Keep the browser's live DOM and undo transaction intact while the
-        // user types. Existing chips remain atomic; newly typed raw labels are
-        // decorated on blur. Explicit toolbar/menu insertions decorate once
-        // immediately after their own input transaction.
+        // Keep the browser's live DOM intact while the user types. Existing
+        // chips remain atomic; newly typed raw labels are decorated on blur.
+        // The shared text-level undo survives later tag decoration and
+        // programmatic toolbar/menu insertions.
     }
 
     function decorateEditorAtCaret() {
@@ -1031,6 +1065,7 @@ function mount(node) {
                     state.optimizer.pendingResult = {...meta, result};
                     state.optimizer.error = "The scene changed while optimizing; the result was not applied.";
                 } else {
+                    recordPromptReplacement(meta.sceneIndex, shot, result);
                     shot.prompt = promptTextToLines(result);
                     state.optimizer.origins.set(meta.sceneKey, {source:meta.source, result});
                     writePlan("Optimized prompt saved to Plan");
@@ -1074,6 +1109,7 @@ function mount(node) {
             refreshOptimizerUi();
             return;
         }
+        recordPromptReplacement(pending.sceneIndex, shot, pending.result);
         shot.prompt = promptTextToLines(pending.result);
         state.optimizer.origins.set(pending.sceneKey, {source:pending.source, result:pending.result});
         state.optimizer.pendingResult = null;
@@ -1124,6 +1160,7 @@ function mount(node) {
             state.optimizer.error = "The scene changed while optimizing; the result was not applied.";
             return;
         }
+        recordPromptReplacement(meta.sceneIndex, shot, result);
         shot.prompt = promptTextToLines(result);
         state.optimizer.origins.set(meta.sceneKey, {source:meta.source, result});
         writePlan("Optimized prompt saved to Plan");
@@ -1394,7 +1431,11 @@ function mount(node) {
         editor.setAttribute("aria-multiline", "true");
         editor.dataset.placeholder = "Write this scene's action, camera, performance, dialogue, sound, and ending continuity…";
         state.editor = editor;
-        renderEditorText(promptValueToText(shot.prompt, `Scene ${state.active + 1} prompt`));
+        const initialPrompt = promptValueToText(
+            shot.prompt, `Scene ${state.active + 1} prompt`,
+        );
+        state.promptUndo = promptUndoForScene(shotId, initialPrompt);
+        renderEditorText(initialPrompt);
         editor.addEventListener("input", saveEditorInput);
         editor.addEventListener("beforeinput", (event) => {
             if (event.inputType === "insertParagraph" || event.inputType === "insertLineBreak") {
@@ -1406,8 +1447,23 @@ function mount(node) {
         });
         editor.addEventListener("copy", (event) => copyEditorSelection(editor, event));
         editor.addEventListener("cut", (event) => copyEditorSelection(editor, event, true));
+        const applyPromptUndo = (direction) => {
+            const text = state.promptUndo?.[direction]?.();
+            if (text == null) return false;
+            const caret = selectionTextOffset(editor);
+            renderEditorText(text, Math.min(caret, text.length));
+            shot.prompt = promptTextToLines(text);
+            writePlan(direction === "undo" ? "Undo saved to Plan" : "Redo saved to Plan");
+            scheduleHistoryDraft(shotId, text);
+            editor.focus();
+            return true;
+        };
         editor.addEventListener("keydown", (event) => {
-            if (event.altKey && event.key === "ArrowLeft") event.preventDefault(), navigate(-1);
+            const undoDirection = promptUndoDirection(event);
+            if (undoDirection) {
+                event.preventDefault();
+                applyPromptUndo(undoDirection);
+            } else if (event.altKey && event.key === "ArrowLeft") event.preventDefault(), navigate(-1);
             else if (event.altKey && event.key === "ArrowRight") event.preventDefault(), navigate(1);
             else if (!event.ctrlKey && !event.metaKey && !event.altKey && event.key === "@"
                     && state.records.some((record) => record.active)) {
@@ -1532,6 +1588,12 @@ function mount(node) {
     node._h3PromptCompanionSetScenePrompt = (planNode, index, text) => {
         if (planNode !== state.planNode || !state.plan?.shots?.[index]) return false;
         state.plan.shots[index].prompt = promptTextToLines(text);
+        const shotId = String(
+            state.plan.shots[index].id
+            || `clip_${String(index + 1).padStart(4, "0")}`,
+        );
+        const promptUndo = promptUndoForScene(shotId, text, {external:true});
+        if (index === state.active) state.promptUndo = promptUndo;
         if (index === state.active && state.editor) {
             const current = editorPlainText(state.editor);
             if (current !== text) {
