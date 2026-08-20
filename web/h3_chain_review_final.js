@@ -340,7 +340,8 @@ function restoreSavedPlanInputs(reviewNode, inputs, policyInputs = {}) {
     }
     const planWidget = widgetByName(planNode, "plan_json");
     const plan = parsePlanJson(String(planWidget?.value ?? ""));
-    const policies = restoreConnectedPolicyInputs(planNode, policyInputs);
+    const policies = restoreConnectedPolicyInputs(
+        planNode, policyInputs, inputs);
     refreshRestoredPlanEditors(planNode);
     app.graph?.setDirtyCanvas?.(true, true);
     for (const [sceneIndex, shot] of plan.shots.entries()) {

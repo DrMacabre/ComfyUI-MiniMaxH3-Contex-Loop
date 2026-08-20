@@ -62,6 +62,13 @@ Legacy Plan modes migrate exactly:
 New Plan nodes default to generated final audio, no source reference, and
 generated continuity. Saved 0.4 widget values retain their old behavior.
 
+Normal workflows author both contracts through `h3_chain_policy_v1`, a
+one-wire wrapper. Plan immediately expands it back into the canonical Audio
+Policy and Transition Policy records before hashing, so equivalent old and new
+graphs produce the same Plan compatibility record. The compact node derives
+audio overlap from the selected boundary (Cut 0, Guide 22, AV 39). An
+independent numeric audio overlap is a Legacy / Expert setting.
+
 ## Incoming transition contract
 
 Transitions use `h3_transition_policy_v1`. A scene setting always describes
@@ -72,14 +79,13 @@ the completed predecessor.
 |---|---|---:|
 | `cut` | guide with no carried picture | 0 frames |
 | `guide` | guide rows | 22 frames |
-| `latent_guide` | direct sampled-latent guide rows; RGB fallback | 22 frames |
-| `detail_guide` | tapered chroma-noise guide rows | 22 frames |
-| `detail_av` | protected disposable video-latent noise taper; audio unchanged | 39 frames |
-| `drift_av` | per-evaluation next-sigma video mask with an 8+4 clean-seam taper | 39 frames |
 | `hard_av` | protected AV prefix | 39 frames |
 | `soft_av` | exact picture prefix with feathered audio release | 39 frames |
 
-Advanced mode may override the implementation and context count explicitly.
+The normal selector intentionally exposes only those four tested choices.
+Legacy / Expert Policy may select `tone_guide`, `latent_guide`, `detail_guide`,
+`detail_av`, `drift_av`, `feathered_av`, or override the implementation,
+visual context, and audio context explicitly.
 `latent_guide` requires video encode mode and at least five positive context
 frames. `tapered_guide` accepts the listed Guide context lengths; only the
 22-frame preset has published validation, so other lengths remain
@@ -129,10 +135,11 @@ value, and whether regeneration is required.
 - Existing node ids remain registered.
 - Existing outputs retain their positional indices.
 - Existing required widget order remains readable.
-- Plan's retired `audio_mode`, `continuation_mode`, and `context_length`
-  widgets remain serialized for 0.4 compatibility but are hidden in the normal
-  0.5 presentation. Legacy 0.4 Policy Adapter exposes those choices as an
-  explicit compatibility route and emits the two typed 0.5 policies.
+- Plan's retired `audio_mode`, `continuation_mode`, `context_length`, and
+  `audio_context_length` widgets remain serialized for 0.4 compatibility but
+  are hidden in the normal 0.5 presentation. Legacy / Expert Policy exposes
+  those choices as an explicit compatibility route and emits the combined
+  one-wire policy plus the two positional typed-policy outputs.
 - New policy fields are appended or introduced through frontend-backed
   migration rather than inserted into old positional layouts.
 - Legacy `audio_mode`, full AUDIO fan-out, direct media paths, and manual
@@ -170,7 +177,7 @@ incoming context that is removed from the delivered scene.
 The primary graph displays only generation-bearing connections. Status,
 manifest JSON, booleans used only for inspection, legacy passthroughs, and
 conditional audio sockets are Advanced. Conditional inputs appear when their
-policy needs them. The three superseded Plan policy widgets are also hidden;
+policy needs them. Superseded Plan policy and layout widgets are also hidden;
 the node menu can reveal them for diagnosis. Hiding a socket or widget must not
 change its backend index or serialized position.
 
@@ -190,7 +197,7 @@ change its backend index or serialized position.
 ## Release validation
 
 All ten delivery stages are implemented. The maintained workflow catalog uses
-explicit audio and transition policies, Source Timeline, and model-free
+one-wire Chain Policy, Source Timeline, and model-free
 preflight. The migration tool is idempotent, the frozen 0.4 positional contract
 is covered by regression tests, and backend/frontend release checks enforce a
 single package version. Archived 0.4 workflows remain unchanged examples of the

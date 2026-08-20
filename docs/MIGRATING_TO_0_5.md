@@ -7,7 +7,9 @@ required merely to open or resume an older workflow.
 
 ## What changes
 
-Version 0.5 replaces combined low-level choices with two explicit policies:
+Version 0.5 uses one **Chain Policy** connection for normal authoring. It keeps
+the audio and transition records independent inside the Plan/checkpoint
+contract, but removes the need to wire two policy nodes.
 
 | 0.4 audio mode | Final audio | Source reference | Generated continuity |
 |---|---|---|---|
@@ -19,19 +21,15 @@ Version 0.5 replaces combined low-level choices with two explicit policies:
 |---|---|---:|
 | guide with zero context | Cut | 0 frames |
 | `guide` | Guide | 22 frames |
-| new `tone_carry_guide` | Tone Carry Guide | 22 frames |
-| new `latent_guide` | Latent Guide | 22 frames |
-| new `tapered_guide` | Detail Guide | 22 frames |
-| new `tapered_av` | Detail AV (experimental) | 39 frames |
-| new `drift_control_av` | Drift-Control AV (experimental; MODEL routed through Chain Context) | 39 frames |
 | `masked_av` | Hard AV | 39 frames |
 | `audio_feathered_av` | Soft AV | 39 frames |
-| `feathered_av` | Expert override (experimental compatibility mode) | custom |
+| any other implementation/context pair | Legacy / Expert Policy | preserved exactly |
 
-Advanced mode retains the old implementation and context fields for custom
-values. Tone Carry Guide, Latent Guide, Detail Guide, and Detail AV are opt-in and do not
-alter migrated workflows. The semantic choice always describes the boundary
-entering a scene.
+The compact presets derive generated-audio overlap from the same boundary: 0,
+22, or 39 frames. A custom audio overlap, Tone/Latent/Detail Guide, Detail AV,
+Drift-Control AV, old dual-stream Feathered AV, and other raw pairs migrate to
+the single **Legacy / Expert Policy** node instead. Nothing is approximated.
+The semantic choice always describes the boundary entering a scene.
 
 ## Automatic migration
 
@@ -50,7 +48,9 @@ python tools/migrate_v05_workflows.py --check /path/to/workflow.json
 
 With no paths, the tool checks or migrates the maintained active examples. It
 is idempotent: running it again does not add duplicate policy, preflight, or
-timeline nodes.
+timeline nodes. Existing separate Audio Policy + Transition Policy nodes are
+collapsed to one Chain Policy when their exact values fit the normal presets;
+otherwise they are replaced by one exact Legacy / Expert Policy adapter.
 
 ## Source-media rewiring
 
@@ -96,8 +96,9 @@ their generic hash fallback.
 
 ## Compatibility guarantee
 
-The migration tool adds nodes and links but does not renumber existing nodes or
-change existing node types. Loop Start's original optional socket order is
-preserved so numerical 0.4 workflow slots still deserialize correctly. Legacy
-full-AUDIO fan-out, direct media paths, Plan widgets, and archived examples
-remain accepted throughout the 0.5 release.
+The migration tool does not renumber the sampling body or change its node
+types. It may replace orphaned policy-only authoring nodes with the one-wire
+equivalent. Loop Start's original optional socket order is preserved so
+numerical 0.4 workflow slots still deserialize correctly. Legacy full-AUDIO
+fan-out, direct media paths, Plan widgets, and archived examples remain
+accepted throughout the 0.5 release.

@@ -7986,8 +7986,9 @@ class MiniMaxH3ChainPolicy:
             if _audio_policy_requires_source({
                 "audio_policy": policy["audio_policy"]})
             else "no source timeline required")
-        return policy, "%s; %s; %s; audio context automatic" % (
-            transition_status, audio_status, source_need)
+        return policy, "%s; %s; %s; audio context automatic (%df)" % (
+            transition_status, audio_status, source_need,
+            int(policy["audio_context_length"]))
 
 
 class MiniMaxH3TransitionPolicy:
@@ -8296,8 +8297,8 @@ class MiniMaxH3ChainPlan:
                 "context_length": (list(H3_CONTEXT_LENGTHS), {
                     "default": 22,
                     "tooltip": "Legacy 0.4 fallback, hidden in the normal 0.5 "
-                               "interface. Connect Transition Policy for new "
-                               "workflows or Legacy 0.4 Policy Adapter when "
+                               "interface. Connect Chain Policy for new "
+                               "workflows or Legacy / Expert Policy when "
                                "rebuilding an old control surface. Default "
                                "previous-scene video frames used to "
                                "continue motion. Use 22 for guide mode and 39 "
@@ -8359,10 +8360,12 @@ class MiniMaxH3ChainPlan:
                                "experimental and usually not the first choice."}),
                 "audio_context_length": ("INT", {
                     "default": 22, "min": 0, "max": 240,
-                    "tooltip": "Amount of previous generated sound carried into "
+                    "tooltip": "Legacy / expert amount of previous generated "
+                               "sound carried into "
                                "the next scene, measured in 24-fps video frames. "
-                               "0 means use context_length; 22 is the tested "
-                               "explicit value. It is active only when the Audio "
+                               "Normal Chain Policy derives 0/22/39 from Cut, "
+                               "Guide, or AV automatically. This field is active "
+                               "only when the Audio "
                                "Policy has Generated continuity=on. Legacy "
                                "generated_audio and source_plus_timeline enable "
                                "that axis; source_track disables it. AV mask modes "
@@ -8421,7 +8424,7 @@ class MiniMaxH3ChainPlan:
                 "continuation_mode": (list(CONTINUATION_MODES), {
                     "default": "guide",
                     "tooltip": "Legacy 0.4 fallback, hidden in the normal 0.5 "
-                               "interface. Connect Transition Policy for new "
+                               "interface. Connect Chain Policy for new "
                                "workflows. Inherited default for scenes without a "
                                "per-scene continuation override. guide keeps "
                                "the established Motion Context "
@@ -8470,12 +8473,12 @@ class MiniMaxH3ChainPlan:
                                "disconnected input uses the internal plan_json "
                                "unchanged."}),
                 "audio_policy": (AUDIO_POLICY_TYPE, {
-                    "tooltip": "Recommended 0.5 control from MiniMax H3 Audio "
-                               "Policy. It independently selects final sound, "
+                    "tooltip": "Legacy separate 0.5 control from MiniMax H3 "
+                               "Audio Policy. It independently selects final sound, "
                                "source reference, and generated continuity, "
                                "and overrides the legacy audio_mode widget."}),
                 "transition_policy": (TRANSITION_POLICY_TYPE, {
-                    "tooltip": "Recommended 0.5 control from MiniMax H3 "
+                    "tooltip": "Legacy separate 0.5 control from MiniMax H3 "
                                "Transition Policy. It overrides the legacy "
                                "context_length and continuation_mode widgets "
                                "with one resolved incoming-transition preset."}),

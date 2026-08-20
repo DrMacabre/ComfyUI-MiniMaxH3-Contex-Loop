@@ -45,10 +45,12 @@ PLAN_JSON = json.dumps({
 })
 
 
-def make_plan(*, audio=None, transition=None, combined=None):
+def make_plan(*, audio=None, transition=None, combined=None,
+              audio_context_length=22):
     return chain._normalize_plan(
         PLAN_JSON, "compact-policy-test", 64, 64, 22,
-        "video", "head", "disabled", "generated_audio", 22,
+        "video", "head", "disabled", "generated_audio",
+        audio_context_length,
         3.0, 8, 7, 18, "model-stack", 0, "guide",
         audio, transition, combined)
 
@@ -64,15 +66,15 @@ assert combined["audio_policy"] == chain._contract_audio_policy(
     "source", "on", "off")
 assert combined["transition_policy"] == chain._contract_transition_policy(
     "soft_av")
-assert combined["audio_context_length"] == 22
+assert combined["audio_context_length"] == 39
 assert "Soft AV" in status
 assert "final=source/ref=on/carry=off" in status
 assert "source timeline required" in status
-assert "audio context automatic" in status
+assert "audio context automatic (39f)" in status
 
 separate_plan = make_plan(
     audio=combined["audio_policy"],
-    transition=combined["transition_policy"])
+    transition=combined["transition_policy"], audio_context_length=39)
 combined_plan = make_plan(combined=combined)
 assert combined_plan["compatibility"] == separate_plan["compatibility"]
 assert combined_plan["plan_hash"] == separate_plan["plan_hash"]

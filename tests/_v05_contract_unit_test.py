@@ -142,12 +142,15 @@ def main():
             "context_length": 39,
             "expert_override": False,
         },
-        "audio_context_length": contracts.DEFAULT_AUDIO_CONTEXT_LENGTH,
+        "audio_context_length": 39,
     }
-    # The stored numeric value remains stable even when continuity is off;
-    # that independent audio-policy axis gates it at runtime. This preserves
-    # the compatibility hash of an equivalent pair of existing 0.5 nodes.
-    assert compact["audio_context_length"] == 22
+    # Compact authoring derives the hidden audio overlap from the tested
+    # transition pair. The independent audio-policy axis gates it at runtime.
+    assert compact["audio_context_length"] == 39
+    assert contracts.chain_policy(
+        "cut", "generated", "off", "on")["audio_context_length"] == 0
+    assert contracts.chain_policy(
+        "guide", "generated", "off", "on")["audio_context_length"] == 22
     expert_transition = contracts.transition_policy(
         "guide", expert_override=True,
         continuation_mode="feathered_av", context_length=39)

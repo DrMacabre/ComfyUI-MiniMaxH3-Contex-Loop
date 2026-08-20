@@ -3,7 +3,7 @@ import {
     TRANSITION_PRESETS,
     transitionPreset,
     transitionPresetName,
-} from "./h3_policy_core.mjs?v=0.5.6";
+} from "./h3_policy_core.mjs?v=0.5.5";
 
 export const AUDIO_POLICY_NODE = "MiniMaxH3AudioPolicy";
 export const CHAIN_POLICY_NODE = "MiniMaxH3ChainPolicy";
@@ -185,7 +185,11 @@ export function resolveAudioPolicy(start) {
 
 function directAudioContextLength(node) {
     const type = nodeType(node);
-    if (type === CHAIN_POLICY_NODE) return 22;
+    if (type === CHAIN_POLICY_NODE) {
+        const preset = transitionPreset(String(
+            widgetByName(node, "incoming_transition")?.value ?? ""));
+        return preset?.contextLength ?? null;
+    }
     if (type === LEGACY_POLICY_NODE) {
         const value = Number(widgetByName(node, "audio_context_length")?.value);
         return Number.isInteger(value) ? value : null;

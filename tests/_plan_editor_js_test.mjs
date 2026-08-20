@@ -44,16 +44,24 @@ assert.deepEqual(
     PRIMARY_TRANSITION_PRESETS,
 );
 assert.equal(sceneTransitionPreset({}, "guide", 22), "inherit");
+assert.equal(sceneTransitionPreset({
+    continuation_mode: "masked_av", context_length: 39,
+}, "guide", 22, 22), "custom");
+assert.equal(sceneTransitionPreset({
+    continuation_mode: "masked_av", context_length: 39,
+}, "guide", 22, 39), "hard_av");
 const compactBoundary = {};
 applySceneTransitionPreset(compactBoundary, "hard_av");
 assert.deepEqual(compactBoundary, {
     continuation_mode: "masked_av", context_length: 39,
+    audio_context_length: 39,
 });
 compactBoundary.audio_context_length = 7;
 assert.equal(sceneTransitionPreset(compactBoundary), "custom");
 applySceneTransitionPreset(compactBoundary, "guide");
 assert.deepEqual(compactBoundary, {
     continuation_mode: "guide", context_length: 22,
+    audio_context_length: 22,
 });
 applySceneTransitionPreset(compactBoundary, "inherit");
 assert.deepEqual(compactBoundary, {});

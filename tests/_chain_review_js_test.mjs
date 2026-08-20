@@ -222,7 +222,7 @@ assert.match(
     checkpointLoadSource,
     /restoreSavedPlanInputs\(\s*node, runBody\.plan_inputs, restoredPolicyInputs\)/,
 );
-assert.match(reviewSource, /restoreConnectedPolicyInputs\(planNode, policyInputs\)/);
+assert.match(reviewSource, /planNode, policyInputs, inputs/);
 assert.match(reviewSource, /refreshRestoredPlanEditors\(planNode\)/);
 assert.match(
     backendSource,

@@ -21,6 +21,7 @@ assert.equal(sceneTransitionPreset(studioBoundary), "inherit");
 applySceneTransitionPreset(studioBoundary, "soft_av");
 assert.deepEqual(studioBoundary, {
     continuation_mode: "audio_feathered_av", context_length: 39,
+    audio_context_length: 39,
 });
 
 const rows = [

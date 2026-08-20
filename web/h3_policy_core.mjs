@@ -82,6 +82,7 @@ export function transitionPresetLabel(name) {
 
 export function sceneTransitionPreset(
     shot, defaultContinuationMode = "guide", defaultContextLength = 22,
+    defaultAudioContextLength = defaultContextLength,
 ) {
     const hasAudioContext = Object.hasOwn(shot ?? {}, "audio_context_length")
         && shot.audio_context_length !== null
@@ -98,11 +99,17 @@ export function sceneTransitionPreset(
     if (!hasMode && !hasContext && !hasAudioContext) {
         return "inherit";
     }
-    if (hasAudioContext) return "custom";
-    return transitionPresetName(
+    const selected = transitionPresetName(
         hasMode ? shot.continuation_mode : defaultContinuationMode,
         hasContext ? shot.context_length : defaultContextLength,
     );
+    const effectiveAudioContext = hasAudioContext
+        ? Number(shot.audio_context_length) : Number(defaultAudioContextLength);
+    if ((hasMode || hasContext || hasAudioContext) && (
+        selected === "custom"
+        || effectiveAudioContext !== transitionPreset(selected)?.contextLength
+    )) return "custom";
+    return selected;
 }
 
 export function applySceneTransitionPreset(shot, name) {
@@ -123,8 +130,9 @@ export function applySceneTransitionPreset(shot, name) {
     const preset = transitionPreset(selected);
     shot.continuation_mode = preset.continuationMode;
     shot.context_length = preset.contextLength;
-    // A semantic preset opts back into automatic generated-audio context.
-    delete shot.audio_context_length;
+    // Keep generated-audio carry on the same tested boundary without
+    // exposing a second normal-user duration choice.
+    shot.audio_context_length = preset.contextLength;
     return shot;
 }
 

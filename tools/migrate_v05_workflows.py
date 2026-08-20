@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Migrate maintained H3 Chain workflow JSON to the 0.5 authoring topology.
+"""Migrate maintained H3 Chain workflow JSON to the compact 0.5 topology.
 
-The migration is deliberately additive. It keeps all 0.4 node ids, widget
-positions, and output slots, adds explicit policy nodes, and inserts preflight
-without rewriting the sampling body. The source-audio reference demo also
-adopts the single typed Source Timeline route.
+The sampling body and existing generation settings stay untouched. Normal
+audio and boundary intent is collapsed to one Chain Policy wire. Settings that
+cannot be represented by the four supported compact transition presets are
+preserved exactly through one Legacy / Expert Policy node. The source-audio
+reference demo also adopts the single typed Source Timeline route.
 """
 
 from __future__ import annotations
@@ -97,6 +98,19 @@ class Graph:
         self.workflow["links"] = [
             item for item in self.workflow["links"] if item[0] != link_id]
 
+    def remove_node_if_orphaned(self, node: dict[str, Any] | None) -> None:
+        if node is None:
+            return
+        if any(output.get("links") for output in node.get("outputs", [])):
+            return
+        for value in node.get("inputs", []):
+            if value.get("link") is not None:
+                self.remove_link(int(value["link"]))
+        self.workflow["nodes"] = [
+            item for item in self.workflow["nodes"]
+            if int(item["id"]) != int(node["id"])]
+        self.nodes.pop(int(node["id"]), None)
+
     def retarget(self, link_id: int, target: dict[str, Any],
                  target_slot: int) -> None:
         link = self.links[link_id]
@@ -142,60 +156,93 @@ def _base_node(node_type: str, title: str, pos: list[float],
     }
 
 
-def _audio_policy_node(plan: dict[str, Any]) -> dict[str, Any]:
-    legacy = str(plan["widgets_values"][9])
-    values = {
-        "source_track": ["source", "on", "off"],
-        "generated_audio": ["generated", "off", "on"],
-        "source_plus_timeline": ["source", "on", "on"],
-    }[legacy]
-    x, y = plan["pos"]
-    result = _base_node(
-        "MiniMaxH3AudioPolicy", "0.5 AUDIO INTENT", [x - 420, y + 160],
-        [320, 150])
-    result["outputs"] = [
-        {"name": "audio_policy", "type": "H3_AUDIO_POLICY", "links": []},
-        {"name": "status", "type": "STRING", "links": None},
-    ]
-    result["widgets_values"] = values
-    return result
+_AUDIO_FROM_LEGACY = {
+    "source_track": ("source", "on", "off"),
+    "generated_audio": ("generated", "off", "on"),
+    "source_plus_timeline": ("source", "on", "on"),
+}
+_LEGACY_FROM_AUDIO = {value: key for key, value in _AUDIO_FROM_LEGACY.items()}
+_TRANSITION_PRESETS = {
+    "cut": ("guide", 0),
+    "guide": ("guide", 22),
+    "tone_guide": ("tone_carry_guide", 22),
+    "latent_guide": ("latent_guide", 22),
+    "detail_guide": ("tapered_guide", 22),
+    "detail_av": ("tapered_av", 39),
+    "drift_av": ("drift_control_av", 39),
+    "hard_av": ("masked_av", 39),
+    "soft_av": ("audio_feathered_av", 39),
+    "audio_feather_av": ("audio_feathered_av", 39),
+}
+_PRIMARY_TRANSITIONS = {
+    "cut": ("guide", 0),
+    "guide": ("guide", 22),
+    "hard_av": ("masked_av", 39),
+    "soft_av": ("audio_feathered_av", 39),
+}
 
 
-def _transition_policy_node(plan: dict[str, Any]) -> dict[str, Any]:
+def _resolved_policy_values(workflow: dict[str, Any],
+                            plan: dict[str, Any]) -> tuple[
+                                tuple[str, str, str], str, int, int]:
+    audio_node = _node(workflow, "MiniMaxH3AudioPolicy")
+    transition_node = _node(workflow, "MiniMaxH3TransitionPolicy")
+    if audio_node is not None:
+        audio = tuple(str(item) for item in audio_node["widgets_values"][:3])
+    else:
+        audio = _AUDIO_FROM_LEGACY[str(plan["widgets_values"][9])]
+
     context = int(plan["widgets_values"][5])
     mode = (str(plan["widgets_values"][16])
             if len(plan["widgets_values"]) > 16 else "guide")
-    preset = {
-        ("guide", 0): "cut",
-        ("guide", 22): "guide",
-        ("latent_guide", 22): "latent_guide",
-        ("tapered_guide", 22): "detail_guide",
-        ("tapered_av", 39): "detail_av",
-        ("drift_control_av", 39): "drift_av",
-        ("masked_av", 39): "hard_av",
-        ("audio_feathered_av", 39): "soft_av",
-    }.get((mode, context), "guide")
-    expert = (mode, context) not in {
-        ("guide", 0), ("guide", 22), ("latent_guide", 22),
-        ("tapered_guide", 22),
-        ("tapered_av", 39),
-        ("drift_control_av", 39),
-        ("masked_av", 39),
-        ("audio_feathered_av", 39),
-    }
+    if transition_node is not None:
+        values = transition_node["widgets_values"]
+        preset = str(values[0])
+        expert = bool(values[1])
+        if expert:
+            mode, context = str(values[2]), int(values[3])
+        else:
+            mode, context = _TRANSITION_PRESETS.get(
+                preset, (mode, context))
+    audio_context = int(plan["widgets_values"][10])
+    return audio, mode, context, audio_context
+
+
+def _chain_policy_node(plan: dict[str, Any], audio: tuple[str, str, str],
+                       mode: str, context: int,
+                       audio_context: int) -> tuple[dict[str, Any], int]:
+    primary = next((name for name, pair in _PRIMARY_TRANSITIONS.items()
+                    if pair == (mode, context)), None)
     x, y = plan["pos"]
+    if primary is not None and audio_context == context:
+        result = _base_node(
+            "MiniMaxH3ChainPolicy", "0.5 CHAIN POLICY",
+            [x - 420, y + 160], [340, 190])
+        result["outputs"] = [
+            {"name": "chain_policy", "type": "H3_CHAIN_POLICY", "links": []},
+            {"name": "status", "type": "STRING", "links": None},
+        ]
+        result["widgets_values"] = [primary, *audio]
+        return result, 0
+
+    legacy_mode = _LEGACY_FROM_AUDIO.get(audio)
+    if legacy_mode is None:
+        raise ValueError("Cannot preserve unsupported legacy audio policy %r." %
+                         (audio,))
     result = _base_node(
-        "MiniMaxH3TransitionPolicy", "0.5 INCOMING TRANSITION",
-        [x - 420, y + 360], [320, 190])
+        "MiniMaxH3Legacy04PolicyAdapter", "0.5 LEGACY / EXPERT POLICY",
+        [x - 420, y + 160], [360, 220])
     result["outputs"] = [
+        {"name": "audio_policy", "type": "H3_AUDIO_POLICY", "links": None},
         {"name": "transition_policy", "type": "H3_TRANSITION_POLICY",
-         "links": []},
-        {"name": "continuation_mode", "type": "STRING", "links": None},
-        {"name": "context_length", "type": "INT", "links": None},
+         "links": None},
         {"name": "status", "type": "STRING", "links": None},
+        {"name": "chain_policy", "type": "H3_CHAIN_POLICY", "links": []},
+        {"name": "audio_context_length", "type": "INT", "links": None},
     ]
-    result["widgets_values"] = [preset, expert, mode, context]
-    return result
+    result["widgets_values"] = [
+        legacy_mode, mode, int(context), int(audio_context)]
+    return result, 3
 
 
 def _preflight_node(start: dict[str, Any]) -> dict[str, Any]:
@@ -278,21 +325,32 @@ def _reference_registry(workflow: dict[str, Any], graph: Graph
     return None
 
 
-def _add_policies(workflow: dict[str, Any], graph: Graph) -> None:
+def _add_chain_policy(workflow: dict[str, Any], graph: Graph) -> None:
     plan = _node(workflow, "MiniMaxH3ChainPlan")
     assert plan is not None
-    if _node(workflow, "MiniMaxH3AudioPolicy") is None:
-        audio = graph.add_node(_audio_policy_node(plan))
-        plan_input = graph.add_input(
-            plan, "audio_policy", "H3_AUDIO_POLICY")
-        graph.connect(audio, 0, plan, plan["inputs"].index(plan_input),
-                      "H3_AUDIO_POLICY")
-    if _node(workflow, "MiniMaxH3TransitionPolicy") is None:
-        transition = graph.add_node(_transition_policy_node(plan))
-        plan_input = graph.add_input(
-            plan, "transition_policy", "H3_TRANSITION_POLICY")
-        graph.connect(transition, 0, plan, plan["inputs"].index(plan_input),
-                      "H3_TRANSITION_POLICY")
+    compact_input = graph.add_input(
+        plan, "chain_policy", "H3_CHAIN_POLICY")
+    if compact_input.get("link") is not None:
+        return
+
+    old_audio = _node(workflow, "MiniMaxH3AudioPolicy")
+    old_transition = _node(workflow, "MiniMaxH3TransitionPolicy")
+    audio, mode, context, audio_context = _resolved_policy_values(
+        workflow, plan)
+    policy, output_slot = _chain_policy_node(
+        plan, audio, mode, context, audio_context)
+
+    for name in ("audio_policy", "transition_policy"):
+        old_input = next((item for item in plan.get("inputs", [])
+                          if item.get("name") == name), None)
+        if old_input is not None and old_input.get("link") is not None:
+            graph.remove_link(int(old_input["link"]))
+
+    policy = graph.add_node(policy)
+    graph.connect(policy, output_slot, plan,
+                  plan["inputs"].index(compact_input), "H3_CHAIN_POLICY")
+    graph.remove_node_if_orphaned(old_audio)
+    graph.remove_node_if_orphaned(old_transition)
 
 
 def _add_preflight(workflow: dict[str, Any], graph: Graph) -> None:
@@ -445,7 +503,7 @@ def migrate(workflow: dict[str, Any], name: str) -> dict[str, Any]:
     if _node(workflow, "MiniMaxH3ChainPlan") is None:
         return workflow
     graph = Graph(workflow)
-    _add_policies(workflow, graph)
+    _add_chain_policy(workflow, graph)
     _add_preflight(workflow, graph)
     _wire_scene_resolved_trim(workflow, graph)
     if name == SOURCE_AUDIO_DEMO:

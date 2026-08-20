@@ -1,8 +1,8 @@
 {
   "id": "9af339d6-8d1e-487b-9c12-9779b34e8ff2",
   "revision": 0,
-  "last_node_id": 1960,
-  "last_link_id": 108,
+  "last_node_id": 1961,
+  "last_link_id": 109,
   "nodes": [
     {
       "id": 1,
@@ -1632,13 +1632,19 @@
         {
           "name": "audio_policy",
           "type": "H3_AUDIO_POLICY",
-          "link": 104,
+          "link": null,
           "shape": 7
         },
         {
           "name": "transition_policy",
           "type": "H3_TRANSITION_POLICY",
-          "link": 105,
+          "link": null,
+          "shape": 7
+        },
+        {
+          "name": "chain_policy",
+          "type": "H3_CHAIN_POLICY",
+          "link": 109,
           "shape": 7
         }
       ],
@@ -2491,95 +2497,6 @@
       "bgcolor": "rgba(24,24,27,.9)"
     },
     {
-      "id": 1958,
-      "type": "MiniMaxH3AudioPolicy",
-      "pos": [
-        -1092,
-        704
-      ],
-      "size": [
-        320,
-        150
-      ],
-      "flags": {},
-      "order": 39,
-      "mode": 0,
-      "inputs": [],
-      "outputs": [
-        {
-          "name": "audio_policy",
-          "type": "H3_AUDIO_POLICY",
-          "links": [
-            104
-          ]
-        },
-        {
-          "name": "status",
-          "type": "STRING",
-          "links": null
-        }
-      ],
-      "title": "0.5 AUDIO INTENT",
-      "properties": {
-        "Node name for S&R": "MiniMaxH3AudioPolicy"
-      },
-      "widgets_values": [
-        "generated",
-        "off",
-        "on"
-      ]
-    },
-    {
-      "id": 1959,
-      "type": "MiniMaxH3TransitionPolicy",
-      "pos": [
-        -1092,
-        904
-      ],
-      "size": [
-        320,
-        190
-      ],
-      "flags": {},
-      "order": 40,
-      "mode": 0,
-      "inputs": [],
-      "outputs": [
-        {
-          "name": "transition_policy",
-          "type": "H3_TRANSITION_POLICY",
-          "links": [
-            105
-          ]
-        },
-        {
-          "name": "continuation_mode",
-          "type": "STRING",
-          "links": null
-        },
-        {
-          "name": "context_length",
-          "type": "INT",
-          "links": null
-        },
-        {
-          "name": "status",
-          "type": "STRING",
-          "links": null
-        }
-      ],
-      "title": "0.5 INCOMING TRANSITION",
-      "properties": {
-        "Node name for S&R": "MiniMaxH3TransitionPolicy"
-      },
-      "widgets_values": [
-        "hard_av",
-        false,
-        "masked_av",
-        39
-      ]
-    },
-    {
       "id": 1960,
       "type": "LoadImage",
       "pos": [
@@ -2626,6 +2543,46 @@
       ],
       "color": "#744c8c",
       "bgcolor": "rgba(24,24,27,.9)"
+    },
+    {
+      "id": 1961,
+      "type": "MiniMaxH3ChainPolicy",
+      "pos": [
+        -1092,
+        704
+      ],
+      "size": [
+        340,
+        190
+      ],
+      "flags": {},
+      "order": 41,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "chain_policy",
+          "type": "H3_CHAIN_POLICY",
+          "links": [
+            109
+          ]
+        },
+        {
+          "name": "status",
+          "type": "STRING",
+          "links": null
+        }
+      ],
+      "title": "0.5 CHAIN POLICY",
+      "properties": {
+        "Node name for S&R": "MiniMaxH3ChainPolicy"
+      },
+      "widgets_values": [
+        "hard_av",
+        "generated",
+        "off",
+        "on"
+      ]
     }
   ],
   "links": [
@@ -3206,22 +3163,6 @@
       "STRING"
     ],
     [
-      104,
-      1958,
-      0,
-      1700,
-      0,
-      "H3_AUDIO_POLICY"
-    ],
-    [
-      105,
-      1959,
-      0,
-      1700,
-      1,
-      "H3_TRANSITION_POLICY"
-    ],
-    [
       106,
       4,
       0,
@@ -3244,6 +3185,14 @@
       132,
       4,
       "H3_CHAIN_STATE"
+    ],
+    [
+      109,
+      1961,
+      0,
+      1700,
+      2,
+      "H3_CHAIN_POLICY"
     ]
   ],
   "groups": [

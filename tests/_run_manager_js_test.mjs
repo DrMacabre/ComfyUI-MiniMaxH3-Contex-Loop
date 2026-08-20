@@ -41,7 +41,7 @@ assert.match(source, /\/minimax_h3_context_loop\/run-assets/);
 assert.match(source, /window\.confirm\(message\)/);
 assert.match(source, /This replaces all active scene prompts, archived Plan settings, and connected 0\.5 policies/);
 assert.match(source, /function applyPlanInputs/);
-assert.match(source, /restoreConnectedPolicyInputs\(planNode, policyInputs\)/);
+assert.match(source, /planNode, policyInputs, inputs/);
 assert.match(source, /payload\.policy_inputs/);
 assert.match(source, /refreshRestoredPlanEditors\(planNode\)/);
 assert.match(source, /left === "plan_json"/);

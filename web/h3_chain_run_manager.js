@@ -216,7 +216,8 @@ function applyPlanInputs(planNode, inputs, policyInputs = {}) {
     if (!applied.includes("plan_json")) {
         throw new Error("The connected Plan does not expose an editable plan_json widget.");
     }
-    const policies = restoreConnectedPolicyInputs(planNode, policyInputs);
+    const policies = restoreConnectedPolicyInputs(
+        planNode, policyInputs, inputs);
     refreshRestoredPlanEditors(planNode);
     app.graph?.setDirtyCanvas?.(true, true);
     return {applied, unavailable, policies};

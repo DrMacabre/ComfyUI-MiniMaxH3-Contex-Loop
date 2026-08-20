@@ -80,33 +80,33 @@ def comparable_plan(plan):
 def validate_v05_topology(workflow):
     """Maintained recursive examples teach the 0.5 semantic graph."""
     plan = node(workflow, "MiniMaxH3ChainPlan")
-    audio = node(workflow, "MiniMaxH3AudioPolicy")
-    transition = node(workflow, "MiniMaxH3TransitionPolicy")
+    policy = node(workflow, "MiniMaxH3ChainPolicy")
+    assert not [item for item in workflow["nodes"] if item.get("type") in {
+        "MiniMaxH3AudioPolicy", "MiniMaxH3TransitionPolicy",
+        "MiniMaxH3Legacy04PolicyAdapter",
+    }]
     legacy_audio = str(plan["widgets_values"][9])
-    assert audio["widgets_values"] == {
+    expected_audio = {
         "source_track": ["source", "on", "off"],
         "generated_audio": ["generated", "off", "on"],
         "source_plus_timeline": ["source", "on", "on"],
     }[legacy_audio]
-    assert origin_for_input(
-        workflow, socket(plan["inputs"], "audio_policy")) == audio
     context = int(plan["widgets_values"][5])
+    audio_context = int(plan["widgets_values"][10])
     mode = (str(plan["widgets_values"][16])
             if len(plan["widgets_values"]) > 16 else "guide")
-    expected = {
-        ("guide", 0): ["cut", False, "guide", 0],
-        ("guide", 22): ["guide", False, "guide", 22],
-        ("tapered_guide", 22): [
-            "detail_guide", False, "tapered_guide", 22],
-        ("tapered_av", 39): [
-            "detail_av", False, "tapered_av", 39],
-        ("masked_av", 39): ["hard_av", False, "masked_av", 39],
-        ("audio_feathered_av", 39): [
-            "soft_av", False, "audio_feathered_av", 39],
-    }.get((mode, context), ["guide", True, mode, context])
-    assert transition["widgets_values"] == expected
+    expected_transition = {
+        ("guide", 0): "cut",
+        ("guide", 22): "guide",
+        ("masked_av", 39): "hard_av",
+        ("audio_feathered_av", 39): "soft_av",
+    }[(mode, context)]
+    assert audio_context == context
+    assert policy["widgets_values"] == [expected_transition, *expected_audio]
     assert origin_for_input(
-        workflow, socket(plan["inputs"], "transition_policy")) == transition
+        workflow, socket(plan["inputs"], "chain_policy")) == policy
+    assert socket(plan["inputs"], "audio_policy")["link"] is None
+    assert socket(plan["inputs"], "transition_policy")["link"] is None
 
     current = node(workflow, "MiniMaxH3ChainCurrent")
     trim = node(workflow, "MiniMaxH3LoopTrim")
@@ -975,6 +975,7 @@ def main():
                 "MiniMaxH3ChainRichScenePromptEditor",
                 "MiniMaxH3ChainRunManager",
                 "MiniMaxH3ChainPreflight",
+                "MiniMaxH3ChainPolicy",
                 "MiniMaxH3AudioPolicy",
                 "MiniMaxH3TransitionPolicy",
             })

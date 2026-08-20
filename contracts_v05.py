@@ -271,10 +271,14 @@ def chain_policy(
         raise ValueError(
             "H3 Chain Policy incoming transition must be one of %s." %
             (PRIMARY_TRANSITION_PRESETS,))
+    resolved_transition = transition_policy(preset)
     return compose_chain_policy(
         audio_policy(final_audio, source_reference, generated_continuity),
-        transition_policy(preset),
-        audio_context_length=DEFAULT_AUDIO_CONTEXT_LENGTH)
+        resolved_transition,
+        # Normal authoring keeps picture and generated-audio carry on the
+        # same tested boundary. The numeric control remains available only
+        # through the Legacy / Expert adapter.
+        audio_context_length=resolved_transition["context_length"])
 
 
 def paired_audio_policy(value: str | bool) -> str:

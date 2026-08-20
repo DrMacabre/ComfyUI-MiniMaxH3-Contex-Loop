@@ -43,13 +43,16 @@ resuming; a changed source correctly invalidates dependent checkpoints.
 Recommended first settings:
 
 ```text
-context_length       22
+Chain Policy         Guide
 encode_mode          video
 anchor_mode          head
-audio_context_length 22
 Loop Trim match_tail true
 Spectrum             off
 ```
+
+Chain Policy derives both visual and generated-audio overlap as 22 frames for
+Guide. Use Legacy / Expert Policy only when this imported-context workflow
+deliberately needs different visual and audio overlap lengths.
 
 ## Long visual context
 

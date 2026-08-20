@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise the additive and idempotent 0.5 workflow migration."""
+"""Exercise the compact, exact, and idempotent 0.5 workflow migration."""
 
 import copy
 import importlib.util
@@ -39,8 +39,15 @@ def main():
         match = next(node for node in migrated["nodes"]
                      if node["id"] == node_id)
         assert match["type"] == node_type
-    assert len(nodes(migrated, "MiniMaxH3AudioPolicy")) == 1
-    assert len(nodes(migrated, "MiniMaxH3TransitionPolicy")) == 1
+    assert len(nodes(migrated, "MiniMaxH3AudioPolicy")) == 0
+    assert len(nodes(migrated, "MiniMaxH3TransitionPolicy")) == 0
+    compact = nodes(migrated, "MiniMaxH3ChainPolicy")
+    assert len(compact) == 1
+    assert compact[0]["widgets_values"] == [
+        "guide", "generated", "off", "on"]
+    plan = nodes(migrated, "MiniMaxH3ChainPlan")[0]
+    assert next(item for item in plan["inputs"]
+                if item["name"] == "chain_policy")["link"] is not None
     studio = nodes(migrated, "MiniMaxH3ChainPlanStudio")[0]
     assert {"source_timeline", "source_audio", "tagged_references",
             "reference_schedule"}.issubset(input_names(studio))
@@ -61,12 +68,17 @@ def main():
     source_demo = load(
         "example_workflows/"
         "MiniMax H3 Ref2V - Studio Tagged Source Audio.json")
+    migration.migrate(source_demo, migration.SOURCE_AUDIO_DEMO)
     stable_demo = copy.deepcopy(source_demo)
     migration.migrate(source_demo, migration.SOURCE_AUDIO_DEMO)
     assert source_demo == stable_demo
     assert len(nodes(source_demo, "MiniMaxH3SourceTimeline")) == 1
-    assert len(nodes(source_demo, "MiniMaxH3AudioPolicy")) == 1
-    assert len(nodes(source_demo, "MiniMaxH3TransitionPolicy")) == 1
+    assert len(nodes(source_demo, "MiniMaxH3AudioPolicy")) == 0
+    assert len(nodes(source_demo, "MiniMaxH3TransitionPolicy")) == 0
+    compact = nodes(source_demo, "MiniMaxH3ChainPolicy")
+    assert len(compact) == 1
+    assert compact[0]["widgets_values"] == [
+        "guide", "source", "on", "off"]
 
     drift_plan = {
         "pos": [100, 200],
@@ -76,11 +88,22 @@ def main():
             "drift_control_av",
         ],
     }
-    drift_transition = migration._transition_policy_node(drift_plan)
-    assert drift_transition["widgets_values"] == [
-        "drift_av", False, "drift_control_av", 39]
+    drift_policy, drift_output = migration._chain_policy_node(
+        drift_plan, ("generated", "off", "on"),
+        "drift_control_av", 39, 39)
+    assert drift_policy["type"] == "MiniMaxH3Legacy04PolicyAdapter"
+    assert drift_policy["widgets_values"] == [
+        "generated_audio", "drift_control_av", 39, 39]
+    assert drift_output == 3
 
-    print("v0.5 workflow migration: additive and idempotent")
+    mismatched_audio, mismatch_output = migration._chain_policy_node(
+        drift_plan, ("generated", "off", "on"), "masked_av", 39, 22)
+    assert mismatched_audio["type"] == "MiniMaxH3Legacy04PolicyAdapter"
+    assert mismatched_audio["widgets_values"] == [
+        "generated_audio", "masked_av", 39, 22]
+    assert mismatch_output == 3
+
+    print("v0.5 workflow migration: compact, exact, and idempotent")
 
 
 if __name__ == "__main__":

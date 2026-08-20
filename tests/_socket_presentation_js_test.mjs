@@ -199,7 +199,7 @@ assert.deepEqual(resolveTransitionPolicy(compactStart), {
     expertOverride: false,
     source: "compact",
 });
-assert.equal(resolveAudioContextLength(compactStart), 22,
+assert.equal(resolveAudioContextLength(compactStart), 39,
     "compact 0.5 policy owns the automatic audio context default");
 assert.deepEqual(policyPlanConsumers(compactPolicy), [compactPlan]);
 assert.equal(

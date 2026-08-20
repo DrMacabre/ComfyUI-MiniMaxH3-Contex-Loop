@@ -83,9 +83,8 @@ explains every maintained example and required asset.
 ## How it works
 
 ```text
-Audio Policy ─┐
-Transition ───┼→ Plan → Preflight → Loop Start → Current Shot
-Source Timeline┘                                  ↓
+Chain Policy ────→ Plan → Preflight → Loop Start → Current Shot
+Source Timeline ───┘                              ↓
                                            H3 conditioning
                                                   ↓
                                       sample → decode → trim
@@ -104,7 +103,7 @@ metadata remain on disk.
 | Task | Guide |
 |---|---|
 | Install and run the first scene | [Getting started](https://github.com/ethanfel/ComfyUI-MiniMaxH3-Contex-Loop/wiki/Getting-Started) |
-| Choose Cut, Guide, Drift-Control AV, Hard AV, Soft AV, or audio behavior | [Continuity and audio](https://github.com/ethanfel/ComfyUI-MiniMaxH3-Contex-Loop/wiki/Continuity-and-Audio) |
+| Choose Cut, Guide, Hard AV, Soft AV, or audio behavior | [Continuity and audio](https://github.com/ethanfel/ComfyUI-MiniMaxH3-Contex-Loop/wiki/Continuity-and-Audio) |
 | Use `@tags`, motion references, or Source Timeline | [References and source media](https://github.com/ethanfel/ComfyUI-MiniMaxH3-Contex-Loop/wiki/References-and-Source-Media) |
 | Inpaint, outpaint, extend, or bridge footage | [Masked editing](https://github.com/ethanfel/ComfyUI-MiniMaxH3-Contex-Loop/wiki/Masked-Editing) |
 | Retry, resume, recover, or assemble later | [Review, resume, and recovery](https://github.com/ethanfel/ComfyUI-MiniMaxH3-Contex-Loop/wiki/Review-Resume-and-Recovery) |
