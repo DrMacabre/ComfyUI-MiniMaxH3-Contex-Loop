@@ -16,31 +16,8 @@
       "flags": {},
       "order": 1,
       "mode": 0,
-      "inputs": [
-        {
-          "name": "plan",
-          "type": "H3_CHAIN_PLAN",
-          "link": null,
-          "shape": 7
-        },
-        {
-          "name": "source_timeline",
-          "type": "H3_SOURCE_TIMELINE",
-          "link": null,
-          "shape": 7
-        }
-      ],
+      "inputs": [],
       "outputs": [
-        {
-          "name": "plan",
-          "type": "H3_CHAIN_PLAN",
-          "links": null
-        },
-        {
-          "name": "source_timeline",
-          "type": "H3_SOURCE_TIMELINE",
-          "links": null
-        },
         {
           "name": "selected_manifest",
           "type": "H3_CHAIN_MANIFEST",
@@ -1167,7 +1144,7 @@
         "Node name for S&R": "Note"
       },
       "widgets_values": [
-        "STANDALONE H3 CHECKPOINT UPSCALE\n\n1. Open Checkpoint Manager and select the saved run.\n2. Select the final scene of a COMPLETE branch. The manager serializes and verifies that exact lineage when queued; no source Plan is used.\n3. Choose a unique profile in Upscale Adapter. start_clip=1/end_clip=0 processes all scenes.\n4. Queue. Each HQ scene is saved before the loop advances; Merger writes under output/h3_chains/<run>/upscaled/<profile>/final/.\n\nsave_latent is OFF by default. The sampler latent is still carried transiently between scenes, but only the small audio/assembly checkpoint is persisted. Enable it if you need to reopen the HQ latent later.\n\nLow-denoise learned upscale does not require the original references. To reproduce Ref2VA conditioning exactly, reconnect the archived reference media to a Ref2VA backend body. For legacy source-track runs without a recoverable Source Timeline, connect the original full AUDIO to Merger."
+        "STANDALONE H3 CHECKPOINT UPSCALE\n\n1. Open Checkpoint Manager and select the saved run.\n2. Select the final scene of a COMPLETE branch. The single green selected_manifest cable is the entire parent-chain contract; no Plan, Source Timeline, source audio, or external context enters the upscale loop.\n3. Choose a unique profile in Upscale Adapter. start_clip=1/end_clip=0 processes all scenes.\n4. Queue. Each HQ scene is saved before the loop advances; Merger writes under output/h3_chains/<run>/upscaled/<profile>/final/.\n\nsave_latent is OFF by default. The sampler latent is still carried transiently between scenes, but only the small audio/assembly checkpoint is persisted. Enable it if you need to reopen the HQ latent later.\n\nLow-denoise learned upscale does not require the original references. To reproduce Ref2VA conditioning exactly, reconnect the archived reference media to a Ref2VA backend body. Merger normally recovers audio from the manifest; only legacy source-track runs without a recoverable Source Timeline need the original full AUDIO connected to Merger."
       ],
       "title": "HOW TO RUN"
     },
@@ -1201,7 +1178,7 @@
     [
       2,
       2,
-      2,
+      0,
       3,
       0,
       "H3_CHAIN_MANIFEST"

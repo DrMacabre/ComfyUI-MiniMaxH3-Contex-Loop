@@ -63,7 +63,7 @@ const source = fs.readFileSync(
     new URL("../web/h3_chain_checkpoint_manager.js", import.meta.url), "utf8",
 );
 assert.match(source, /MiniMaxH3ChainCheckpointManager/);
-assert.match(source, /MiniMaxH3ChainPlan/);
+assert.doesNotMatch(source, /MiniMaxH3ChainPlan/);
 assert.match(source, /selection_json/);
 assert.match(source, /checkpointRevisionLineage/);
 assert.match(source, /checkpoint-revisions\/delete-preview/);
@@ -91,8 +91,9 @@ const backend = fs.readFileSync(
 );
 assert.match(backend, /class MiniMaxH3ChainCheckpointManager/);
 assert.match(backend,
-    /def passthrough\(self, selection_json="", plan=None, source_timeline=None\):/);
+    /def passthrough\(self, selection_json=""\):/);
 assert.match(backend, /_checkpoint_selection_manifest\(selection_json\)/);
+assert.match(backend, /RETURN_NAMES = \("selected_manifest",\)/);
 assert.doesNotMatch(
     backend.slice(
         backend.indexOf("class MiniMaxH3ChainCheckpointManager"),

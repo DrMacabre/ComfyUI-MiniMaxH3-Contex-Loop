@@ -782,8 +782,9 @@ def validate_deferred_h3_upscale(path):
     loop_end = node(workflow, "MiniMaxH3ChainUpscaleLoopEnd")
     merger = node(workflow, "MiniMaxH3ChainUpscaleMerge")
 
-    assert socket(manager["inputs"], "plan")["link"] is None
-    assert socket(manager["outputs"], "plan")["links"] is None
+    assert manager["inputs"] == []
+    assert [item["name"] for item in manager["outputs"]] == [
+        "selected_manifest"]
     assert socket(manager["outputs"], "selected_manifest")["links"] == [
         socket(adapter["inputs"], "source_manifest")["link"]]
     assert adapter["widgets_values"][0:2] == ["h3_learned_2x", "h3_latent"]
@@ -816,7 +817,8 @@ def validate_deferred_h3_upscale(path):
     notes = "\n".join(
         str(item.get("widgets_values", [""])[0])
         for item in workflow["nodes"] if item.get("type") == "Note")
-    assert "no source Plan is used" in notes
+    assert "selected_manifest cable is the entire parent-chain contract" in notes
+    assert "no Plan, Source Timeline, source audio, or external context" in notes
     assert "does not require the original references" in notes
     assert "save_latent is OFF" in notes
     assert "ComfyUI-MiniMaxH3_LatentUpscaler" in notes

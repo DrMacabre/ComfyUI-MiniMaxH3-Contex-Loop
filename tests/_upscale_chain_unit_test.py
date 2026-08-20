@@ -69,7 +69,7 @@ def main():
         assert len(node.OUTPUT_TOOLTIPS) == len(node.RETURN_TYPES), name
     manager_schema = package.NODE_CLASS_MAPPINGS[
         "MiniMaxH3ChainCheckpointManager"].INPUT_TYPES()
-    assert "plan" in manager_schema["optional"]
+    assert "optional" not in manager_schema
     assert "selection_json" in manager_schema["required"]
     assert "plan" not in upscale.MiniMaxH3ChainUpscaleAdapter.INPUT_TYPES()[
         "required"]
@@ -121,8 +121,8 @@ def main():
             ],
         })
         manager = chain.MiniMaxH3ChainCheckpointManager()
-        assert manager.passthrough("")[2] is None
-        selected_manifest = manager.passthrough(selection)[2]
+        assert manager.passthrough("")[0] is None
+        selected_manifest = manager.passthrough(selection)[0]
         assert selected_manifest["clip_count"] == 2
 
         adapter = upscale.MiniMaxH3ChainUpscaleAdapter()

@@ -11,33 +11,10 @@ import {
 } from "./h3_checkpoint_manager_core.mjs?v=0.5.7";
 
 const NODE_NAME = "MiniMaxH3ChainCheckpointManager";
-const PLAN_NAME = "MiniMaxH3ChainPlan";
 const RUN_PROPERTY = "h3_checkpoint_manager_run";
 const SCENE_PROPERTY = "h3_checkpoint_manager_scene";
 const REVISION_PROPERTY = "h3_checkpoint_manager_revision";
 const SHARED_COLORS = ["#6ea8ff", "#58c99d", "#bd8cff", "#e8a84f", "#f07f8c", "#55bfd0"];
-
-function nodeType(node) {
-    return node?.comfyClass ?? node?.type ?? "";
-}
-
-function upstreamPlanNode(start) {
-    const queue = [start];
-    const seen = new Set();
-    while (queue.length) {
-        const node = queue.shift();
-        if (!node || seen.has(node)) continue;
-        seen.add(node);
-        if (node !== start && nodeType(node) === PLAN_NAME) return node;
-        for (const input of node.inputs ?? []) {
-            if (input.link == null) continue;
-            const link = node.graph?.links?.[input.link];
-            const parent = link ? node.graph?.getNodeById?.(link.origin_id) : null;
-            if (parent) queue.push(parent);
-        }
-    }
-    return null;
-}
 
 function widget(node, name) {
     return node?.widgets?.find((item) => item.name === name);
@@ -221,11 +198,6 @@ function mount(node) {
     deletionActions.append(status, remove);
     deletion.append(deletionTitle, deletionBody, deletionActions);
     root.append(head, runRow, scenes, main, deletion);
-
-    function activePlanRun() {
-        const plan = upstreamPlanNode(node);
-        return String(widget(plan, "run_name")?.value ?? "").trim();
-    }
 
     function persistSelection() {
         node.properties[RUN_PROPERTY] = state.runName;
@@ -567,8 +539,7 @@ function mount(node) {
         try {
             const payload = await jsonRequest("/minimax_h3_context_loop/runs");
             state.runs = payload.runs ?? [];
-            const connected = activePlanRun();
-            const preferred = state.runName || connected;
+            const preferred = state.runName;
             state.runName = state.runs.some((item) => item.run_name === preferred)
                 ? preferred : state.runs[0]?.run_name ?? "";
             runSelect.replaceChildren();
@@ -656,18 +627,6 @@ function mount(node) {
         Math.max(Number(node.size?.[0]) || 0, 900),
         Math.max(Number(node.size?.[1]) || 0, 760),
     ]);
-    const connectionsChanged = node.onConnectionsChange;
-    node.onConnectionsChange = function () {
-        const result = connectionsChanged?.apply(this, arguments);
-        window.setTimeout(() => {
-            const connected = activePlanRun();
-            if (connected && connected !== state.runName) {
-                state.runName = connected;
-                void refreshRuns();
-            }
-        }, 0);
-        return result;
-    };
     node._h3CheckpointManagerRefresh = () => void refreshRuns();
     const sharedLinksResizeObserver = typeof ResizeObserver === "function"
         ? new ResizeObserver(scheduleSharedLinks) : null;

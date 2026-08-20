@@ -9390,25 +9390,13 @@ class MiniMaxH3ChainCheckpointManager:
                     "tooltip": "Hidden serialized run and revision lineage "
                                "maintained by the Checkpoint Manager browser."}),
             },
-            "optional": {
-                "plan": (PLAN_TYPE, {
-                    "tooltip": "Optional generation-workflow passthrough. It "
-                               "only preselects the Plan's run and is not "
-                               "needed for checkpoint upscaling."}),
-                "source_timeline": (SOURCE_TIMELINE_TYPE, {
-                    "tooltip": "Optional 0.5 Source Timeline pass-through. "
-                               "Checkpoint inspection never materializes or "
-                               "changes its media."}),
-            },
         }
 
-    RETURN_TYPES = (PLAN_TYPE, SOURCE_TIMELINE_TYPE, MANIFEST_TYPE)
-    RETURN_NAMES = ("plan", "source_timeline", "selected_manifest")
+    RETURN_TYPES = (MANIFEST_TYPE,)
+    RETURN_NAMES = ("selected_manifest",)
     OUTPUT_TOOLTIPS = (
-        "The optional connected Plan, unchanged, for generation workflows.",
-        "The optional 0.5 Source Timeline, unchanged.",
         "The complete selected checkpoint lineage as a verified manifest. "
-        "Connect this directly to Checkpoint Upscale Adapter.",
+        "This is the only Checkpoint Upscale Adapter input.",
     )
     FUNCTION = "passthrough"
     CATEGORY = "conditioning/minimax/contex_loop"
@@ -9419,9 +9407,9 @@ class MiniMaxH3ChainCheckpointManager:
         "standalone upscaling, and delete one inactive leaf revision at a "
         "time after a complete deletion preview.")
 
-    def passthrough(self, selection_json="", plan=None, source_timeline=None):
+    def passthrough(self, selection_json=""):
         manifest = _checkpoint_selection_manifest(selection_json)
-        return (plan, source_timeline, manifest)
+        return (manifest,)
 
 
 class MiniMaxH3ChainFirstSceneImage:
