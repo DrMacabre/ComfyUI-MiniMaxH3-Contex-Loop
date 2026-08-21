@@ -20,8 +20,7 @@
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "Node name for S&R": "MiniMaxH3ChainCheckpointManager"
       },
-      "widgets_values": [""],
-      "title": "1 — SELECT COMPLETE BRANCH"
+      "widgets_values": [""]
     },
     {
       "id": 3,
@@ -39,8 +38,7 @@
         "cnr_id": "comfy-core",
         "Node name for S&R": "VAELoader"
       },
-      "widgets_values": ["MiniMaw-H3/minimax_h3_video_vae_fp16.safetensors"],
-      "title": "ORIGINAL H3 VIDEO VAE — NOT AUDIO VAE"
+      "widgets_values": ["MiniMaw-H3/minimax_h3_video_vae_fp16.safetensors"]
     },
     {
       "id": 4,
@@ -64,8 +62,7 @@
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "Node name for S&R": "MiniMaxH3ChainLatentVideoAdapter"
       },
-      "widgets_values": ["plan", "plan", "disk-backed", true, 256],
-      "title": "2 — STREAM FULL BRANCH FROM H3 LATENTS"
+      "widgets_values": ["plan", "plan", "disk-backed", true, 256]
     },
     {
       "id": 5,
@@ -85,8 +82,7 @@
         "aux_id": "ainvfx/ComfyUI-SeedVR2_VideoUpscaler",
         "Node name for S&R": "SeedVR2LoadDiTModel"
       },
-      "widgets_values": ["seedvr2_ema_3b_fp16.safetensors", "cuda:0", 32, false, "cpu", false, "sdpa"],
-      "title": "SEEDVR2 DIT — CHOOSE INSTALLED MODEL"
+      "widgets_values": ["seedvr2_ema_3b_fp16.safetensors", "cuda:0", 32, false, "cpu", false, "sdpa"]
     },
     {
       "id": 6,
@@ -106,8 +102,7 @@
         "aux_id": "ainvfx/ComfyUI-SeedVR2_VideoUpscaler",
         "Node name for S&R": "SeedVR2LoadVAEModel"
       },
-      "widgets_values": ["ema_vae_fp16.safetensors", "cuda:0", true, 1024, 128, true, 768, 128, "false", "cpu", false],
-      "title": "SEEDVR2 VAE"
+      "widgets_values": ["ema_vae_fp16.safetensors", "cuda:0", true, 1024, 128, true, 768, 128, "false", "cpu", false]
     },
     {
       "id": 7,
@@ -130,8 +125,7 @@
         "aux_id": "ethanfel/ComfyUI-SeedVR2_VideoUpscaler",
         "Node name for S&R": "SeedVR2DirectVideoUpscaler"
       },
-      "widgets_values": [42, "fixed", 1080, 0, 5, 21, 2, false, 0, 0, "lab", 0.0, 0.0, "cpu", 18, false],
-      "title": "3 — SEEDVR2 WHOLE-VIDEO CHUNKED UPSCALE"
+      "widgets_values": [42, "fixed", 1080, 0, 5, 21, 2, false, 0, 0, "lab", 0.0, 0.0, "cpu", 18, false]
     },
     {
       "id": 8,
@@ -149,8 +143,7 @@
         "cnr_id": "comfy-core",
         "Node name for S&R": "SaveVideo"
       },
-      "widgets_values": ["video/h3_seedvr2_%date:yyyy-MM-dd%", "auto", "auto"],
-      "title": "4 — SAVE UPSCALED VIDEO + PRESERVED AUDIO"
+      "widgets_values": ["video/h3_seedvr2_%date:yyyy-MM-dd%", "auto", "auto"]
     },
     {
       "id": 9,
@@ -163,8 +156,7 @@
       "inputs": [],
       "outputs": [],
       "properties": {},
-      "widgets_values": ["WHOLE-CHAIN SEEDVR2 FINISH\n\n1. In Checkpoint Manager select the final scene of a COMPLETE branch.\n2. Use the original H3 VIDEO VAE. Do not select minimax_h3_audio_vae: it has 32 latent channels and cannot decode the 24-channel video latent.\n3. Keep decode_buffer=disk-backed. MiniMax's temporal VAE writes the active scene to a temporary mmap; only boundary frames stay in ordinary RAM.\n4. The adapter trims saved context, resolves the Plan's boundary blends, embeds the saved final audio policy, and caches one continuous lossless movie under output/h3_chains/<run>/upscaled/seedvr2/source/.\n5. SeedVR2 Direct reads that movie in chunk_size batches. chunk_size=21 and overlap=2 are conservative defaults; its batching is independent of H3 scene boundaries.\n6. The ethanfel SeedVR2 fork preserves input audio in its returned VIDEO, so it connects directly to core Save Video.\n\nNo Plan, Source Timeline, source media, per-scene upscale loop, IMAGE batch, or manual intermediate path is required. Legacy source-audio runs without a saved Source Timeline are the only case that may need source_audio on the adapter.\n\nRequired SeedVR2 fork: https://github.com/ethanfel/ComfyUI-SeedVR2_VideoUpscaler"],
-      "title": "HOW THIS STAYS CONTINUOUS AND LOW-RAM"
+      "widgets_values": ["WHOLE-CHAIN SEEDVR2 FINISH\n\n1. In Checkpoint Manager select the final scene of a COMPLETE branch.\n2. Use the original H3 VIDEO VAE. Do not select minimax_h3_audio_vae: it has 32 latent channels and cannot decode the 24-channel video latent.\n3. Keep decode_buffer=disk-backed. MiniMax's temporal VAE writes the active scene to a temporary mmap; only boundary frames stay in ordinary RAM.\n4. The adapter trims saved context, resolves the Plan's boundary blends, embeds the saved final audio policy, and caches one continuous lossless movie under output/h3_chains/<run>/upscaled/seedvr2/source/.\n5. SeedVR2 Direct reads that movie in chunk_size batches. chunk_size=21 and overlap=2 are conservative defaults; its batching is independent of H3 scene boundaries.\n6. The ethanfel SeedVR2 fork preserves input audio in its returned VIDEO, so it connects directly to core Save Video.\n\nNo Plan, Source Timeline, source media, per-scene upscale loop, IMAGE batch, or manual intermediate path is required. Legacy source-audio runs without a saved Source Timeline are the only case that may need source_audio on the adapter.\n\nRequired SeedVR2 fork: https://github.com/ethanfel/ComfyUI-SeedVR2_VideoUpscaler"]
     }
   ],
   "links": [
