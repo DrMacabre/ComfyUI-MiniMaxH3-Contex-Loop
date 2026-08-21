@@ -10998,7 +10998,9 @@ class MiniMaxH3DriftControlModelPatch:
                 "latent": ("LATENT", {
                     "tooltip": "Chain Context's latent output. Its private "
                                "marker verifies that the sampler and model "
-                               "patch use the same Drift-Control prefix."}),
+                               "patch use the same Drift-Control prefix, and "
+                               "it remains the clean inpaint reference across "
+                               "a multi-sampler sigma handoff."}),
                 "full_sigmas": ("SIGMAS", {
                     "tooltip": "The original complete sigma schedule BEFORE "
                                "it is split. Every model-patch instance must "
@@ -11011,16 +11013,19 @@ class MiniMaxH3DriftControlModelPatch:
     RETURN_NAMES = ("model",)
     OUTPUT_TOOLTIPS = (
         "The input MODEL with Drift-Control's shared full-schedule mask patch "
-        "only for an active Drift-Control scene; otherwise unchanged.",
+        "and automatic clean-reference sigma handoff only for an active "
+        "Drift-Control scene; otherwise unchanged.",
     )
     FUNCTION = "patch"
     CATEGORY = "conditioning/minimax/contex_loop"
     DESCRIPTION = (
         "Lightweight inline patch for sigma-split workflows that switch H3 "
-        "models. It stores only the small full sigma tuple and clones "
-        "ModelPatcher metadata; it does not duplicate or jointly load model "
-        "weights. Leave Chain Context's MODEL input disconnected, connect its "
-        "drift_sigmas input, and use one instance for each raw model branch."
+        "models. It stores the small full sigma tuple plus a non-copying "
+        "reference to Chain Context's clean latent, and clones ModelPatcher "
+        "metadata; it does not duplicate or jointly load model weights or "
+        "latent data. Leave Chain Context's MODEL input disconnected, connect "
+        "its drift_sigmas input, and use one instance for each raw model "
+        "branch."
     )
 
     def patch(self, model, state, latent, full_sigmas):

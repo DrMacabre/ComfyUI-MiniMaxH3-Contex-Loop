@@ -32,6 +32,7 @@ from .contracts_v05 import DRIFT_CONTROL_AV_RECIPE
 
 _LOG = logging.getLogger("minimax_h3_context_loop.drift_control_av")
 _WRAPPER_KEY = "h3_context_loop_drift_control_av"
+_SAMPLER_WRAPPER_KEY = "h3_context_loop_drift_control_split_handoff"
 _MODEL_OPTION_MARKER = "h3_context_loop_drift_control_av_recipe"
 _LATENT_MARKER = "h3_context_loop_drift_control_av_prefix"
 
@@ -154,6 +155,7 @@ class _DriftControlMaskState:
         video_shape: tuple[int, ...],
         prefix_steps: int,
         schedule_override: Any = None,
+        reference_samples: Any = None,
     ):
         self.video_shape = tuple(int(value) for value in video_shape)
         self.prefix_steps = int(prefix_steps)
@@ -172,6 +174,12 @@ class _DriftControlMaskState:
         # original unsplit schedule lets both model branches resolve the same
         # next sigma at the hand-off without retaining another model or latent.
         self.schedule_override = _schedule_values(schedule_override)
+        # This is the exact Chain Context sample object, not a clone.  Comfy's
+        # graph already owns it, so keeping one pointer here does not duplicate
+        # the latent.  A split sampler needs it because SamplerCustomAdvanced
+        # otherwise reuses stage one's output as both the new starting state
+        # and the immutable inpaint reference.
+        self.reference_samples = reference_samples
 
     def denoise_mask_function(
         self,
@@ -204,6 +212,122 @@ class _DriftControlMaskState:
         if self.current_video_mask is not None:
             kwargs["denoise_mask"] = self.current_video_mask
         return executor(*args, **kwargs)
+
+    def _is_split_tail(self, sigmas: Any) -> bool:
+        if not self.schedule_override:
+            return False
+        local = _schedule_values(sigmas)
+        if not local:
+            return False
+        first = float(local[0])
+        full_first = float(self.schedule_override[0])
+        tolerance = max(1e-7, abs(full_first) * 1e-6)
+        return first < full_first - tolerance
+
+    def _reference_for_sampler(
+        self,
+        guider: Any,
+        latent_image: torch.Tensor,
+    ) -> torch.Tensor:
+        samples = self.reference_samples
+        if samples is None:
+            raise RuntimeError(
+                "h3_drift_control_av: sigma-split handoff lost Chain "
+                "Context's original latent reference."
+            )
+
+        if bool(getattr(samples, "is_nested", False)):
+            import comfy.utils
+            reference, _ = comfy.utils.pack_latents(list(samples.unbind()))
+        elif isinstance(samples, (tuple, list)):
+            import comfy.utils
+            reference, _ = comfy.utils.pack_latents(list(samples))
+        elif torch.is_tensor(samples):
+            reference = samples
+        else:
+            raise RuntimeError(
+                "h3_drift_control_av: unsupported Chain Context latent "
+                "container at the sigma-split handoff."
+            )
+
+        reference = reference.to(
+            device=latent_image.device,
+            dtype=latent_image.dtype,
+        )
+        if tuple(reference.shape) != tuple(latent_image.shape):
+            raise RuntimeError(
+                "h3_drift_control_av: sigma-split handoff reference shape "
+                "%s does not match the active packed latent %s." %
+                (tuple(reference.shape), tuple(latent_image.shape))
+            )
+        if bool(torch.count_nonzero(reference)):
+            reference = guider.inner_model.process_latent_in(reference)
+        return reference
+
+    def sampler_sample_wrapper(
+        self,
+        executor,
+        guider,
+        sigmas,
+        extra_args,
+        callback,
+        noise,
+        latent_image,
+        denoise_mask,
+        disable_pbar,
+    ):
+        """Keep the clean inpaint reference across a sigma-split handoff.
+
+        For flow sampling, stage one's output is inverse-scaled at the split
+        sigma.  A stock second SamplerCustomAdvanced scales that output back
+        to the exact boundary state, but also mistakes it for the immutable
+        inpaint reference.  Re-express the same boundary state as deterministic
+        handoff noise around Chain Context's original latent instead.  No new
+        random noise is introduced and the sampler receives exactly the same
+        starting x; only its fixed mask reference is corrected.
+        """
+        if denoise_mask is None or not self._is_split_tail(sigmas):
+            return executor(
+                guider, sigmas, extra_args, callback, noise, latent_image,
+                denoise_mask, disable_pbar)
+
+        sigma = float(
+            torch.as_tensor(sigmas).detach().float().reshape(-1)[0])
+        if not math.isfinite(sigma) or sigma <= 0.0 or sigma >= 1.0:
+            raise RuntimeError(
+                "h3_drift_control_av: invalid sigma %.8g at the split "
+                "handoff." % sigma
+            )
+
+        reference = self._reference_for_sampler(guider, latent_image)
+        model_sampling = guider.inner_model.model_sampling
+        noise_scale = float(getattr(model_sampling, "noise_scale", 1.0))
+        if not math.isfinite(noise_scale) or noise_scale <= 0.0:
+            raise RuntimeError(
+                "h3_drift_control_av: invalid H3 flow noise scale %.8g at "
+                "the split handoff." % noise_scale
+            )
+
+        # Stock stage-B startup would produce:
+        #   x = sigma * noise_scale * noise + (1 - sigma) * stage_a
+        # Use the original reference instead, solving for a deterministic
+        # noise tensor which reconstructs that exact same x.
+        factor = (1.0 - sigma) / (sigma * noise_scale)
+        # The incoming NOISE tensor is disposable after this point.  Reuse it
+        # in place so the handoff adds only the clean packed reference, not a
+        # second full packed-latent allocation at an already memory-heavy
+        # two-model boundary.
+        handoff_noise = noise.add_(latent_image, alpha=factor).add_(
+            reference, alpha=-factor)
+        _LOG.info(
+            "H3 Drift-Control AV: corrected sigma-split handoff at sigma "
+            "%.8g; preserved stage state and restored Chain Context's clean "
+            "inpaint reference",
+            sigma,
+        )
+        return executor(
+            guider, sigmas, extra_args, callback, handoff_noise, reference,
+            denoise_mask, disable_pbar)
 
 
 def install_drift_control_av_model(
@@ -273,12 +397,18 @@ def install_drift_control_av_model(
         video_shape,
         int(prefix_steps),
         schedule_override=schedule_override,
+        reference_samples=samples,
     )
     patched.set_model_denoise_mask_function(state.denoise_mask_function)
     patched.add_wrapper_with_key(
         WrappersMP.APPLY_MODEL,
         _WRAPPER_KEY,
         state.apply_model_wrapper,
+    )
+    patched.add_wrapper_with_key(
+        WrappersMP.SAMPLER_SAMPLE,
+        _SAMPLER_WRAPPER_KEY,
+        state.sampler_sample_wrapper,
     )
     patched.model_options[_MODEL_OPTION_MARKER] = dict(
         DRIFT_CONTROL_AV_RECIPE)

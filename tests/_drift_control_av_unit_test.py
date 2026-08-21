@@ -140,6 +140,7 @@ patcher_extension = types.ModuleType("comfy.patcher_extension")
 class WrappersMP:
     APPLY_MODEL = "apply_model"
     DIFFUSION_MODEL = "diffusion_model"
+    SAMPLER_SAMPLE = "sampler_sample"
 
 
 patcher_extension.WrappersMP = WrappersMP
@@ -159,9 +160,91 @@ assert callable(patched.model_options["denoise_mask_function"])
 assert patched.model_options[
     "h3_context_loop_drift_control_av_recipe"] == (
         contracts.DRIFT_CONTROL_AV_RECIPE)
-assert len(patched.wrappers) == 1
+assert len(patched.wrappers) == 2
 assert patched.wrappers[0][0:2] == (
     "apply_model", "h3_context_loop_drift_control_av")
+assert patched.wrappers[1][0:2] == (
+    "sampler_sample", "h3_context_loop_drift_control_split_handoff")
+
+
+class FlowSampling:
+    noise_scale = 1.0
+
+
+class InnerSamplerModel:
+    model_sampling = FlowSampling()
+
+    @staticmethod
+    def process_latent_in(value):
+        return value
+
+
+class FakeGuider:
+    inner_model = InnerSamplerModel()
+
+
+handoff_reference = torch.tensor([[[1.0, 2.0, 3.0, 4.0]]])
+stage_a = torch.tensor([[[3.0, 5.0, 7.0, 9.0]]])
+zero_noise = torch.zeros_like(stage_a)
+handoff_state = drift._DriftControlMaskState(
+    video_shape,
+    12,
+    schedule_override=torch.tensor([1.0, 0.8, 0.5, 0.2, 0.0]),
+    reference_samples=handoff_reference,
+)
+handoff_capture = {}
+
+
+def handoff_executor(
+    guider, sigmas, extra_args, callback, noise, latent_image,
+    denoise_mask, disable_pbar,
+):
+    handoff_capture["noise"] = noise
+    handoff_capture["latent_image"] = latent_image
+    sigma = float(sigmas[0])
+    handoff_capture["start"] = (
+        sigma * noise + (1.0 - sigma) * latent_image)
+    return "split-ok"
+
+
+assert handoff_state.sampler_sample_wrapper(
+    handoff_executor,
+    FakeGuider(),
+    torch.tensor([0.5, 0.2, 0.0]),
+    {},
+    None,
+    zero_noise,
+    stage_a,
+    torch.ones_like(stage_a),
+    True,
+) == "split-ok"
+assert torch.equal(handoff_capture["latent_image"], handoff_reference)
+# Stock DisableNoise + stage_a would start at (1-sigma)*stage_a.  The corrected
+# call reconstructs that exact state while restoring the original reference.
+assert torch.allclose(handoff_capture["start"], 0.5 * stage_a)
+
+stage_one_capture = {}
+
+
+def stage_one_executor(*args):
+    stage_one_capture["noise"] = args[4]
+    stage_one_capture["latent_image"] = args[5]
+    return "stage-one-ok"
+
+
+assert handoff_state.sampler_sample_wrapper(
+    stage_one_executor,
+    FakeGuider(),
+    torch.tensor([1.0, 0.8, 0.5]),
+    {},
+    None,
+    zero_noise,
+    stage_a,
+    torch.ones_like(stage_a),
+    True,
+) == "stage-one-ok"
+assert stage_one_capture["noise"] is zero_noise
+assert stage_one_capture["latent_image"] is stage_a
 
 marked = drift.mark_drift_control_latent(latent, 12)
 assert marked is not latent
@@ -184,4 +267,5 @@ else:
 
 print(
     "Drift-Control AV: next-sigma ratios, 8+4 taper, packed sampler mask, "
-    "H3 timestep mask, MODEL patch, and conflict guard passed")
+    "H3 timestep mask, clean-reference split handoff, MODEL patch, and "
+    "conflict guard passed")
