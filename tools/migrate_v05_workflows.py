@@ -4,7 +4,7 @@
 The sampling body and existing generation settings stay untouched. Normal
 audio and boundary intent is collapsed to one Chain Policy wire. Settings that
 cannot be represented by the four supported compact transition presets are
-preserved exactly through one Legacy / Expert Policy node. The source-audio
+preserved exactly through one Legacy 0.4 Policy Adapter node. The source-audio
 reference demo also adopts the single typed Source Timeline route. Every
 custom demo title starts with the node's registered display name so the graph
 still teaches the real node names.
@@ -63,6 +63,9 @@ NODE_DISPLAY_NAMES = {
     "MiniMaxH3ChainPlan": "MiniMax H3 Contex Loop Plan",
     "MiniMaxH3ChainPlanStudio": "MiniMax H3 Plan Studio (Experimental)",
     "MiniMaxH3ChainPolicy": "MiniMax H3 Chain Policy",
+    "MiniMaxH3AdvancedPolicy": "MiniMax H3 Advanced Policy Override",
+    "MiniMaxH3Legacy04PolicyAdapter": (
+        "MiniMax H3 Legacy 0.4 Policy Adapter"),
     "MiniMaxH3ChainPreflight": "MiniMax H3 Chain Preflight",
     "MiniMaxH3ChainReview": "MiniMax H3 Contex Loop Review Gate",
     "MiniMaxH3ChainRunManager": "MiniMax H3 Run Manager",
@@ -298,7 +301,7 @@ def _chain_policy_node(plan: dict[str, Any], audio: tuple[str, str, str],
         raise ValueError("Cannot preserve unsupported legacy audio policy %r." %
                          (audio,))
     result = _base_node(
-        "MiniMaxH3Legacy04PolicyAdapter", "0.4 LEGACY / EXPERT POLICY",
+        "MiniMaxH3Legacy04PolicyAdapter", "0.4 LEGACY POLICY ADAPTER",
         [x - 420, y + 160], [360, 220])
     result["outputs"] = [
         {"name": "chain_policy", "type": "H3_CHAIN_POLICY", "links": []},

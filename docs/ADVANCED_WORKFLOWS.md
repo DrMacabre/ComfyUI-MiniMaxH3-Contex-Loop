@@ -51,7 +51,7 @@ Spectrum             off
 ```
 
 Chain Policy derives both visual and generated-audio overlap as 22 frames for
-Guide. Use Legacy / Expert Policy only when this imported-context workflow
+Guide. Use the Legacy 0.4 Policy Adapter only when this imported-context workflow
 deliberately needs different visual and audio overlap lengths.
 
 ## Long visual context

@@ -23,12 +23,12 @@ contract, but removes the need to wire two policy nodes.
 | `guide` | Guide | 22 frames |
 | `masked_av` | Hard AV | 39 frames |
 | `audio_feathered_av` | Soft AV | 39 frames |
-| any other implementation/context pair | Legacy / Expert Policy | preserved exactly |
+| any other implementation/context pair | Legacy 0.4 Policy Adapter | preserved exactly |
 
 The compact presets derive generated-audio overlap from the same boundary: 0,
 22, or 39 frames. A custom audio overlap, Tone/Latent/Detail Guide, Detail AV,
 Drift-Control AV, old dual-stream Feathered AV, and other raw pairs migrate to
-the single **Legacy / Expert Policy** node instead. Nothing is approximated.
+the single **Legacy 0.4 Policy Adapter** node instead. Nothing is approximated.
 The semantic choice always describes the boundary entering a scene.
 
 ## Automatic migration
@@ -49,8 +49,8 @@ python tools/migrate_v05_workflows.py --check /path/to/workflow.json
 With no paths, the tool checks or migrates the maintained active examples. It
 is idempotent: running it again does not add duplicate policy, preflight, or
 timeline nodes. Exact 0.4 settings become one Chain Policy when they fit the
-normal presets; other implementation/context pairs become one exact Legacy /
-Expert Policy adapter.
+normal presets; other implementation/context pairs become one exact Legacy 0.4
+Policy Adapter.
 
 ## Source-media rewiring
 

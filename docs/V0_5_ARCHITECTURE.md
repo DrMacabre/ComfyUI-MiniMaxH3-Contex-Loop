@@ -79,7 +79,15 @@ one-wire wrapper. Plan immediately expands it back into the canonical Audio
 Policy and Transition Policy records before hashing, so compatibility follows
 resolved behavior rather than the authoring graph. The compact node derives
 audio overlap from the selected boundary (Cut 0, Guide 22, AV 39). An
-independent numeric audio overlap is a Legacy / Expert setting.
+Advanced Policy Override composes a named experimental transition over that
+policy without replacing its audio record. An independent numeric audio
+overlap is available only through the Legacy 0.4 Policy Adapter.
+Policy nodes are composable wrappers over the same `h3_chain_policy_v1`
+record. Chain Policy owns audio intent and a normal transition. Advanced
+Policy replaces only the transition with a named semantic recipe. A connected
+Legacy Adapter preserves the incoming audio record and replaces only its raw
+transition/audio-context fields; standalone, it also translates 0.4
+`audio_mode`. The policy layer nearest Plan owns the effective boundary.
 
 ## Incoming transition contract
 
@@ -95,9 +103,11 @@ the completed predecessor.
 | `soft_av` | exact picture prefix with feathered audio release | 39 frames |
 
 The normal selector intentionally exposes only those four tested choices.
-Legacy / Expert Policy may select `tone_guide`, `latent_guide`, `detail_guide`,
-`detail_av`, `drift_av`, `feathered_av`, or override the implementation,
-visual context, and audio context explicitly.
+Advanced Policy Override selects named semantic recipes including
+`tone_guide`, `latent_guide`, `detail_guide`, `detail_av`, and `drift_av` while
+preserving the upstream audio intent. The Legacy 0.4 Policy Adapter owns raw
+implementation, visual-context, and audio-context values, including the old
+dual-stream `feathered_av` implementation.
 `latent_guide` requires video encode mode and at least five positive context
 frames. `tapered_guide` accepts the listed Guide context lengths; only the
 22-frame preset has published validation, so other lengths remain
@@ -149,7 +159,7 @@ value, and whether regeneration is required.
 - Existing required widget order remains readable.
 - Plan's retired `audio_mode`, `continuation_mode`, `context_length`, and
   `audio_context_length` widgets remain serialized for 0.4 compatibility but
-  are hidden in the normal 0.5 presentation. Legacy / Expert Policy exposes
+  are hidden in the normal 0.5 presentation. Legacy 0.4 Policy Adapter exposes
   those choices as an explicit compatibility route and emits one combined
   policy output.
 - New policy fields are appended or introduced through frontend-backed

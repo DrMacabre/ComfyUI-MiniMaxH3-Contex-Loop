@@ -81,6 +81,22 @@ assert locked["audio_policy"] == chain._contract_audio_policy(
 assert "final=source/ref=off/carry=off/target=locked" in locked_status
 assert "source timeline required" in locked_status
 
+advanced = chain.MiniMaxH3AdvancedPolicy()
+advanced_inputs = advanced.INPUT_TYPES()["required"]
+assert advanced_inputs["chain_policy"][0] == chain.CHAIN_POLICY_TYPE
+assert tuple(advanced_inputs["incoming_transition"][0]) == (
+    "cut", "guide", "tone_guide", "latent_guide", "detail_guide",
+    "detail_av", "drift_av", "hard_av", "soft_av")
+drift, drift_status = advanced.apply(combined, "drift_av")
+assert drift["audio_policy"] == combined["audio_policy"]
+assert drift["transition_policy"] == chain._contract_transition_policy(
+    "drift_av")
+assert drift["audio_context_length"] == 39
+assert "advanced override" in drift_status
+assert "audio preserved" in drift_status
+locked_drift = advanced.apply(locked, "drift_av")[0]
+assert locked_drift["audio_policy"] == locked["audio_policy"]
+
 combined_plan = make_plan(combined=combined)
 assert "chain_policy" not in combined_plan["compatibility"]
 
@@ -93,7 +109,20 @@ assert legacy_combined["audio_policy"] == chain.migrate_legacy_audio_mode(
 assert legacy_combined["transition_policy"]["continuation_mode"] == (
     "feathered_av")
 assert legacy_combined["audio_context_length"] == 33
-assert "legacy / expert" in legacy_status
+assert "legacy 0.4 migration" in legacy_status
+assert legacy.INPUT_TYPES()["optional"]["chain_policy"][0] == (
+    chain.CHAIN_POLICY_TYPE)
+legacy_overlay, overlay_status = legacy.build(
+    "generated_audio", "drift_control_av", 39, 39,
+    chain_policy=combined)
+assert legacy_overlay["audio_policy"] == combined["audio_policy"]
+assert legacy_overlay["transition_policy"] == chain._contract_transition_policy(
+    "drift_av")
+assert "incoming audio preserved" in overlay_status
+legacy_locked = legacy.build(
+    "generated_audio", "masked_av", 39, 39,
+    chain_policy=locked)[0]
+assert legacy_locked["audio_policy"] == locked["audio_policy"]
 legacy_plan = make_plan(combined=legacy_combined)
 assert legacy_plan["compatibility"]["audio_context_length"] == 33
 assert legacy_plan["compatibility"]["continuation_mode"] == "feathered_av"
@@ -104,10 +133,17 @@ assert "audio_policy" not in plan_inputs["optional"]
 assert "transition_policy" not in plan_inputs["optional"]
 assert chain.CHAIN_NODE_CLASS_MAPPINGS[
     "MiniMaxH3ChainPolicy"] is chain.MiniMaxH3ChainPolicy
+assert chain.CHAIN_NODE_CLASS_MAPPINGS[
+    "MiniMaxH3AdvancedPolicy"] is chain.MiniMaxH3AdvancedPolicy
 assert chain.CHAIN_NODE_DISPLAY_NAME_MAPPINGS[
     "MiniMaxH3ChainPolicy"] == "MiniMax H3 Chain Policy"
+assert chain.CHAIN_NODE_DISPLAY_NAME_MAPPINGS[
+    "MiniMaxH3AdvancedPolicy"] == "MiniMax H3 Advanced Policy Override"
+assert chain.CHAIN_NODE_DISPLAY_NAME_MAPPINGS[
+    "MiniMaxH3Legacy04PolicyAdapter"] == (
+        "MiniMax H3 Legacy 0.4 Policy Adapter")
 
 print(
     "compact chain policy: primary semantic choices, one-wire Plan input, "
-    "canonical compatibility records, and one-output 0.4 legacy/expert "
-    "adapter pass")
+    "composable advanced transitions, canonical compatibility records, and "
+    "one-output 0.4 legacy adapter pass")

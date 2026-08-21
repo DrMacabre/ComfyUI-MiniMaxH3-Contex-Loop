@@ -139,10 +139,10 @@ function injectStyles() {
         .h3studio-form { align-items:end; display:grid;
             grid-template-columns:minmax(130px,1.3fr) minmax(175px,1.3fr) minmax(65px,.5fr) minmax(135px,1.1fr) minmax(120px,.85fr) minmax(140px,1fr); margin-bottom:8px; }
         .h3studio-field { display:flex; min-width:0; flex-direction:column; gap:3px; color:var(--hs-muted); }
-        .h3studio-expert { margin:0 0 8px; padding:6px 8px; border:1px solid var(--hs-border);
+        .h3studio-advanced { margin:0 0 8px; padding:6px 8px; border:1px solid var(--hs-border);
             border-radius:6px; color:var(--hs-muted); }
-        .h3studio-expert summary { cursor:pointer; font-weight:700; }
-        .h3studio-expert-grid { display:grid; grid-template-columns:repeat(3,minmax(160px,1fr));
+        .h3studio-advanced summary { cursor:pointer; font-weight:700; }
+        .h3studio-advanced-grid { display:grid; grid-template-columns:repeat(3,minmax(160px,1fr));
             gap:7px; margin-top:7px; align-items:end; }
         .h3studio-length { display:grid; grid-template-columns:112px minmax(80px,1fr); gap:5px; }
         .h3studio-context-pair { display:grid; grid-template-columns:1fr 1fr; gap:5px; }
@@ -181,7 +181,7 @@ function injectStyles() {
             gap:8px; align-items:start; color:var(--hs-muted); }
         .h3studio-ref-preview img,.h3studio-ref-preview video { width:100%; max-height:150px; object-fit:contain; background:#08090c; }
         .h3studio-ref-preview audio { width:100%; height:36px; }
-        @media(max-width:760px) { .h3studio-form,.h3studio-expert-grid { grid-template-columns:1fr 1fr; }
+        @media(max-width:760px) { .h3studio-form,.h3studio-advanced-grid { grid-template-columns:1fr 1fr; }
             .h3studio-defaults { grid-template-columns:1fr; } }
     `;
     document.head.appendChild(style);
@@ -960,7 +960,7 @@ function mount(node) {
         incomingTransition.title = "One semantic boundary choice. Inherit "
             + "uses the connected Chain Policy. A preset writes its tested "
             + "visual implementation/context pair and restores automatic "
-            + "generated-audio context. Custom means raw Legacy / Expert "
+            + "generated-audio context. Custom means raw Advanced "
             + "overrides remain below.";
         incomingTransition.addEventListener("change", () => {
             if (incomingTransition.value === "custom") return;
@@ -1102,17 +1102,17 @@ function mount(node) {
             field("Incoming transition", incomingTransition),
             field("Final assembly crossfade frames", blendFrames),
         );
-        const expert = element("details", "h3studio-expert");
-        expert.append(element(
-            "summary", "", "Legacy / Expert boundary controls",
+        const advanced = element("details", "h3studio-advanced");
+        advanced.append(element(
+            "summary", "", "Advanced boundary controls",
         ));
-        const expertGrid = element("div", "h3studio-expert-grid");
-        expertGrid.append(
+        const advancedGrid = element("div", "h3studio-advanced-grid");
+        advancedGrid.append(
             field("Visual / audio context", contextPair),
             field("Implementation", continuation),
             field("Boundary spatial proxy", spatialProxy),
         );
-        expert.append(expertGrid);
+        advanced.append(advancedGrid);
 
         if (state.promptEditors.length) {
             const delegated = element("div", "h3studio-prompt-delegated");
@@ -1123,7 +1123,7 @@ function mount(node) {
                     "Scene selection is synchronized in both directions; Studio keeps scene ID, length, steps, seed, timeline, and playback controls.",
                 ),
             );
-            panel.append(head, form, expert, delegated);
+            panel.append(head, form, advanced, delegated);
             return panel;
         }
 
@@ -1153,7 +1153,7 @@ function mount(node) {
         );
         const history = element("div", "h3studio-history");
         state.history.host = history; state.history.textarea = prompt; state.history.status = message;
-        panel.append(head, form, expert, prompt, tools, tray, history);
+        panel.append(head, form, advanced, prompt, tools, tray, history);
         void loadHistory(row.id, prompt.value);
         return panel;
     }

@@ -12,9 +12,28 @@ Version 0.5 separates three independent decisions and one exact-target switch:
 | Lock source audio | `on`, `off` | Whether each exact source window occupies the complete target audio latent and is protected from denoising |
 
 Set these controls and the default incoming boundary on the single **Chain
-Policy** node. Its one output connects to Plan. Use **Legacy / Expert Policy**
-only for a genuine 0.4 import, a raw implementation, or an independent audio
-overlap.
+Policy** node. Its one output may connect directly to Plan or pass through an
+**Advanced Policy Override**. Advanced Policy preserves every audio choice and
+replaces only the incoming transition with a named experimental recipe such as
+Drift-Control AV. Use the **Legacy 0.4 Policy Adapter** only for a genuine 0.4
+import, a raw implementation/context pair, or an independent numeric audio
+overlap. It can also accept an incoming Chain Policy, in which case its legacy
+`audio_mode` is ignored and the modern audio intent is preserved.
+
+Policy layers are ordered left to right. Each downstream layer replaces only
+the boundary fields it owns; the last boundary layer wins, while the audio
+record continues unchanged:
+
+```text
+Chain Policy → Plan
+Chain Policy → Advanced Policy Override → Plan
+Chain Policy → Legacy 0.4 Policy Adapter → Plan
+Chain Policy → Advanced Policy Override → Legacy 0.4 Policy Adapter → Plan
+```
+
+The reverse Advanced/Legacy order is also valid: whichever is nearest Plan
+owns the effective transition. A standalone Legacy Adapter retains exact 0.4
+`audio_mode` behavior for imported workflows.
 
 For a prerecorded song or dialogue performance that must remain exact, choose
 Source final audio and enable **Lock source audio**. The switch resolves Source
@@ -88,12 +107,13 @@ audio ticks are released with a half-cosine ramp. With Generated continuity
 off, the target audio stays fully denoisable and paired source audio spans the
 complete raw scene window instead of inheriting the delivered-video window.
 This is the tested upstream AV extension recipe. The older
-dual-stream `feathered_av` remains an Expert override for compatibility.
+dual-stream `feathered_av` remains a raw Legacy Adapter override for
+compatibility.
 
 AV prefixes must end on both native clocks: 39, 90, 141, 192, or 243 frames.
 The normal 39-frame prefix maps exactly to 12 video latent steps and 65 audio
 steps; 22 frames maps to 36.666... audio steps and is rejected before model
-loading. At 39 frames, expert `feathered_av` fully protects the first 8 video /
+loading. At 39 frames, legacy raw `feathered_av` fully protects the first 8 video /
 42 audio steps and ramps the final 4 video / 23 audio prefix steps.
 
 Chain Policy controls the normal incoming boundary: Cut carries no picture,
@@ -122,8 +142,9 @@ unchanged.
 
 In Plan Studio, a scene normally chooses Inherit, Cut, Guide, Hard AV, or Soft
 AV. That single choice writes the matching visual and generated-audio overlap.
-The raw implementation and separate visual/audio context fields are under
-Legacy / Expert boundary controls.
+The raw per-scene implementation and separate visual/audio context fields are
+under Advanced boundary controls. Plan-wide raw 0.4 defaults belong to the
+Legacy 0.4 Policy Adapter.
 
 ### Scheduled boundary spatial proxy
 

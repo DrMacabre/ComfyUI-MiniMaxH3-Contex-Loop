@@ -5,7 +5,11 @@ import json
 import pathlib
 import tempfile
 
-from run_manager import RunArchiveManager, _workflow_inputs
+from run_manager import (
+    RunArchiveManager,
+    _workflow_inputs,
+    archive_policy_inputs,
+)
 
 
 def write(path, value):
@@ -14,6 +18,24 @@ def write(path, value):
 
 
 def main():
+    locked_policy = archive_policy_inputs({
+        "compatibility": {
+            "audio_policy": {
+                "version": "h3_audio_policy_v1",
+                "final_audio": "source",
+                "source_reference": "off",
+                "generated_continuity": "off",
+                "source_audio_target": "locked",
+            },
+        },
+    })["audio_policy"]
+    assert locked_policy == {
+        "final_audio": "source",
+        "source_reference": "off",
+        "generated_continuity": "off",
+        "source_audio_target": "locked",
+    }
+
     old_widgets = [
         '{"shots":[{"prompt":"old"}]}', "old_run", "", 960, 544,
         22, "video", "head", "disabled", "source_track", 22, 15.0,

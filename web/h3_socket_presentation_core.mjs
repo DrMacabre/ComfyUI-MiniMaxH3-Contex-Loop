@@ -6,6 +6,7 @@ import {
 } from "./h3_policy_core.mjs?v=0.5.5";
 
 export const CHAIN_POLICY_NODE = "MiniMaxH3ChainPolicy";
+export const ADVANCED_POLICY_NODE = "MiniMaxH3AdvancedPolicy";
 export const LEGACY_POLICY_NODE = "MiniMaxH3Legacy04PolicyAdapter";
 export const PLAN_NODE = "MiniMaxH3ChainPlan";
 
@@ -70,15 +71,17 @@ function linkedOrigin(node, input) {
 export function policyPlanConsumers(policyNode) {
     const type = nodeType(policyNode);
     const inputNames = (type === CHAIN_POLICY_NODE
+            || type === ADVANCED_POLICY_NODE
             || type === LEGACY_POLICY_NODE)
         ? ["chain_policy"] : [];
     if (!inputNames.length) return [];
     const graph = policyNode?.graph;
     return (graph?._nodes ?? []).filter((candidate) =>
         nodeType(candidate) === PLAN_NODE
-        && inputNames.some((name) => linkedOrigin(
-            candidate, inputByName(candidate, name),
-        ) === policyNode),
+        && inputNames.some((name) => {
+            const origin = linkedOrigin(candidate, inputByName(candidate, name));
+            return upstreamNodes(origin).includes(policyNode);
+        }),
     );
 }
 
@@ -107,6 +110,7 @@ export function upstreamNodes(start) {
 
 function audioPolicyFromWidgets(node) {
     if (nodeType(node) === LEGACY_POLICY_NODE) {
+        if (linkedOrigin(node, inputByName(node, "chain_policy"))) return null;
         const mode = String(widgetByName(node, "audio_mode")?.value ?? "");
         const mapped = LEGACY_AUDIO_POLICIES[mode];
         if (!mapped) return null;
@@ -155,17 +159,16 @@ function legacyAudioPolicy(plan) {
 }
 
 export function resolveAudioPolicy(start) {
+    let planFallback = null;
     for (const node of upstreamNodes(start)) {
         const direct = audioPolicyFromWidgets(node);
         if (direct) return direct;
         if (nodeType(node) !== PLAN_NODE) continue;
-        const compactNode = linkedOrigin(
-            node, inputByName(node, "chain_policy"));
-        const compact = audioPolicyFromWidgets(compactNode);
-        if (compact) return compact;
-        const legacy = legacyAudioPolicy(node);
-        if (legacy) return legacy;
+        if (!linkedOrigin(node, inputByName(node, "chain_policy"))) {
+            planFallback ??= legacyAudioPolicy(node);
+        }
     }
+    if (planFallback) return planFallback;
     return {
         known: false,
         finalAudio: null,
@@ -177,7 +180,7 @@ export function resolveAudioPolicy(start) {
 
 function directAudioContextLength(node) {
     const type = nodeType(node);
-    if (type === CHAIN_POLICY_NODE) {
+    if (type === CHAIN_POLICY_NODE || type === ADVANCED_POLICY_NODE) {
         const preset = transitionPreset(String(
             widgetByName(node, "incoming_transition")?.value ?? ""));
         return preset?.contextLength ?? null;
@@ -190,18 +193,18 @@ function directAudioContextLength(node) {
 }
 
 export function resolveAudioContextLength(start) {
+    let planFallback = null;
     for (const node of upstreamNodes(start)) {
         const direct = directAudioContextLength(node);
         if (direct != null) return direct;
         if (nodeType(node) !== PLAN_NODE) continue;
-        const compactNode = linkedOrigin(
-            node, inputByName(node, "chain_policy"));
-        const compact = directAudioContextLength(compactNode);
-        if (compact != null) return compact;
-        const legacy = Number(widgetByName(node, "audio_context_length")?.value);
-        if (Number.isInteger(legacy)) return legacy;
+        if (!linkedOrigin(node, inputByName(node, "chain_policy"))) {
+            const legacy = Number(
+                widgetByName(node, "audio_context_length")?.value);
+            if (Number.isInteger(legacy)) planFallback ??= legacy;
+        }
     }
-    return 22;
+    return planFallback ?? 22;
 }
 
 function transitionPolicyFromWidgets(node) {
@@ -218,7 +221,7 @@ function transitionPolicyFromWidgets(node) {
             expertOverride: preset === "custom", source: "legacy_adapter",
         };
     }
-    if (type === CHAIN_POLICY_NODE) {
+    if (type === CHAIN_POLICY_NODE || type === ADVANCED_POLICY_NODE) {
         const preset = String(
             widgetByName(node, "incoming_transition")?.value ?? "");
         const pair = transitionPreset(preset);
@@ -227,7 +230,8 @@ function transitionPolicyFromWidgets(node) {
             known: true, preset,
             continuationMode: pair.continuationMode,
             contextLength: pair.contextLength,
-            expertOverride: false, source: "compact",
+            expertOverride: false,
+            source: type === ADVANCED_POLICY_NODE ? "advanced" : "compact",
         };
     }
     return null;
@@ -249,17 +253,16 @@ function legacyTransitionPolicy(plan) {
 }
 
 export function resolveTransitionPolicy(start) {
+    let planFallback = null;
     for (const node of upstreamNodes(start)) {
         const direct = transitionPolicyFromWidgets(node);
         if (direct) return direct;
         if (nodeType(node) !== PLAN_NODE) continue;
-        const compactNode = linkedOrigin(
-            node, inputByName(node, "chain_policy"));
-        const compact = transitionPolicyFromWidgets(compactNode);
-        if (compact) return compact;
-        const legacy = legacyTransitionPolicy(node);
-        if (legacy) return legacy;
+        if (!linkedOrigin(node, inputByName(node, "chain_policy"))) {
+            planFallback ??= legacyTransitionPolicy(node);
+        }
     }
+    if (planFallback) return planFallback;
     return {
         known: false,
         preset: null,
@@ -350,6 +353,14 @@ export function presentationForNode(node, showAdvanced = false) {
         for (const name of hiddenWidgets) {
             if (inputByName(node, name)) hiddenInputs.add(name);
         }
+    }
+    // A chained Legacy Adapter is a raw boundary layer. Its 0.4 audio_mode is
+    // deliberately ignored by the backend because the upstream modern policy
+    // owns audio intent, so do not present an inert control in either view.
+    if (nodeType(node) === LEGACY_POLICY_NODE
+            && linkedOrigin(node, inputByName(node, "chain_policy"))) {
+        hiddenWidgets.add("audio_mode");
+        if (inputByName(node, "audio_mode")) hiddenInputs.add("audio_mode");
     }
     return {hiddenInputs, hiddenOutputs, hiddenWidgets, policy};
 }

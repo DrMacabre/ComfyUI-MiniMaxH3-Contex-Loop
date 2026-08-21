@@ -50,6 +50,13 @@ export const TRANSITION_PRESETS = Object.freeze({
     }),
 });
 
+// Semantic recipes accepted by the composable Advanced Policy node. The
+// audio_feather_av spelling is a read-only migration alias for soft_av.
+export const ADVANCED_TRANSITION_PRESETS = Object.freeze([
+    "cut", "guide", "tone_guide", "latent_guide", "detail_guide",
+    "detail_av", "drift_av", "hard_av", "soft_av",
+]);
+
 export const LEGACY_AUDIO_POLICIES = Object.freeze({
     source_track: Object.freeze(["source", "on", "off"]),
     generated_audio: Object.freeze(["generated", "off", "on"]),
@@ -76,7 +83,7 @@ export function transitionPresetName(
 
 export function transitionPresetLabel(name) {
     if (name === "inherit") return "Inherit Chain Policy";
-    if (name === "custom") return "Custom · Legacy / Expert controls";
+    if (name === "custom") return "Custom · Advanced controls";
     return transitionPreset(name)?.label ?? String(name ?? "Unknown");
 }
 

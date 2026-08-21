@@ -896,7 +896,7 @@ function mountEditor(node) {
             + "the connected Chain Policy. Choosing a preset writes its tested "
             + "visual implementation/context pair and returns generated-audio "
             + "context to automatic behavior. Custom means this scene still "
-            + "contains raw Legacy / Expert overrides below.";
+            + "contains raw Advanced boundary overrides below.";
         incomingTransition.addEventListener("change", () => {
             if (incomingTransition.value === "custom") return;
             applySceneTransitionPreset(shot, incomingTransition.value);
@@ -1032,9 +1032,9 @@ function mountEditor(node) {
         );
         advanced.append(
             field("Steps (blank = default)", steps),
-            field("Expert visual context", context),
-            field("Expert audio context", audioContext),
-            field("Expert implementation", continuation),
+            field("Advanced visual context", context),
+            field("Advanced audio context", audioContext),
+            field("Advanced implementation", continuation),
             field("Boundary spatial proxy", spatialProxy),
         );
         card.append(

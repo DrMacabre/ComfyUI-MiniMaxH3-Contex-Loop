@@ -1,5 +1,6 @@
 import {app} from "/scripts/app.js";
 import {
+    ADVANCED_POLICY_NODE,
     CHAIN_POLICY_NODE,
     LEGACY_POLICY_NODE,
     PLAN_NODE,
@@ -12,7 +13,7 @@ import {
 
 const EXTENSION = "minimax_h3_context_loop.socket_presentation";
 const WATCHED_POLICY_NODES = new Set([
-    CHAIN_POLICY_NODE, LEGACY_POLICY_NODE, PLAN_NODE,
+    CHAIN_POLICY_NODE, ADVANCED_POLICY_NODE, LEGACY_POLICY_NODE, PLAN_NODE,
 ]);
 
 function collapseWidget(widget) {
@@ -149,8 +150,8 @@ app.registerExtension({
             const advanced = Boolean(this.properties?.h3_show_advanced_sockets);
             options.push({
                 content: advanced
-                    ? "Hide advanced / legacy H3 controls"
-                    : "Show advanced / legacy H3 controls",
+                    ? "Hide advanced H3 controls"
+                    : "Show advanced H3 controls",
                 callback: () => {
                     this.properties ??= {};
                     this.properties.h3_show_advanced_sockets = !advanced;

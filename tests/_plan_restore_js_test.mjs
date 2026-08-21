@@ -170,7 +170,7 @@ const compactMismatch = restoreConnectedPolicyInputs(compactPlan, {
     },
 }, {audio_context_length: 22});
 assert.deepEqual(compactMismatch.applied, []);
-assert.match(compactMismatch.unavailable[0], /Legacy \/ Expert Policy/);
+assert.match(compactMismatch.unavailable[0], /Advanced Policy.*Legacy 0\.4/);
 
 compactPolicy.type = "MiniMaxH3Legacy04PolicyAdapter";
 compactPolicy.widgets = [
@@ -197,4 +197,117 @@ assert.deepEqual(compactPolicy.widgets.map((item) => item.value), [
     "source_plus_timeline", "drift_control_av", 39, 17,
 ]);
 
-console.log("H3 Plan restore: one-wire compact, 0.4 legacy/expert, and prompt refresh pass");
+const layeredGraph = {
+    links: {
+        30: {origin_id: 12, target_id: 10},
+        31: {origin_id: 11, target_id: 12},
+    },
+    _nodes: [],
+    beforeChange() {}, afterChange() {}, setDirtyCanvas() {},
+    getNodeById(id) { return this._nodes.find((node) => node.id === id); },
+};
+const layeredPlan = {
+    id: 10, type: "MiniMaxH3ChainPlan", graph: layeredGraph,
+    inputs: [{name: "chain_policy", link: 30}], widgets: [],
+};
+const layeredBase = {
+    id: 11, type: "MiniMaxH3ChainPolicy", graph: layeredGraph, inputs: [],
+    widgets: [
+        widget("incoming_transition", "guide"),
+        widget("final_audio", "generated"),
+        widget("source_reference", "off"),
+        widget("generated_continuity", "off"),
+        widget("lock_source_audio", false),
+    ],
+};
+const layeredAdvanced = {
+    id: 12, type: "MiniMaxH3AdvancedPolicy", graph: layeredGraph,
+    inputs: [{name: "chain_policy", link: 31}],
+    widgets: [widget("incoming_transition", "detail_av")],
+};
+layeredGraph._nodes.push(layeredPlan, layeredBase, layeredAdvanced);
+const layeredResult = restoreConnectedPolicyInputs(layeredPlan, {
+    audio_policy: {
+        final_audio: "source", source_reference: "on",
+        generated_continuity: "on",
+    },
+    transition_policy: {
+        preset: "drift_av", expert_override: false,
+        expert_continuation_mode: "drift_control_av",
+        expert_context_length: 39,
+    },
+}, {audio_context_length: 39});
+assert.deepEqual(layeredResult, {
+    applied: ["audio_policy", "transition_policy"], unavailable: [],
+});
+assert.deepEqual(layeredBase.widgets.map((item) => item.value), [
+    "guide", "source", "on", "on", false,
+]);
+assert.equal(layeredAdvanced.widgets[0].value, "drift_av");
+
+const rawLayered = restoreConnectedPolicyInputs(layeredPlan, {
+    transition_policy: {
+        preset: "guide", expert_override: true,
+        expert_continuation_mode: "feathered_av",
+        expert_context_length: 39,
+    },
+}, {audio_context_length: 17});
+assert.deepEqual(rawLayered.applied, []);
+assert.match(rawLayered.unavailable[0], /Legacy 0\.4 Policy Adapter/);
+
+const legacyLayerGraph = {
+    links: {
+        50: {origin_id: 15, target_id: 13},
+        51: {origin_id: 14, target_id: 15},
+    },
+    _nodes: [],
+    beforeChange() {}, afterChange() {}, setDirtyCanvas() {},
+    getNodeById(id) { return this._nodes.find((node) => node.id === id); },
+};
+const legacyLayerPlan = {
+    id: 13, type: "MiniMaxH3ChainPlan", graph: legacyLayerGraph,
+    inputs: [{name: "chain_policy", link: 50}], widgets: [],
+};
+const legacyLayerBase = {
+    id: 14, type: "MiniMaxH3ChainPolicy", graph: legacyLayerGraph, inputs: [],
+    widgets: [
+        widget("incoming_transition", "guide"),
+        widget("final_audio", "generated"),
+        widget("source_reference", "off"),
+        widget("generated_continuity", "off"),
+        widget("lock_source_audio", false),
+    ],
+};
+const legacyLayer = {
+    id: 15, type: "MiniMaxH3Legacy04PolicyAdapter", graph: legacyLayerGraph,
+    inputs: [{name: "chain_policy", link: 51}],
+    widgets: [
+        widget("audio_mode", "generated_audio"),
+        widget("continuation_mode", "guide"),
+        widget("context_length", 22),
+        widget("audio_context_length", 22),
+    ],
+};
+legacyLayerGraph._nodes.push(
+    legacyLayerPlan, legacyLayerBase, legacyLayer);
+const legacyLayerResult = restoreConnectedPolicyInputs(legacyLayerPlan, {
+    audio_policy: {
+        final_audio: "source", source_reference: "on",
+        generated_continuity: "on",
+    },
+    transition_policy: {
+        preset: "guide", expert_override: true,
+        continuation_mode: "feathered_av", context_length: 39,
+    },
+}, {audio_context_length: 17});
+assert.deepEqual(legacyLayerResult, {
+    applied: ["audio_policy", "transition_policy"], unavailable: [],
+});
+assert.deepEqual(legacyLayerBase.widgets.map((item) => item.value), [
+    "guide", "source", "on", "on", false,
+]);
+assert.deepEqual(legacyLayer.widgets.map((item) => item.value), [
+    "generated_audio", "feathered_av", 39, 17,
+]);
+
+console.log("H3 Plan restore: compact, composable advanced, 0.4 legacy, and prompt refresh pass");

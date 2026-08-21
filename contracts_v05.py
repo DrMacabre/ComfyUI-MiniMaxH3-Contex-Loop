@@ -23,6 +23,10 @@ GENERATED_CONTINUITY_POLICIES = ("off", "on")
 SOURCE_AUDIO_TARGET_POLICIES = ("off", "locked")
 PAIRED_AUDIO_POLICIES = ("off", "embedded")
 PRIMARY_TRANSITION_PRESETS = ("cut", "guide", "hard_av", "soft_av")
+ADVANCED_TRANSITION_PRESETS = (
+    "cut", "guide", "tone_guide", "latent_guide", "detail_guide",
+    "detail_av", "drift_av", "hard_av", "soft_av",
+)
 DEFAULT_AUDIO_CONTEXT_LENGTH = 22
 CONTEXT_SPATIAL_PROXY_MODES = ("off", "rgb_5_6", "latent_5_6")
 CONTINUATION_POLICIES = (
@@ -301,8 +305,9 @@ def chain_policy(
             "locked" if bool(lock_source_audio) else "off"),
         resolved_transition,
         # Normal authoring keeps picture and generated-audio carry on the
-        # same tested boundary. The numeric control remains available only
-        # through the Legacy / Expert adapter.
+        # same tested boundary. The Advanced Policy keeps that semantic
+        # pairing for experimental recipes; independent numeric values remain
+        # available only through the 0.4 Legacy Policy Adapter.
         audio_context_length=resolved_transition["context_length"])
 
 

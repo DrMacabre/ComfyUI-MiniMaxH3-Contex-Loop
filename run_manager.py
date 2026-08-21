@@ -256,7 +256,8 @@ def archive_policy_inputs(archive: Any) -> dict[str, dict[str, Any]]:
             resolved_audio = audio_policy(
                 saved_audio.get("final_audio"),
                 saved_audio.get("source_reference"),
-                saved_audio.get("generated_continuity"))
+                saved_audio.get("generated_continuity"),
+                saved_audio.get("source_audio_target", "off"))
         else:
             resolved_audio = migrate_legacy_audio_mode(
                 compatibility.get("audio_mode", "generated_audio"))
@@ -265,6 +266,8 @@ def archive_policy_inputs(archive: Any) -> dict[str, dict[str, Any]]:
             "source_reference": resolved_audio["source_reference"],
             "generated_continuity": resolved_audio["generated_continuity"],
         }
+        if resolved_audio.get("source_audio_target") == "locked":
+            restored["audio_policy"]["source_audio_target"] = "locked"
     except (TypeError, ValueError):
         # A malformed optional policy must not prevent prompt/Plan recovery.
         pass

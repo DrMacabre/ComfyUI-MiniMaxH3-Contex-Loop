@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import {
+    ADVANCED_POLICY_NODE,
     CHAIN_POLICY_NODE,
     applySocketPresentation,
     hasSourceTimeline,
@@ -214,6 +215,11 @@ assert.deepEqual(resolveAudioPolicy(legacyAdapter), {
     generatedContinuity: "on",
     source: "legacy_adapter",
 });
+assert.equal(
+    presentationForNode(legacyAdapter, false).hiddenWidgets.has("audio_mode"),
+    false,
+    "standalone legacy migration still exposes its 0.4 audio mode",
+);
 assert.deepEqual(resolveTransitionPolicy(legacyAdapter), {
     known: true,
     preset: "custom",
@@ -224,10 +230,86 @@ assert.deepEqual(resolveTransitionPolicy(legacyAdapter), {
 });
 assert.equal(resolveAudioContextLength(legacyAdapter), 91);
 
+const layeredBase = node(20, CHAIN_POLICY_NODE, [], [
+    ["chain_policy", [41]], ["status", null],
+], [
+    ["incoming_transition", "guide"], ["final_audio", "source"],
+    ["source_reference", "on"], ["generated_continuity", "on"],
+    ["lock_source_audio", false],
+]);
+const layeredAdvanced = node(21, ADVANCED_POLICY_NODE, [
+    ["chain_policy", 41],
+], [["chain_policy", [42]], ["status", null]], [
+    ["incoming_transition", "drift_av"],
+]);
+const layeredPlan = node(22, "MiniMaxH3ChainPlan", [
+    ["chain_policy", 42],
+], [["plan", [43]]], [
+    ["audio_mode", "generated_audio"],
+    ["continuation_mode", "guide"],
+    ["context_length", 5],
+    ["audio_context_length", 5],
+]);
+const layeredStart = node(23, "MiniMaxH3ChainLoopStart", [
+    ["plan", 43], ["source_audio", null], ["source_timeline", null],
+]);
+new Graph([layeredBase, layeredAdvanced, layeredPlan, layeredStart], {
+    41: {origin_id: 20, target_id: 21},
+    42: {origin_id: 21, target_id: 22},
+    43: {origin_id: 22, target_id: 23},
+});
+assert.deepEqual(resolveAudioPolicy(layeredStart), {
+    known: true,
+    finalAudio: "source",
+    sourceReference: "on",
+    generatedContinuity: "on",
+    source: "compact",
+});
+assert.deepEqual(resolveTransitionPolicy(layeredStart), {
+    known: true,
+    preset: "drift_av",
+    continuationMode: "drift_control_av",
+    contextLength: 39,
+    expertOverride: false,
+    source: "advanced",
+});
+assert.equal(resolveAudioContextLength(layeredStart), 39);
+assert.deepEqual(policyPlanConsumers(layeredBase), [layeredPlan]);
+assert.deepEqual(policyPlanConsumers(layeredAdvanced), [layeredPlan]);
+
+const legacyOverlay = node(24, "MiniMaxH3Legacy04PolicyAdapter", [
+    ["chain_policy", 44],
+], [["chain_policy", null]], [
+    ["audio_mode", "generated_audio"],
+    ["continuation_mode", "feathered_av"], ["context_length", 39],
+    ["audio_context_length", 17],
+]);
+layeredBase.outputs[0].links.push(44);
+layeredBase.graph._nodes.push(legacyOverlay);
+legacyOverlay.graph = layeredBase.graph;
+layeredBase.graph.links[44] = {origin_id: 20, target_id: 24};
+assert.deepEqual(resolveAudioPolicy(legacyOverlay), {
+    known: true,
+    finalAudio: "source",
+    sourceReference: "on",
+    generatedContinuity: "on",
+    source: "compact",
+});
+assert.equal(
+    presentationForNode(legacyOverlay, false).hiddenWidgets.has("audio_mode"),
+    true,
+    "a chained legacy boundary does not expose its ignored audio mode",
+);
+assert.equal(
+    presentationForNode(legacyOverlay, true).hiddenWidgets.has("audio_mode"),
+    true,
+    "the ignored legacy audio mode stays hidden in the advanced view",
+);
+
 const extensionSource = fs.readFileSync(
     new URL("../web/h3_socket_presentation.js", import.meta.url), "utf8");
-assert.match(extensionSource, /Show advanced \/ legacy H3 controls/);
-assert.match(extensionSource, /Hide advanced \/ legacy H3 controls/);
+assert.match(extensionSource, /Show advanced H3 controls/);
+assert.match(extensionSource, /Hide advanced H3 controls/);
 assert.match(extensionSource, /refreshPolicyConsumers\(node\)/);
 assert.match(extensionSource, /_h3ChainEditorConnectionRefresh/);
 assert.match(extensionSource, /_h3PlanStudioRefresh/);

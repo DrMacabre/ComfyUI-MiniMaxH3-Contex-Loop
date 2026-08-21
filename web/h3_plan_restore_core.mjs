@@ -1,4 +1,5 @@
 import {
+    ADVANCED_TRANSITION_PRESETS,
     LEGACY_AUDIO_POLICIES,
     PRIMARY_TRANSITION_PRESETS,
     transitionPreset,
@@ -6,6 +7,7 @@ import {
 } from "./h3_policy_core.mjs?v=0.5.5";
 
 const CHAIN_POLICY_NODE = "MiniMaxH3ChainPolicy";
+const ADVANCED_POLICY_NODE = "MiniMaxH3AdvancedPolicy";
 const LEGACY_POLICY_NODE = "MiniMaxH3Legacy04PolicyAdapter";
 
 function nodeType(node) {
@@ -53,6 +55,24 @@ function findUpstreamType(start, wantedType) {
     return null;
 }
 
+function findFirstUpstreamType(start, wantedTypes) {
+    const queue = [start];
+    const seen = new Set();
+    while (queue.length) {
+        const node = queue.shift();
+        if (!node || seen.has(node)) continue;
+        seen.add(node);
+        if (wantedTypes.has(nodeType(node))) return node;
+        for (const input of node.inputs ?? []) {
+            if (input.link == null) continue;
+            const link = graphLink(node.graph, input.link);
+            const parent = link ? node.graph?.getNodeById?.(link.origin_id) : null;
+            if (parent) queue.push(parent);
+        }
+    }
+    return null;
+}
+
 function writeWidget(node, name, value, unavailable, label) {
     const widget = widgetByName(node, name);
     if (!widget) {
@@ -68,8 +88,9 @@ function effectiveTransition(values) {
     if (!values || typeof values !== "object") return null;
     if (Boolean(values.expert_override)) {
         const continuationMode = String(
-            values.expert_continuation_mode ?? "");
-        const contextLength = Number(values.expert_context_length);
+            values.expert_continuation_mode ?? values.continuation_mode ?? "");
+        const contextLength = Number(
+            values.expert_context_length ?? values.context_length);
         if (!continuationMode || !Number.isInteger(contextLength)) return null;
         return {continuationMode, contextLength};
     }
@@ -80,8 +101,7 @@ function effectiveTransition(values) {
     } : null;
 }
 
-function restoreCompactPolicy(node, policyInputs, planInputs,
-                              applied, unavailable) {
+function restoreCompactAudio(node, policyInputs, applied, unavailable) {
     const audio = policyInputs.audio_policy;
     if (audio && typeof audio === "object") {
         const entries = [
@@ -100,6 +120,10 @@ function restoreCompactPolicy(node, policyInputs, planInputs,
             node, name, value, unavailable, "audio_policy"));
         if (complete) applied.push("audio_policy");
     }
+}
+
+function restoreCompactTransition(node, policyInputs, planInputs,
+                                  applied, unavailable) {
     const transition = policyInputs.transition_policy;
     if (!transition || typeof transition !== "object") return;
     const effective = effectiveTransition(transition);
@@ -111,7 +135,8 @@ function restoreCompactPolicy(node, policyInputs, planInputs,
     if (!PRIMARY_TRANSITION_PRESETS.includes(preset)
             || !audioContextMatches) {
         unavailable.push(
-            "transition_policy (saved boundary needs Legacy / Expert Policy)",
+            "transition_policy (saved boundary needs Advanced Policy or the "
+            + "Legacy 0.4 Policy Adapter)",
         );
         return;
     }
@@ -121,8 +146,7 @@ function restoreCompactPolicy(node, policyInputs, planInputs,
     )) applied.push("transition_policy");
 }
 
-function restoreLegacyPolicy(node, policyInputs, planInputs,
-                             applied, unavailable) {
+function restoreLegacyAudio(node, policyInputs, applied, unavailable) {
     const audio = policyInputs.audio_policy;
     if (audio && typeof audio === "object") {
         if (audio.source_audio_target === "locked") {
@@ -134,7 +158,7 @@ function restoreLegacyPolicy(node, policyInputs, planInputs,
             ].every((name) => Object.hasOwn(audio, name));
             if (!completeAxes) {
                 unavailable.push(
-                    "audio_policy (incomplete saved Legacy / Expert axes)");
+                    "audio_policy (incomplete saved legacy 0.4 axes)");
             } else {
                 const axes = [
                     String(audio.final_audio), String(audio.source_reference),
@@ -146,13 +170,17 @@ function restoreLegacyPolicy(node, policyInputs, planInputs,
                 )?.[0];
                 if (!audioMode) {
                     unavailable.push(
-                        "audio_policy (unsupported Legacy / Expert axes)");
+                        "audio_policy (unsupported legacy 0.4 axes)");
                 } else if (writeWidget(
                     node, "audio_mode", audioMode, unavailable, "audio_policy",
                 )) applied.push("audio_policy");
             }
         }
     }
+}
+
+function restoreLegacyTransition(node, policyInputs, planInputs,
+                                 applied, unavailable) {
     const transition = policyInputs.transition_policy;
     if (!transition || typeof transition !== "object") return;
     const effective = effectiveTransition(transition);
@@ -172,6 +200,34 @@ function restoreLegacyPolicy(node, policyInputs, planInputs,
     if (complete) applied.push("transition_policy");
 }
 
+function restoreAdvancedTransition(node, policyInputs, planInputs,
+                                   applied, unavailable) {
+    const transition = policyInputs.transition_policy;
+    if (!transition || typeof transition !== "object") return;
+    const effective = effectiveTransition(transition);
+    if (!effective) {
+        unavailable.push("transition_policy (invalid saved boundary)");
+        return;
+    }
+    const preset = transitionPresetName(
+        effective.continuationMode, effective.contextLength);
+    const savedAudioContext = Number(planInputs?.audio_context_length);
+    const audioContextMatches = !Number.isInteger(savedAudioContext)
+        || savedAudioContext === effective.contextLength;
+    if (!ADVANCED_TRANSITION_PRESETS.includes(preset)
+            || !audioContextMatches) {
+        unavailable.push(
+            "transition_policy (saved raw boundary needs the Legacy 0.4 "
+            + "Policy Adapter as the final policy layer)",
+        );
+        return;
+    }
+    if (writeWidget(
+        node, "incoming_transition", preset, unavailable,
+        "transition_policy",
+    )) applied.push("transition_policy");
+}
+
 /** Restore normalized policy records onto the one-wire policy node already
  * connected to Plan. Connections are never replaced or invented. */
 export function restoreConnectedPolicyInputs(
@@ -187,23 +243,40 @@ export function restoreConnectedPolicyInputs(
     try {
         const combinedOrigin = linkedInputOrigin(planNode, "chain_policy");
         const compact = findUpstreamType(combinedOrigin, CHAIN_POLICY_NODE);
-        if (compact) {
-            restoreCompactPolicy(
-                compact, policyInputs, planInputs, applied, unavailable);
-            compact.graph?.setDirtyCanvas?.(true, true);
-            return {applied, unavailable};
-        }
         const legacy = findUpstreamType(combinedOrigin, LEGACY_POLICY_NODE);
-        if (legacy) {
-            restoreLegacyPolicy(
-                legacy, policyInputs, planInputs, applied, unavailable);
+        if (compact) {
+            restoreCompactAudio(
+                compact, policyInputs, applied, unavailable);
+            compact.graph?.setDirtyCanvas?.(true, true);
+        } else if (legacy) {
+            restoreLegacyAudio(legacy, policyInputs, applied, unavailable);
             legacy.graph?.setDirtyCanvas?.(true, true);
-            return {applied, unavailable};
         }
-        unavailable.push(
-            "chain_policy (connect MiniMax H3 Chain Policy or the 0.4 "
-            + "Legacy / Expert adapter)",
+
+        const transitionTarget = findFirstUpstreamType(
+            combinedOrigin,
+            new Set([
+                ADVANCED_POLICY_NODE, LEGACY_POLICY_NODE, CHAIN_POLICY_NODE,
+            ]),
         );
+        if (nodeType(transitionTarget) === ADVANCED_POLICY_NODE) {
+            restoreAdvancedTransition(
+                transitionTarget, policyInputs, planInputs,
+                applied, unavailable);
+        } else if (nodeType(transitionTarget) === LEGACY_POLICY_NODE) {
+            restoreLegacyTransition(
+                transitionTarget, policyInputs, planInputs,
+                applied, unavailable);
+        } else if (nodeType(transitionTarget) === CHAIN_POLICY_NODE) {
+            restoreCompactTransition(
+                transitionTarget, policyInputs, planInputs,
+                applied, unavailable);
+        } else {
+            unavailable.push(
+                "chain_policy (connect MiniMax H3 Chain Policy, Advanced "
+                + "Policy, or the Legacy 0.4 Policy Adapter)",
+            );
+        }
     } finally {
         graph?.afterChange?.();
     }
