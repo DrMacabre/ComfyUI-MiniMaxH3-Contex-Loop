@@ -142,7 +142,60 @@ This first release does not bulk-delete branches. The leaf-first workflow makes
 the exact context consequences visible and avoids silently orphaning later
 checkpoints.
 
-### Deferred upscale child runs
+### Whole-chain SeedVR2 finishing
+
+SeedVR2 is best treated as a final whole-video backend, not as another
+scene-recursive H3 pass. Select the final scene of a complete branch in
+Checkpoint Manager and use this graph:
+
+```text
+Checkpoint Manager.selected_manifest
+        + original H3 video VAE
+        ↓
+Full-Chain Latent Video Adapter
+        ↓ native, file-backed VIDEO
+SeedVR2 Direct Video Upscaler
+        ↓
+core Save Video
+```
+
+**Full-Chain Latent Video Adapter** verifies and decodes the original
+safetensors video latent for every selected scene; it never reads the saved
+H.264 scene previews. It trims repeated context, applies the saved incoming
+blend schedule, and writes one lossless RGB movie before SeedVR2 starts.
+SeedVR2 therefore chunks a continuous timeline rather than restarting at H3
+scene boundaries. A chain with Existing Video Context also streams its saved
+prelude into the same movie.
+
+`decode_buffer=disk-backed` is the recommended default. MiniMax H3's VAE keeps
+its native temporal chunking but writes the decoded float scene into a
+temporary mmap. The adapter converts and encodes one frame at a time, retaining
+only the next boundary window in normal RAM, then deletes that scene buffer.
+Peak ordinary RAM is therefore bounded by latent/model overhead and the blend
+window instead of the decoded duration of the full chain. `memory` is a
+compatibility fallback that holds one decoded scene at a time; neither mode
+holds the whole production.
+
+The continuous source is content-addressed and reused at:
+
+```text
+output/h3_chains/<run_name>/upscaled/seedvr2/source/<cache_key>.mkv
+```
+
+The cache key includes the immutable checkpoint lineage, VAE implementation,
+blend schedule, prelude, and selected audio policy. Disable `reuse_cache` to
+force a fresh VAE decode. `audio_source=plan` recovers the saved final-audio
+policy and Source Timeline directly from the manifest; only legacy source runs
+without a recoverable timeline need the optional `source_audio` socket.
+
+Use the audio-preserving **SeedVR2 Direct Video Upscaler** from
+[ethanfel/ComfyUI-SeedVR2_VideoUpscaler](https://github.com/ethanfel/ComfyUI-SeedVR2_VideoUpscaler).
+It reads the adapter movie in `chunk_size` batches, returns one file-backed
+H.264 VIDEO, and embeds the source audio in that VIDEO so it can connect
+straight to core Save Video. Its separate AUDIO output remains available for
+alternate muxing graphs.
+
+### Deferred H3 upscale child runs
 
 Select the final scene of the complete branch you want in Checkpoint Manager,
 then connect its **selected_manifest** output to **MiniMax H3 Checkpoint Upscale

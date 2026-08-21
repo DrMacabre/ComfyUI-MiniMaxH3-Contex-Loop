@@ -167,6 +167,7 @@ def main():
         "MiniMaxH3ChainCurrent", "MiniMaxH3ChainContext",
         "MiniMaxH3ChainSegmentSave", "MiniMaxH3ChainLoopEnd",
         "MiniMaxH3ChainManifestLoad", "MiniMaxH3ChainExportPNG",
+        "MiniMaxH3ChainLatentVideoAdapter",
         "MiniMaxH3ChainAssemble",
         "MiniMaxH3LoopTrim",
         "MiniMaxH3ContexLoopSeamProbe",

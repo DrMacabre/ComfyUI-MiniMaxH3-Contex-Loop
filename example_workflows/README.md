@@ -24,6 +24,7 @@ example_workflows/
 │   └── soldier_crabs_reference_cc0.png
 ├── EXPERIMENTAL MiniMax H3 Ref2V - Sequential Motion.json
 ├── MiniMax H3 Deferred Upscale - H3 Learned 2x.json
+├── MiniMax H3 Deferred Upscale - SeedVR2 Full Chain.json
 ├── MiniMax H3 - Masked AV Bridge - Two Clips.json
 ├── MiniMax H3 - Masked AV Extension - Chain + Reference Image.json
 ├── MiniMax H3 - Masked AV Extension - Single Clip.json
@@ -54,6 +55,18 @@ The additional sequential-motion workflow is deliberately prefixed
 recursive Motion Context.
 
 ## Deferred H3 upscale
+
+[`MiniMax H3 Deferred Upscale - SeedVR2 Full Chain.json`](<MiniMax H3 Deferred Upscale - SeedVR2 Full Chain.json>)
+is the low-RAM whole-video route. Checkpoint Manager supplies one complete
+branch; Full-Chain Latent Video Adapter re-decodes the original H3 video
+latents scene by scene into a cached lossless native VIDEO, resolves all H3
+boundary blends first, and hands that single continuous file to SeedVR2 Direct.
+The default disk-backed VAE buffer prevents a decoded scene—let alone the full
+chain—from becoming a large resident IMAGE batch. SeedVR2 then uses its own
+21-frame chunks with a two-frame context overlap and sends its audio-preserving
+VIDEO directly to core Save Video. Install the
+[ethanfel SeedVR2 fork](https://github.com/ethanfel/ComfyUI-SeedVR2_VideoUpscaler)
+before opening the graph.
 
 [`MiniMax H3 Deferred Upscale - H3 Learned 2x.json`](<MiniMax H3 Deferred Upscale - H3 Learned 2x.json>)
 is a standalone second-pass workflow: it contains no first-pass generation

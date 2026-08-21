@@ -108,7 +108,7 @@ metadata remain on disk.
 | Use `@tags`, motion references, or Source Timeline | [References and source media](https://github.com/ethanfel/ComfyUI-MiniMaxH3-Contex-Loop/wiki/References-and-Source-Media) |
 | Inpaint, outpaint, extend, or bridge footage | [Masked editing](https://github.com/ethanfel/ComfyUI-MiniMaxH3-Contex-Loop/wiki/Masked-Editing) |
 | Retry, resume, recover, or assemble later | [Review, resume, and recovery](https://github.com/ethanfel/ComfyUI-MiniMaxH3-Contex-Loop/wiki/Review-Resume-and-Recovery) |
-| Upscale a completed checkpoint branch | [Runs, review, and recovery](docs/RUNS_AND_RECOVERY.md#deferred-upscale-child-runs) |
+| Upscale a completed checkpoint branch | [Runs, review, and recovery](docs/RUNS_AND_RECOVERY.md#whole-chain-seedvr2-finishing) |
 | Diagnose a problem | [Troubleshooting](https://github.com/ethanfel/ComfyUI-MiniMaxH3-Contex-Loop/wiki/Troubleshooting) |
 | Check where a feature came from | [Feature origins](https://github.com/ethanfel/ComfyUI-MiniMaxH3-Contex-Loop/wiki/Feature-Origins) |
 | Look up Plan fields and implementation details | [Advanced reference](https://github.com/ethanfel/ComfyUI-MiniMaxH3-Contex-Loop/wiki/Advanced-Reference) |
@@ -122,6 +122,11 @@ leaves one revision at a time. Its Plan and Source Timeline pass-throughs can
 remain connected in generation workflows, while its selected-manifest output
 launches a standalone deferred upscale loop with no source Plan. Each profile
 is isolated under `upscaled/<profile>`, and saving the large HQ latent is optional.
+For whole-video SeedVR2 finishing, Full-Chain Latent Video Adapter instead
+re-decodes every selected H3 checkpoint into one cached, lossless, file-backed
+movie. It resolves scene overlaps before upscaling and uses a temporary
+disk-backed VAE output buffer, so the complete production never becomes one
+in-memory IMAGE tensor.
 Tagged and Scheduled Ref2VA also cache each active scene's native reference
 latents and compact Qwen presentation automatically; the upscale loop restores
 them from the checkpoint fingerprint without original reference-media wires.

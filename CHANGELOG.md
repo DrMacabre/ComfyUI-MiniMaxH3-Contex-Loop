@@ -4,6 +4,17 @@ Newest first. This file keeps release history out of the onboarding README.
 
 ## Unreleased — Deferred checkpoint upscaling
 
+- Added a whole-branch SeedVR2 route: Checkpoint Manager → Full-Chain Latent
+  Video Adapter → SeedVR2 Direct. It decodes the immutable H3 video latents,
+  resolves scene overlap blends before upscaling, and exposes one continuous
+  native file-backed VIDEO instead of restarting an upscaler per scene.
+- Added a disk-backed MiniMax VAE output buffer and content-addressed source
+  cache under `upscaled/seedvr2/source/`. The decoder retains its native
+  temporal chunks while ordinary RAM holds only the boundary window; saved
+  source/generated audio is embedded automatically for the SeedVR2 pass.
+- Added the standalone whole-chain SeedVR2 workflow and corrected the learned
+  H3 2x example to load the 24-channel H3 video VAE rather than the
+  incompatible 32-channel audio VAE.
 - Added a backend-neutral recursive upscale child run: Checkpoint Manager
   selected manifest → Upscale Adapter → Current Scene → H3/LTX/custom backend →
   Segment Save → Loop End → Merger. Each profile is isolated under the parent

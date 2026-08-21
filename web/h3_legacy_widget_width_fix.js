@@ -38,6 +38,7 @@ const H3_NODE_TYPES = new Set([
     "MiniMaxH3ChainLoopEnd",
     "MiniMaxH3ChainManifestLoad",
     "MiniMaxH3ChainExportPNG",
+    "MiniMaxH3ChainLatentVideoAdapter",
     "MiniMaxH3ChainAssemble",
 ]);
 

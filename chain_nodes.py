@@ -14,6 +14,7 @@ typed MiniMax chain state rather than arbitrary carry sockets.
 from __future__ import annotations
 
 import asyncio
+import gc
 import hashlib
 import json
 import logging
@@ -6156,6 +6157,92 @@ def _write_lossless_rgb_video(
             container.close()
         _safe_unlink(temporary)
         raise
+
+
+def _rgb24_frame_array(image: Any) -> Any:
+    """Convert one decoded IMAGE frame to the exact bytes sent to a codec."""
+    if np is None:
+        raise RuntimeError("Streaming H3 video writing requires NumPy.")
+    if torch is not None and torch.is_tensor(image):
+        if image.ndim != 3 or int(image.shape[-1]) < 3:
+            raise ValueError(
+                "Streaming H3 video expected [height,width,channels]; got %s."
+                % (tuple(image.shape),))
+        return (torch.clamp(image[..., :3], 0.0, 1.0) * 255.0).round().to(
+            device="cpu", dtype=torch.uint8).contiguous().numpy()
+    array = np.asarray(image)
+    if array.ndim != 3 or int(array.shape[-1]) < 3:
+        raise ValueError(
+            "Streaming H3 video expected [height,width,channels]; got %s."
+            % (tuple(array.shape),))
+    array = array[..., :3]
+    if array.dtype != np.uint8:
+        array = np.clip(array, 0.0, 1.0)
+        array = np.rint(array * 255.0).astype(np.uint8)
+    return np.ascontiguousarray(array)
+
+
+class _StreamingLosslessRGBWriter:
+    """Incremental RGB writer; only one encoded frame is resident at a time."""
+
+    def __init__(self, path: str, fps: int,
+                 metadata: dict[str, Any] | None = None):
+        if av is None or np is None:
+            raise RuntimeError(
+                "Streaming H3 lossless video writing requires PyAV and NumPy.")
+        self.path = path
+        self.fps = int(fps)
+        self.metadata = metadata or {}
+        self.container = None
+        self.stream = None
+        self.width = None
+        self.height = None
+        self.written = 0
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        _safe_unlink(path)
+
+    def write(self, image: Any) -> None:
+        array = _rgb24_frame_array(image)
+        height, width = int(array.shape[0]), int(array.shape[1])
+        if self.container is None:
+            self.width, self.height = width, height
+            self.container = av.open(self.path, mode="w")
+            for key, value in self.metadata.items():
+                if value is not None:
+                    self.container.metadata[str(key)] = str(value)
+            self.stream = self.container.add_stream(
+                "libx264rgb", rate=Fraction(self.fps, 1))
+            self.stream.width = width
+            self.stream.height = height
+            self.stream.pix_fmt = "rgb24"
+            self.stream.options = {"crf": "0", "preset": "medium"}
+        elif width != self.width or height != self.height:
+            raise ValueError(
+                "H3 full-chain decode changed dimensions from %dx%d to %dx%d."
+                % (self.width, self.height, width, height))
+        frame = av.VideoFrame.from_ndarray(array, format="rgb24")
+        frame.pts = self.written
+        frame.time_base = Fraction(1, self.fps)
+        for packet in self.stream.encode(frame):
+            self.container.mux(packet)
+        self.written += 1
+
+    def close(self) -> None:
+        if self.container is None:
+            return
+        try:
+            for packet in self.stream.encode():
+                self.container.mux(packet)
+        finally:
+            self.container.close()
+            self.container = None
+            self.stream = None
+
+    def abort(self) -> None:
+        try:
+            self.close()
+        finally:
+            _safe_unlink(self.path)
 
 
 def _write_wav(audio: dict[str, Any], path: str) -> None:
@@ -13946,6 +14033,586 @@ class MiniMaxH3ChainExportPNG:
                 "result": (output_dir, written, status)}
 
 
+def _full_chain_blend_schedule(
+    manifest: dict[str, Any],
+    segments: list[dict[str, Any]],
+    prelude: dict[str, Any] | None,
+    value: Any,
+) -> list[int]:
+    """Resolve the overlap entering every latent-decoded scene."""
+    configured = int(
+        (manifest.get("compatibility") or {}).get("video_blend_frames", 0))
+    boundary_count = len(segments) if prelude is not None else max(
+        0, len(segments) - 1)
+    text = str(value if value is not None else "plan").strip().lower()
+    if not text or text == "plan":
+        incoming = segments if prelude is not None else segments[1:]
+        schedule = []
+        for item in incoming:
+            delivered = int(item["delivered_frames"])
+            repeated = max(
+                0, int(item.get("raw_frames", delivered)) - delivered)
+            schedule.append(min(
+                repeated,
+                max(0, int(item.get("blend_frames", configured)))))
+        return schedule
+    return _scheduled_blend_frames(value, boundary_count, configured)
+
+
+def _full_chain_selected_audio(
+    manifest: dict[str, Any],
+    selected: str,
+    prelude: dict[str, Any] | None,
+    source_audio: Any = None,
+) -> dict[str, Any] | None:
+    """Recover exactly the final audio policy without another Plan socket."""
+    extension_frames = int(manifest["total_delivered_frames"])
+    if selected == "none":
+        return None
+    if selected == "generated":
+        audio = _generated_audio(manifest)
+    elif selected == "source":
+        timeline = _source_timeline_from_metadata(manifest)
+        if timeline is not None and source_audio is not None:
+            raise ValueError(
+                "H3 Full-Chain Latent Video already recovered its Source "
+                "Timeline from the manifest; disconnect legacy source_audio.")
+        if timeline is not None:
+            _validate_source_timeline_hash(
+                manifest["compatibility"], timeline,
+                "H3 Full-Chain Latent Video")
+            audio = _source_timeline_scene_audio(
+                timeline, 0, extension_frames)
+        else:
+            _validate_source_audio_hash(
+                manifest["compatibility"], source_audio,
+                "H3 Full-Chain Latent Video")
+            waveform, sample_rate = _validate_audio(
+                source_audio, "H3 Full-Chain Latent Video source audio")
+            required = int(round(
+                extension_frames / float(FPS) * sample_rate))
+            if int(waveform.shape[-1]) < required:
+                if (manifest["compatibility"].get(
+                        "source_audio_silent_padding")
+                        and _audio_is_silent(waveform)):
+                    audio = _pad_audio_to_samples(
+                        source_audio, required,
+                        "H3 Full-Chain Latent Video silent source audio")
+                else:
+                    raise ValueError(
+                        "H3 Full-Chain Latent Video source audio has %d "
+                        "samples; %d are required." %
+                        (int(waveform.shape[-1]), required))
+            else:
+                audio = source_audio
+    else:
+        raise ValueError(
+            "Unknown H3 full-chain audio source %r." % selected)
+    if audio is not None and prelude is not None:
+        audio = _audio_with_prelude(audio, extension_frames, prelude)
+    return audio
+
+
+def _mux_full_chain_adapter_audio(
+    video_path: str,
+    audio: dict[str, Any],
+    output_path: str,
+    bitrate_kbps: int,
+    total_frames: int,
+) -> None:
+    """Attach audio while stream-copying the lossless RGB video track."""
+    ffmpeg = _usable_ffmpeg()
+    if ffmpeg is None:
+        raise RuntimeError(
+            "H3 Full-Chain Latent Video needs a usable ffmpeg executable to "
+            "embed audio in its lossless RGB adapter movie. Select "
+            "audio_source=none only if audio will be restored downstream.")
+    wav_path = "%s.%s.audio.wav" % (output_path, uuid.uuid4().hex)
+    try:
+        _write_wav(audio, wav_path)
+        _run_ffmpeg([
+            ffmpeg, "-y", "-i", video_path, "-i", wav_path,
+            "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy",
+            "-c:a", "aac", "-b:a", "%dk" % int(bitrate_kbps),
+            "-t", "%.9f" % (int(total_frames) / float(FPS)),
+            "-map_metadata", "0", output_path,
+        ])
+    finally:
+        _safe_unlink(wav_path)
+
+
+def _full_chain_vae_signature(video_vae: Any) -> str:
+    first_stage = getattr(video_vae, "first_stage_model", None)
+    value = first_stage if first_stage is not None else video_vae
+    cls = type(value)
+    return "%s.%s" % (cls.__module__, cls.__qualname__)
+
+
+def _full_chain_cache_identity(
+    manifest: dict[str, Any],
+    segments: list[dict[str, Any]],
+    prelude: dict[str, Any] | None,
+    schedule: list[int],
+    audio_source: str,
+    video_vae: Any,
+) -> tuple[str, dict[str, Any]]:
+    identity = {
+        "format": "h3_full_chain_latent_video_cache_v1",
+        "run_name": str(manifest.get("run_name") or ""),
+        "plan_hash": str(manifest.get("plan_hash") or ""),
+        "vae": _full_chain_vae_signature(video_vae),
+        "audio_source": str(audio_source),
+        "source_audio_hash": str(
+            (manifest.get("compatibility") or {}).get(
+                "source_audio_hash") or ""),
+        "blend_schedule": [int(item) for item in schedule],
+        "prelude": ({
+            "video_sha256": str(prelude.get("video_sha256") or ""),
+            "audio_sha256": str(prelude.get("audio_sha256") or ""),
+            "frame_count": int(prelude.get("frame_count", 0)),
+        } if prelude is not None else None),
+        "segments": [{
+            "index": int(item["index"]),
+            "revision": str(item.get("revision") or ""),
+            "checkpoint_sha256": str(item.get("checkpoint_sha256") or ""),
+            "raw_frames": int(item["raw_frames"]),
+            "delivered_frames": int(item["delivered_frames"]),
+        } for item in segments],
+    }
+    digest = hashlib.sha256(
+        _canonical_json(identity).encode("utf-8")).hexdigest()
+    return digest, identity
+
+
+def _full_chain_cached_video(
+    path: str, sidecar_path: str, digest: str, total_frames: int,
+) -> bool:
+    if not os.path.isfile(path) or not os.path.isfile(sidecar_path):
+        return False
+    try:
+        record = _read_json(sidecar_path)
+        return (
+            isinstance(record, dict)
+            and record.get("format") == "h3_full_chain_latent_video_v1"
+            and bool(record.get("complete"))
+            and str(record.get("cache_key") or "") == digest
+            and int(record.get("frame_count", -1)) == int(total_frames)
+            and int(record.get("file_size", -1)) == os.path.getsize(path)
+            and os.path.getsize(path) > 0
+        )
+    except (OSError, TypeError, ValueError):
+        return False
+
+
+def _decode_checkpoint_video_for_streaming(
+    video_vae: Any,
+    video: Any,
+    decode_buffer: str,
+    buffer_path: str,
+) -> tuple[Any, Any, str]:
+    """Decode one scene, optionally into an mmap instead of heap RAM."""
+    mode = str(decode_buffer or "disk-backed").strip().lower()
+    if mode not in ("disk-backed", "memory"):
+        raise ValueError(
+            "H3 Full-Chain Latent Video decode_buffer must be disk-backed "
+            "or memory; got %r." % decode_buffer)
+    if not torch.is_tensor(video) or video.ndim != 5:
+        raise ValueError(
+            "H3 Full-Chain Latent Video expected a five-dimensional saved "
+            "video latent; got %r." % (getattr(video, "shape", None),))
+    first_stage = getattr(video_vae, "first_stage_model", None)
+    latent_mean = getattr(first_stage, "latents_mean", None)
+    if torch.is_tensor(latent_mean):
+        expected_channels = int(latent_mean.numel())
+        actual_channels = int(video.shape[1])
+        if expected_channels != actual_channels:
+            raise ValueError(
+                "H3 Full-Chain Latent Video received a %d-channel VAE for a "
+                "%d-channel video latent. Select "
+                "minimax_h3_video_vae_fp16.safetensors, not the 32-channel "
+                "MiniMax audio VAE." %
+                (expected_channels, actual_channels))
+    can_map = (
+        mode == "disk-backed"
+        and torch is not None
+        and first_stage is not None
+        and bool(getattr(first_stage, "comfy_has_chunked_io", False))
+        and callable(getattr(first_stage, "decode_output_shape", None))
+        and callable(getattr(first_stage, "decode", None))
+        and torch.is_tensor(latent_mean)
+        and int(latent_mean.numel()) == 24
+        and int(video.shape[1]) == 24
+        and callable(getattr(video_vae, "memory_used_decode", None))
+        and callable(getattr(video_vae, "throw_exception_if_invalid", None))
+        and hasattr(video_vae, "patcher")
+        and hasattr(video_vae, "device")
+        and hasattr(video_vae, "vae_dtype")
+        and hasattr(video_vae, "disable_offload")
+    )
+    if can_map:
+        # MiniMax H3's decoder already handles its causal temporal chunks and
+        # accepts an output buffer. Mapping that buffer avoids ComfyUI's normal
+        # full-scene float allocation without changing the decoder's math.
+        from comfy import model_management
+
+        output_shape = tuple(
+            int(part) for part in first_stage.decode_output_shape(video.shape))
+        if len(output_shape) != 5 or output_shape[0] != 1:
+            raise ValueError(
+                "H3 disk-backed VAE decode expected [1,C,T,H,W], got %s."
+                % (output_shape,))
+        os.makedirs(os.path.dirname(buffer_path), exist_ok=True)
+        _safe_unlink(buffer_path)
+        mapped = torch.from_file(
+            buffer_path, shared=True,
+            size=math.prod(output_shape), dtype=torch.float32).reshape(
+                output_shape)
+        video_vae.throw_exception_if_invalid()
+        memory_used = video_vae.memory_used_decode(
+            video.shape, video_vae.vae_dtype)
+        model_management.load_models_gpu(
+            [video_vae.patcher], memory_required=memory_used,
+            force_full_load=video_vae.disable_offload)
+        with model_management.cuda_device_context(video_vae.device):
+            samples = video.to(
+                device=video_vae.device, dtype=video_vae.vae_dtype)
+            first_stage.decode(samples, output_buffer=mapped)
+            del samples
+        images = mapped.movedim(1, -1)[0]
+        return images, mapped, "disk-backed mmap"
+
+    if mode == "disk-backed":
+        _LOG.warning(
+            "H3 Full-Chain Latent Video could not use a disk-backed output "
+            "buffer with VAE %s; falling back to one in-memory scene.",
+            _full_chain_vae_signature(video_vae))
+    images = video_vae.decode(video)
+    if not torch.is_tensor(images):
+        raise ValueError(
+            "H3 Full-Chain Latent Video VAE returned %r instead of IMAGE."
+            % type(images))
+    if images.ndim == 5:
+        images = images.reshape(
+            -1, images.shape[-3], images.shape[-2], images.shape[-1])
+    if images.ndim != 4:
+        raise ValueError(
+            "H3 Full-Chain Latent Video VAE returned shape %s; expected "
+            "[frames,height,width,channels]." % (tuple(images.shape),))
+    return images, None, "one-scene memory"
+
+
+def _first_video_frames(path: str, count: int):
+    seen = 0
+    for frame in _decode_rgb_frames(path):
+        if seen >= int(count):
+            return
+        seen += 1
+        yield frame
+
+
+class MiniMaxH3ChainLatentVideoAdapter:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "manifest": (MANIFEST_TYPE, {
+                    "tooltip": "Complete selected branch from Checkpoint "
+                               "Manager. No source Plan is required."}),
+                "video_vae": ("VAE", {
+                    "tooltip": "The original MiniMax H3 video VAE. Every "
+                               "checkpoint latent is decoded directly; saved "
+                               "H.264 scene files are not used."}),
+                "audio_source": (["plan", "source", "generated", "none"], {
+                    "default": "plan",
+                    "tooltip": "Audio embedded in the continuous adapter "
+                               "video. plan follows the saved final-audio "
+                               "policy; Source Timeline recovery comes from "
+                               "the manifest."}),
+                "blend_schedule": ("STRING", {
+                    "default": "plan",
+                    "tooltip": "Boundary crossfades applied before SeedVR2. "
+                               "plan uses each saved incoming-scene value; a "
+                               "list such as 5,30 overrides the boundaries."}),
+                "decode_buffer": (["disk-backed", "memory"], {
+                    "default": "disk-backed",
+                    "tooltip": "disk-backed lets MiniMax's temporal decoder "
+                               "write each scene into a temporary mmap. RAM "
+                               "then holds only boundary frames. memory uses "
+                               "ComfyUI's normal one-scene decode."}),
+                "reuse_cache": ("BOOLEAN", {
+                    "default": True,
+                    "tooltip": "Reuse an already completed adapter movie for "
+                               "the exact checkpoint lineage, VAE class, "
+                               "blend schedule, and audio policy."}),
+                "audio_bitrate": ("INT", {
+                    "default": 256, "min": 64, "max": 512,
+                    "tooltip": "AAC bitrate embedded in the lossless RGB "
+                               "adapter movie for SeedVR2 to preserve."}),
+            },
+            "optional": {
+                "source_audio": ("AUDIO", {
+                    "tooltip": "Legacy fallback only. Current runs recover "
+                               "source audio from the Source Timeline stored "
+                               "on the selected manifest."}),
+            },
+        }
+
+    RETURN_TYPES = ("VIDEO", "STRING", "STRING")
+    RETURN_NAMES = ("video", "video_path", "status")
+    OUTPUT_TOOLTIPS = (
+        "One native file-backed continuous VIDEO for SeedVR2 Direct Video "
+        "Upscaler. It already contains the selected chain audio.",
+        "Absolute path of the cached lossless RGB adapter movie.",
+        "Cache/decode mode, scene count, frame count, blends, and output path.",
+    )
+    FUNCTION = "adapt"
+    CATEGORY = "conditioning/minimax/contex_loop"
+    DESCRIPTION = (
+        "Stream a complete checkpoint branch from original H3 video latents "
+        "into one lossless, audio-bearing, file-backed VIDEO. Scene overlap "
+        "blends happen before a whole-video upscaler; the full frame sequence "
+        "never becomes one ComfyUI IMAGE tensor.")
+
+    @classmethod
+    def IS_CHANGED(cls, *args, **kwargs):
+        return float("NaN")
+
+    def adapt(self, manifest, video_vae, audio_source, blend_schedule,
+              decode_buffer, reuse_cache, audio_bitrate, source_audio=None):
+        if _st_load is None or torch is None or av is None or np is None:
+            raise RuntimeError(
+                "H3 Full-Chain Latent Video requires safetensors, torch, "
+                "NumPy, and PyAV.")
+        if not isinstance(manifest, dict) or manifest.get(
+                "format") != "h3_chain_manifest_v3":
+            raise ValueError(
+                "H3 Full-Chain Latent Video requires a complete branch from "
+                "Checkpoint Manager.")
+        segments = _checkpoint_export_segments(manifest)
+        prelude = _validate_prelude(manifest)
+        schedule = _full_chain_blend_schedule(
+            manifest, segments, prelude, blend_schedule)
+        selected_audio = str(audio_source or "plan").strip().lower()
+        if selected_audio == "plan":
+            selected_audio = _audio_policy_final(manifest)
+        if selected_audio not in ("source", "generated", "none"):
+            raise ValueError(
+                "H3 Full-Chain Latent Video audio_source must resolve to "
+                "source, generated, or none; got %r." % selected_audio)
+
+        prelude_frames = int(prelude["frame_count"]) if prelude else 0
+        total_frames = prelude_frames + int(
+            manifest["total_delivered_frames"])
+        digest, identity = _full_chain_cache_identity(
+            manifest, segments, prelude, schedule, selected_audio, video_vae)
+        run_name = _safe_name(manifest.get("run_name"), "h3_chain")
+        cache_dir = os.path.join(
+            _output_root(), "h3_chains", run_name, "upscaled", "seedvr2",
+            "source")
+        os.makedirs(cache_dir, exist_ok=True)
+        final_path = os.path.join(cache_dir, digest + ".mkv")
+        sidecar_path = os.path.join(cache_dir, digest + ".json")
+        if bool(reuse_cache) and _full_chain_cached_video(
+                final_path, sidecar_path, digest, total_frames):
+            status = (
+                "reused full-chain SeedVR2 source cache: %d scenes / %d "
+                "frames / blends [%s] -> %s" %
+                (len(segments), total_frames,
+                 ",".join(str(item) for item in schedule), final_path))
+            return (_native_video_from_path(final_path), final_path, status)
+
+        transaction = uuid.uuid4().hex
+        silent_path = os.path.join(
+            cache_dir, ".%s.%s.video.mkv" % (digest, transaction))
+        muxed_path = os.path.join(
+            cache_dir, ".%s.%s.muxed.mkv" % (digest, transaction))
+        buffer_paths: list[str] = []
+        writer = _StreamingLosslessRGBWriter(
+            silent_path, FPS, _manifest_media_metadata(manifest))
+        pending: deque[Any] = deque()
+        decoder_modes: list[str] = []
+
+        records: list[dict[str, Any]] = []
+        if prelude is not None:
+            records.append({
+                "kind": "prelude",
+                "input_frames": prelude_frames,
+                "blend_frames": 0,
+                "path": _absolute_output_path(prelude["video"]),
+            })
+        schedule_index = 0
+        for ordinal, segment in enumerate(segments):
+            has_predecessor = bool(records)
+            blend = int(schedule[schedule_index]) if has_predecessor else 0
+            if has_predecessor:
+                schedule_index += 1
+            delivered = int(segment["delivered_frames"])
+            raw = int(segment["raw_frames"])
+            repeated = raw - delivered
+            if blend > repeated:
+                raise ValueError(
+                    "H3 Full-Chain Latent Video boundary before clip %d "
+                    "requests %d blend frames, but that scene repeats only "
+                    "%d context frames." %
+                    (int(segment["index"]), blend, repeated))
+            records.append({
+                "kind": "segment",
+                "segment": segment,
+                "input_frames": delivered + blend,
+                "blend_frames": blend,
+                "start_frame": repeated - blend,
+            })
+        if schedule_index != len(schedule):
+            raise RuntimeError(
+                "H3 Full-Chain Latent Video did not consume its complete "
+                "blend schedule.")
+
+        def consume(iterator: Any, expected: int, blend: int,
+                    next_blend: int, label: str) -> None:
+            seen = 0
+            if writer.written == 0 and not pending:
+                for image in iterator:
+                    pending.append(_rgb24_frame_array(image))
+                    seen += 1
+                    while len(pending) > next_blend:
+                        writer.write(pending.popleft())
+            else:
+                if len(pending) != blend:
+                    raise RuntimeError(
+                        "%s retained %d predecessor frames; expected %d." %
+                        (label, len(pending), blend))
+                iterator = iter(iterator)
+                for offset in range(blend):
+                    try:
+                        incoming = _rgb24_frame_array(next(iterator))
+                    except StopIteration as exc:
+                        raise ValueError(
+                            "%s ended inside its overlap." % label) from exc
+                    previous = pending.popleft()
+                    alpha = (offset + 1) / float(blend + 1)
+                    mixed = np.clip(
+                        previous.astype(np.float32) * (1.0 - alpha)
+                        + incoming.astype(np.float32) * alpha,
+                        0.0, 255.0).round().astype(np.uint8)
+                    writer.write(mixed)
+                    seen += 1
+                for image in iterator:
+                    pending.append(_rgb24_frame_array(image))
+                    seen += 1
+                    while len(pending) > next_blend:
+                        writer.write(pending.popleft())
+            if seen != int(expected):
+                raise ValueError(
+                    "%s provided %d frames; expected %d." %
+                    (label, seen, int(expected)))
+            if len(pending) != int(next_blend):
+                raise RuntimeError(
+                    "%s retained %d frames for the next boundary; expected "
+                    "%d." % (label, len(pending), int(next_blend)))
+
+        try:
+            for record_index, record in enumerate(records):
+                next_blend = (int(records[record_index + 1]["blend_frames"])
+                              if record_index + 1 < len(records) else 0)
+                if record["kind"] == "prelude":
+                    consume(
+                        _first_video_frames(
+                            record["path"], record["input_frames"]),
+                        record["input_frames"], 0, next_blend,
+                        "H3 full-chain prelude")
+                    continue
+
+                segment = record["segment"]
+                index = int(segment["index"])
+                checkpoint = _absolute_output_path(segment["checkpoint"])
+                tensors = _st_load(checkpoint)
+                video = tensors.get("video")
+                if video is None:
+                    raise ValueError(
+                        "H3 Full-Chain Latent Video checkpoint for clip %d "
+                        "has no video latent." % index)
+                buffer_path = os.path.join(
+                    cache_dir, ".%s.%s.clip_%04d.buffer" %
+                    (digest, transaction, index))
+                images = mapped = None
+                try:
+                    images, mapped, decoder_mode = (
+                        _decode_checkpoint_video_for_streaming(
+                            video_vae, video, decode_buffer, buffer_path))
+                    decoder_modes.append(decoder_mode)
+                    if mapped is not None:
+                        buffer_paths.append(buffer_path)
+                    raw = int(segment["raw_frames"])
+                    if int(images.shape[0]) != raw:
+                        raise ValueError(
+                            "H3 Full-Chain Latent Video decoded %d frames for "
+                            "clip %d; its checkpoint requires %d." %
+                            (int(images.shape[0]), index, raw))
+                    start = int(record["start_frame"])
+                    stop = start + int(record["input_frames"])
+                    consume(
+                        images[start:stop], record["input_frames"],
+                        record["blend_frames"], next_blend,
+                        "H3 full-chain clip %d" % index)
+                finally:
+                    del images, mapped, video, tensors
+                    gc.collect()
+                    _safe_unlink(buffer_path)
+
+            while pending:
+                writer.write(pending.popleft())
+            writer.close()
+            if writer.written != total_frames:
+                raise RuntimeError(
+                    "H3 Full-Chain Latent Video wrote %d frames; expected %d."
+                    % (writer.written, total_frames))
+
+            audio = _full_chain_selected_audio(
+                manifest, selected_audio, prelude, source_audio)
+            if audio is None:
+                os.replace(silent_path, final_path)
+            else:
+                _mux_full_chain_adapter_audio(
+                    silent_path, audio, muxed_path, int(audio_bitrate),
+                    total_frames)
+                os.replace(muxed_path, final_path)
+                _safe_unlink(silent_path)
+                del audio
+            record = {
+                "format": "h3_full_chain_latent_video_v1",
+                "complete": True,
+                "cache_key": digest,
+                "identity": identity,
+                "frame_count": total_frames,
+                "scene_count": len(segments),
+                "prelude_frames": prelude_frames,
+                "blend_schedule": schedule,
+                "audio_source": selected_audio,
+                "decoder_modes": decoder_modes,
+                "file": os.path.basename(final_path),
+                "file_size": os.path.getsize(final_path),
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            _atomic_json(sidecar_path, record)
+        except BaseException:
+            writer.abort()
+            _safe_unlink(muxed_path)
+            raise
+        finally:
+            for path in buffer_paths:
+                _safe_unlink(path)
+
+        mode_status = ", ".join(sorted(set(decoder_modes))) or "cached"
+        status = (
+            "built full-chain SeedVR2 source: %d scenes / %d frames / %s / "
+            "blends [%s] / audio=%s -> %s" %
+            (len(segments), total_frames, mode_status,
+             ",".join(str(item) for item in schedule), selected_audio,
+             final_path))
+        _LOG.info("H3 Chain %s", status)
+        return (_native_video_from_path(final_path), final_path, status)
+
+
 class MiniMaxH3ChainAssemble:
     @classmethod
     def INPUT_TYPES(cls):
@@ -15342,6 +16009,7 @@ CHAIN_NODE_CLASS_MAPPINGS = {
     "MiniMaxH3ChainLoopEnd": MiniMaxH3ChainLoopEnd,
     "MiniMaxH3ChainManifestLoad": MiniMaxH3ChainManifestLoad,
     "MiniMaxH3ChainExportPNG": MiniMaxH3ChainExportPNG,
+    "MiniMaxH3ChainLatentVideoAdapter": MiniMaxH3ChainLatentVideoAdapter,
     "MiniMaxH3ChainAssemble": MiniMaxH3ChainAssemble,
 }
 
@@ -15392,5 +16060,7 @@ CHAIN_NODE_DISPLAY_NAME_MAPPINGS = {
     "MiniMaxH3ChainLoopEnd": "MiniMax H3 Contex Loop End",
     "MiniMaxH3ChainManifestLoad": "MiniMax H3 Contex Loop Load Manifest",
     "MiniMaxH3ChainExportPNG": "MiniMax H3 Contex Loop Export PNG Sequence",
+    "MiniMaxH3ChainLatentVideoAdapter": (
+        "MiniMax H3 Full-Chain Latent Video Adapter"),
     "MiniMaxH3ChainAssemble": "MiniMax H3 Contex Loop Assemble",
 }

@@ -827,6 +827,51 @@ def validate_deferred_h3_upscale(path):
     assert "AUTO-RESTORE finds its compact native H3 reference latents" in notes
     assert "save_latent is OFF" in notes
     assert "ComfyUI-MiniMaxH3_LatentUpscaler" in notes
+    h3_video_vae = node(workflow, "VAELoader")
+    assert h3_video_vae["widgets_values"] == [
+        "MiniMaw-H3/minimax_h3_video_vae_fp16.safetensors"]
+    return workflow
+
+
+def validate_seedvr2_full_chain(path):
+    workflow = load(path)
+    validate_links(workflow)
+    node_types = {item.get("type") for item in workflow["nodes"]}
+    assert {
+        "MiniMaxH3ChainCheckpointManager",
+        "MiniMaxH3ChainLatentVideoAdapter",
+        "VAELoader",
+        "SeedVR2LoadDiTModel",
+        "SeedVR2LoadVAEModel",
+        "SeedVR2DirectVideoUpscaler",
+        "SaveVideo",
+    } <= node_types
+    assert not {
+        "MiniMaxH3ChainPlan", "MiniMaxH3ChainLoopStart",
+        "MiniMaxH3ChainUpscaleAdapter", "SamplerCustomAdvanced",
+        "VAEDecode", "CreateVideo",
+    }.intersection(node_types)
+    manager = node(workflow, "MiniMaxH3ChainCheckpointManager")
+    adapter = node(workflow, "MiniMaxH3ChainLatentVideoAdapter")
+    direct = node(workflow, "SeedVR2DirectVideoUpscaler")
+    saver = node(workflow, "SaveVideo")
+    assert socket(manager["outputs"], "selected_manifest")["links"] == [
+        socket(adapter["inputs"], "manifest")["link"]]
+    assert node(workflow, "VAELoader")["widgets_values"] == [
+        "MiniMaw-H3/minimax_h3_video_vae_fp16.safetensors"]
+    assert adapter["widgets_values"] == [
+        "plan", "plan", "disk-backed", True, 256]
+    assert socket(adapter["outputs"], "video")["links"] == [
+        socket(direct["inputs"], "video")["link"]]
+    assert direct["widgets_values"][5:8] == [21, 2, False]
+    assert socket(direct["outputs"], "video")["links"] == [
+        socket(saver["inputs"], "video")["link"]]
+    notes = "\n".join(
+        str(item.get("widgets_values", [""])[0])
+        for item in workflow["nodes"] if item.get("type") == "Note")
+    assert "disk-backed" in notes
+    assert "Do not select minimax_h3_audio_vae" in notes
+    assert "No Plan, Source Timeline" in notes
     return workflow
 
 
@@ -851,6 +896,8 @@ def main():
         EXAMPLES / "EXPERIMENTAL MiniMax H3 Ref2V - Sequential Motion.json")
     deferred_upscale_path = (
         EXAMPLES / "MiniMax H3 Deferred Upscale - H3 Learned 2x.json")
+    seedvr2_full_chain_path = (
+        EXAMPLES / "MiniMax H3 Deferred Upscale - SeedVR2 Full Chain.json")
     masked_inpaint_path = (
         EXAMPLES / "MiniMax H3 - Masked Video Inpaint.json")
     masked_ref_inpaint_path = (
@@ -870,6 +917,7 @@ def main():
         ref2v_source_audio_path.name,
         sequential_path.name,
         deferred_upscale_path.name,
+        seedvr2_full_chain_path.name,
         masked_inpaint_path.name,
         masked_ref_inpaint_path.name,
         masked_single_extension_path.name,
@@ -878,7 +926,7 @@ def main():
     }
     for path in EXAMPLES.glob("*.json"):
         workflow = load(path)
-        if path == deferred_upscale_path:
+        if path in {deferred_upscale_path, seedvr2_full_chain_path}:
             continue
         if path == masked_bridge_path:
             validate_links(workflow)
@@ -922,6 +970,8 @@ def main():
     sequential, _sequential_plan = validate_sequential_motion_ref(
         sequential_path)
     deferred_upscale = validate_deferred_h3_upscale(deferred_upscale_path)
+    seedvr2_full_chain = validate_seedvr2_full_chain(
+        seedvr2_full_chain_path)
     masked_inpaint = load(masked_inpaint_path)
     masked_types = {item["type"] for item in masked_inpaint["nodes"]}
     assert {
@@ -1073,9 +1123,10 @@ def main():
             ref2v_basic, ref2v_tagged, ref2v_studio, ref2v_source_audio,
             sequential, masked_inpaint, masked_ref_inpaint,
             masked_single_extension,
-            masked_chain_extension, masked_bridge, deferred_upscale)
+            masked_chain_extension, masked_bridge, deferred_upscale,
+            seedvr2_full_chain)
     }
-    assert len(uuids) == 16
+    assert len(uuids) == 17
 
     asset = EXAMPLES / "assets" / "jigen_market_garden_doom_opening.png"
     assert asset.is_file()
@@ -1102,7 +1153,7 @@ def main():
           "experimental sequential-motion Ref2VA, masked video inpaint, "
           "picture-conditioned masked Ref2VA inpaint, "
           "looped masked AV extension, two-ended masked AV bridge, and "
-          "deferred learned H3 2x; "
+          "deferred learned H3 2x and whole-chain SeedVR2; "
           "valid links, bundled "
           "assets, timeline wiring, six-section prompts, restoration, and "
           "attribution pass")
