@@ -157,6 +157,7 @@ CONTINUATION_MODES = (
     "guide", "tone_carry_guide", "latent_guide", "tapered_guide",
     "masked_av", "tapered_av", "feathered_av", "audio_feathered_av",
     "drift_control_av")
+LOOP_MEMORY_POLICIES = ("off", "unload_models", "fresh_scene")
 GUIDE_CONTINUATION_MODES = frozenset((
     "guide", "tone_carry_guide", "latent_guide", "tapered_guide"))
 MASKED_CONTINUATION_MODES = frozenset((
@@ -11758,6 +11759,92 @@ def _throw_if_review_interrupted() -> None:
         check()
 
 
+def _release_loop_boundary_resources(
+        policy: str, scene_index: int) -> dict[str, int | str]:
+    """Best-effort model/cache cleanup after a durable scene checkpoint.
+
+    ComfyUI does not expose a supported full PromptExecutor reset while a
+    dynamic subgraph is still resolving. ``fresh_scene`` therefore uses the
+    public model manager plus the RAM-pressure cache release callback installed
+    by PromptExecutor. The recursive carry has already been reduced to CPU
+    context/checkpoint state before this runs, so evictable loader and
+    intermediate outputs may be rebuilt safely by the following scene.
+    """
+    resolved = str(policy or "off").strip().lower()
+    if resolved not in LOOP_MEMORY_POLICIES:
+        raise ValueError(
+            "H3 Loop End between_scene_cleanup must be one of %s; got %r." %
+            (LOOP_MEMORY_POLICIES, policy))
+    result: dict[str, int | str] = {
+        "policy": resolved,
+        "pinned_bytes": 0,
+        "cache_bytes": 0,
+        "collected_objects": 0,
+    }
+    if resolved == "off":
+        return result
+
+    try:
+        import comfy.model_management as model_management
+    except ImportError as exc:
+        _LOG.warning(
+            "H3 Chain could not run %s cleanup after scene %d: %s",
+            resolved, int(scene_index), exc)
+        return result
+
+    if resolved == "fresh_scene":
+        free_pins = getattr(model_management, "free_pins", None)
+        if callable(free_pins):
+            try:
+                result["pinned_bytes"] = int(free_pins(
+                    sys.maxsize, evict_active=True))
+            except Exception as exc:
+                _LOG.warning(
+                    "H3 Chain fresh-scene cleanup could not release pinned "
+                    "model pages after scene %d: %s", int(scene_index), exc)
+
+    try:
+        model_management.unload_all_models()
+    except Exception as exc:
+        _LOG.warning(
+            "H3 Chain could not unload models after scene %d: %s",
+            int(scene_index), exc)
+
+    if resolved == "fresh_scene":
+        try:
+            import comfy.memory_management as memory_management
+            release = getattr(memory_management, "extra_ram_release", None)
+            if callable(release):
+                result["cache_bytes"] = int(release(
+                    sys.maxsize, free_active=True))
+        except Exception as exc:
+            _LOG.warning(
+                "H3 Chain fresh-scene cleanup could not request execution "
+                "cache eviction after scene %d: %s", int(scene_index), exc)
+        result["collected_objects"] = int(gc.collect())
+
+    empty_cache = getattr(model_management, "soft_empty_cache", None)
+    if callable(empty_cache):
+        try:
+            empty_cache(force=True)
+        except TypeError:
+            empty_cache()
+        except Exception as exc:
+            _LOG.warning(
+                "H3 Chain could not empty the device allocator after scene "
+                "%d: %s", int(scene_index), exc)
+
+    _LOG.info(
+        "H3 Chain scene %d boundary cleanup=%s: pinned %.1f MB, execution "
+        "cache %.1f MB, Python objects %d; the next scene reloads any "
+        "evicted model or intermediate outputs.",
+        int(scene_index), resolved,
+        int(result["pinned_bytes"]) / float(1024 ** 2),
+        int(result["cache_bytes"]) / float(1024 ** 2),
+        int(result["collected_objects"]))
+    return result
+
+
 async def _await_review_decision(future: asyncio.Future,
                                  timeout_seconds: float) -> dict[str, Any]:
     """Wait with a heartbeat so cross-thread HTTP decisions always wake up.
@@ -12271,6 +12358,22 @@ class MiniMaxH3ChainLoopEnd:
                                "or directly from Segment Save when no review is "
                                "wanted."}),
             },
+            "optional": {
+                "between_scene_cleanup": (list(LOOP_MEMORY_POLICIES), {
+                    "default": "off",
+                    "tooltip": "Runtime-only memory policy applied after a "
+                               "scene is safely checkpointed and before the "
+                               "next scene or retry starts. off keeps ComfyUI "
+                               "caches; unload_models releases loaded weights "
+                               "from VRAM; fresh_scene also releases pinned "
+                               "model pages, requests active RAM-pressure-cache "
+                               "eviction, runs Python garbage collection, and "
+                               "empties the CUDA allocator. fresh_scene may "
+                               "reload model/reference nodes and is best for "
+                               "model-switching chains. ComfyUI has no safe "
+                               "full executor reset inside a running recursive "
+                               "prompt, so the small live loop carry remains."}),
+            },
             "hidden": {
                 "dynprompt": "DYNPROMPT",
                 "unique_id": "UNIQUE_ID",
@@ -12398,7 +12501,7 @@ class MiniMaxH3ChainLoopEnd:
         }
 
     def end(self, flow, state, images, sampled_latent, segment,
-            dynprompt=None, unique_id=None):
+            between_scene_cleanup="off", dynprompt=None, unique_id=None):
         plan = state["plan"]
         index = int(state["index"])
         if int(segment.get("index", -1)) != index:
@@ -12421,7 +12524,14 @@ class MiniMaxH3ChainLoopEnd:
             # Keep the predecessor context and accepted segment list unchanged.
             # Segment Save makes the new take active when this index completes
             # again while retaining the rejected take as an immutable revision.
-            return self._recurse(flow, retry_state, dynprompt, unique_id)
+            expansion = self._recurse(
+                flow, retry_state, dynprompt, unique_id)
+            # Drop the rejected scene's live tensors before cache eviction so
+            # soft_empty_cache can release their allocator blocks as well.
+            del images, sampled_latent, segment, state
+            _release_loop_boundary_resources(
+                between_scene_cleanup, index)
+            return expansion
         selected_frames = images
         selected_latent = sampled_latent
         if (isinstance(review, dict)
@@ -12453,7 +12563,15 @@ class MiniMaxH3ChainLoopEnd:
             next_state["source_timeline"] = state["source_timeline"]
         end_clip = int(next_state["end_clip"])
         if index < end_clip:
-            return self._recurse(flow, next_state, dynprompt, unique_id)
+            expansion = self._recurse(
+                flow, next_state, dynprompt, unique_id)
+            # The recursive state owns independent CPU clones. Release this
+            # iteration's full-resolution arguments before emptying caches.
+            del selected_frames, selected_latent
+            del images, sampled_latent, segment, state
+            _release_loop_boundary_resources(
+                between_scene_cleanup, index)
+            return expansion
 
         complete = end_clip == len(plan["shots"])
         manifest = _manifest_from_segments(

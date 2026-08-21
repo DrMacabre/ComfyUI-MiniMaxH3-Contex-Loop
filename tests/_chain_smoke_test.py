@@ -88,6 +88,63 @@ class FakeDynamicPrompt:
 def main():
     package, chain = load_package()
 
+    cleanup_input = chain.MiniMaxH3ChainLoopEnd.INPUT_TYPES()[
+        "optional"]["between_scene_cleanup"]
+    assert cleanup_input[0] == ["off", "unload_models", "fresh_scene"]
+    cleanup_calls = []
+    import comfy.memory_management as memory_management
+    import comfy.model_management as model_management
+    original_free_pins = model_management.free_pins
+    original_unload = model_management.unload_all_models
+    original_empty_cache = model_management.soft_empty_cache
+    original_ram_release = memory_management.extra_ram_release
+    original_collect = chain.gc.collect
+    model_management.free_pins = lambda size, evict_active=False: (
+        cleanup_calls.append(("pins", size, evict_active)) or 12_345)
+    model_management.unload_all_models = lambda: cleanup_calls.append(
+        ("unload",))
+    model_management.soft_empty_cache = lambda force=False: cleanup_calls.append(
+        ("empty", force))
+    memory_management.extra_ram_release = (
+        lambda target, free_active=False: (
+            cleanup_calls.append(("ram", target, free_active)) or 54_321))
+    chain.gc.collect = lambda: cleanup_calls.append(("gc",)) or 7
+    try:
+        untouched = chain._release_loop_boundary_resources("off", 1)
+        assert cleanup_calls == [] and untouched["policy"] == "off"
+
+        unloaded = chain._release_loop_boundary_resources(
+            "unload_models", 1)
+        assert cleanup_calls == [("unload",), ("empty", True)]
+        assert unloaded["pinned_bytes"] == 0
+        assert unloaded["cache_bytes"] == 0
+
+        cleanup_calls.clear()
+        fresh = chain._release_loop_boundary_resources("fresh_scene", 2)
+        assert cleanup_calls == [
+            ("pins", sys.maxsize, True),
+            ("unload",),
+            ("ram", sys.maxsize, True),
+            ("gc",),
+            ("empty", True),
+        ]
+        assert fresh["pinned_bytes"] == 12_345
+        assert fresh["cache_bytes"] == 54_321
+        assert fresh["collected_objects"] == 7
+        try:
+            chain._release_loop_boundary_resources("erase_everything", 2)
+        except ValueError as exc:
+            assert "between_scene_cleanup" in str(exc)
+        else:
+            raise AssertionError("unknown loop cleanup policy was accepted")
+    finally:
+        model_management.free_pins = original_free_pins
+        model_management.unload_all_models = original_unload
+        model_management.soft_empty_cache = original_empty_cache
+        memory_management.extra_ram_release = original_ram_release
+        chain.gc.collect = original_collect
+    print("loop cleanup: off, model unload, and fresh-scene eviction passed")
+
     fixed_now = datetime(2026, 8, 11, 14, 5, 9)
     assert chain._expand_filename_date(
         "render_%date:yyyy-MM-dd%_%hour%-%minute%-%second%", fixed_now
@@ -1927,10 +1984,21 @@ def main():
                     "segment": ["3", 0],
                 }},
             }
-            expanded = chain.MiniMaxH3ChainLoopEnd().end(
-                ["1", 0], state1, images1, av_latent(), segment1,
-                dynprompt=FakeDynamicPrompt(fake_prompt), unique_id="4")
+            cleanup_boundaries = []
+            original_boundary_cleanup = chain._release_loop_boundary_resources
+            chain._release_loop_boundary_resources = (
+                lambda policy, scene: cleanup_boundaries.append(
+                    (policy, scene)) or {"policy": policy})
+            try:
+                expanded = chain.MiniMaxH3ChainLoopEnd().end(
+                    ["1", 0], state1, images1, av_latent(), segment1,
+                    between_scene_cleanup="fresh_scene",
+                    dynprompt=FakeDynamicPrompt(fake_prompt), unique_id="4")
+            finally:
+                chain._release_loop_boundary_resources = (
+                    original_boundary_cleanup)
             assert isinstance(expanded, dict) and expanded.get("expand")
+            assert cleanup_boundaries == [("fresh_scene", 1)]
             cloned_starts = [node for node in expanded["expand"].values()
                              if node["class_type"] == "MiniMaxH3ChainLoopStart"]
             assert len(cloned_starts) == 1

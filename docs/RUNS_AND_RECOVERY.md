@@ -41,6 +41,25 @@ the retry instead.
 Disable the floating control under **Settings → MiniMax H3 Contex Loop →
 Interface → Cancel & reroll** without affecting Review Gate.
 
+## Between-scene memory cleanup
+
+Loop End can apply a runtime-only `between_scene_cleanup` policy after the
+current scene and checkpoint are durable, immediately before it starts the next
+scene or retry:
+
+- `off` keeps ComfyUI's normal caches.
+- `unload_models` unloads model weights and empties the device allocator.
+- `fresh_scene` additionally releases pinned model pages, asks ComfyUI's active
+  RAM-pressure cache to evict reusable execution outputs, and runs Python
+  garbage collection. Use it for chains that switch large models between
+  scenes; the next scene will reload anything that was evicted.
+
+The policy does not enter Plan or resume hashes. It deliberately preserves the
+small recursive carry and dynamic graph result because ComfyUI has no supported
+way to reset the entire executor while that graph is still resolving. On cache
+types other than RAM pressure, `fresh_scene` still unloads models and clears
+allocators, but no executor-output eviction callback is available.
+
 ## Resume
 
 For a fresh run:
