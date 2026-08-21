@@ -267,6 +267,7 @@ def main():
     assert package.WEB_DIRECTORY == "./web"
     assert (ROOT / "web" / "h3_chain_plan_editor.js").is_file()
     assert (ROOT / "web" / "h3_chain_plan_core.mjs").is_file()
+    assert (ROOT / "web" / "h3_prompt_completion_core.mjs").is_file()
     assert (ROOT / "web" / "h3_chain_cancel_reroll.js").is_file()
     assert (ROOT / "web" / "h3_chain_cancel_reroll_core.mjs").is_file()
     assert (ROOT / "web" / "h3_chain_scene_prompt_editor.js").is_file()

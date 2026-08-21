@@ -31,7 +31,18 @@ textarea. It edits the selected scene's real `shots[n].prompt`; there is no
 second prompt copy.
 
 - Arrow buttons or `Alt+Left/Right` change scenes.
-- `@` opens Picture/Video/Audio references.
+- Typing `@` offers the connected Picture/Video/Audio aliases. In Tagged mode,
+  inserting an inactive alias activates it; scheduled references remain limited
+  to the selected scene.
+- Typing `#` offers valid Tagged Picture semantic/storyboard anchors only.
+- Typing `<` offers H3 subjects, dialogue tags, and available native reference
+  labels. Typing `[` filters shot markers and summary-intent combinations; for
+  example, `[re` lists the supported reference-generation combinations.
+- Typing the start of an H3 section name at the beginning of a line completes
+  `subject_definitions:`, `integrated_multimodal_description:`, and the other
+  standard sections. `Ctrl+Space` (`Cmd+Space` on macOS) opens the full H3
+  completion catalog. Use arrows to select and `Enter` or `Tab` to insert.
+- **@ Reference** remains available for browsing connected media previews.
 - **Dialogue** wraps a selection in `<d>` tags.
 - `#picture[2.50s]` adds a scene-local Qwen semantic checkpoint when the
   picture is registered through Tagged Ref2VA. With Tagged Ref2VA set to

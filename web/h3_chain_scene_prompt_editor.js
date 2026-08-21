@@ -31,6 +31,7 @@ import {
     promptUndoDirection,
     tokenizeRichPrompt,
 } from "./h3_rich_prompt_editor_core.mjs?v=0.5.5";
+import {createPromptCompletionController} from "./h3_prompt_completion_core.mjs?v=0.5.5";
 import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.5.5";
 
 const {publishCompanionScene, rebaseScenePrompt} = promptCompanionSync;
@@ -615,6 +616,8 @@ function mount(node) {
         ),
         decorated: node.properties[PRESENTATION_PROPERTY] !== false,
         records: [],
+        referenceMode: null,
+        completion: null,
         promptTextarea: null,
         richEditor: null,
         popover: null,
@@ -1609,6 +1612,8 @@ function mount(node) {
     }
 
     function showFailure(message) {
+        state.completion?.destroy();
+        state.completion = null;
         assistant.host = null;
         state.promptTextarea = null;
         state.richEditor = null;
@@ -1898,6 +1903,8 @@ function mount(node) {
             return;
         }
         hidePopover();
+        state.completion?.destroy();
+        state.completion = null;
         state.active = Math.max(0, Math.min(state.active, state.plan.shots.length - 1));
         root.style.setProperty("--h3sp-font-size", `${state.fontSize}px`);
         assistant.host = null;
@@ -1955,11 +1962,12 @@ function mount(node) {
         state.promptTextarea = textarea;
         state.promptUndo = promptUndoForScene(shotId, textarea.value);
 
-        const {records} = availableReferenceRecords(
-            node, state.active + 1, {prompt: [
+        const referenceData = availableReferenceRecords(
+            node, state.active + 1, {includeInactive:true, prompt: [
                 sharedPrompt(state.plan).text.trim(), textarea.value.trim(),
             ].filter(Boolean).join("\n\n")});
-        state.records = records;
+        state.records = referenceData.records;
+        state.referenceMode = referenceData.mode;
         const editorShell = element("div", "h3sp-editor-shell");
         editorShell.classList.toggle("h3sp-hidden", !state.decorated);
         const richEditor = element("div", "h3sp-rich-editor");
@@ -1976,11 +1984,16 @@ function mount(node) {
 
         const tools = element("div", "h3sp-tools");
         const refs = element("div", "h3sp-refs");
-        const referenceButton = button("@ Reference", "Open connected Ref2VA references and previews (@)", () => {
-            const opening = !refs.classList.contains("h3sp-open");
-            if (opening) renderReferenceTray(refs);
-            refs.classList.toggle("h3sp-open", opening);
-        });
+        const referenceButton = button(
+            "@ Reference",
+            "Browse connected Ref2VA media; typing @ opens inline autocomplete",
+            () => {
+                state.completion?.hide();
+                const opening = !refs.classList.contains("h3sp-open");
+                if (opening) renderReferenceTray(refs);
+                refs.classList.toggle("h3sp-open", opening);
+            },
+        );
         const dialogueButton = button("Dialogue", "Wrap selection in <d> dialogue tags", () => {
             insertPromptDialogue();
         });
@@ -2004,7 +2017,8 @@ function mount(node) {
             referenceButton,
             dialogueButton,
             presentationButton,
-            element("span", "h3sp-hint", "Alt+←/→ scenes · @ native ref · #picture[2.50s] semantic"),
+            element("span", "h3sp-hint",
+                "Alt+←/→ scenes · type @ # < [ · Ctrl/Cmd+Space for all"),
         );
         const footer = element("div", "h3sp-footer");
         const identity = element(
@@ -2052,9 +2066,12 @@ function mount(node) {
             scheduleHistoryDraft(shotId, textarea.value);
             if (document.activeElement !== richEditor) renderRichEditorText(textarea.value);
             refreshAssistant();
+            state.completion?.refresh();
         });
         textarea.addEventListener("keydown", (event) => {
-            if (handlePromptUndo(event, textarea)) {
+            if (state.completion?.handleKeydown(event)) {
+                return;
+            } else if (handlePromptUndo(event, textarea)) {
                 return;
             } else if (event.altKey && event.key === "ArrowLeft") {
                 event.preventDefault();
@@ -2062,11 +2079,6 @@ function mount(node) {
             } else if (event.altKey && event.key === "ArrowRight") {
                 event.preventDefault();
                 navigate(1);
-            } else if (!event.ctrlKey && !event.metaKey && !event.altKey && event.key === "@") {
-                event.preventDefault();
-                renderReferenceTray(refs);
-                refs.classList.add("h3sp-open");
-                refs.querySelector(".h3sp-ref-chip, button")?.focus();
             }
         });
 
@@ -2092,7 +2104,9 @@ function mount(node) {
         richEditor.addEventListener("copy", (event) => copyEditorSelection(richEditor, event));
         richEditor.addEventListener("cut", (event) => copyEditorSelection(richEditor, event, true));
         richEditor.addEventListener("keydown", (event) => {
-            if (handlePromptUndo(event, richEditor)) {
+            if (state.completion?.handleKeydown(event)) {
+                return;
+            } else if (handlePromptUndo(event, richEditor)) {
                 return;
             } else if (event.altKey && event.key === "ArrowLeft") {
                 event.preventDefault();
@@ -2100,16 +2114,51 @@ function mount(node) {
             } else if (event.altKey && event.key === "ArrowRight") {
                 event.preventDefault();
                 navigate(1);
-            } else if (!event.ctrlKey && !event.metaKey && !event.altKey && event.key === "@") {
-                event.preventDefault();
-                renderReferenceTray(refs);
-                refs.classList.add("h3sp-open");
             } else if (event.key === "Escape") {
                 refs.classList.remove("h3sp-open");
             }
         });
         richEditor.addEventListener("blur", () => {
             renderRichEditorText(editorPlainText(richEditor));
+        });
+
+        const activeInput = state.decorated ? richEditor : textarea;
+        state.completion = createPromptCompletionController({
+            input:activeInput,
+            getText:() => state.decorated
+                ? editorPlainText(richEditor) : textarea.value,
+            getCaret:() => state.decorated
+                ? selectionTextOffset(richEditor) : textarea.selectionStart,
+            getRecords:() => state.records,
+            getReferenceMode:() => state.referenceMode,
+            replaceText:(result) => {
+                const text = result.text;
+                const refreshed = availableReferenceRecords(
+                    node, state.active + 1, {
+                        includeInactive:true,
+                        prompt:[sharedPrompt(state.plan).text.trim(), text.trim()]
+                            .filter(Boolean).join("\n\n"),
+                    },
+                );
+                state.records = refreshed.records;
+                state.referenceMode = refreshed.mode;
+                textarea.value = text;
+                if (state.decorated) {
+                    state.richInputType = "insertReplacementText";
+                    try {
+                        textarea.dispatchEvent(new Event("input", {bubbles:true}));
+                    } finally {
+                        state.richInputType = "";
+                    }
+                    renderRichEditorText(text, result.caret);
+                } else {
+                    textarea.setSelectionRange(result.caret, result.caret);
+                    textarea.dispatchEvent(new InputEvent("input", {
+                        bubbles:true,
+                        inputType:"insertReplacementText",
+                    }));
+                }
+            },
         });
 
         root.append(head, nav, tools, refs, textarea, editorShell);
@@ -2208,6 +2257,8 @@ function mount(node) {
         if (state.popoverTimer != null) window.clearTimeout(state.popoverTimer);
         hidePopover();
         state.popover?.remove();
+        state.completion?.destroy();
+        state.completion = null;
         api.removeEventListener("executed", onPromptExecuted);
         delete node._h3PromptCompanionSetActiveScene;
         delete node._h3PromptCompanionSetScenePrompt;

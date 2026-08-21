@@ -39,6 +39,7 @@ import {
     richGuideInstruction,
     tokenizeRichPrompt,
 } from "./h3_rich_prompt_editor_core.mjs?v=0.5.5";
+import {createPromptCompletionController} from "./h3_prompt_completion_core.mjs?v=0.5.5";
 import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.5.5";
 
 const {publishCompanionScene, rebaseScenePrompt} = promptCompanionSync;
@@ -495,6 +496,7 @@ function mount(node) {
         fontSize:clamp(node.properties[FONT_PROPERTY], MIN_FONT, MAX_FONT, DEFAULT_FONT),
         guide:normalizeRichGuide(node.properties[GUIDE_PROPERTY]),
         records:[], referenceMode:null, editor:null, refs:null, status:null, optimizerStatus:null,
+        completion:null,
         history:{sceneKey:"", data:null, revisionId:null, host:null, loadToken:0, loadPromise:null,
             saveTimer:null, pendingDraft:null, savePromise:null, error:"", treeOpen:false,
             showArchived:false},
@@ -1026,6 +1028,7 @@ function mount(node) {
 
     function refreshOptimizerUi() {
         const busy = optimizerBusy();
+        if (busy) state.completion?.hide();
         if (state.editor) state.editor.contentEditable = busy ? "false" : "true";
         for (const control of root.querySelectorAll("[data-h3rp-lock]")) control.disabled = busy;
         const optimize = root.querySelector(".h3rp-optimize");
@@ -1320,6 +1323,8 @@ function mount(node) {
     }
 
     function showFailure(message) {
+        state.completion?.destroy();
+        state.completion = null;
         state.editor = null;
         state.history.host = null;
         root.replaceChildren(
@@ -1344,6 +1349,8 @@ function mount(node) {
 
     function render() {
         hidePopover();
+        state.completion?.destroy();
+        state.completion = null;
         if (!state.plan?.shots?.length) return showFailure("The connected Plan has no scenes.");
         state.active = Math.max(0, Math.min(state.active, state.plan.shots.length - 1));
         root.style.setProperty("--h3rp-font-size", `${state.fontSize}px`);
@@ -1398,6 +1405,7 @@ function mount(node) {
 
         const toolbar = element("div", "h3rp-toolbar");
         const refsButton = button("References", "Show connected references, miniatures, and media previews", () => {
+            state.completion?.hide();
             renderReferenceTray();
             state.refs.classList.toggle("h3rp-open");
         }, "reference");
@@ -1446,7 +1454,10 @@ function mount(node) {
         );
         state.promptUndo = promptUndoForScene(shotId, initialPrompt);
         renderEditorText(initialPrompt);
-        editor.addEventListener("input", saveEditorInput);
+        editor.addEventListener("input", (event) => {
+            saveEditorInput(event);
+            state.completion?.refresh();
+        });
         editor.addEventListener("beforeinput", (event) => {
             if (event.inputType === "insertParagraph" || event.inputType === "insertLineBreak") {
                 event.preventDefault(); insertPlainText(editor, "\n");
@@ -1469,26 +1480,46 @@ function mount(node) {
             return true;
         };
         editor.addEventListener("keydown", (event) => {
+            if (state.completion?.handleKeydown(event)) return;
             const undoDirection = promptUndoDirection(event);
             if (undoDirection) {
                 event.preventDefault();
                 applyPromptUndo(undoDirection);
             } else if (event.altKey && event.key === "ArrowLeft") event.preventDefault(), navigate(-1);
             else if (event.altKey && event.key === "ArrowRight") event.preventDefault(), navigate(1);
-            else if (!event.ctrlKey && !event.metaKey && !event.altKey && event.key === "@"
-                    && state.records.some((record) => record.active)) {
-                // The palette inserts the complete token. Do not leave the
-                // trigger '@' behind or selecting @hero would produce @@hero.
-                event.preventDefault();
-                renderReferenceTray();
-                refs.classList.add("h3rp-open");
-            } else if (event.key === "Escape") refs.classList.remove("h3rp-open");
+            else if (event.key === "Escape") refs.classList.remove("h3rp-open");
         });
         editor.addEventListener("blur", () => {
             const text = editorPlainText(editor);
             renderEditorText(text);
         });
         editorShell.append(editor);
+        state.completion = createPromptCompletionController({
+            input:editor,
+            getText:() => editorPlainText(editor),
+            getCaret:() => selectionTextOffset(editor),
+            getRecords:() => state.records,
+            getReferenceMode:() => state.referenceMode,
+            replaceText:(result) => {
+                const text = result.text;
+                if (state.referenceMode === "tagged") {
+                    const refreshed = availableReferenceRecords(
+                        node, state.active + 1, {
+                            includeInactive:true,
+                            prompt:[sharedPrompt(state.plan).text.trim(), text.trim()]
+                                .filter(Boolean).join("\n\n"),
+                        },
+                    );
+                    state.records = refreshed.records;
+                    state.referenceMode = refreshed.mode;
+                }
+                state.promptUndo?.record(text, {inputType:"insertReplacementText"});
+                shot.prompt = promptTextToLines(text);
+                renderEditorText(text, result.caret);
+                writePlan("Completion saved to Plan");
+                scheduleHistoryDraft(shotId, text);
+            },
+        });
 
         const footer = element("div", "h3rp-footer");
         const identity = element("span", "", `Scene ${state.active + 1}/${state.plan.shots.length} · ${shotId}`);
@@ -1498,6 +1529,11 @@ function mount(node) {
         state.history.host = historyHost;
         state.status = status;
 
+        const completionHint = element(
+            "span", "h3rp-muted",
+            "Type @, #, <, or [ · Ctrl/Cmd+Space for all H3 completions",
+        );
+        toolbar.append(completionHint);
         root.append(head, nav, toolbar, refs, editorShell, footer);
         refreshOptimizerUi();
         void loadHistory(shotId, editorPlainText(editor));
@@ -1581,6 +1617,8 @@ function mount(node) {
         if (state.popoverTimer != null) window.clearTimeout(state.popoverTimer);
         hidePopover();
         state.popover?.remove();
+        state.completion?.destroy();
+        state.completion = null;
         api.removeEventListener("executed", onPromptExecuted);
         delete node._h3PromptCompanionSetActiveScene;
         delete node._h3PromptCompanionSetScenePrompt;
