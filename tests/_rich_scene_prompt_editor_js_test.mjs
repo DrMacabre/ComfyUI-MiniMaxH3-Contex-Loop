@@ -115,6 +115,8 @@ assert.match(source, /Audio never autoplays/);
 assert.match(source, /pointerdown.*preventDefault/);
 assert.match(source, /createPromptCompletionController/);
 assert.match(source, /state\.completion\?\.handleKeydown/);
+assert.match(source, /restoreTextSelection/);
+assert.match(source, /editingSemanticTime/);
 assert.match(source, /Type @, #, <, or \[/);
 assert.match(source, /Ctrl\/Cmd\+Space for all H3 completions/);
 assert.doesNotMatch(source, /event\.key === "@"/);

@@ -445,6 +445,45 @@ function restoreCaret(editor, requested) {
     selection?.addRange(range);
 }
 
+function restoreTextSelection(editor, requestedStart, requestedEnd) {
+    const start = Math.max(0, Number(requestedStart) || 0);
+    const end = Math.max(start, Number(requestedEnd) || start);
+    let consumed = 0;
+    let startPoint = null;
+    let endPoint = null;
+    function visit(node) {
+        if (startPoint && endPoint) return;
+        if (node.nodeType === Node.TEXT_NODE) {
+            const length = node.textContent?.length ?? 0;
+            if (!startPoint && start >= consumed && start <= consumed + length) {
+                startPoint = [node, start - consumed];
+            }
+            if (!endPoint && end >= consumed && end <= consumed + length) {
+                endPoint = [node, end - consumed];
+            }
+            consumed += length;
+            return;
+        }
+        if (node.nodeType !== Node.ELEMENT_NODE) return;
+        if (node.classList?.contains("h3rp-token")) {
+            consumed += String(node.dataset.token ?? "").length;
+            return;
+        }
+        for (const child of node.childNodes) visit(child);
+    }
+    visit(editor);
+    if (!startPoint || !endPoint) {
+        restoreCaret(editor, end);
+        return;
+    }
+    const range = document.createRange();
+    range.setStart(...startPoint);
+    range.setEnd(...endPoint);
+    const selection = globalThis.getSelection?.();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+}
+
 function insertPlainText(editor, text) {
     editor.focus();
     const selection = globalThis.getSelection?.();
@@ -908,23 +947,38 @@ function mount(node) {
         return token;
     }
 
-    function renderEditorText(text, caret = null) {
+    function renderEditorText(text, caret = null, editableSelection = null) {
         if (!state.editor) return;
         const source = String(text ?? "");
         const parts = tokenizeRichPrompt(source, state.records);
         const fragment = document.createDocumentFragment();
+        let sourceOffset = 0;
         for (let index = 0; index < parts.length; index += 1) {
             const part = parts[index];
+            const partStart = sourceOffset;
+            const partEnd = partStart + part.text.length;
+            sourceOffset = partEnd;
             // Leave an unfinished unknown @word as normal text while the user
             // is still typing it; it becomes a red unresolved chip on blur or
             // another explicit decoration pass.
             const unfinished = part.type === "reference" && part.unresolved
                 && part.text.startsWith("@") && index === parts.length - 1
                 && document.activeElement === state.editor;
-            fragment.append(unfinished ? document.createTextNode(part.text) : makeToken(part));
+            const editingSemanticTime = part.type === "reference" && part.semantic
+                && editableSelection?.selectionStart >= partStart
+                && editableSelection?.selectionEnd <= partEnd;
+            fragment.append(unfinished || editingSemanticTime
+                ? document.createTextNode(part.text) : makeToken(part));
         }
         state.editor.replaceChildren(fragment);
-        if (caret != null) restoreCaret(state.editor, caret);
+        if (editableSelection?.selectionStart != null
+                && editableSelection?.selectionEnd != null) {
+            restoreTextSelection(
+                state.editor,
+                editableSelection.selectionStart,
+                editableSelection.selectionEnd,
+            );
+        } else if (caret != null) restoreCaret(state.editor, caret);
     }
 
     function saveEditorInput(event) {
@@ -1515,7 +1569,7 @@ function mount(node) {
                 }
                 state.promptUndo?.record(text, {inputType:"insertReplacementText"});
                 shot.prompt = promptTextToLines(text);
-                renderEditorText(text, result.caret);
+                renderEditorText(text, result.caret, result);
                 writePlan("Completion saved to Plan");
                 scheduleHistoryDraft(shotId, text);
             },

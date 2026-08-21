@@ -165,7 +165,9 @@ function referenceItems(records, referenceMode, trigger) {
                 label: `#${token.slice(1)}[timestamp]`,
                 insertText: anchor,
                 filterText: token.slice(1),
-                detail: "Tagged Picture · Qwen semantic/storyboard anchor (edit 0.00s)",
+                detail: "Tagged Picture · Qwen semantic/storyboard anchor; type the scene time",
+                selectionStart: anchor.indexOf("[") + 1,
+                selectionEnd: anchor.indexOf("s]"),
                 priority: record.active ? 0 : 1,
             });
         }
@@ -305,7 +307,15 @@ export function applyPromptCompletion(value, query, item) {
     const result = text.slice(0, start) + insertText + text.slice(end);
     const relativeCaret = item.caretOffset == null
         ? insertText.length : Math.max(0, Math.min(insertText.length, Number(item.caretOffset) || 0));
-    return {text: result, caret: start + relativeCaret};
+    const replacement = {text: result, caret: start + relativeCaret};
+    if (item.selectionStart != null && item.selectionEnd != null) {
+        replacement.selectionStart = start + Math.max(
+            0, Math.min(insertText.length, Number(item.selectionStart) || 0));
+        replacement.selectionEnd = start + Math.max(
+            0, Math.min(insertText.length, Number(item.selectionEnd) || 0));
+        replacement.caret = replacement.selectionEnd;
+    }
+    return replacement;
 }
 
 function completionStyles() {

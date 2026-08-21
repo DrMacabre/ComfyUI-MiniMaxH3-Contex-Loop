@@ -539,6 +539,45 @@ function restoreCaret(editor, requested) {
     selection?.addRange(range);
 }
 
+function restoreTextSelection(editor, requestedStart, requestedEnd) {
+    const start = Math.max(0, Number(requestedStart) || 0);
+    const end = Math.max(start, Number(requestedEnd) || start);
+    let consumed = 0;
+    let startPoint = null;
+    let endPoint = null;
+    function visit(current) {
+        if (startPoint && endPoint) return;
+        if (current.nodeType === Node.TEXT_NODE) {
+            const length = current.textContent?.length ?? 0;
+            if (!startPoint && start >= consumed && start <= consumed + length) {
+                startPoint = [current, start - consumed];
+            }
+            if (!endPoint && end >= consumed && end <= consumed + length) {
+                endPoint = [current, end - consumed];
+            }
+            consumed += length;
+            return;
+        }
+        if (current.nodeType !== Node.ELEMENT_NODE) return;
+        if (current.classList?.contains("h3sp-token")) {
+            consumed += String(current.dataset.token ?? "").length;
+            return;
+        }
+        for (const child of current.childNodes) visit(child);
+    }
+    visit(editor);
+    if (!startPoint || !endPoint) {
+        restoreCaret(editor, end);
+        return;
+    }
+    const range = document.createRange();
+    range.setStart(...startPoint);
+    range.setEnd(...endPoint);
+    const selection = globalThis.getSelection?.();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+}
+
 function insertPlainText(editor, text) {
     editor.focus();
     const selection = globalThis.getSelection?.();
@@ -1751,19 +1790,34 @@ function mount(node) {
         return token;
     }
 
-    function renderRichEditorText(text, caret = null) {
+    function renderRichEditorText(text, caret = null, editableSelection = null) {
         if (!state.richEditor) return;
         const parts = tokenizeRichPrompt(String(text ?? ""), state.records);
         const fragment = document.createDocumentFragment();
+        let sourceOffset = 0;
         for (let index = 0; index < parts.length; index += 1) {
             const part = parts[index];
+            const partStart = sourceOffset;
+            const partEnd = partStart + part.text.length;
+            sourceOffset = partEnd;
             const unfinished = part.type === "reference" && part.unresolved
                 && part.text.startsWith("@") && index === parts.length - 1
                 && document.activeElement === state.richEditor;
-            fragment.append(unfinished ? document.createTextNode(part.text) : makeRichToken(part));
+            const editingSemanticTime = part.type === "reference" && part.semantic
+                && editableSelection?.selectionStart >= partStart
+                && editableSelection?.selectionEnd <= partEnd;
+            fragment.append(unfinished || editingSemanticTime
+                ? document.createTextNode(part.text) : makeRichToken(part));
         }
         state.richEditor.replaceChildren(fragment);
-        if (caret != null) restoreCaret(state.richEditor, caret);
+        if (editableSelection?.selectionStart != null
+                && editableSelection?.selectionEnd != null) {
+            restoreTextSelection(
+                state.richEditor,
+                editableSelection.selectionStart,
+                editableSelection.selectionEnd,
+            );
+        } else if (caret != null) restoreCaret(state.richEditor, caret);
     }
 
     function insertPromptText(text) {
@@ -2150,9 +2204,12 @@ function mount(node) {
                     } finally {
                         state.richInputType = "";
                     }
-                    renderRichEditorText(text, result.caret);
+                    renderRichEditorText(text, result.caret, result);
                 } else {
-                    textarea.setSelectionRange(result.caret, result.caret);
+                    textarea.setSelectionRange(
+                        result.selectionStart ?? result.caret,
+                        result.selectionEnd ?? result.caret,
+                    );
                     textarea.dispatchEvent(new InputEvent("input", {
                         bubbles:true,
                         inputType:"insertReplacementText",

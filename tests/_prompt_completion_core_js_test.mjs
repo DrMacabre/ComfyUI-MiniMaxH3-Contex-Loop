@@ -41,6 +41,13 @@ const semantic = promptCompletionItems(
 );
 assert.deepEqual(semantic.map((item) => item.label), ["#costume[timestamp]"]);
 assert.equal(semantic[0].insertText, "#costume[0.00s]");
+assert.deepEqual(applyPromptCompletion("Use #co here", promptCompletionQuery(
+    "Use #co here", 7), semantic[0]), {
+    text:"Use #costume[0.00s] here",
+    caret:17,
+    selectionStart:13,
+    selectionEnd:17,
+});
 assert.deepEqual(promptCompletionItems(
     promptCompletionQuery("#", 1), records, {referenceMode:"scheduled"},
 ), []);

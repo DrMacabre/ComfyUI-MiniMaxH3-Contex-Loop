@@ -48,6 +48,8 @@ assert.match(source, /Core Ref2VA references/);
 assert.doesNotMatch(source, /event\.key === "#"/);
 assert.match(source, /createPromptCompletionController/);
 assert.match(source, /state\.completion\?\.handleKeydown/);
+assert.match(source, /restoreTextSelection/);
+assert.match(source, /editingSemanticTime/);
 assert.match(source, /type @ # < \[/);
 assert.doesNotMatch(source, /event\.key === "@"/);
 assert.match(source, /FONT_SIZE_PROPERTY/);
