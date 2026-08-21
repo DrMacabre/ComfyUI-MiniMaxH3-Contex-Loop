@@ -8486,11 +8486,15 @@ class MiniMaxH3ChainPolicy:
                                "track, or no soundtrack."}),
                 "source_reference": (list(SOURCE_REFERENCE_POLICIES), {
                     "default": "off",
-                    "tooltip": "On exposes the exact source-timeline audio "
-                               "window as a separate Ref2VA Audio reference. "
-                               "This is independent of the final soundtrack. "
-                               "Lock source audio overrides this off because "
-                               "the source already occupies the target latent."}),
+                    "tooltip": "Use the matching Source Timeline audio as "
+                               "guidance while H3 generates this scene's "
+                               "sound. This does not copy the source waveform "
+                               "into the result or choose the final MP4 "
+                               "soundtrack. To force the exact source waveform "
+                               "during generation, enable Lock source audio; "
+                               "to put it in the final MP4, set Final audio to "
+                               "source. Lock automatically turns this "
+                               "reference off."}),
                 "generated_continuity": (
                     list(GENERATED_CONTINUITY_POLICIES), {
                         "default": "on",
