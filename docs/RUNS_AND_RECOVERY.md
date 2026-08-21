@@ -49,10 +49,11 @@ scene or retry:
 
 - `off` keeps ComfyUI's normal caches.
 - `unload_models` unloads model weights and empties the device allocator.
-- `fresh_scene` additionally releases pinned model pages, asks ComfyUI's active
-  RAM-pressure cache to evict reusable execution outputs, and runs Python
-  garbage collection. Use it for chains that switch large models between
-  scenes; the next scene will reload anything that was evicted.
+- `fresh_scene` first asks ComfyUI's active RAM-pressure cache to evict reusable
+  execution outputs and runs Python garbage collection, then releases remaining
+  pinned model pages, unloads models, and empties the device allocator. Use it
+  for chains that switch large models between scenes; the next scene will reload
+  anything that was evicted.
 
 The policy does not enter Plan or resume hashes. It deliberately preserves the
 small recursive carry and dynamic graph result because ComfyUI has no supported

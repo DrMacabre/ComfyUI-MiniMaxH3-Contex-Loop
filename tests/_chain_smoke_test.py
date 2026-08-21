@@ -97,6 +97,7 @@ def main():
     original_free_pins = model_management.free_pins
     original_unload = model_management.unload_all_models
     original_empty_cache = model_management.soft_empty_cache
+    original_cleanup_models = model_management.cleanup_models_gc
     original_ram_release = memory_management.extra_ram_release
     original_collect = chain.gc.collect
     model_management.free_pins = lambda size, evict_active=False: (
@@ -105,6 +106,8 @@ def main():
         ("unload",))
     model_management.soft_empty_cache = lambda force=False: cleanup_calls.append(
         ("empty", force))
+    model_management.cleanup_models_gc = lambda: cleanup_calls.append(
+        ("models_gc",))
     memory_management.extra_ram_release = (
         lambda target, free_active=False: (
             cleanup_calls.append(("ram", target, free_active)) or 54_321))
@@ -122,10 +125,11 @@ def main():
         cleanup_calls.clear()
         fresh = chain._release_loop_boundary_resources("fresh_scene", 2)
         assert cleanup_calls == [
-            ("pins", sys.maxsize, True),
-            ("unload",),
             ("ram", sys.maxsize, True),
             ("gc",),
+            ("models_gc",),
+            ("pins", sys.maxsize, True),
+            ("unload",),
             ("empty", True),
         ]
         assert fresh["pinned_bytes"] == 12_345
@@ -141,9 +145,10 @@ def main():
         model_management.free_pins = original_free_pins
         model_management.unload_all_models = original_unload
         model_management.soft_empty_cache = original_empty_cache
+        model_management.cleanup_models_gc = original_cleanup_models
         memory_management.extra_ram_release = original_ram_release
         chain.gc.collect = original_collect
-    print("loop cleanup: off, model unload, and fresh-scene eviction passed")
+    print("loop cleanup: cache-first eviction and model unload passed")
 
     fixed_now = datetime(2026, 8, 11, 14, 5, 9)
     assert chain._expand_filename_date(

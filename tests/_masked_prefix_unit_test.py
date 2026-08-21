@@ -682,10 +682,11 @@ def main():
         "tapered_av", "drift_control_av"))
     clean_blend_source = frames.clone()
     noisy_blend = torch.full((12, 32, 48, 3), -7.0)
-    clean_blend = chain._detail_av_clean_blend_images(
+    clean_prefix = chain._detail_av_clean_blend_prefix(
         {"previous_frames": clean_blend_source}, noisy_blend, 5)
-    assert torch.equal(clean_blend[:5], clean_blend_source[-5:])
-    assert torch.all(clean_blend[5:] == -7.0)
+    assert torch.equal(clean_prefix, clean_blend_source[-5:])
+    assert clean_prefix.untyped_storage().data_ptr() == (
+        clean_blend_source.untyped_storage().data_ptr())
     assert torch.all(noisy_blend == -7.0)
     assert torch.equal(clean_blend_source, frames)
     migrated_av_plan = chain._normalize_plan(

@@ -159,6 +159,17 @@ def main():
         overlap = torch.cat((frames(2, (0, 1, 0)),
                              frames(4, (0, 0, 1))), dim=0)
         chain._write_segment_video(overlap, str(extension), 24, 0)
+        streamed_prefix = root / "streamed_prefix.mp4"
+        disposable = frames(3, (0, 0, 1))
+        clean_prefix = frames(1, (1, 0, 0))
+        chain._write_segment_video(
+            disposable, str(streamed_prefix), 24, 0,
+            replacement_prefix=clean_prefix)
+        streamed_frames = decode(streamed_prefix)
+        assert streamed_frames[0][0, 0, 0] > 200
+        assert streamed_frames[0][0, 0, 2] < 20
+        assert streamed_frames[1][0, 0, 2] > 200
+        assert torch.all(disposable[..., 2] == 1.0)
         records = [
             {"path": str(base), "input_frames": 5,
              "delivered_frames": 5, "blend_frames": 0},

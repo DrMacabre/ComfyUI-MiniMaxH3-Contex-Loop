@@ -5343,7 +5343,11 @@ def _prompt_fields(plan: dict[str, Any], index: int) -> dict[str, Any]:
 
 def _tensor_cpu_clone(value: Any) -> Any:
     if torch is not None and torch.is_tensor(value):
-        return value.detach().cpu().contiguous().clone()
+        # ``cpu().contiguous().clone()`` can briefly hold two new host copies
+        # when the source is on CUDA. Ask ``to`` for the owned CPU copy once;
+        # checkpoint slices are normally already contiguous after transfer.
+        result = value.detach().to(device="cpu", copy=True)
+        return result if result.is_contiguous() else result.contiguous()
     return value
 
 
@@ -5614,10 +5618,15 @@ def _compact_latent(latent: dict[str, Any]) -> dict[str, Any]:
                         _tensor_cpu_clone(parts[1])]}
 
 
-def _detail_av_clean_blend_images(
+def _detail_av_clean_blend_prefix(
         state: dict[str, Any], images_with_overlap: Any,
         blend_frames: int) -> Any:
-    """Keep a disposable AV prefix out of persistent blend artifacts."""
+    """Return the clean prefix streamed over a disposable AV blend head.
+
+    Returning only the predecessor view avoids cloning a complete 300+ frame
+    float RGB scene merely to replace its first few frames. The video writer
+    performs the substitution one frame at a time.
+    """
     blend_frames = int(blend_frames)
     if blend_frames <= 0:
         return images_with_overlap
@@ -5643,10 +5652,7 @@ def _detail_av_clean_blend_images(
             "differs: "
             "%s vs %s." %
             (tuple(previous.shape), tuple(images_with_overlap.shape)))
-    result = images_with_overlap.detach().contiguous().clone()
-    result[:blend_frames] = previous[-blend_frames:].to(
-        device=result.device, dtype=result.dtype)
-    return result
+    return previous[-blend_frames:].detach()
 
 
 def _previous_context_frames(state: dict[str, Any], vae: Any,
@@ -6072,7 +6078,8 @@ def _slice_audio_after_external_context(
 
 
 def _write_segment_video(images: Any, path: str, fps: int, crf: int,
-                         metadata: dict[str, Any] | None = None) -> None:
+                         metadata: dict[str, Any] | None = None,
+                         replacement_prefix: Any = None) -> None:
     if av is None or torch is None:
         raise RuntimeError("H3 segment saving requires PyAV and torch.")
     if len(images.shape) != 4 or int(images.shape[0]) < 1:
@@ -6080,6 +6087,19 @@ def _write_segment_video(images: Any, path: str, fps: int, crf: int,
     height, width = int(images.shape[1]), int(images.shape[2])
     if width % 2 or height % 2:
         raise ValueError("H.264 segment dimensions must be even.")
+    prefix_count = 0
+    if replacement_prefix is not None:
+        if (not torch.is_tensor(replacement_prefix)
+                or replacement_prefix.ndim != 4):
+            raise ValueError(
+                "H3 replacement video prefix must be an IMAGE tensor.")
+        if tuple(replacement_prefix.shape[1:]) != tuple(images.shape[1:]):
+            raise ValueError(
+                "H3 replacement video prefix geometry differs from its "
+                "scene: %s vs %s." % (
+                    tuple(replacement_prefix.shape), tuple(images.shape)))
+        prefix_count = min(
+            int(replacement_prefix.shape[0]), int(images.shape[0]))
     os.makedirs(os.path.dirname(path), exist_ok=True)
     temporary = path[:-4] + ".tmp.mp4"
     if os.path.exists(temporary):
@@ -6098,7 +6118,9 @@ def _write_segment_video(images: Any, path: str, fps: int, crf: int,
         stream.height = height
         stream.pix_fmt = "yuv420p"
         stream.options = {"crf": str(int(crf)), "preset": "medium"}
-        for image in images:
+        for frame_index, image in enumerate(images):
+            if frame_index < prefix_count:
+                image = replacement_prefix[frame_index]
             array = (torch.clamp(image[..., :3] * 255.0, 0, 255)
                      .to(device="cpu", dtype=torch.uint8).numpy())
             frame = av.VideoFrame.from_ndarray(array, format="rgb24")
@@ -11150,9 +11172,10 @@ class MiniMaxH3ChainSegmentSave:
         continuation_mode = migrate_continuation_mode(shot.get(
             "continuation_mode",
             compatibility.get("continuation_mode", "guide")))
+        clean_blend_prefix = None
         if (continuation_mode in DISPOSABLE_PREFIX_CONTINUATION_MODES
                 and blend_frames):
-            images_with_overlap = _detail_av_clean_blend_images(
+            clean_blend_prefix = _detail_av_clean_blend_prefix(
                 state, images_with_overlap, blend_frames)
             _LOG.info(
                 "H3 %s: restored %d clean predecessor frames in the blend "
@@ -11320,7 +11343,7 @@ class MiniMaxH3ChainSegmentSave:
                         "title": "H3 blend-ready scene %d - %s" %
                                  (index, shot["id"]),
                         "h3_blend_frames": str(blend_frames),
-                    })
+                    }, replacement_prefix=clean_blend_prefix)
             if published_audio is not None:
                 _atomic_wav(
                     {"waveform": tensors["delivered_audio"],
@@ -11793,6 +11816,36 @@ def _release_loop_boundary_resources(
         return result
 
     if resolved == "fresh_scene":
+        # Execution outputs can retain complete loader branches, decoded
+        # videos, and patched model objects. Evict them before model unload so
+        # unloading cannot briefly coexist with all of those allocations in
+        # host RAM. This ordering is essential for workflows that switch two
+        # large H3 checkpoints inside one recursive scene body.
+        try:
+            import comfy.memory_management as memory_management
+            release = getattr(memory_management, "extra_ram_release", None)
+            if callable(release):
+                result["cache_bytes"] = int(release(
+                    sys.maxsize, free_active=True))
+        except Exception as exc:
+            _LOG.warning(
+                "H3 Chain fresh-scene cleanup could not request execution "
+                "cache eviction after scene %d: %s", int(scene_index), exc)
+        result["collected_objects"] = int(gc.collect())
+
+    cleanup_models = getattr(model_management, "cleanup_models_gc", None)
+    if resolved == "fresh_scene" and callable(cleanup_models):
+        try:
+            cleanup_models()
+        except Exception as exc:
+            _LOG.warning(
+                "H3 Chain could not prune unreferenced models after scene "
+                "%d: %s", int(scene_index), exc)
+
+    if resolved == "fresh_scene":
+        # Any DynamicVRAM pins still associated with this now-durable scene
+        # can be released after the execution cache and dead model references
+        # are gone. This leaves less host state for unload_all_models to walk.
         free_pins = getattr(model_management, "free_pins", None)
         if callable(free_pins):
             try:
@@ -11810,19 +11863,6 @@ def _release_loop_boundary_resources(
             "H3 Chain could not unload models after scene %d: %s",
             int(scene_index), exc)
 
-    if resolved == "fresh_scene":
-        try:
-            import comfy.memory_management as memory_management
-            release = getattr(memory_management, "extra_ram_release", None)
-            if callable(release):
-                result["cache_bytes"] = int(release(
-                    sys.maxsize, free_active=True))
-        except Exception as exc:
-            _LOG.warning(
-                "H3 Chain fresh-scene cleanup could not request execution "
-                "cache eviction after scene %d: %s", int(scene_index), exc)
-        result["collected_objects"] = int(gc.collect())
-
     empty_cache = getattr(model_management, "soft_empty_cache", None)
     if callable(empty_cache):
         try:
@@ -11835,12 +11875,12 @@ def _release_loop_boundary_resources(
                 "%d: %s", int(scene_index), exc)
 
     _LOG.info(
-        "H3 Chain scene %d boundary cleanup=%s: pinned %.1f MB, execution "
-        "cache %.1f MB, Python objects %d; the next scene reloads any "
-        "evicted model or intermediate outputs.",
+        "H3 Chain scene %d boundary cleanup=%s: execution cache %.1f MB, "
+        "pinned model pages %.1f MB, Python objects %d; the next scene "
+        "reloads any evicted model or intermediate outputs.",
         int(scene_index), resolved,
-        int(result["pinned_bytes"]) / float(1024 ** 2),
         int(result["cache_bytes"]) / float(1024 ** 2),
+        int(result["pinned_bytes"]) / float(1024 ** 2),
         int(result["collected_objects"]))
     return result
 
@@ -12365,10 +12405,11 @@ class MiniMaxH3ChainLoopEnd:
                                "scene is safely checkpointed and before the "
                                "next scene or retry starts. off keeps ComfyUI "
                                "caches; unload_models releases loaded weights "
-                               "from VRAM; fresh_scene also releases pinned "
-                               "model pages, requests active RAM-pressure-cache "
-                               "eviction, runs Python garbage collection, and "
-                               "empties the CUDA allocator. fresh_scene may "
+                               "from VRAM; fresh_scene first requests active "
+                               "RAM-pressure-cache eviction and Python garbage "
+                               "collection, then releases remaining pinned "
+                               "model pages, unloads models, and empties the "
+                               "CUDA allocator. fresh_scene may "
                                "reload model/reference nodes and is best for "
                                "model-switching chains. ComfyUI has no safe "
                                "full executor reset inside a running recursive "
