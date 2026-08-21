@@ -165,6 +165,7 @@ def main():
         "MiniMaxH3ChainExternalVideo",
         "MiniMaxH3ChainLoopStart",
         "MiniMaxH3ChainCurrent", "MiniMaxH3ChainContext",
+        "MiniMaxH3DriftControlModelPatch",
         "MiniMaxH3ChainSegmentSave", "MiniMaxH3ChainLoopEnd",
         "MiniMaxH3ChainManifestLoad", "MiniMaxH3ChainExportPNG",
         "MiniMaxH3ChainLatentVideoAdapter",

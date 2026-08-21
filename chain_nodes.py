@@ -162,6 +162,8 @@ GUIDE_CONTINUATION_MODES = frozenset((
 MASKED_CONTINUATION_MODES = frozenset((
     "masked_av", "tapered_av", "feathered_av", "audio_feathered_av",
     "drift_control_av"))
+DISPOSABLE_PREFIX_CONTINUATION_MODES = frozenset((
+    "tapered_av", "drift_control_av"))
 RGB_PROXY_GUIDE_MODES = frozenset((
     "guide", "tone_carry_guide", "tapered_guide"))
 REFERENCE_AUDIO_TIMELINE_MODES = ("standalone", "source_timeline")
@@ -5614,7 +5616,7 @@ def _compact_latent(latent: dict[str, Any]) -> dict[str, Any]:
 def _detail_av_clean_blend_images(
         state: dict[str, Any], images_with_overlap: Any,
         blend_frames: int) -> Any:
-    """Keep Detail AV's disposable noisy prefix out of assembly artifacts."""
+    """Keep a disposable AV prefix out of persistent blend artifacts."""
     blend_frames = int(blend_frames)
     if blend_frames <= 0:
         return images_with_overlap
@@ -5622,19 +5624,22 @@ def _detail_av_clean_blend_images(
     if (torch is None or not torch.is_tensor(previous)
             or not torch.is_tensor(images_with_overlap)):
         raise ValueError(
-            "H3 Detail AV visual blending requires the clean predecessor "
+            "H3 disposable-prefix AV blending requires the clean predecessor "
             "IMAGE checkpoint.")
     if previous.ndim != 4 or images_with_overlap.ndim != 4:
         raise ValueError(
-            "H3 Detail AV blend tensors must be [frames,height,width,channels].")
+            "H3 disposable-prefix AV blend tensors must be "
+            "[frames,height,width,channels].")
     if int(previous.shape[0]) < blend_frames:
         raise ValueError(
-            "H3 Detail AV blend requests %d clean predecessor frames, but "
+            "H3 disposable-prefix AV blend requests %d clean predecessor "
+            "frames, but "
             "only %d are checkpointed." %
             (blend_frames, int(previous.shape[0])))
     if tuple(previous.shape[1:]) != tuple(images_with_overlap.shape[1:]):
         raise ValueError(
-            "H3 Detail AV clean predecessor/blend image geometry differs: "
+            "H3 disposable-prefix AV clean predecessor/blend image geometry "
+            "differs: "
             "%s vs %s." %
             (tuple(previous.shape), tuple(images_with_overlap.shape)))
     result = images_with_overlap.detach().contiguous().clone()
@@ -10696,10 +10701,21 @@ class MiniMaxH3ChainContext:
                                "behavior is active."}),
                 "model": ("MODEL", {
                     "tooltip": "Required only by Drift-Control AV. Connect "
-                               "the MiniMax H3 MODEL before the sampler, then "
-                               "use Chain Context's model output for every "
-                               "sampler stage. Other continuation modes pass "
-                               "this MODEL through unchanged."}),
+                               "one MiniMax H3 MODEL here for a single-model "
+                               "sampler. For a sigma split that switches "
+                               "models, leave this disconnected, connect the "
+                               "full drift_sigmas schedule, and put one "
+                               "Drift-Control Model Patch on EACH raw model "
+                               "branch. Other modes pass a connected MODEL "
+                               "through unchanged."}),
+                "drift_sigmas": ("SIGMAS", {
+                    "tooltip": "Optional original FULL sigma schedule before "
+                               "any split. Connect it for Drift-Control AV "
+                               "when sampling is divided across stages so "
+                               "both model branches use one canonical "
+                               "next-sigma schedule. This also selects the "
+                               "external per-model patch route when Chain "
+                               "Context's MODEL input is disconnected."}),
             }
         }
 
@@ -10720,8 +10736,9 @@ class MiniMaxH3ChainContext:
         "video prefix. Wire this output to the sampler so Plan can switch "
         "safely.",
         "H3 MODEL patched only while Drift-Control AV is active; otherwise "
-        "the optional input MODEL passes through unchanged. Connect this to "
-        "every sampler stage when the Plan contains Drift-Control AV.",
+        "the optional input MODEL passes through unchanged. This is None on "
+        "the external sigma-split route, where each raw model instead passes "
+        "through its own Drift-Control Model Patch.",
     )
     FUNCTION = "apply"
     CATEGORY = "conditioning/minimax/contex_loop"
@@ -10735,7 +10752,7 @@ class MiniMaxH3ChainContext:
                    "Context.")
 
     def apply(self, state, conditioning, vae, latent, audio_vae=None,
-              model=None):
+              model=None, drift_sigmas=None):
         index = int(state["index"])
         plan = state["plan"]
         cfg = plan["compatibility"]
@@ -10784,11 +10801,14 @@ class MiniMaxH3ChainContext:
                 from .masked_context import _require_h3_mask_support
 
                 _require_h3_mask_support()
-            if drift_required and model is None:
+            if (drift_required and model is None
+                    and drift_sigmas is None):
                 raise ValueError(
-                    "This Plan contains Drift-Control AV. Connect the H3 "
-                    "MODEL to Chain Context and route its model output through "
-                    "every sampler stage before generating scene 1.")
+                    "This Plan contains Drift-Control AV. For one model, "
+                    "connect it to Chain Context. For a sigma-split model "
+                    "switch, connect the original full schedule to "
+                    "drift_sigmas and put a Drift-Control Model Patch on "
+                    "each raw model branch before generating scene 1.")
             if continuation_mode in MASKED_CONTINUATION_MODES:
                 prepared_conditioning = conditioning
             else:
@@ -10839,7 +10859,10 @@ class MiniMaxH3ChainContext:
                         "H3 Drift-Control AV expected a %d-frame prefix, got "
                         "%d." %
                         (int(DRIFT_CONTROL_AV_RECIPE["context_frames"]), trim))
-                from .drift_control import install_drift_control_av_model
+                from .drift_control import (
+                    install_drift_control_av_model,
+                    mark_drift_control_latent,
+                )
 
                 validated_steps = int(
                     DRIFT_CONTROL_AV_RECIPE["validated_steps"])
@@ -10849,9 +10872,21 @@ class MiniMaxH3ChainContext:
                         "initial validated baseline is %d steps. This run is "
                         "experimental.",
                         index, int(shot["steps"]), validated_steps)
-                out_model = install_drift_control_av_model(
-                    model, out_latent,
-                    int(DRIFT_CONTROL_AV_RECIPE["video_steps"]))
+                prefix_steps = int(DRIFT_CONTROL_AV_RECIPE["video_steps"])
+                out_latent = mark_drift_control_latent(
+                    out_latent, prefix_steps)
+                install_kwargs = {}
+                if drift_sigmas is not None:
+                    install_kwargs["schedule_override"] = drift_sigmas
+                if model is not None:
+                    out_model = install_drift_control_av_model(
+                        model, out_latent, prefix_steps, **install_kwargs)
+                elif drift_sigmas is None:
+                    raise ValueError(
+                        "Drift-Control AV has no MODEL patch route. Connect "
+                        "one MODEL to Chain Context, or connect drift_sigmas "
+                        "and patch every switched MODEL branch inline."
+                    )
             return (out_conditioning, trim, True, out_latent, out_model)
         previous_latent = (state.get("previous_latent")
                            if generated_audio_context else None)
@@ -10921,6 +10956,81 @@ class MiniMaxH3ChainContext:
             video_context_latent=video_context_latent,
         )
         return (out, trim, True, target_latent, model)
+
+
+class MiniMaxH3DriftControlModelPatch:
+    """Patch one additional H3 model branch without owning both loaders."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "model": ("MODEL", {
+                    "tooltip": "One raw MiniMax H3 AV MODEL used by a "
+                               "sigma-split sampler. Use one patch node per "
+                               "model branch, including the first."}),
+                "state": (STATE_TYPE, {
+                    "tooltip": "Current Shot state. Non-Drift scenes pass "
+                               "the MODEL through unchanged."}),
+                "latent": ("LATENT", {
+                    "tooltip": "Chain Context's latent output. Its private "
+                               "marker verifies that the sampler and model "
+                               "patch use the same Drift-Control prefix."}),
+                "full_sigmas": ("SIGMAS", {
+                    "tooltip": "The original complete sigma schedule BEFORE "
+                               "it is split. Every model-patch instance must "
+                               "receive this same schedule, while each sampler "
+                               "still receives its own split half."}),
+            },
+        }
+
+    RETURN_TYPES = ("MODEL",)
+    RETURN_NAMES = ("model",)
+    OUTPUT_TOOLTIPS = (
+        "The input MODEL with Drift-Control's shared full-schedule mask patch "
+        "only for an active Drift-Control scene; otherwise unchanged.",
+    )
+    FUNCTION = "patch"
+    CATEGORY = "conditioning/minimax/contex_loop"
+    DESCRIPTION = (
+        "Lightweight inline patch for sigma-split workflows that switch H3 "
+        "models. It stores only the small full sigma tuple and clones "
+        "ModelPatcher metadata; it does not duplicate or jointly load model "
+        "weights. Leave Chain Context's MODEL input disconnected, connect its "
+        "drift_sigmas input, and use one instance for each raw model branch."
+    )
+
+    def patch(self, model, state, latent, full_sigmas):
+        index = int(state["index"])
+        plan = state["plan"]
+        cfg = plan["compatibility"]
+        shot = plan["shots"][index - 1]
+        continuation_mode = migrate_continuation_mode(shot.get(
+            "continuation_mode",
+            cfg.get("continuation_mode", "guide")))
+        context_length = _shot_context_length(
+            shot, int(cfg.get("context_length", 0)))
+        active = (
+            continuation_mode == "drift_control_av"
+            and context_length > 0
+            and (index > 1 or bool(state.get("external_context")))
+        )
+        if not active:
+            return (model,)
+
+        from .drift_control import (
+            drift_control_latent_prefix_steps,
+            install_drift_control_av_model,
+        )
+
+        prefix_steps = drift_control_latent_prefix_steps(latent)
+        patched = install_drift_control_av_model(
+            model,
+            latent,
+            prefix_steps,
+            schedule_override=full_sigmas,
+        )
+        return (patched,)
 
 
 class MiniMaxH3ChainSegmentSave:
@@ -11039,13 +11149,15 @@ class MiniMaxH3ChainSegmentSave:
         continuation_mode = migrate_continuation_mode(shot.get(
             "continuation_mode",
             compatibility.get("continuation_mode", "guide")))
-        if continuation_mode == "tapered_av" and blend_frames:
+        if (continuation_mode in DISPOSABLE_PREFIX_CONTINUATION_MODES
+                and blend_frames):
             images_with_overlap = _detail_av_clean_blend_images(
                 state, images_with_overlap, blend_frames)
             _LOG.info(
-                "H3 Detail AV: restored %d clean predecessor frames in the "
-                "blend artifact; the disposable noisy latent overlap remains "
-                "fully trimmed from delivered video.", blend_frames)
+                "H3 %s: restored %d clean predecessor frames in the blend "
+                "artifact; the disposable sampled latent overlap remains "
+                "fully trimmed from delivered video.",
+                continuation_mode, blend_frames)
         incoming_guide_tone = (
             _state_guide_tone_carry(state)
             if continuation_mode == "tone_carry_guide" else None)
@@ -16007,6 +16119,7 @@ CHAIN_NODE_CLASS_MAPPINGS = {
     "MiniMaxH3ChainCurrent": MiniMaxH3ChainCurrent,
     "MiniMaxH3PatchPriority": MiniMaxH3PatchPriority,
     "MiniMaxH3ChainContext": MiniMaxH3ChainContext,
+    "MiniMaxH3DriftControlModelPatch": MiniMaxH3DriftControlModelPatch,
     "MiniMaxH3ChainSegmentSave": MiniMaxH3ChainSegmentSave,
     "MiniMaxH3ChainReview": MiniMaxH3ChainReview,
     "MiniMaxH3ChainLoopEnd": MiniMaxH3ChainLoopEnd,
@@ -16058,6 +16171,8 @@ CHAIN_NODE_DISPLAY_NAME_MAPPINGS = {
     "MiniMaxH3ChainCurrent": "MiniMax H3 Contex Loop Current Shot",
     "MiniMaxH3PatchPriority": "MiniMax H3 Patch Priority",
     "MiniMaxH3ChainContext": "MiniMax H3 Contex Loop Context",
+    "MiniMaxH3DriftControlModelPatch": (
+        "MiniMax H3 Drift-Control Model Patch (Sigma Split)"),
     "MiniMaxH3ChainSegmentSave": "MiniMax H3 Contex Loop Segment + Checkpoint",
     "MiniMaxH3ChainReview": "MiniMax H3 Contex Loop Review Gate",
     "MiniMaxH3ChainLoopEnd": "MiniMax H3 Contex Loop End",

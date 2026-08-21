@@ -678,6 +678,8 @@ def main():
     assert detail_dependency["scopes"]["incoming_boundary"][
         "detail_av_recipe"] == chain.DETAIL_AV_RECIPE
 
+    assert chain.DISPOSABLE_PREFIX_CONTINUATION_MODES == frozenset((
+        "tapered_av", "drift_control_av"))
     clean_blend_source = frames.clone()
     noisy_blend = torch.full((12, 32, 48, 3), -7.0)
     clean_blend = chain._detail_av_clean_blend_images(

@@ -25,7 +25,9 @@ The two continuation engines and public masking path are capability-gated:
 - `drift_control_av` additionally needs current ModelPatcher dynamic-mask and
   apply-model-wrapper APIs. Chain Context installs both hooks on a cloned MODEL
   and refuses an existing dynamic denoise-mask function rather than composing
-  two incompatible owners.
+  two incompatible owners. A sigma-split model switch uses the dedicated
+  one-model Drift-Control Model Patch for each raw branch and shares the
+  original unsplit sigma schedule; the patch does not copy model weights.
 - `MiniMaxH3ContexMaskedTarget` uses the same native-first per-token AV mask
   layer for arbitrary manual targets. It activates compatibility only when the
   node executes and does not require a separate MODEL patch node.

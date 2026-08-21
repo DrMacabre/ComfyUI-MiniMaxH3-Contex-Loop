@@ -95,11 +95,20 @@ apply-model hook, H3's internal per-row timestep labels. Audio remains exact or
 open according to Audio Policy.
 
 Select **Drift-Control AV**, connect the H3 MODEL to Chain Context's optional
-`model` input, and use its `model` output for every sampler stage. Chain Context
-stops before scene 1 when a Drift-Control Plan is missing that route. Do not put
-Differential Diffusion or another dynamic denoise-mask patch on the same MODEL
-path. The initial validated baseline is 39 frames and 20 sampling steps; other
-samplers, schedulers, step counts, and split-sigma paths remain experimental.
+`model` input, and use its `model` output for the first or only sampler stage.
+Chain Context stops before scene 1 when a Drift-Control Plan is missing that
+route. For a sigma split that switches models, leave Chain Context's `model`
+input disconnected. Connect the original full schedule (before the split) to
+its `drift_sigmas` input, then place **MiniMax H3 Drift-Control Model Patch
+(Sigma Split)** between each raw model and its sampler. Feed every patch Current
+Shot `state`, Chain Context `latent`, and that same original full sigma
+schedule. This keeps both model loaders independent and sequential. Each patch
+stores only a small CPU sigma tuple and cloned ModelPatcher metadata, not
+another copy of either model's weights.
+
+Do not put Differential Diffusion or another dynamic denoise-mask patch on the
+same MODEL path. The initial validated baseline is 39 frames and 20 sampling
+steps; other samplers, schedulers, and step counts remain experimental.
 
 The 0.5 **Soft AV** preset selects `audio_feathered_av`: all picture-prefix
 steps remain exact. With Generated continuity on, only the final eight carried

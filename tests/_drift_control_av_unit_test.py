@@ -82,6 +82,21 @@ assert state.apply_model_wrapper(
     executor, "x", denoise_mask=torch.ones((1, 1, 15, 2, 2))) == "ok"
 assert captured["denoise_mask"] is state.current_video_mask
 
+# A sigma-split sampler exposes only its local schedule.  Supplying the full
+# unsplit schedule keeps the boundary's next-sigma ratio identical across
+# switched model branches instead of incorrectly treating the split as zero.
+split_local = torch.tensor([1.0, 0.8])
+split_without_override = drift._DriftControlMaskState(video_shape, 12)
+split_without_override.denoise_mask_function(
+    torch.tensor([0.8]), base, {"sigmas": split_local})
+assert split_without_override.last_ratio == 0.0
+split_with_override = drift._DriftControlMaskState(
+    video_shape, 12, schedule_override=schedule)
+split_updated = split_with_override.denoise_mask_function(
+    torch.tensor([0.8]), base, {"sigmas": split_local})
+assert abs(split_with_override.last_ratio - 0.625) < 1e-7
+assert abs(float(split_updated[..., 0]) - 0.625) < 1e-7
+
 try:
     drift._DriftControlMaskState(video_shape, 11)
 except ValueError as exc:
@@ -147,6 +162,16 @@ assert patched.model_options[
 assert len(patched.wrappers) == 1
 assert patched.wrappers[0][0:2] == (
     "apply_model", "h3_context_loop_drift_control_av")
+
+marked = drift.mark_drift_control_latent(latent, 12)
+assert marked is not latent
+assert drift.drift_control_latent_prefix_steps(marked) == 12
+try:
+    drift.drift_control_latent_prefix_steps(latent)
+except ValueError as exc:
+    assert "Chain Context's latent" in str(exc)
+else:
+    raise AssertionError("The inline patch accepted an unmarked stock latent")
 
 conflicting = FakeModel()
 conflicting.model_options["denoise_mask_function"] = lambda *args: args[1]

@@ -131,6 +131,13 @@ output couples the sampler-side inpaint blend to H3's per-row timestep mask;
 using only one of those paths would give the model a mislabeled prefix. The
 recipe is dependency-hashed and initially validated at 20 steps.
 
+When a workflow splits sigmas and switches H3 models, Chain Context receives
+the original unsplit schedule but no MODEL. Each raw model passes through its
+own lightweight Drift-Control Model Patch with the same Current Shot state,
+Chain Context latent, and full schedule. This keeps next-sigma selection
+continuous across the sampler boundary without making Chain Context own either
+model loader or retaining duplicate weight tensors.
+
 ## Scene dependency contract
 
 Each accepted scene stores `h3_scene_dependency_v1`. Dependencies have four

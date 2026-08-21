@@ -33,6 +33,7 @@ from .contracts_v05 import DRIFT_CONTROL_AV_RECIPE
 _LOG = logging.getLogger("minimax_h3_context_loop.drift_control_av")
 _WRAPPER_KEY = "h3_context_loop_drift_control_av"
 _MODEL_OPTION_MARKER = "h3_context_loop_drift_control_av_recipe"
+_LATENT_MARKER = "h3_context_loop_drift_control_av_prefix"
 
 
 def _schedule_values(sigmas: Any) -> tuple[float, ...]:
@@ -148,7 +149,12 @@ def apply_dynamic_prefix_mask(
 class _DriftControlMaskState:
     """Per-model-call state shared by sampler and apply-model wrappers."""
 
-    def __init__(self, video_shape: tuple[int, ...], prefix_steps: int):
+    def __init__(
+        self,
+        video_shape: tuple[int, ...],
+        prefix_steps: int,
+        schedule_override: Any = None,
+    ):
         self.video_shape = tuple(int(value) for value in video_shape)
         self.prefix_steps = int(prefix_steps)
         self.matched_steps = int(DRIFT_CONTROL_AV_RECIPE["matched_steps"])
@@ -161,6 +167,11 @@ class _DriftControlMaskState:
         self.current_video_mask: torch.Tensor | None = None
         self.last_sigma: float | None = None
         self.last_ratio: float | None = None
+        # Keep only a tiny CPU tuple.  In a sigma-split workflow every sampler
+        # exposes only its local half through extra_options["sigmas"].  The
+        # original unsplit schedule lets both model branches resolve the same
+        # next sigma at the hand-off without retaining another model or latent.
+        self.schedule_override = _schedule_values(schedule_override)
 
     def denoise_mask_function(
         self,
@@ -169,7 +180,10 @@ class _DriftControlMaskState:
         extra_options: dict[str, Any] | None = None,
     ) -> torch.Tensor:
         current = float(torch.as_tensor(sigma).detach().float().reshape(-1)[0])
-        schedule = (extra_options or {}).get("sigmas", ())
+        schedule = (
+            self.schedule_override
+            or (extra_options or {}).get("sigmas", ())
+        )
         ratio = matched_noise_ratio(current, schedule)
         out, video_mask = apply_dynamic_prefix_mask(
             denoise_mask,
@@ -196,6 +210,7 @@ def install_drift_control_av_model(
     model: Any,
     latent: dict[str, Any],
     prefix_steps: int,
+    schedule_override: Any = None,
 ):
     """Clone an H3 MODEL and install the coupled dynamic-mask hooks."""
     if model is None:
@@ -254,7 +269,11 @@ def install_drift_control_av_model(
 
     from comfy.patcher_extension import WrappersMP
 
-    state = _DriftControlMaskState(video_shape, int(prefix_steps))
+    state = _DriftControlMaskState(
+        video_shape,
+        int(prefix_steps),
+        schedule_override=schedule_override,
+    )
     patched.set_model_denoise_mask_function(state.denoise_mask_function)
     patched.add_wrapper_with_key(
         WrappersMP.APPLY_MODEL,
@@ -268,9 +287,54 @@ def install_drift_control_av_model(
     patched.model_options[_WRAPPER_KEY] = state
     _LOG.info(
         "H3 Drift-Control AV: installed schedule-matched video mask for %d "
-        "prefix steps (%d matched + %d clean-seam taper); audio unchanged",
+        "prefix steps (%d matched + %d clean-seam taper); %s; audio "
+        "unchanged",
         int(prefix_steps),
         int(state.matched_steps),
         int(state.taper_steps),
+        ("using %d values from the full unsplit sigma schedule" %
+         len(state.schedule_override)
+         if state.schedule_override else
+         "using the active sampler stage's sigma schedule"),
     )
     return patched
+
+
+def mark_drift_control_latent(
+    latent: dict[str, Any],
+    prefix_steps: int,
+) -> dict[str, Any]:
+    """Mark the exact Chain Context latent accepted by inline model patches."""
+    if not isinstance(latent, dict):
+        raise ValueError(
+            "h3_drift_control_av: Chain Context did not produce a LATENT."
+        )
+    output = dict(latent)
+    output[_LATENT_MARKER] = {
+        "version": str(DRIFT_CONTROL_AV_RECIPE["version"]),
+        "prefix_steps": int(prefix_steps),
+    }
+    return output
+
+
+def drift_control_latent_prefix_steps(latent: Any) -> int:
+    """Validate and return a marked Drift-Control prefix step count."""
+    marker = latent.get(_LATENT_MARKER) if isinstance(latent, dict) else None
+    if not isinstance(marker, dict):
+        raise ValueError(
+            "Drift-Control Model Patch requires Chain Context's latent "
+            "output for the active scene. Do not connect the stock empty "
+            "latent directly."
+        )
+    if str(marker.get("version", "")) != str(
+            DRIFT_CONTROL_AV_RECIPE["version"]):
+        raise ValueError(
+            "Drift-Control Model Patch received an incompatible latent "
+            "recipe. Re-run Chain Context with the current node version."
+        )
+    steps = int(marker.get("prefix_steps", 0))
+    if steps < 1:
+        raise ValueError(
+            "Drift-Control Model Patch received an invalid prefix marker."
+        )
+    return steps

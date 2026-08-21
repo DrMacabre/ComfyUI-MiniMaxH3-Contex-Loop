@@ -372,9 +372,28 @@ masked_stub.apply_masked_prefix = lambda **_kwargs: (
     39,
 )
 drift_stub = types.ModuleType(PACKAGE + ".drift_control")
-drift_stub.install_drift_control_av_model = (
-    lambda model, _latent, prefix_steps:
-    ("patched-model", model, prefix_steps))
+drift_calls = []
+
+
+def mark_drift_latent(latent, prefix_steps):
+    marked = dict(latent)
+    marked["drift_prefix_steps"] = int(prefix_steps)
+    return marked
+
+
+def drift_prefix_steps(latent):
+    return int(latent["drift_prefix_steps"])
+
+
+def install_drift_model(
+        model, _latent, prefix_steps, schedule_override=None):
+    drift_calls.append((model, prefix_steps, schedule_override))
+    return ("patched-model", model, prefix_steps)
+
+
+drift_stub.mark_drift_control_latent = mark_drift_latent
+drift_stub.drift_control_latent_prefix_steps = drift_prefix_steps
+drift_stub.install_drift_control_av_model = install_drift_model
 sys.modules[masked_stub.__name__] = masked_stub
 sys.modules[drift_stub.__name__] = drift_stub
 try:
@@ -386,7 +405,7 @@ try:
             latent="target-latent",
         )
     except ValueError as exc:
-        assert "Connect the H3 MODEL" in str(exc)
+        assert "connect it to Chain Context" in str(exc)
     else:
         raise AssertionError(
             "Drift-Control AV accepted a disconnected MODEL path")
@@ -400,23 +419,66 @@ try:
     )
     assert first_result == (
         "stock-conditioning", 0, False, "target-latent", "h3-model")
-    second_result = chain.MiniMaxH3ChainContext().apply(
-        state={
+    full_sigmas = torch.tensor([1.0, 0.8, 0.5, 0.2, 0.0])
+    split_first_result = chain.MiniMaxH3ChainContext().apply(
+        state={"index": 1, "plan": drift_plan},
+        conditioning="stock-conditioning",
+        vae=object(),
+        latent="target-latent",
+        drift_sigmas=full_sigmas,
+    )
+    assert split_first_result == (
+        "stock-conditioning", 0, False, "target-latent", None)
+    second_state = {
             "index": 2,
             "plan": drift_plan,
             "previous_frames": source,
             "previous_latent": original_latent,
             "segments": [],
-        },
+        }
+    second_result = chain.MiniMaxH3ChainContext().apply(
+        state=second_state,
         conditioning="stock-conditioning",
         vae=object(),
         latent="target-latent",
         model="h3-model",
+        drift_sigmas=full_sigmas,
     )
     assert second_result[:3] == ("drift-conditioning", 39, True)
     assert tuple(second_result[3]["samples"][0].shape) == (
         1, 16, 12, 2, 2)
     assert second_result[4] == ("patched-model", "h3-model", 12)
+    assert drift_calls[-1] == ("h3-model", 12, full_sigmas)
+
+    split_second_result = chain.MiniMaxH3ChainContext().apply(
+        state=second_state,
+        conditioning="stock-conditioning",
+        vae=object(),
+        latent="target-latent",
+        drift_sigmas=full_sigmas,
+    )
+    assert split_second_result[:3] == (
+        "drift-conditioning", 39, True)
+    assert split_second_result[4] is None
+
+    # A switched second model is patched inline from the same Chain Context
+    # latent and full unsplit schedule. The first scene remains a passthrough.
+    inline = chain.MiniMaxH3DriftControlModelPatch()
+    assert inline.patch(
+        "second-h3-model",
+        {"index": 1, "plan": drift_plan},
+        "stock-latent",
+        full_sigmas,
+    ) == ("second-h3-model",)
+    inline_result = inline.patch(
+        "second-h3-model",
+        second_state,
+        split_second_result[3],
+        full_sigmas,
+    )
+    assert inline_result == (
+        ("patched-model", "second-h3-model", 12),)
+    assert drift_calls[-1] == ("second-h3-model", 12, full_sigmas)
 finally:
     sys.modules.pop(masked_stub.__name__, None)
     sys.modules.pop(drift_stub.__name__, None)
