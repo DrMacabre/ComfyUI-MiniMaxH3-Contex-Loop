@@ -57,8 +57,9 @@ recursive Motion Context.
 ## Deferred H3 upscale
 
 [`MiniMax H3 Deferred Upscale - SeedVR2 Full Chain.json`](<MiniMax H3 Deferred Upscale - SeedVR2 Full Chain.json>)
-is the low-RAM whole-video route. Checkpoint Manager supplies one complete
-branch; Full-Chain Latent Video Adapter re-decodes the original H3 video
+is the low-RAM whole-video route. Checkpoint Manager supplies the selected
+generated lineage, including a partial run when later planned scenes have not
+been rendered yet; Full-Chain Latent Video Adapter re-decodes the original H3 video
 latents scene by scene into a cached lossless native VIDEO, resolves all H3
 boundary blends first, and hands that single continuous file to SeedVR2 Direct.
 The default disk-backed VAE buffer prevents a decoded scene—let alone the full
@@ -70,10 +71,11 @@ before opening the graph.
 
 [`MiniMax H3 Deferred Upscale - H3 Learned 2x.json`](<MiniMax H3 Deferred Upscale - H3 Learned 2x.json>)
 is a standalone second-pass workflow: it contains no first-pass generation
-loop or source Plan. Select the final scene of a complete branch in Checkpoint
-Manager, then queue the child upscale profile. The manager emits that verified
-immutable lineage directly; recovery-only Source Timeline metadata stays
-embedded in the manifest.
+loop or source Plan. Select the latest generated scene you want in Checkpoint
+Manager, then queue the child upscale profile. The selected lineage may be
+shorter than the saved Plan; for example, scene 1 can be upscaled while scenes
+2–4 are still ungenerated. The manager emits that verified immutable lineage
+directly; recovery-only Source Timeline metadata stays embedded in the manifest.
 
 The loop uses Tr1dae's **MiniMax H3 Latent Upscale Combined 2x**, the learned
 clean-latent path, a four-step staggered refinement schedule at denoise 0.45,

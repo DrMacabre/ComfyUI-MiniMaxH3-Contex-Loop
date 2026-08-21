@@ -186,6 +186,22 @@ def main():
             assert abs(pixels[4] - 170) <= 2
             assert all(value >= 253 for value in pixels[5:])
 
+            partial_manifest = {
+                **manifest,
+                "clip_count": 1,
+                "planned_clip_count": 2,
+                "selection_complete": False,
+                "total_delivered_frames": 5,
+                "segments": manifest["segments"][:1],
+            }
+            partial_vae = FakeVAE()
+            partial_video, partial_path, partial_status = node().adapt(
+                partial_manifest, partial_vae, "none", "plan", "memory",
+                False, 256)
+            assert partial_video == partial_path
+            assert partial_vae.calls == 1
+            assert "1 scenes / 5 frames" in partial_status
+
             cached_vae = FakeVAE()
             cached_vae.fail = True
             cached_video, cached_path, cached_status = node().adapt(

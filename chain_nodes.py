@@ -10147,16 +10147,17 @@ class MiniMaxH3ChainCheckpointManager:
     RETURN_TYPES = (MANIFEST_TYPE,)
     RETURN_NAMES = ("selected_manifest",)
     OUTPUT_TOOLTIPS = (
-        "The complete selected checkpoint lineage as a verified manifest. "
-        "This is the only Checkpoint Upscale Adapter input.",
+        "The selected checkpoint lineage as a verified manifest. A partial "
+        "generated lineage is valid even when the saved Plan contains later "
+        "scenes. This is the only Checkpoint Upscale Adapter input.",
     )
     FUNCTION = "passthrough"
     CATEGORY = "conditioning/minimax/contex_loop"
     DESCRIPTION = (
         "Browse checkpoint scenes and inferred revision branches across H3 "
         "runs; preview saved media, inspect exact video/audio context "
-        "dependencies and storage, emit a complete selected branch for "
-        "standalone upscaling, load any complete branch into a connected Plan, "
+        "dependencies and storage, emit the selected generated lineage for "
+        "standalone upscaling, load any branch into a connected Plan, "
         "delete inactive leaves, or roll back the active branch tip after a "
         "complete deletion preview.")
 
@@ -14316,8 +14317,9 @@ class MiniMaxH3ChainLatentVideoAdapter:
         return {
             "required": {
                 "manifest": (MANIFEST_TYPE, {
-                    "tooltip": "Complete selected branch from Checkpoint "
-                               "Manager. No source Plan is required."}),
+                    "tooltip": "Selected generated lineage from Checkpoint "
+                               "Manager. Partial runs are supported and no "
+                               "source Plan is required."}),
                 "video_vae": ("VAE", {
                     "tooltip": "The original MiniMax H3 video VAE. Every "
                                "checkpoint latent is decoded directly; saved "
@@ -14368,7 +14370,7 @@ class MiniMaxH3ChainLatentVideoAdapter:
     FUNCTION = "adapt"
     CATEGORY = "conditioning/minimax/contex_loop"
     DESCRIPTION = (
-        "Stream a complete checkpoint branch from original H3 video latents "
+        "Stream a selected checkpoint lineage from original H3 video latents "
         "into one lossless, audio-bearing, file-backed VIDEO. Scene overlap "
         "blends happen before a whole-video upscaler; the full frame sequence "
         "never becomes one ComfyUI IMAGE tensor.")
@@ -14386,7 +14388,7 @@ class MiniMaxH3ChainLatentVideoAdapter:
         if not isinstance(manifest, dict) or manifest.get(
                 "format") != "h3_chain_manifest_v3":
             raise ValueError(
-                "H3 Full-Chain Latent Video requires a complete branch from "
+                "H3 Full-Chain Latent Video requires a generated lineage from "
                 "Checkpoint Manager.")
         segments = _checkpoint_export_segments(manifest)
         prelude = _validate_prelude(manifest)
@@ -15248,14 +15250,14 @@ def _load_checkpoint_revision(
 
 
 def _checkpoint_selection_manifest(value: Any) -> dict[str, Any] | None:
-    """Build one immutable complete branch directly from manager selection."""
+    """Build one immutable generated lineage directly from manager selection."""
     if value is None or (isinstance(value, str) and not value.strip()):
         return None
     selection = _json_document(value)
     if not isinstance(selection, dict):
         raise ValueError(
             "Checkpoint Manager selection is not a JSON object. Select a "
-            "complete branch again.")
+            "checkpoint revision again.")
     run_name = _safe_name(selection.get("run_name"), "")
     if not run_name:
         raise ValueError("Checkpoint Manager selection has no saved run.")
@@ -15272,12 +15274,11 @@ def _checkpoint_selection_manifest(value: Any) -> dict[str, Any] | None:
     shots = archived_plan.get("shots") if isinstance(archived_plan, dict) else None
     if not isinstance(shots, list) or not shots:
         raise ValueError("Selected H3 run has no valid archived scene list.")
-    if len(lineage) != len(shots):
+    if len(lineage) > len(shots):
         raise ValueError(
-            "Checkpoint Manager selected a partial branch through scene %d; "
-            "upscaling requires the complete %d-scene branch. Select scene "
-            "%d at the right-hand tip of the desired branch." %
-            (len(lineage), len(shots), len(shots)))
+            "Checkpoint Manager selected a lineage through scene %d, but the "
+            "archived Plan contains only %d scenes." %
+            (len(lineage), len(shots)))
 
     loaded = []
     compatibility = None
@@ -15286,7 +15287,7 @@ def _checkpoint_selection_manifest(value: Any) -> dict[str, Any] | None:
         if not isinstance(item, dict) or int(item.get("scene", 0)) != index:
             raise ValueError(
                 "Checkpoint Manager lineage must contain contiguous scenes "
-                "1 through %d." % len(shots))
+                "1 through %d." % len(lineage))
         metadata, _metadata_path = _load_checkpoint_revision(
             run_name, index, item.get("revision"))
         current_compatibility = metadata.get("compatibility")
@@ -15365,6 +15366,8 @@ def _checkpoint_selection_manifest(value: Any) -> dict[str, Any] | None:
         "prompt_prefix": str(prompt_prefix or ""),
         "compatibility": _json_document(compatibility),
         "clip_count": len(segments),
+        "planned_clip_count": len(shots),
+        "selection_complete": len(segments) == len(shots),
         "total_delivered_frames": total_frames,
         "duration_seconds": total_frames / float(FPS),
         "segments": segments,

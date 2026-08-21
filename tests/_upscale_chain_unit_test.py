@@ -123,10 +123,31 @@ def main():
         })
         manager = chain.MiniMaxH3ChainCheckpointManager()
         assert manager.passthrough("")[0] is None
+        partial_selection = json.dumps({
+            "run_name": "upscale_test",
+            "lineage": [
+                {"scene": 1, "revision": source["revision"]},
+            ],
+        })
+        partial_manifest = manager.passthrough(partial_selection)[0]
+        assert partial_manifest["clip_count"] == 1
+        assert partial_manifest["planned_clip_count"] == 2
+        assert partial_manifest["selection_complete"] is False
+        assert [item["revision"] for item in partial_manifest["segments"]] == [
+            source["revision"]]
         selected_manifest = manager.passthrough(selection)[0]
         assert selected_manifest["clip_count"] == 2
+        assert selected_manifest["planned_clip_count"] == 2
+        assert selected_manifest["selection_complete"] is True
 
         adapter = upscale.MiniMaxH3ChainUpscaleAdapter()
+        _partial_flow, partial_state, partial_source, partial_status = (
+            adapter.adapt(
+                partial_manifest, "partial", "h3_latent", '{"scale":2}',
+                1, 0, False, 18))
+        assert len(partial_state["source_manifest"]["segments"]) == 1
+        assert partial_source["planned_clip_count"] == 2
+        assert "scene 1/1" in partial_status
         flow, upscale_state, source_manifest, _status = adapter.adapt(
             selected_manifest, "quality", "h3_latent", '{"scale":2}',
             1, 1, False, 18)

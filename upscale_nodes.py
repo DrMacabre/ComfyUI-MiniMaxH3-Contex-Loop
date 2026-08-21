@@ -91,7 +91,7 @@ def _verified_source_manifest(value: dict[str, Any]) -> dict[str, Any]:
     manifest = chain._json_document(value)
     if not isinstance(manifest, dict):
         raise ValueError(
-            "Checkpoint Upscale Adapter requires a selected branch manifest "
+            "Checkpoint Upscale Adapter requires a selected lineage manifest "
             "from Checkpoint Manager.")
     chain._validate_manifest(manifest)
     if isinstance(manifest.get("prelude"), dict):
@@ -281,8 +281,10 @@ class MiniMaxH3ChainUpscaleAdapter:
         return {
             "required": {
                 "source_manifest": (chain.MANIFEST_TYPE, {
-                    "tooltip": "Verified complete branch emitted directly by "
-                               "Checkpoint Manager. No source Plan is needed."}),
+                    "tooltip": "Verified generated lineage emitted directly "
+                               "by Checkpoint Manager. It may stop before "
+                               "later ungenerated Plan scenes; no source Plan "
+                               "is needed."}),
                 "profile": ("STRING", {
                     "default": "h3_2x",
                     "tooltip": "Child output folder under this run's upscaled directory."}),
@@ -319,12 +321,12 @@ class MiniMaxH3ChainUpscaleAdapter:
     OUTPUT_TOOLTIPS = (
         "Raw recursive-loop link; connect it directly to Upscale Loop End.",
         "Current child-run state for Upscale Current Scene.",
-        "Verified complete manifest of the selected parent checkpoint branch.",
+        "Verified manifest of the selected generated checkpoint lineage.",
         "Selected profile, scene range, backend label, and latent-save policy.",
     )
     FUNCTION = "adapt"
     CATEGORY = "conditioning/minimax/contex_loop/upscale"
-    DESCRIPTION = ("Turn Checkpoint Manager's selected complete branch into a "
+    DESCRIPTION = ("Turn Checkpoint Manager's selected generated lineage into a "
                    "resumable child upscale loop without a source Plan or "
                    "changes to the source run.")
 
