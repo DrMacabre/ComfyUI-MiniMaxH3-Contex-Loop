@@ -20,6 +20,7 @@ PREFLIGHT_VERSION = "h3_preflight_v1"
 FINAL_AUDIO_POLICIES = ("generated", "source", "none")
 SOURCE_REFERENCE_POLICIES = ("off", "on")
 GENERATED_CONTINUITY_POLICIES = ("off", "on")
+SOURCE_AUDIO_TARGET_POLICIES = ("off", "locked")
 PAIRED_AUDIO_POLICIES = ("off", "embedded")
 PRIMARY_TRANSITION_PRESETS = ("cut", "guide", "hard_av", "soft_av")
 DEFAULT_AUDIO_CONTEXT_LENGTH = 22
@@ -191,11 +192,16 @@ def audio_policy(
     final_audio: str,
     source_reference: str,
     generated_continuity: str,
+    source_audio_target: str | bool = "off",
 ) -> dict[str, str]:
     """Validate and return one independent 0.5 audio-policy record."""
     final = str(final_audio)
     source = str(source_reference)
     continuity = str(generated_continuity)
+    if isinstance(source_audio_target, bool):
+        target = "locked" if source_audio_target else "off"
+    else:
+        target = str(source_audio_target or "off").strip().lower()
     if final not in FINAL_AUDIO_POLICIES:
         raise ValueError("Unknown H3 final-audio policy %r." % final_audio)
     if source not in SOURCE_REFERENCE_POLICIES:
@@ -205,12 +211,28 @@ def audio_policy(
         raise ValueError(
             "Unknown H3 generated-continuity policy %r." %
             generated_continuity)
-    return {
+    if target not in SOURCE_AUDIO_TARGET_POLICIES:
+        raise ValueError(
+            "Unknown H3 source-audio-target policy %r." %
+            source_audio_target)
+    # A clean source waveform occupying the complete target audio latent is
+    # already the strongest possible audio condition.  Keeping a separate
+    # Ref2VA audio bank or a predecessor audio prefix would describe competing
+    # clocks, so the compact switch resolves both axes off canonically.
+    if target == "locked":
+        source = "off"
+        continuity = "off"
+    policy = {
         "version": AUDIO_POLICY_VERSION,
         "final_audio": final,
         "source_reference": source,
         "generated_continuity": continuity,
     }
+    # Preserve the byte-for-byte v1 spelling for existing workflows and
+    # checkpoints when the new opt-in behavior is disabled.
+    if target != "off":
+        policy["source_audio_target"] = target
+    return policy
 
 
 def compose_chain_policy(
@@ -229,7 +251,8 @@ def compose_chain_policy(
         raise ValueError("H3 Chain Policy requires a current Audio Policy.")
     resolved_audio = audio_policy(
         audio.get("final_audio"), audio.get("source_reference"),
-        audio.get("generated_continuity"))
+        audio.get("generated_continuity"),
+        audio.get("source_audio_target", "off"))
     if (not isinstance(transition, dict) or
             transition.get("version") != TRANSITION_POLICY_VERSION):
         raise ValueError("H3 Chain Policy requires a current Transition Policy.")
@@ -263,8 +286,9 @@ def chain_policy(
     final_audio: str,
     source_reference: str,
     generated_continuity: str,
+    lock_source_audio: bool = False,
 ) -> dict[str, Any]:
-    """Build the compact normal-user policy from its four semantic choices."""
+    """Build the compact normal-user policy from its semantic choices."""
     preset = str(incoming_transition)
     if preset not in PRIMARY_TRANSITION_PRESETS:
         raise ValueError(
@@ -272,7 +296,9 @@ def chain_policy(
             (PRIMARY_TRANSITION_PRESETS,))
     resolved_transition = transition_policy(preset)
     return compose_chain_policy(
-        audio_policy(final_audio, source_reference, generated_continuity),
+        audio_policy(
+            final_audio, source_reference, generated_continuity,
+            "locked" if bool(lock_source_audio) else "off"),
         resolved_transition,
         # Normal authoring keeps picture and generated-audio carry on the
         # same tested boundary. The numeric control remains available only

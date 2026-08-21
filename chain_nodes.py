@@ -218,7 +218,8 @@ def _validate_audio_policy(value: Any) -> dict[str, str]:
             "H3 Audio Policy version is missing or obsolete.")
     return _contract_audio_policy(
         value.get("final_audio"), value.get("source_reference"),
-        value.get("generated_continuity"))
+        value.get("generated_continuity"),
+        value.get("source_audio_target", "off"))
 
 
 def _resolved_audio_policy(value: Any) -> dict[str, str]:
@@ -246,15 +247,24 @@ def _legacy_audio_mode_for_policy(policy: Any) -> str:
 
 def _audio_policy_summary(value: Any) -> str:
     policy = _resolved_audio_policy(value)
-    return "final=%s/ref=%s/carry=%s" % (
+    summary = "final=%s/ref=%s/carry=%s" % (
         policy["final_audio"], policy["source_reference"],
         policy["generated_continuity"])
+    if policy.get("source_audio_target") == "locked":
+        summary += "/target=locked"
+    return summary
+
+
+def _audio_policy_locks_source_audio(value: Any) -> bool:
+    return _resolved_audio_policy(value).get(
+        "source_audio_target", "off") == "locked"
 
 
 def _audio_policy_requires_source(value: Any) -> bool:
     policy = _resolved_audio_policy(value)
     return (policy["final_audio"] == "source" or
-            policy["source_reference"] == "on")
+            policy["source_reference"] == "on" or
+            policy.get("source_audio_target") == "locked")
 
 
 def _audio_policy_uses_source_reference(value: Any) -> bool:
@@ -3831,8 +3841,9 @@ def _canonical_source_reference_dependency(
         plan: dict[str, Any], index: int,
         source_timeline: Any = None, source_audio: Any = None
         ) -> dict[str, Any] | None:
-    """Hash only the canonical source PCM window which guides one scene."""
-    if not _audio_policy_uses_source_reference(plan):
+    """Hash the canonical source PCM window which affects one scene."""
+    if (not _audio_policy_uses_source_reference(plan)
+            and not _audio_policy_locks_source_audio(plan)):
         return None
     shot = plan["shots"][int(index) - 1]
     external_lead = int(shot.get("external_context_frames", 0))
@@ -3942,6 +3953,10 @@ def _scene_dependency_record(
             "video_blend_frames": video_blend,
         },
     }
+    if _audio_policy_locks_source_audio(compatibility):
+        # Omit the disabled spelling so pre-switch scene-dependency records
+        # remain byte-for-byte compatible with unchanged 0.5 runs.
+        scopes["global_generation"]["source_audio_target"] = "locked"
     if transition in MASKED_CONTINUATION_MODES:
         # v2 separates a masked motion video's delivered-only bank from its
         # paired soundtrack's full raw target window, and obeys Generated
@@ -4330,9 +4345,8 @@ def _plan_with_source_audio(plan: dict[str, Any],
     if _audio_policy_requires_source(plan):
         if source_audio is None:
             raise ValueError(
-                "H3 chain Audio Policy final=%s, source reference=%s "
-                "requires source_audio on Loop Start." %
-                (policy["final_audio"], policy["source_reference"]))
+                "H3 chain Audio Policy %s requires source_audio on Loop "
+                "Start." % _audio_policy_summary({"audio_policy": policy}))
         waveform, sample_rate = _validate_audio(
             source_audio, "H3 Chain Loop Start source audio")
         required_samples = int(round(
@@ -4382,9 +4396,8 @@ def _plan_with_source_timeline(
     audio_kind = str(source["audio"]["kind"])
     if _audio_policy_requires_source(plan) and audio_kind == "none":
         raise ValueError(
-            "H3 chain Audio Policy final=%s, source reference=%s requires "
-            "audio on Source Timeline." %
-            (policy["final_audio"], policy["source_reference"]))
+            "H3 chain Audio Policy %s requires audio on Source Timeline." %
+            _audio_policy_summary({"audio_policy": policy}))
     required_frames = int(plan["total_delivered_frames"])
     silent_padding = bool(
         source.get("recovery", {}).get("silent_padding_frames"))
@@ -8473,8 +8486,10 @@ class MiniMaxH3ChainPolicy:
                 "source_reference": (list(SOURCE_REFERENCE_POLICIES), {
                     "default": "off",
                     "tooltip": "On exposes the exact source-timeline audio "
-                               "window to the generation graph. This is "
-                               "independent of the final soundtrack."}),
+                               "window as a separate Ref2VA Audio reference. "
+                               "This is independent of the final soundtrack. "
+                               "Lock source audio overrides this off because "
+                               "the source already occupies the target latent."}),
                 "generated_continuity": (
                     list(GENERATED_CONTINUITY_POLICIES), {
                         "default": "on",
@@ -8484,7 +8499,19 @@ class MiniMaxH3ChainPolicy:
                                    "context; AV follows its exact shared video "
                                    "boundary. Off leaves target audio fully "
                                    "denoisable. This does not select the final "
-                                   "soundtrack."}),
+                                   "soundtrack. Lock source audio overrides "
+                                   "this off."}),
+                # Keep this last so older serialized widget arrays retain the
+                # exact positions of all existing 0.5 choices.
+                "lock_source_audio": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Encode each scene's exact Source Timeline "
+                               "window directly into the target H3 audio "
+                               "latent and protect the complete audio mask "
+                               "from denoising. This automatically replaces "
+                               "Source reference and Generated continuity for "
+                               "generation. Choose Final audio=source when the "
+                               "final MP4 must retain the original waveform."}),
             },
         }
 
@@ -8492,8 +8519,8 @@ class MiniMaxH3ChainPolicy:
     RETURN_NAMES = ("chain_policy", "status")
     OUTPUT_TOOLTIPS = (
         "Combined 0.5 policy to connect to Chain Plan's chain_policy input.",
-        "Resolved transition, soundtrack, source-reference, and generated-"
-        "continuity summary.",
+        "Resolved transition, soundtrack, source-reference, generated-"
+        "continuity, and exact-target lock summary.",
     )
     FUNCTION = "build"
     CATEGORY = "conditioning/minimax/contex_loop/policies"
@@ -8504,10 +8531,11 @@ class MiniMaxH3ChainPolicy:
     )
 
     def build(self, incoming_transition="guide", final_audio="generated",
-              source_reference="off", generated_continuity="on"):
+              source_reference="off", generated_continuity="on",
+              lock_source_audio=False):
         policy = _contract_chain_policy(
             incoming_transition, final_audio, source_reference,
-            generated_continuity)
+            generated_continuity, lock_source_audio)
         transition_status = _transition_policy_display({
             "transition_policy": policy["transition_policy"]})
         audio_status = _audio_policy_summary({
@@ -10270,9 +10298,10 @@ class MiniMaxH3ChainCurrent:
         "imported-video scene 1, its separate context lead precedes this time.",
         "Raw conditioning-audio duration in seconds, including any imported "
         "scene 1 context lead.",
-        "Current source-audio window for Ref2VA. It is frame-exact normally, "
-        "or capped to the target H3 audio grid when alignment is enabled. It is "
-        "empty when the Plan Audio Policy has Source reference=off.",
+        "Current source-audio window for a separate Ref2VA Audio reference. It "
+        "is frame-exact normally, or capped to the target H3 audio grid when "
+        "alignment is enabled. It is empty when Source reference=off, including "
+        "when Lock source audio carries the full window privately in state.",
         "Current scene timing, delivered frames, source window, and seed.",
         "Legacy resolved blend integer. New 0.5 workflows connect Current "
         "Shot state to Loop Trim state, which resolves scene overrides "
@@ -10281,7 +10310,7 @@ class MiniMaxH3ChainCurrent:
     FUNCTION = "current"
     CATEGORY = "conditioning/minimax/contex_loop"
     DESCRIPTION = ("Expose the current shot's prompt, seed, dimensions, valid "
-                   "length, steps, and source-audio reference window.")
+                   "length, steps, and source-audio reference/target window.")
 
     def current(self, state, source_audio=None, align_audio_reference=False):
         plan = state["plan"]
@@ -10293,8 +10322,11 @@ class MiniMaxH3ChainCurrent:
                 "H3 Chain Current Shot already receives source media through "
                 "Loop Start's Source Timeline; disconnect legacy source_audio.")
         audio_slice = None
+        target_audio_slice = None
         alignment_status = "audio ref unavailable"
-        if _audio_policy_uses_source_reference(plan):
+        source_reference_enabled = _audio_policy_uses_source_reference(plan)
+        source_audio_locked = _audio_policy_locks_source_audio(plan)
+        if source_reference_enabled or source_audio_locked:
             external_lead = int(shot.get("external_context_frames", 0))
             if source_timeline is not None:
                 _validate_source_timeline_hash(
@@ -10304,7 +10336,7 @@ class MiniMaxH3ChainCurrent:
                     delivered = int(shot["delivered_frames"])
                     extension_audio = _source_timeline_scene_audio(
                         source_timeline, 0, delivered)
-                    audio_slice = _slice_audio_after_external_context(
+                    target_audio_slice = _slice_audio_after_external_context(
                         extension_audio, state.get("previous_audio"),
                         int(shot["raw_frames"]), external_lead,
                         pad_silence=False)
@@ -10312,7 +10344,7 @@ class MiniMaxH3ChainCurrent:
                     source_start = int(round(
                         float(shot["audio_start_seconds"]) * FPS))
                     source_end = source_start + int(shot["raw_frames"])
-                    audio_slice = _source_timeline_scene_audio(
+                    target_audio_slice = _source_timeline_scene_audio(
                         source_timeline, source_start, source_end)
                 alignment_status = "Source Timeline frame-exact"
             else:
@@ -10320,26 +10352,38 @@ class MiniMaxH3ChainCurrent:
                     plan["compatibility"], source_audio,
                     "H3 Chain Current Shot")
                 if index == 1 and external_lead > 0:
-                    audio_slice = _slice_audio_after_external_context(
+                    target_audio_slice = _slice_audio_after_external_context(
                         source_audio, state.get("previous_audio"),
                         int(shot["raw_frames"]), external_lead,
                         pad_silence=bool(plan["compatibility"].get(
                             "source_audio_silent_padding")))
                 else:
-                    audio_slice = _slice_audio(
+                    target_audio_slice = _slice_audio(
                         source_audio, shot["audio_start_seconds"],
                         shot["audio_duration_seconds"],
                         pad_silence=bool(plan["compatibility"].get(
                             "source_audio_silent_padding")))
-            if bool(align_audio_reference):
+            if source_audio_locked and target_audio_slice is None:
+                raise ValueError(
+                    "H3 Chain Current Shot cannot lock source audio because "
+                    "the active Source Timeline has no audio track.")
+            # Alignment is a Ref2VA-only experiment. The locked target keeps
+            # the complete frame-exact waveform and crops only after audio-VAE
+            # encoding to the target latent's authoritative 40 Hz length.
+            audio_slice = target_audio_slice if source_reference_enabled else None
+            if source_reference_enabled and bool(align_audio_reference):
                 audio_slice, alignment_status = (
                     _align_audio_reference_to_h3_grid(
                         audio_slice, int(shot["raw_frames"])))
             else:
                 alignment_status = (
-                    "Source Timeline frame-exact"
-                    if source_timeline is not None else
-                    "audio ref frame-exact")
+                    ("Source Timeline target-locked"
+                     if source_timeline is not None else
+                     "source audio target-locked")
+                    if source_audio_locked else
+                    ("Source Timeline frame-exact"
+                     if source_timeline is not None else
+                     "audio ref frame-exact"))
         external_lead = int(shot.get("external_context_frames", 0))
         if index == 1 and external_lead > 0:
             audio_status = "imported lead %.3fs + song 0..%.3fs" % (
@@ -10364,6 +10408,8 @@ class MiniMaxH3ChainCurrent:
                    shot["delivered_frames"], video_blend_frames, audio_status,
                    alignment_status, shot["seed"]))
         dependency_state = dict(state)
+        if source_audio_locked:
+            dependency_state["current_source_audio_target"] = target_audio_slice
         dependency_state["current_source_reference_dependency"] = (
             _canonical_source_reference_dependency(
                 plan, index, source_timeline, source_audio))
@@ -10460,11 +10506,11 @@ class MiniMaxH3ChainContext:
             },
             "optional": {
                 "audio_vae": ("VAE", {
-                    "tooltip": "H3 audio VAE used only when scene 1 continues "
-                               "from imported video audio. Later loop scenes "
-                               "reuse their saved AV latent directly. It may be "
-                               "left disconnected for visual-only context or "
-                               "when generated continuity is off."}),
+                    "tooltip": "H3 audio VAE used when scene 1 continues from "
+                               "imported audio or when Chain Policy locks each "
+                               "source-audio window into the target latent. It "
+                               "may be left disconnected only when neither "
+                               "behavior is active."}),
                 "model": ("MODEL", {
                     "tooltip": "Required only by Drift-Control AV. Connect "
                                "the MiniMax H3 MODEL before the sampler, then "
@@ -10485,10 +10531,11 @@ class MiniMaxH3ChainContext:
         "MiniMax H3 Contex Loop Trim.",
         "True when preceding video or generated audio is carried, including "
         "audio-only guide continuation; false for a fully independent scene.",
-        "Sampler-ready target latent. In guide mode this is the input latent "
-        "unchanged. In an AV mask mode its preserved prefix and nested "
-        "denoise mask carry the previous scene into the current target. Wire "
-        "this output to the sampler so Plan can switch safely.",
+        "Sampler-ready target latent. With Lock source audio, its complete "
+        "scene-local audio stream is source encoded and protected even in "
+        "Guide/Cut modes. AV mask modes additionally preserve the selected "
+        "video prefix. Wire this output to the sampler so Plan can switch "
+        "safely.",
         "H3 MODEL patched only while Drift-Control AV is active; otherwise "
         "the optional input MODEL passes through unchanged. Connect this to "
         "every sampler stage when the Plan contains Drift-Control AV.",
@@ -10518,9 +10565,17 @@ class MiniMaxH3ChainContext:
             "continuation_mode", cfg.get("continuation_mode", "guide"))
         context_spatial_proxy = _shot_context_spatial_proxy(shot)
         external_first = index == 1 and bool(state.get("external_context"))
+        source_audio_locked = _audio_policy_locks_source_audio(cfg)
+        target_latent = latent
+        if source_audio_locked:
+            from .masked_context import apply_locked_source_audio_target
+
+            target_latent = apply_locked_source_audio_target(
+                latent, audio_vae, state.get("current_source_audio_target"))
         generated_audio_context = (
             continuation_mode in GUIDE_CONTINUATION_MODES
             and _audio_policy_uses_generated_continuity(cfg)
+            and not source_audio_locked
             and audio_context_length > 0)
         has_context = context_length > 0 or generated_audio_context
         if not has_context or (index == 1 and not external_first):
@@ -10560,7 +10615,7 @@ class MiniMaxH3ChainContext:
                 prepared_conditioning,
                 0,
                 False,
-                latent,
+                target_latent,
                 model,
             )
         previous_frames = _previous_context_frames(
@@ -10571,13 +10626,14 @@ class MiniMaxH3ChainContext:
             previous_latent = state.get("previous_latent")
             preserve_audio_prefix = (
                 _audio_policy_uses_generated_continuity(cfg)
+                and not source_audio_locked
                 and audio_context_length > 0)
             detail_video_seed = (
                 int(shot["seed"]) ^ int(DETAIL_AV_RECIPE["seed_xor"]))
             out_conditioning, out_latent, trim = apply_masked_prefix(
                 conditioning=conditioning,
                 vae=vae,
-                latent=latent,
+                latent=target_latent,
                 previous_frames=previous_frames,
                 context_length=context_length,
                 crop=cfg["crop"],
@@ -10667,7 +10723,7 @@ class MiniMaxH3ChainContext:
         out, trim = MiniMaxH3MotionContext().apply(
             conditioning=conditioning,
             vae=vae,
-            latent=latent,
+            latent=target_latent,
             context_frames=previous_frames,
             context_length=context_length,
             encode_mode=cfg["encode_mode"],
@@ -10681,7 +10737,7 @@ class MiniMaxH3ChainContext:
             context_audio=previous_audio,
             video_context_latent=video_context_latent,
         )
-        return (out, trim, True, latent, model)
+        return (out, trim, True, target_latent, model)
 
 
 class MiniMaxH3ChainSegmentSave:
@@ -10942,7 +10998,8 @@ class MiniMaxH3ChainSegmentSave:
                 "current_source_reference_dependency")
             if (source_dependency is None
                     and state.get("source_timeline") is not None
-                    and _audio_policy_uses_source_reference(plan)):
+                    and (_audio_policy_uses_source_reference(plan)
+                         or _audio_policy_locks_source_audio(plan))):
                 source_dependency = _canonical_source_reference_dependency(
                     plan, index, state.get("source_timeline"), None)
             scene_dependency = _scene_dependency_record(

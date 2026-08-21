@@ -78,6 +78,26 @@ assert default_policy == {
 }
 assert "final=generated/ref=off/carry=on" in default_status
 
+locked_policy = chain._contract_audio_policy(
+    "source", "on", "on", "locked")
+assert locked_policy == {
+    "version": chain.AUDIO_POLICY_VERSION,
+    "final_audio": "source",
+    "source_reference": "off",
+    "generated_continuity": "off",
+    "source_audio_target": "locked",
+}
+assert chain._audio_policy_locks_source_audio({
+    "audio_policy": locked_policy})
+assert not chain._audio_policy_uses_source_reference({
+    "audio_policy": locked_policy})
+assert not chain._audio_policy_uses_generated_continuity({
+    "audio_policy": locked_policy})
+assert chain._audio_policy_requires_source({
+    "audio_policy": locked_policy})
+assert "/target=locked" in chain._audio_policy_summary({
+    "audio_policy": locked_policy})
+
 custom_policy = chain._contract_audio_policy("source", "off", "on")
 custom_status = chain._audio_policy_summary({"audio_policy": custom_policy})
 custom = make_plan("generated_audio", custom_policy)
@@ -122,6 +142,15 @@ state = {"plan": prepared_reference, "index": 1}
 current = chain.MiniMaxH3ChainCurrent().current(state, source_audio)["result"]
 assert current[12] is not None
 assert tuple(current[12]["waveform"].shape) == (1, 1, 22000)
+
+locked_plan = chain._plan_with_source_audio(
+    make_plan("generated_audio", locked_policy), source_audio)
+locked_current = chain.MiniMaxH3ChainCurrent().current(
+    {"plan": locked_plan, "index": 1}, source_audio)["result"]
+assert locked_current[12] is None
+assert tuple(locked_current[0]["current_source_audio_target"][
+    "waveform"].shape) == (1, 1, 22000)
+assert "target-locked" in locked_current[13]
 
 silent_state = {"plan": prepared_silent, "index": 1}
 silent_current = chain.MiniMaxH3ChainCurrent().current(

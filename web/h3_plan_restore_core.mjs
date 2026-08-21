@@ -89,6 +89,13 @@ function restoreCompactPolicy(node, policyInputs, planInputs,
             ["source_reference", audio.source_reference],
             ["generated_continuity", audio.generated_continuity],
         ].filter(([name]) => Object.hasOwn(audio, name));
+        // The disabled spelling is intentionally omitted from canonical
+        // policies. Restore its absence as false so loading an older run also
+        // clears a currently enabled compact-policy switch.
+        entries.push([
+            "lock_source_audio",
+            audio.source_audio_target === "locked",
+        ]);
         const complete = entries.every(([name, value]) => writeWidget(
             node, name, value, unavailable, "audio_policy"));
         if (complete) applied.push("audio_policy");
@@ -118,27 +125,32 @@ function restoreLegacyPolicy(node, policyInputs, planInputs,
                              applied, unavailable) {
     const audio = policyInputs.audio_policy;
     if (audio && typeof audio === "object") {
-        const completeAxes = [
-            "final_audio", "source_reference", "generated_continuity",
-        ].every((name) => Object.hasOwn(audio, name));
-        if (!completeAxes) {
+        if (audio.source_audio_target === "locked") {
             unavailable.push(
-                "audio_policy (incomplete saved Legacy / Expert axes)");
+                "audio_policy (source target lock needs the compact Chain Policy)");
         } else {
-            const axes = [
-                String(audio.final_audio), String(audio.source_reference),
-                String(audio.generated_continuity),
-            ];
-            const audioMode = Object.entries(LEGACY_AUDIO_POLICIES).find(
-                ([, value]) => value.every(
-                    (item, index) => item === axes[index]),
-            )?.[0];
-            if (!audioMode) {
+            const completeAxes = [
+                "final_audio", "source_reference", "generated_continuity",
+            ].every((name) => Object.hasOwn(audio, name));
+            if (!completeAxes) {
                 unavailable.push(
-                    "audio_policy (unsupported Legacy / Expert axes)");
-            } else if (writeWidget(
-                node, "audio_mode", audioMode, unavailable, "audio_policy",
-            )) applied.push("audio_policy");
+                    "audio_policy (incomplete saved Legacy / Expert axes)");
+            } else {
+                const axes = [
+                    String(audio.final_audio), String(audio.source_reference),
+                    String(audio.generated_continuity),
+                ];
+                const audioMode = Object.entries(LEGACY_AUDIO_POLICIES).find(
+                    ([, value]) => value.every(
+                        (item, index) => item === axes[index]),
+                )?.[0];
+                if (!audioMode) {
+                    unavailable.push(
+                        "audio_policy (unsupported Legacy / Expert axes)");
+                } else if (writeWidget(
+                    node, "audio_mode", audioMode, unavailable, "audio_policy",
+                )) applied.push("audio_policy");
+            }
         }
     }
     const transition = policyInputs.transition_policy;

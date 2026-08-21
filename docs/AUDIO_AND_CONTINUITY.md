@@ -2,21 +2,29 @@
 
 ## Choose an audio policy
 
-Version 0.5 separates three independent decisions:
+Version 0.5 separates three independent decisions and one exact-target switch:
 
 | Axis | Values | Meaning |
 |---|---|---|
 | Final audio | `generated`, `source`, `none` | What Assemble places in the final MP4 |
 | Source reference | `on`, `off` | Whether the exact active source window guides H3 |
 | Generated continuity | `on`, `off` | Whether the previous sampled audio latent continues into the next scene |
+| Lock source audio | `on`, `off` | Whether each exact source window occupies the complete target audio latent and is protected from denoising |
 
-Set these three axes and the default incoming boundary on the single **Chain
+Set these controls and the default incoming boundary on the single **Chain
 Policy** node. Its one output connects to Plan. Use **Legacy / Expert Policy**
 only for a genuine 0.4 import, a raw implementation, or an independent audio
 overlap.
 
 For a prerecorded song or dialogue performance that must remain exact, choose
-Source final audio and enable Source reference. For a short voice/timbre
+Source final audio and enable **Lock source audio**. The switch resolves Source
+reference and Generated continuity off: the source is no longer a loose Ref2VA
+audio bank or a carried predecessor prefix. Chain Context VAE-encodes the
+scene-local source window into H3's target audio stream and sets its complete
+denoise mask to zero. Video remains denoisable and can attend to the protected
+audio for timing and lip sync. Source-rate conversion for H3's audio VAE may
+still occur; final assembly with Final audio=source uses the Source Timeline
+track rather than model-decoded audio. For a short voice/timbre
 reference where H3 should generate new words, choose Generated final audio and
 schedule that clip as an ordinary tagged audio reference.
 
@@ -51,6 +59,11 @@ continuity off, the audio mask remains fully open even when final assembly uses
 `source_track`. For recursive scenes, enabled audio carry copies the previous
 sampler's audio latent directly. For scene 1 after Existing Video Context,
 carrying imported audio requires source audio and the H3 audio VAE.
+
+With **Lock source audio** on, the complete scene-local audio mask is zero
+instead. This composes with every picture boundary: Cut and Guide affect only
+video context, while AV modes preserve or taper their video prefix without
+copying predecessor audio over the locked source window.
 
 Experimental `drift_control_av` is a recursive picture-only treatment layered
 on the same 39-frame AV prefix. It does not bake random noise into a checkpoint

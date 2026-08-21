@@ -39,6 +39,7 @@ const audioPolicy = node(1, CHAIN_POLICY_NODE, [], [["chain_policy", [10]]], [
     ["final_audio", "generated"],
     ["source_reference", "off"],
     ["generated_continuity", "on"],
+    ["lock_source_audio", false],
 ]);
 const plan = node(2, "MiniMaxH3ChainPlan", [
     ["chain_policy", 10],
@@ -148,6 +149,7 @@ const compactPolicy = node(10, CHAIN_POLICY_NODE, [], [
 ], [
     ["incoming_transition", "hard_av"], ["final_audio", "source"],
     ["source_reference", "on"], ["generated_continuity", "off"],
+    ["lock_source_audio", false],
 ]);
 const compactPlan = node(11, "MiniMaxH3ChainPlan", [
     ["chain_policy", 31],
@@ -181,6 +183,21 @@ assert.equal(resolveAudioContextLength(compactStart), 39,
 assert.deepEqual(policyPlanConsumers(compactPolicy), [compactPlan]);
 assert.equal(
     presentationForNode(compactPolicy, false).hiddenOutputs.has("status"), true,
+);
+compactPolicy.widgets.find(
+    (item) => item.name === "lock_source_audio").value = true;
+assert.deepEqual(resolveAudioPolicy(compactStart), {
+    known: true,
+    finalAudio: "source",
+    sourceReference: "off",
+    generatedContinuity: "off",
+    source: "compact",
+    sourceAudioTarget: "locked",
+});
+assert.equal(
+    presentationForNode(compactStart, false).hiddenInputs.has("source_audio"),
+    false,
+    "locked source target still needs legacy source audio without a timeline",
 );
 
 const legacyAdapter = node(8, "MiniMaxH3Legacy04PolicyAdapter", [], [

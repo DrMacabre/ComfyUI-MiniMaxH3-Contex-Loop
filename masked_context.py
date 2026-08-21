@@ -387,6 +387,39 @@ def _existing_mask_streams(latent, video, audio):
     return video_mask.float(), audio_mask.float()
 
 
+def apply_locked_source_audio_target(latent, audio_vae, source_audio):
+    """Place exact scene-local source audio in H3's protected target stream.
+
+    Reuse the standalone master-audio implementation so Chain Policy receives
+    the same authoritative target-grid sizing, short encoder-lookahead retry,
+    channel normalization, and mask composition as the public masking node.
+    The Current Shot window is already scene-local, so its clock begins at 0.
+    """
+    if audio_vae is None:
+        raise ValueError(
+            "h3_source_audio_target: Lock source audio requires the H3 audio "
+            "VAE connected to Chain Context.")
+    if not isinstance(source_audio, dict):
+        raise ValueError(
+            "h3_source_audio_target: Current Shot state has no source-audio "
+            "target window. Keep Current Shot state connected to Chain Context.")
+    from .master_audio_context import MiniMaxH3ContexMasterAudioMaskedAV
+
+    out, prefix_frames, _clip_audio = (
+        MiniMaxH3ContexMasterAudioMaskedAV().prepare(
+            latent=latent,
+            audio_vae=audio_vae,
+            master_audio=source_audio,
+            clip_start_seconds=0.0,
+            context_length=0,
+        ))
+    if int(prefix_frames) != 0:
+        raise RuntimeError(
+            "h3_source_audio_target: audio-only target unexpectedly changed "
+            "the video prefix.")
+    return out
+
+
 def _feather_preserved_prefix(video_mask, audio_mask, video_steps, audio_steps):
     """Apply a narrow, high-denoise handoff at a protected AV tail."""
     video_steps = int(video_steps)

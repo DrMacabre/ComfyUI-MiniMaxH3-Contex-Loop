@@ -40,13 +40,24 @@ descriptor from the saved manifest. Legacy VIDEO/AUDIO sockets remain adapters.
 
 ## Audio intent contract
 
-Audio intent uses `h3_audio_policy_v1` and three independent axes:
+Audio intent uses `h3_audio_policy_v1`, three independent axes, and an optional
+exact-target switch:
 
 | Axis | Values | Meaning |
 |---|---|---|
 | Final audio | `generated`, `source`, `none` | What Assemble places in the final MP4 |
 | Source reference | `on`, `off` | Whether the active source window guides H3 generation |
 | Generated continuity | `on`, `off` | Whether the prior sampled audio latent continues into the next scene, including AV-mask prefixes |
+| Source audio target | omitted, `locked` | Whether the scene-local source window replaces and fully protects H3's complete target audio latent |
+
+The compact **Lock source audio** switch emits `source_audio_target=locked` and
+canonically resolves Source reference and Generated continuity to `off`. This
+prevents a loose Ref2VA audio bank or predecessor prefix from competing with the
+exact target clock. Chain Context audio-VAE encodes the current source window,
+crops only right-side encoder padding to the target's authoritative 40 Hz grid,
+and composes an all-zero audio denoise mask with the selected video boundary.
+Final-audio selection remains independent; `source` uses the Source Timeline
+track for assembly.
 
 Paired audio on a tagged motion reference is a fourth, reference-local decision:
 `embedded` or `off`. It never selects the final soundtrack implicitly.
@@ -59,8 +70,9 @@ Legacy Plan modes migrate exactly:
 | `generated_audio` | generated | off | on |
 | `source_plus_timeline` | source | on | on |
 
-New Plan nodes default to generated final audio, no source reference, and
-generated continuity. Saved 0.4 widget values retain their old behavior.
+New Plan nodes default to generated final audio, no source reference, generated
+continuity, and no source target lock. Saved 0.4 widget values retain their old
+behavior.
 
 Normal workflows author both contracts through `h3_chain_policy_v1`, a
 one-wire wrapper. Plan immediately expands it back into the canonical Audio

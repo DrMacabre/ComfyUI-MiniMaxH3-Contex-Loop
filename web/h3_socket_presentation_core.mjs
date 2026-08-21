@@ -123,15 +123,21 @@ function audioPolicyFromWidgets(node) {
     const finalAudio = widgetByName(node, "final_audio")?.value;
     const sourceReference = widgetByName(node, "source_reference")?.value;
     const generatedContinuity = widgetByName(node, "generated_continuity")?.value;
+    const sourceAudioTargetLocked = Boolean(
+        widgetByName(node, "lock_source_audio")?.value);
     if (finalAudio == null || sourceReference == null
             || generatedContinuity == null) return null;
-    return {
+    const policy = {
         known: true,
         finalAudio: String(finalAudio),
-        sourceReference: String(sourceReference),
-        generatedContinuity: String(generatedContinuity),
+        sourceReference: sourceAudioTargetLocked
+            ? "off" : String(sourceReference),
+        generatedContinuity: sourceAudioTargetLocked
+            ? "off" : String(generatedContinuity),
         source: "compact",
     };
+    if (sourceAudioTargetLocked) policy.sourceAudioTarget = "locked";
+    return policy;
 }
 
 function legacyAudioPolicy(plan) {
@@ -273,7 +279,8 @@ function sourceAudioInputNeeded(node, policy) {
     const type = nodeType(node);
     if (hasSourceTimeline(node)) return false;
     if (type === CURRENT_NODE) {
-        return !policy.known || policy.sourceReference === "on";
+        return !policy.known || policy.sourceReference === "on"
+            || policy.sourceAudioTarget === "locked";
     }
     if (type === REVIEW_NODE) {
         return String(widgetByName(node, "partial_audio_source")?.value)
@@ -287,7 +294,8 @@ function sourceAudioInputNeeded(node, policy) {
     }
     if (CONDITIONAL_SOURCE_AUDIO_NODES.has(type)) {
         return !policy.known || policy.finalAudio === "source"
-            || policy.sourceReference === "on";
+            || policy.sourceReference === "on"
+            || policy.sourceAudioTarget === "locked";
     }
     return true;
 }

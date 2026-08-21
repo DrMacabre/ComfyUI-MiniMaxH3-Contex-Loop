@@ -46,6 +46,7 @@ const audio = {
         widget("final_audio", "generated"),
         widget("source_reference", "off"),
         widget("generated_continuity", "on"),
+        widget("lock_source_audio", false),
     ],
 };
 const reroute = {
@@ -92,7 +93,7 @@ assert.deepEqual(result, {
     unavailable: [],
 });
 assert.deepEqual(audio.widgets.map((item) => item.value), [
-    "soft_av", "source", "on", "off",
+    "soft_av", "source", "on", "off", false,
 ]);
 assert.ok(audio.widgets.every((item) => item.callbackValue === item.value));
 assert.equal(graph.beforeCount, 1);
@@ -130,6 +131,7 @@ const compactPolicy = {
         widget("final_audio", "generated"),
         widget("source_reference", "off"),
         widget("generated_continuity", "on"),
+        widget("lock_source_audio", false),
     ],
 };
 compactGraph._nodes.push(compactPlan, compactPolicy);
@@ -147,7 +149,19 @@ assert.deepEqual(compactResult, {
     applied: ["audio_policy", "transition_policy"], unavailable: [],
 });
 assert.deepEqual(compactPolicy.widgets.map((item) => item.value), [
-    "hard_av", "source", "on", "off",
+    "hard_av", "source", "on", "off", false,
+]);
+const compactLocked = restoreConnectedPolicyInputs(compactPlan, {
+    audio_policy: {
+        final_audio: "source", source_reference: "off",
+        generated_continuity: "off", source_audio_target: "locked",
+    },
+});
+assert.deepEqual(compactLocked, {
+    applied: ["audio_policy"], unavailable: [],
+});
+assert.deepEqual(compactPolicy.widgets.map((item) => item.value), [
+    "hard_av", "source", "off", "off", true,
 ]);
 const compactMismatch = restoreConnectedPolicyInputs(compactPlan, {
     transition_policy: {

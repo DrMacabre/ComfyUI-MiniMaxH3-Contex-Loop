@@ -141,6 +141,8 @@ def main():
     nodes = _load("nodes")
     masked = _load("masked_context")
     masked._require_h3_mask_support = lambda: None
+    master_audio = _load("master_audio_context")
+    master_audio.require_h3_mask_support = lambda _operation: True
 
     # The fixed AV recipe reproduces the observed 1376x768 -> 1152x640
     # experiment in latent space without changing time or final geometry.
@@ -187,6 +189,38 @@ def main():
             {"resolved_frame_index": 191, "name": "retained last"},
         ],
     }]]
+
+    class LockedAudioVAE:
+        audio_sample_rate = 32000
+
+        def encode(self, waveform):
+            assert waveform.ndim == 3
+            assert int(waveform.shape[-1]) == 2
+            steps = torch.arange(
+                target_audio_steps + 1, dtype=torch.float32).reshape(
+                    1, 1, 1, -1)
+            return steps.expand(
+                1, 32, 2, target_audio_steps + 1).clone()
+
+    locked_source_window = {
+        "waveform": torch.zeros((
+            1, 1, round(target_frames / 24.0 * 32000)),
+            dtype=torch.float32),
+        "sample_rate": 32000,
+    }
+    locked_target = masked.apply_locked_source_audio_target(
+        target, LockedAudioVAE(), locked_source_window)
+    locked_video, locked_audio = locked_target["samples"].unbind()
+    locked_video_mask, locked_audio_mask = (
+        locked_target["noise_mask"].unbind())
+    assert torch.equal(locked_video, target_video)
+    assert tuple(locked_audio.shape) == tuple(target_audio.shape)
+    assert torch.all(locked_audio[..., -1] == target_audio_steps - 1)
+    assert torch.all(locked_video_mask == 1.0)
+    assert not torch.count_nonzero(locked_audio_mask)
+    assert "noise_mask" not in target
+    assert not torch.count_nonzero(target_audio)
+
     out_conditioning, out, trim = masked.apply_masked_prefix(
         conditioning=conditioning,
         vae=UnexpectedVideoVAE(),
@@ -387,6 +421,30 @@ def main():
     assert not torch.count_nonzero(
         source_video_mask[:, :, :prefix_video_steps])
     assert torch.all(source_audio_mask == 1.0)
+
+    _, locked_av, locked_av_trim = masked.apply_masked_prefix(
+        conditioning=conditioning,
+        vae=UnexpectedVideoVAE(),
+        latent=locked_target,
+        previous_frames=frames,
+        context_length=39,
+        crop="disabled",
+        previous_latent=previous,
+        audio_only_feather=True,
+        preserve_audio_prefix=False,
+    )
+    locked_av_video, locked_av_audio = locked_av["samples"].unbind()
+    locked_av_video_mask, locked_av_audio_mask = (
+        locked_av["noise_mask"].unbind())
+    assert locked_av_trim == 39
+    assert torch.equal(
+        locked_av_video[:, :, :prefix_video_steps],
+        previous_video[:, :, -prefix_video_steps:],
+    )
+    assert torch.equal(locked_av_audio, locked_audio)
+    assert not torch.count_nonzero(
+        locked_av_video_mask[:, :, :prefix_video_steps])
+    assert not torch.count_nonzero(locked_av_audio_mask)
 
     existing_video_mask = torch.ones_like(target_video[:, :1])
     existing_video_mask[:, :, 8:12, 0, 0] = 0.1
@@ -885,6 +943,47 @@ def main():
     assert not torch.count_nonzero(
         no_carry_video_mask[:, :, :prefix_video_steps])
     assert torch.all(no_carry_audio_mask == 1.0)
+    locked_policy = chain._contract_compose_chain_policy(
+        chain._contract_audio_policy("source", "on", "on", "locked"),
+        chain._contract_transition_policy("soft_av"),
+        audio_context_length=39)
+    locked_plan = chain._normalize_plan(
+        json.dumps({"shots": [
+            {"id": "one", "prompt": "first", "length": 192},
+            {"id": "source_locked", "prompt": "second", "length": 192},
+        ]}),
+        "locked_source_audio_test", 64, 32, 39, "video", "head",
+        "disabled", "source_track", 39, 8.0, 8, 1, 18,
+        "model-stack-v1", 0, "audio_feathered_av", locked_policy,
+    )
+    locked_state = {
+        "plan": locked_plan, "index": 2, "previous_frames": frames,
+        "previous_latent": previous,
+        "current_source_audio_target": locked_source_window,
+    }
+    locked_result = chain.MiniMaxH3ChainContext().apply(
+        locked_state, conditioning, VideoVAE(), target, LockedAudioVAE())
+    locked_chain_video, locked_chain_audio = (
+        locked_result[3]["samples"].unbind())
+    locked_chain_video_mask, locked_chain_audio_mask = (
+        locked_result[3]["noise_mask"].unbind())
+    assert locked_result[1:3] == (39, True)
+    assert torch.equal(
+        locked_chain_video[:, :, :prefix_video_steps],
+        previous_video[:, :, -prefix_video_steps:],
+    )
+    assert torch.equal(locked_chain_audio, locked_audio)
+    assert not torch.count_nonzero(
+        locked_chain_video_mask[:, :, :prefix_video_steps])
+    assert not torch.count_nonzero(locked_chain_audio_mask)
+    locked_first_result = chain.MiniMaxH3ChainContext().apply(
+        {"plan": locked_plan, "index": 1, "external_context": False,
+         "current_source_audio_target": locked_source_window},
+        conditioning, VideoVAE(), target, LockedAudioVAE())
+    locked_first_audio_mask = locked_first_result[3][
+        "noise_mask"].unbind()[1]
+    assert locked_first_result[1:3] == (0, False)
+    assert not torch.count_nonzero(locked_first_audio_mask)
     feathered_state = dict(mixed_state)
     feathered_state["plan"] = feathered_plan
     feathered_result = chain.MiniMaxH3ChainContext().apply(

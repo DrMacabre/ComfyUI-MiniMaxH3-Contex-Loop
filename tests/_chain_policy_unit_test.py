@@ -59,6 +59,9 @@ required = node.INPUT_TYPES()["required"]
 assert tuple(required["incoming_transition"][0]) == (
     "cut", "guide", "hard_av", "soft_av")
 assert "audio_context_length" not in required
+assert list(required)[-1] == "lock_source_audio"
+assert required["lock_source_audio"][0] == "BOOLEAN"
+assert required["lock_source_audio"][1]["default"] is False
 combined, status = node.build("soft_av", "source", "on", "off")
 assert combined["version"] == chain.CHAIN_POLICY_VERSION
 assert combined["audio_policy"] == chain._contract_audio_policy(
@@ -70,6 +73,13 @@ assert "Soft AV" in status
 assert "final=source/ref=on/carry=off" in status
 assert "source timeline required" in status
 assert "audio context automatic (39f)" in status
+
+locked, locked_status = node.build(
+    "soft_av", "source", "on", "on", True)
+assert locked["audio_policy"] == chain._contract_audio_policy(
+    "source", "off", "off", "locked")
+assert "final=source/ref=off/carry=off/target=locked" in locked_status
+assert "source timeline required" in locked_status
 
 combined_plan = make_plan(combined=combined)
 assert "chain_policy" not in combined_plan["compatibility"]

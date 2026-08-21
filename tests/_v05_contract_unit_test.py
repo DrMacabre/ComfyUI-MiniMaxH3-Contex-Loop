@@ -106,6 +106,15 @@ def main():
                     "source_reference": source_reference,
                     "generated_continuity": continuity,
                 }
+    locked_audio = contracts.audio_policy(
+        "source", "on", "on", "locked")
+    assert locked_audio == {
+        "version": contracts.AUDIO_POLICY_VERSION,
+        "final_audio": "source",
+        "source_reference": "off",
+        "generated_continuity": "off",
+        "source_audio_target": "locked",
+    }
     assert contracts.paired_audio_policy(True) == "embedded"
     assert contracts.paired_audio_policy(False) == "off"
     assert contracts.paired_audio_policy("embedded") == "embedded"
@@ -147,6 +156,10 @@ def main():
     # Compact authoring derives the hidden audio overlap from the tested
     # transition pair. The independent audio-policy axis gates it at runtime.
     assert compact["audio_context_length"] == 39
+    locked_compact = contracts.chain_policy(
+        "soft_av", "source", "on", "on", True)
+    assert locked_compact["audio_policy"] == locked_audio
+    assert locked_compact["audio_context_length"] == 39
     assert contracts.chain_policy(
         "cut", "generated", "off", "on")["audio_context_length"] == 0
     assert contracts.chain_policy(

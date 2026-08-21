@@ -86,6 +86,29 @@ assert any(item["scope"] == "scene_generation"
 assert all(item["scene"] == 2 and item["regeneration_required"]
            for item in audio_diffs)
 
+locked_policy = chain._contract_compose_chain_policy(
+    chain._contract_audio_policy("source", "on", "on", "locked"),
+    chain._contract_transition_policy("guide"),
+    audio_context_length=22)
+locked_plan = chain._normalize_plan(
+    json.dumps({"shots": [
+        {"id": "one", "prompt": "@actor opens.", "length": 39},
+        {"id": "two", "prompt": "@actor continues.", "length": 39},
+    ]}),
+    "locked-dependency-test", 64, 64, 5, "video", "head", "disabled",
+    "generated_audio", 5, 1.0, 8, 11, 18, "body:auto:v1", 0,
+    "guide", locked_policy)
+locked_prepared = chain._plan_with_source_audio(locked_plan, audio_a)
+locked_source_dependency = chain._canonical_source_reference_dependency(
+    locked_prepared, 1, None, audio_a)
+assert locked_source_dependency is not None
+locked_dependency = chain._scene_dependency_record(
+    locked_prepared, 1, locked_source_dependency)
+assert locked_dependency["scopes"]["global_generation"][
+    "source_audio_target"] == "locked"
+assert locked_dependency["scopes"]["scene_generation"][
+    "source_reference_window"]["pcm_sha256"]
+
 # Final mux choice and whole-source identity are assembly-only.
 assembly_changed = json.loads(json.dumps(scene1_a))
 assembly_changed["scopes"]["assembly_only"]["final_audio"] = "generated"
