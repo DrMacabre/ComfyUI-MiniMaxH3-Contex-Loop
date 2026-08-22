@@ -11084,7 +11084,7 @@ class MiniMaxH3ChainContext:
                                "Context's MODEL input is disconnected."}),
                 "visual_cond_noise_aug": ("FLOAT", {
                     "default": VISUAL_COND_NOISE_AUG_DEFAULT,
-                    "min": 0.900,
+                    "min": 0.000,
                     "max": 1.000,
                     "step": 0.001,
                     "round": 0.001,
@@ -11092,6 +11092,11 @@ class MiniMaxH3ChainContext:
                                "ComfyUI's current H3 default; try 0.995, "
                                "then 0.990 to weaken the near-clean visual "
                                "conditioning seen at early sampling steps. "
+                               "For causal diagnosis only, 0.000 keeps the "
+                               "same packed visual-condition rows and "
+                               "positions but replaces their latent content "
+                               "with seeded noise and removes their clean "
+                               "timestep pin. "
                                "Core exposes one value per conditioning "
                                "payload, so on continuation scenes it also "
                                "affects character, keyframe, and motion "

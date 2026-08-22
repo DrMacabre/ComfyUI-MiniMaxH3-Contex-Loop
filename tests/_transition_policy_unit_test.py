@@ -277,6 +277,8 @@ context_optional = chain.MiniMaxH3ChainContext.INPUT_TYPES()["optional"]
 visual_aug_schema = context_optional["visual_cond_noise_aug"]
 assert visual_aug_schema[0] == "FLOAT"
 assert visual_aug_schema[1]["default"] == 0.999
+assert visual_aug_schema[1]["min"] == 0.0
+assert visual_aug_schema[1]["max"] == 1.0
 assert visual_aug_schema[1]["step"] == 0.001
 assert list(context_optional)[-1] == "visual_cond_noise_aug"
 

@@ -311,7 +311,7 @@ def main():
         vae=VAE(), latent=target, context_frames=context, context_length=22,
         encode_mode="video", anchor_mode="head", crop="disabled",
         audio_context_length=22, audio_mode="timeline",
-        context_latent=previous, visual_cond_noise_aug=0.995,
+        context_latent=previous, visual_cond_noise_aug=0.0,
     )
 
     assert trim == 22
@@ -324,7 +324,7 @@ def main():
         "native guides; core-owned; no compatibility patch required")
     assert mm.PackedLayout.__init__ is stock_layout_init
     output_metadata = output[0][1]
-    assert output_metadata["minimax_visual_cond_noise_aug"] == 0.995
+    assert output_metadata["minimax_visual_cond_noise_aug"] == 0.0
     assert "minimax_frame_count" not in output_metadata
     assert output_metadata["minimax_refs"] == refs
     keyframes = output_metadata["minimax_keyframes"]

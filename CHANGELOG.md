@@ -4,6 +4,12 @@ Newest first. This file keeps release history out of the onboarding README.
 
 ## Unreleased — Deferred checkpoint upscaling
 
+- Expanded Chain Context's Guide-only `visual_cond_noise_aug` diagnostic to
+  the complete `0.000`–`1.000` range. A `0.000` test now preserves the packed
+  condition layout while replacing its visual latent content with seeded
+  noise, allowing content-driven drift to be separated from structural
+  condition-row effects.
+
 - Hid the Upscale Adapter's provenance-only `recipe_json` in the default
   presentation. It remains serialized for resume validation and can be edited
   through **Show advanced H3 controls**.
