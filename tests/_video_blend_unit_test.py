@@ -67,6 +67,21 @@ def normalized(context=90, blend=39, anchor="head"):
 
 
 def main():
+    assemble_optional = chain.MiniMaxH3ChainAssemble.INPUT_TYPES()["optional"]
+    assert assemble_optional["color_stabilization"][0] == (
+        "off", "scene_1_anchor")
+    assert assemble_optional["color_stabilization"][1]["default"] == "off"
+    brightness, saturation = chain._scene_color_transform(
+        {
+            "luma_percentiles": [80.0, 130.0, 190.0],
+            "saturation_percentiles": [40.0, 60.0, 80.0],
+        }, {
+            "luma_percentiles": [70.0, 120.0, 180.0],
+            "saturation_percentiles": [44.444, 66.667, 88.889],
+        })
+    assert abs(brightness - (5.0 / 255.0)) < 1e-6
+    assert abs(saturation - 0.95) < 1e-3
+
     plan = normalized()
     assert plan["compatibility"]["context_length"] == 90
     assert plan["compatibility"]["video_blend_frames"] == 39
@@ -227,6 +242,60 @@ def main():
         assert "curves=all=" in chain._ffmpeg_boundary_tone_filter(
             tone_match)
 
+        # Optional temporal stabilization anchors generated scene one, keeps
+        # the exact boundary at the predecessor's accepted transform, then
+        # ramps a capped correction through the incoming delivered frames.
+        color_records = chain._auto_scene_color_stabilization_records(
+            tone_records)
+        color_schedule = color_records[1].get(
+            "scene_color_stabilization")
+        assert color_schedule is not None
+        assert color_schedule["start_frame"] == 8
+        assert color_schedule["ramp_frames"] == 4
+        assert color_schedule["previous_brightness"] == 0.0
+        assert color_schedule["previous_saturation"] == 1.0
+        assert 0.0 < color_schedule["brightness"] <= 6.0 / 255.0
+        assert "hue=b=" in chain._ffmpeg_scene_color_filter(
+            color_schedule)
+        probe = np.full((8, 8, 3), 100, dtype=np.uint8)
+        unchanged = chain._apply_scene_color_stabilization(
+            probe, color_schedule, color_schedule["start_frame"])
+        assert np.array_equal(unchanged, probe)
+        corrected = chain._apply_scene_color_stabilization(
+            probe, color_schedule,
+            color_schedule["start_frame"] + color_schedule["ramp_frames"])
+        assert float(corrected.mean()) > float(probe.mean())
+        color_probe = np.full((8, 8, 3), (180, 100, 50), dtype=np.uint8)
+        saturation_probe = {
+            **color_schedule,
+            "previous_brightness": 0.0,
+            "brightness": 0.0,
+            "previous_saturation": 1.0,
+            "saturation": 0.94,
+        }
+        desaturated = chain._apply_scene_color_stabilization(
+            color_probe, saturation_probe,
+            saturation_probe["start_frame"] +
+            saturation_probe["ramp_frames"])
+        assert int(np.ptp(desaturated[0, 0])) < int(np.ptp(color_probe[0, 0]))
+
+        # An existing-video prelude is not the color reference. The first
+        # generated segment remains scene one and receives no grade schedule.
+        with_prelude = chain._auto_scene_color_stabilization_records([
+            {**tone_records[0], "kind": "prelude"},
+            {**tone_records[0], "kind": "segment", "scene_index": 1},
+            {**tone_records[1], "kind": "segment", "scene_index": 2},
+        ])
+        assert "scene_color_stabilization" not in with_prelude[0]
+        assert "scene_color_stabilization" not in with_prelude[1]
+        assert "scene_color_stabilization" in with_prelude[2]
+
+        color_pyav = root / "color_stabilized_pyav.mp4"
+        chain._pyav_blend_video(
+            color_records, str(color_pyav), {"title": "color anchor"},
+            14, 0)
+        assert len(decode(color_pyav)) == 14
+
         # A resume made before Tone Carry metadata existed recovers the same
         # small curve from its two immutable scene videos. The segment record
         # is enriched in memory; its checkpoint/latent is not touched.
@@ -322,6 +391,23 @@ def main():
                 mean_luma(ffmpeg_tone_frames[11]) -
                 mean_luma(ffmpeg_tone_frames[10]))
             assert ffmpeg_tone_delta < 1.5, ffmpeg_tone_delta
+            ffmpeg_color = root / "ffmpeg_color_anchor.mp4"
+            ffmpeg_color_baseline = root / "ffmpeg_color_baseline.mp4"
+            chain._ffmpeg_blend_video(
+                ffmpeg, tone_records, str(ffmpeg_color_baseline),
+                str(metadata), 14, 0)
+            chain._ffmpeg_blend_video(
+                ffmpeg, color_records, str(ffmpeg_color), str(metadata),
+                14, 0)
+            ffmpeg_color_baseline_frames = decode(ffmpeg_color_baseline)
+            ffmpeg_color_frames = decode(ffmpeg_color)
+            assert len(ffmpeg_color_frames) == 14
+            assert mean_luma(ffmpeg_color_frames[-1]) > (
+                mean_luma(ffmpeg_color_baseline_frames[-1]) + 0.2)
+            seam_mad = float(np.abs(
+                ffmpeg_color_frames[10].astype(np.int16) -
+                ffmpeg_color_baseline_frames[10].astype(np.int16)).mean())
+            assert seam_mad < 1.0, seam_mad
 
         checkpoint_one = root / "one.safetensors"
         checkpoint_two = root / "two.safetensors"
@@ -464,10 +550,21 @@ def main():
         hard = chain.MiniMaxH3ChainAssemble().assemble(
             hard_manifest, "none", "final", 128)["result"][0]
         assert len(decode(hard)) == 9
+        forced_hard_records = chain._blend_video_records(
+            hard_manifest, hard_manifest["segments"], None,
+            force_records=True)
+        assert len(forced_hard_records) == 2
+        assert not any(record["blend_frames"]
+                       for record in forced_hard_records)
+        stabilized_hard = chain.MiniMaxH3ChainAssemble().assemble(
+            hard_manifest, "none", "color_anchor", 128,
+            color_stabilization="scene_1_anchor")["result"][0]
+        assert len(decode(stabilized_hard)) == 9
 
     print("H3 video blend: extended context validation, scheduled recovery, "
-          "automatic boundary tone matching, chained xfade CFR, and "
-          "frame-exact PyAV/ffmpeg assembly pass")
+          "automatic boundary tone matching, scene-one temporal color "
+          "stabilization, chained xfade CFR, and frame-exact PyAV/ffmpeg "
+          "assembly pass")
 
 
 if __name__ == "__main__":

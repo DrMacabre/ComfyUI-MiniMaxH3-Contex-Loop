@@ -402,6 +402,26 @@ Each scheduled value must not exceed that incoming scene's repeated context.
 For example, a chain whose first join has five context frames and later joins
 have thirty-nine can use `5,30`; requesting thirty at the first join is rejected.
 
+### Optional scene-one color stabilization
+
+Set Assemble's `color_stabilization` to `scene_1_anchor` to counter gradual
+exposure or saturation drift in a completed chain. Assembly measures a
+center-weighted sample of the first generated scene, then fits only a weak,
+bounded luma/saturation correction for each later scene. A correction is capped
+at six code values of luma and six percent of saturation, at half the measured
+strength.
+
+The exact join inherits the preceding scene's accepted correction. Starting
+after the retained overlap, that correction moves smoothly to the next scene's
+target over 72 frames. Consequently the option cannot introduce a new grade
+step at the boundary and does not change motion, timing, or audio. A prelude is
+not used as the reference: the first generated scene remains the anchor.
+
+This is an assembly grade, not diffusion conditioning. It does not change
+checkpoints or future continuation input. It is disabled by default. Enabling
+it uses the same single pixel-processing encode as a visual blend; on a hard-cut
+assembly it replaces the otherwise lossless stream copy with one encode.
+
 Enable `copy_to_output` to keep the canonical final in the run folder and also
 publish an MP4 into the regular ComfyUI output tree. `output_subfolder` is
 relative to that output root, supports nested folders and the same date tokens,

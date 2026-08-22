@@ -142,6 +142,11 @@ BOUNDARY_TONE_MATCH_CONTEXT_FRAMES = 8
 BOUNDARY_TONE_MATCH_SEARCH_FRAMES = 4
 BOUNDARY_TONE_MATCH_MIN_JUMP = 1.25
 BOUNDARY_TONE_MATCH_MAX_SHIFT = 6.0
+ASSEMBLY_COLOR_STABILIZATION_MODES = ("off", "scene_1_anchor")
+ASSEMBLY_COLOR_STABILIZATION_RAMP_FRAMES = 72
+ASSEMBLY_COLOR_STABILIZATION_STRENGTH = 0.5
+ASSEMBLY_COLOR_STABILIZATION_MAX_LUMA_SHIFT = 6.0
+ASSEMBLY_COLOR_STABILIZATION_MAX_SATURATION_CHANGE = 0.06
 MASKED_AUDIO_CONTRACT = "raw_source_window_v2"
 PLAN_STUDIO_PREVIEW_TTL_SECONDS = 6 * 60 * 60
 PLAN_STUDIO_PREVIEW_MAX_SESSIONS = 32
@@ -13346,6 +13351,7 @@ def _blend_video_records(
     blend_schedule: Any = "plan",
     video_vae: Any = None,
     temporary_paths: list[str] | None = None,
+    force_records: bool = False,
 ) -> list[dict[str, Any]]:
     """Resolve scheduled joins and their disk-backed overlap continuations."""
     configured = int(
@@ -13370,13 +13376,14 @@ def _blend_video_records(
     else:
         schedule = _scheduled_blend_frames(
             blend_schedule, boundary_count, configured)
-    if not any(schedule):
+    if not any(schedule) and not bool(force_records):
         return []
     records: list[dict[str, Any]] = []
     has_predecessor = prelude is not None
     boundary_index = 0
     if prelude is not None:
         records.append({
+            "kind": "prelude",
             "path": _absolute_output_path(prelude["video"]),
             "input_frames": int(prelude["frame_count"]),
             "delivered_frames": int(prelude["frame_count"]),
@@ -13423,6 +13430,8 @@ def _blend_video_records(
         if not os.path.isfile(path):
             raise FileNotFoundError("H3 chain blend input is missing: %s" % path)
         records.append({
+            "kind": "segment",
+            "scene_index": int(item.get("index", len(records) + 1)),
             "path": path,
             "input_frames": delivered + expected_blend,
             "delivered_frames": delivered,
@@ -13438,7 +13447,8 @@ def _blend_video_records(
         has_predecessor = True
     if not records:
         raise ValueError("H3 chain blend assembly has no video inputs.")
-    return records if any(int(item["blend_frames"]) for item in records) else []
+    return (records if bool(force_records) or any(
+        int(item["blend_frames"]) for item in records) else [])
 
 
 def _boundary_luma(array: Any, stride: int = 1) -> Any:
@@ -13693,6 +13703,225 @@ def _auto_boundary_tone_match_records(
     return prepared
 
 
+def _scene_color_frame_stats(array: Any) -> tuple[Any, Any]:
+    """Return center-weighted luma and saturation percentiles for one frame."""
+    if np is None:
+        raise RuntimeError("H3 scene color stabilization requires NumPy.")
+    if not isinstance(array, np.ndarray) or array.ndim != 3 or array.shape[-1] < 3:
+        raise ValueError(
+            "H3 scene color stabilization expected an RGB frame; got %r." %
+            (getattr(array, "shape", None),))
+    height, width = int(array.shape[0]), int(array.shape[1])
+    y0, y1 = int(height * 0.12), max(int(height * 0.92), 1)
+    x0, x1 = int(width * 0.20), max(int(width * 0.80), 1)
+    sample = array[y0:y1:4, x0:x1:4, :3].astype(np.float32, copy=False)
+    if not int(sample.size):
+        sample = array[::4, ::4, :3].astype(np.float32, copy=False)
+    luma = (sample[..., 0] * 0.2126 + sample[..., 1] * 0.7152 +
+            sample[..., 2] * 0.0722)
+    maximum = np.max(sample, axis=-1)
+    minimum = np.min(sample, axis=-1)
+    saturation = np.divide(
+        maximum - minimum, np.maximum(maximum, 1.0),
+        out=np.zeros_like(maximum), where=maximum > 0.0) * 255.0
+    valid = (luma >= 20.0) & (luma <= 235.0)
+    if int(np.count_nonzero(valid)) >= 64:
+        luma = luma[valid]
+        saturation = saturation[valid]
+    return (
+        np.percentile(luma, (10.0, 50.0, 90.0)).astype(np.float64),
+        np.percentile(saturation, (25.0, 50.0, 75.0)).astype(np.float64),
+    )
+
+
+def _record_scene_color_stats(record: dict[str, Any]) -> dict[str, Any]:
+    """Measure a bounded number of interior frames from one assembly record."""
+    if av is None or np is None:
+        raise RuntimeError(
+            "H3 scene color stabilization requires PyAV and NumPy.")
+    skip = max(0, int(record.get("skip_frames", 0)))
+    count = int(record.get("input_frames", 0))
+    blend = max(0, int(record.get("blend_frames", 0)))
+    delivered = max(1, int(record.get("delivered_frames", count - blend)))
+    margin = min(24, max(2, delivered // 10))
+    start = min(count - 1, blend + margin)
+    stop = max(start + 1, count - margin)
+    step = max(1, (stop - start) // 24)
+    luma_rows = []
+    saturation_rows = []
+    tone_prefix_luts = [
+        _boundary_tone_lut(match)
+        for match in (record.get("tone_match_prefix") or [])
+        if isinstance(match, dict)
+    ]
+    tone_match = record.get("tone_match")
+    tone_start = (int(tone_match["start_frame"])
+                  if isinstance(tone_match, dict) else None)
+    tone_lut = (_boundary_tone_lut(tone_match)
+                if isinstance(tone_match, dict) else None)
+    local_index = -skip
+    for array in _decode_rgb_frames(record["path"]):
+        if local_index >= count:
+            break
+        if (local_index >= start and local_index < stop and
+                (local_index - start) % step == 0):
+            for prefix_lut in tone_prefix_luts:
+                array = prefix_lut[array]
+            if (tone_lut is not None and tone_start is not None and
+                    local_index >= tone_start):
+                array = tone_lut[array]
+            luma, saturation = _scene_color_frame_stats(array)
+            luma_rows.append(luma)
+            saturation_rows.append(saturation)
+        local_index += 1
+    if not luma_rows:
+        raise ValueError(
+            "H3 scene color stabilization could not sample delivered frames "
+            "from %s." % record["path"])
+    return {
+        "luma_percentiles": np.median(
+            np.stack(luma_rows, axis=0), axis=0).tolist(),
+        "saturation_percentiles": np.median(
+            np.stack(saturation_rows, axis=0), axis=0).tolist(),
+        "sampled_frames": len(luma_rows),
+    }
+
+
+def _coherent_color_delta(values: Any, minimum: float) -> float:
+    values = np.asarray(values, dtype=np.float64)
+    positive = values[values > 0.0]
+    negative = values[values < 0.0]
+    selected = positive if len(positive) >= 2 else (
+        negative if len(negative) >= 2 else np.asarray([], dtype=np.float64))
+    if not len(selected):
+        return 0.0
+    value = float(np.median(selected))
+    return value if abs(value) >= float(minimum) else 0.0
+
+
+def _scene_color_transform(
+    anchor: dict[str, Any],
+    current: dict[str, Any],
+) -> tuple[float, float]:
+    """Fit a deliberately weak exposure/saturation transform to scene one."""
+    target_luma = np.asarray(anchor["luma_percentiles"], dtype=np.float64)
+    source_luma = np.asarray(current["luma_percentiles"], dtype=np.float64)
+    luma_shift = _coherent_color_delta(target_luma - source_luma, 1.0)
+    luma_shift = float(np.clip(
+        luma_shift * ASSEMBLY_COLOR_STABILIZATION_STRENGTH,
+        -ASSEMBLY_COLOR_STABILIZATION_MAX_LUMA_SHIFT,
+        ASSEMBLY_COLOR_STABILIZATION_MAX_LUMA_SHIFT))
+
+    target_sat = np.asarray(
+        anchor["saturation_percentiles"], dtype=np.float64)
+    source_sat = np.asarray(
+        current["saturation_percentiles"], dtype=np.float64)
+    ratios = np.divide(
+        target_sat, np.maximum(source_sat, 1.0),
+        out=np.ones_like(target_sat), where=source_sat > 0.0)
+    saturation_delta = _coherent_color_delta(ratios - 1.0, 0.02)
+    saturation = 1.0 + (
+        saturation_delta * ASSEMBLY_COLOR_STABILIZATION_STRENGTH)
+    saturation = float(np.clip(
+        saturation,
+        1.0 - ASSEMBLY_COLOR_STABILIZATION_MAX_SATURATION_CHANGE,
+        1.0 + ASSEMBLY_COLOR_STABILIZATION_MAX_SATURATION_CHANGE))
+    return luma_shift / 255.0, saturation
+
+
+def _auto_scene_color_stabilization_records(
+    records: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Anchor later scenes to scene one's color without changing a seam.
+
+    Each new record enters with its predecessor's accepted transform. The
+    transform then moves toward that scene's conservative scene-one match over
+    three seconds. This keeps the exact join unchanged and avoids a hard grade
+    step while preventing slow exposure/saturation drift from accumulating.
+    """
+    prepared = [dict(record) for record in records]
+    anchor_index = next(
+        (index for index, record in enumerate(prepared)
+         if str(record.get("kind") or "segment") == "segment"),
+        None)
+    if anchor_index is None or anchor_index + 1 >= len(prepared):
+        return prepared
+    anchor = _record_scene_color_stats(prepared[anchor_index])
+    previous_brightness = 0.0
+    previous_saturation = 1.0
+    for record_index in range(anchor_index + 1, len(prepared)):
+        record = prepared[record_index]
+        if str(record.get("kind") or "segment") != "segment":
+            continue
+        stats = _record_scene_color_stats(record)
+        brightness, saturation = _scene_color_transform(anchor, stats)
+        ramp = min(
+            ASSEMBLY_COLOR_STABILIZATION_RAMP_FRAMES,
+            max(1, int(record.get("delivered_frames", 1))))
+        record["scene_color_stabilization"] = {
+            "version": "h3_scene_1_color_anchor_v1",
+            "start_frame": max(0, int(record.get("blend_frames", 0))),
+            "ramp_frames": int(ramp),
+            "previous_brightness": float(previous_brightness),
+            "brightness": float(brightness),
+            "previous_saturation": float(previous_saturation),
+            "saturation": float(saturation),
+            "anchor": anchor,
+            "source": stats,
+        }
+        previous_brightness = brightness
+        previous_saturation = saturation
+        _LOG.info(
+            "H3 scene-one color anchor scene %d: brightness %+.4f, "
+            "saturation %.4f, ramp %d frames.",
+            int(record.get("scene_index", record_index + 1)),
+            brightness, saturation, ramp)
+    return prepared
+
+
+def _ffmpeg_scene_color_filter(schedule: dict[str, Any]) -> str:
+    start = int(schedule["start_frame"])
+    ramp = max(1, int(schedule["ramp_frames"]))
+    progress = "clip((n-%d)/%d\\,0\\,1)" % (start, ramp)
+    previous_brightness = float(schedule["previous_brightness"])
+    brightness_delta = float(
+        schedule["brightness"]) - previous_brightness
+    previous_saturation = float(schedule["previous_saturation"])
+    saturation_delta = float(
+        schedule["saturation"]) - previous_saturation
+    # FFmpeg's hue filter evaluates b/s per frame while operating directly on
+    # the existing YUV planes. Its brightness unit spans one tenth of the
+    # normalized RGB range, so multiply our normalized code-value offset by
+    # ten. Unlike eq, hue's identity path stays neutral on H3's untagged
+    # yuv420p segments instead of switching to a range-sensitive LUT.
+    brightness = "10*(%.9f+(%.9f)*%s)" % (
+        previous_brightness, brightness_delta, progress)
+    saturation = "%.9f+(%.9f)*%s" % (
+        previous_saturation, saturation_delta, progress)
+    return "hue=b='%s':s='%s'" % (brightness, saturation)
+
+
+def _apply_scene_color_stabilization(
+    array: Any,
+    schedule: dict[str, Any],
+    frame_index: int,
+) -> Any:
+    start = int(schedule["start_frame"])
+    ramp = max(1, int(schedule["ramp_frames"]))
+    progress = float(np.clip((int(frame_index) - start) / float(ramp), 0.0, 1.0))
+    brightness = float(schedule["previous_brightness"]) + progress * (
+        float(schedule["brightness"]) -
+        float(schedule["previous_brightness"]))
+    saturation = float(schedule["previous_saturation"]) + progress * (
+        float(schedule["saturation"]) -
+        float(schedule["previous_saturation"]))
+    rgb = array[..., :3].astype(np.float32, copy=False) / 255.0
+    luma = (rgb[..., 0:1] * 0.2126 + rgb[..., 1:2] * 0.7152 +
+            rgb[..., 2:3] * 0.0722)
+    adjusted = luma + saturation * (rgb - luma) + brightness
+    return np.clip(adjusted * 255.0, 0.0, 255.0).round().astype(np.uint8)
+
+
 def _ffmpeg_boundary_tone_filter(match: dict[str, Any]) -> str:
     points = " ".join(
         "%.6f/%.6f" % (float(x), float(y))
@@ -13748,6 +13977,9 @@ def _ffmpeg_blend_video(
         tone_match = records[index].get("tone_match")
         if isinstance(tone_match, dict):
             operations += "," + _ffmpeg_boundary_tone_filter(tone_match)
+        color_schedule = records[index].get("scene_color_stabilization")
+        if isinstance(color_schedule, dict):
+            operations += "," + _ffmpeg_scene_color_filter(color_schedule)
         filters.append("[%d:v]%s[v%d]" % (index, operations, index))
     previous = "v0"
     cumulative = int(records[0]["delivered_frames"])
@@ -13857,6 +14089,7 @@ def _pyav_blend_video(
                           if isinstance(tone_match, dict) else None)
             tone_lut = (_boundary_tone_lut(tone_match)
                         if isinstance(tone_match, dict) else None)
+            color_schedule = record.get("scene_color_stabilization")
             next_blend = (int(records[record_index + 1]["blend_frames"])
                           if record_index + 1 < len(records) else 0)
             seen = 0
@@ -13867,6 +14100,9 @@ def _pyav_blend_video(
                 if (tone_lut is not None and tone_start is not None and
                         int(frame_index) >= tone_start):
                     array = tone_lut[array]
+                if isinstance(color_schedule, dict):
+                    array = _apply_scene_color_stabilization(
+                        array, color_schedule, frame_index)
                 return array
 
             for _ in range(int(record.get("skip_frames", 0))):
@@ -14955,6 +15191,17 @@ class MiniMaxH3ChainAssemble:
                                "Accepted corrections are carried through "
                                "later overlaps so they do not create a new "
                                "seam. This never reruns diffusion."}),
+                "color_stabilization": (ASSEMBLY_COLOR_STABILIZATION_MODES, {
+                    "default": "off",
+                    "tooltip": "Optional assembly-only temporal grade. "
+                               "scene_1_anchor measures the first scene as a "
+                               "fixed color reference, applies no new change "
+                               "at a join, then gently ramps a capped "
+                               "exposure/saturation correction over 72 "
+                               "frames. It uses one assembly encode, never "
+                               "blends pixels for color, and does not affect "
+                               "motion or audio sync. Off preserves the "
+                               "existing stream-copy/blend behavior."}),
                 "source_audio": ("AUDIO", {
                     "tooltip": "Full original source track. Required when "
                                "audio_source resolves to source; it is trimmed "
@@ -14982,7 +15229,10 @@ class MiniMaxH3ChainAssemble:
     OUTPUT_NODE = True
     CATEGORY = "conditioning/minimax/contex_loop"
     DESCRIPTION = ("Stream-copy saved H3 segments into one MP4 and mux either "
-                   "the original source track or checkpointed generated audio.")
+                   "the original source track or checkpointed generated audio. "
+                   "Optional assembly filters can blend joins, remove a small "
+                   "boundary tone step, or stabilize later scene color to "
+                   "scene one without rerunning diffusion.")
 
     @classmethod
     def IS_CHANGED(cls, *args, **kwargs):
@@ -14992,7 +15242,8 @@ class MiniMaxH3ChainAssemble:
                  source_audio=None, overwrite_existing=False,
                  copy_to_output=False, output_subfolder="",
                  source_timeline=None, blend_schedule="plan",
-                 blend_video_vae=None, boundary_tone_match="off"):
+                 blend_video_vae=None, boundary_tone_match="off",
+                 color_stabilization="off"):
         segments = _validate_manifest(manifest)
         prelude = _validate_prelude(manifest)
         tone_match_mode = str(
@@ -15002,6 +15253,13 @@ class MiniMaxH3ChainAssemble:
             raise ValueError(
                 "H3 Chain Assemble boundary_tone_match must be off or auto; "
                 "got %r." % boundary_tone_match)
+        color_stabilization_mode = str(
+            color_stabilization if color_stabilization is not None
+            else "off").strip().lower()
+        if color_stabilization_mode not in ASSEMBLY_COLOR_STABILIZATION_MODES:
+            raise ValueError(
+                "H3 Chain Assemble color_stabilization must be off or "
+                "scene_1_anchor; got %r." % color_stabilization)
         selected = audio_source
         if selected == "plan":
             selected = _audio_policy_final(manifest)
@@ -15115,11 +15373,19 @@ class MiniMaxH3ChainAssemble:
                 manifest, segments, prelude,
                 blend_schedule=blend_schedule,
                 video_vae=blend_video_vae,
-                temporary_paths=scheduled_blend_temps)
+                temporary_paths=scheduled_blend_temps,
+                force_records=color_stabilization_mode != "off")
             if tone_match_mode == "auto" and blend_records:
                 blend_records = _auto_boundary_tone_match_records(
                     blend_records)
+            if (color_stabilization_mode == "scene_1_anchor" and
+                    blend_records):
+                blend_records = _auto_scene_color_stabilization_records(
+                    blend_records)
             blend_enabled = bool(blend_records)
+            has_visual_blends = any(
+                int(record.get("blend_frames", 0))
+                for record in blend_records)
             media_metadata = _manifest_media_metadata(manifest)
             if blend_enabled:
                 _write_ffmetadata(metadata_tmp, media_metadata)
@@ -15130,11 +15396,15 @@ class MiniMaxH3ChainAssemble:
                             total_output_frames,
                             int(manifest["compatibility"].get(
                                 "segment_crf", 18)))
-                        backend = "ffmpeg cumulative linear blend"
+                        backend = ("ffmpeg cumulative linear blend"
+                                   if has_visual_blends else
+                                   "ffmpeg temporal color stabilization")
                     except Exception as exc:
                         if av is None:
                             raise
-                        backend = "PyAV cumulative linear blend fallback"
+                        backend = ("PyAV cumulative linear blend fallback"
+                                   if has_visual_blends else
+                                   "PyAV temporal color stabilization fallback")
                         _LOG.warning(
                             "H3 Chain ffmpeg blending failed; retrying with "
                             "the built-in PyAV fallback: %s", exc)
@@ -15145,7 +15415,9 @@ class MiniMaxH3ChainAssemble:
                             int(manifest["compatibility"].get(
                                 "segment_crf", 18)))
                 else:
-                    backend = "PyAV cumulative linear blend fallback"
+                    backend = ("PyAV cumulative linear blend fallback"
+                               if has_visual_blends else
+                               "PyAV temporal color stabilization fallback")
                     _LOG.warning(
                         "H3 Chain usable ffmpeg executable unavailable; "
                         "blending with "
@@ -15228,9 +15500,12 @@ class MiniMaxH3ChainAssemble:
             if tone_match_mode == "auto" and matched_boundaries else
             ("; auto tone match found no coherent step"
              if tone_match_mode == "auto" else ""))
-        status = "assembled %d generated clips%s with %s%s%s -> %s%s%s" % (
+        color_status = (
+            "; scene-one temporal color anchor"
+            if color_stabilization_mode == "scene_1_anchor" else "")
+        status = "assembled %d generated clips%s with %s%s%s%s -> %s%s%s" % (
             len(segments), " + existing-video prelude" if prelude else "",
-            backend, blend_status, tone_status, final_path,
+            backend, blend_status, tone_status, color_status, final_path,
             sidecar_status, copy_status)
         _LOG.info("H3 Chain %s", status)
         published_video = output_copy or final_path
