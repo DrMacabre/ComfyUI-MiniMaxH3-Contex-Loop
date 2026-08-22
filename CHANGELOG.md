@@ -2,7 +2,7 @@
 
 Newest first. This file keeps release history out of the onboarding README.
 
-## Unreleased — Deferred checkpoint upscaling
+## v0.5.6 — Simplified 0.5 release and deferred checkpoint upscaling
 
 - Ported the strict authoring layer from the standalone H3 Prompt IDE into
   both scene prompt editors. They now share Auto/T2VA/I2VA/FL2VA/L2VA/Ref2VA

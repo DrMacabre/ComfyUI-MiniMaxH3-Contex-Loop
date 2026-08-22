@@ -13,7 +13,7 @@ scenes from disk.
 **[Troubleshooting](https://github.com/ethanfel/ComfyUI-MiniMaxH3-Contex-Loop/wiki/Troubleshooting)** ·
 [Full wiki](https://github.com/ethanfel/ComfyUI-MiniMaxH3-Contex-Loop/wiki)
 
-> **Version 0.5 status:** this README describes `feature/0.5-workflow-ux`.
+> **Version 0.5 status:** `main` is the supported 0.5 release line.
 > Saved 0.4 workflows and checkpoints remain supported.
 
 > **Contex** is the intentional public repository spelling.
@@ -34,8 +34,7 @@ scenes from disk.
 From `ComfyUI/custom_nodes`:
 
 ```bash
-git clone --branch feature/0.5-workflow-ux \
-  https://github.com/ethanfel/ComfyUI-MiniMaxH3-Contex-Loop.git
+git clone https://github.com/ethanfel/ComfyUI-MiniMaxH3-Contex-Loop.git
 ```
 
 Restart ComfyUI, then:
