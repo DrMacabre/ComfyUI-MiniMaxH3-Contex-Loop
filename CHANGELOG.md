@@ -4,6 +4,15 @@ Newest first. This file keeps release history out of the onboarding README.
 
 ## Unreleased — Deferred checkpoint upscaling
 
+- Added an opt-in **Reference Video Fade** MODEL patch for native H3 Ref2VA
+  video blocks. It keeps the complete 24 fps reference at full early
+  influence, then applies a full-schedule half-cosine attention-value fade
+  without touching still refs, Qwen presentation, reference audio,
+  continuation guides, or target streams. Split samplers can share the
+  original unsplit sigma schedule, and existing SolAttn/Comfy Kitchen
+  attention overrides remain chained. This complements rather than replaces
+  Color-Stable Drift AV: one controls external native video references, while
+  the other controls the previous-scene continuation prefix.
 - Added a whole-branch SeedVR2 route: Checkpoint Manager → Full-Chain Latent
   Video Adapter → SeedVR2 Direct. It decodes the immutable H3 video latents,
   resolves scene overlap blends before upscaling, and exposes one continuous
