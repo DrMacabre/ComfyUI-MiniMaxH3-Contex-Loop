@@ -2,7 +2,7 @@
 
 Newest first. This file keeps release history out of the onboarding README.
 
-## Unreleased
+## v0.5.7 — MiniMax H3 tokenizer compatibility
 
 - Added a guarded compatibility backport for ComfyUI PR #15808. Older core
   builds now register MiniMax H3's seven released dialogue, cutoff, lyrics,

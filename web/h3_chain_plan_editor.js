@@ -23,18 +23,18 @@ import {
     setSharedPrompt,
     shotLengthMode,
     sharedPrompt,
-} from "./h3_chain_plan_core.mjs?v=0.5.6";
-import {availableReferenceRecords} from "./h3_reference_preview_core.mjs?v=0.5.6";
+} from "./h3_chain_plan_core.mjs?v=0.5.7";
+import {availableReferenceRecords} from "./h3_reference_preview_core.mjs?v=0.5.7";
 import {
     applySceneTransitionPreset,
     primaryTransitionOptions,
     sceneTransitionPreset,
     transitionPresetLabel,
-} from "./h3_policy_core.mjs?v=0.5.6";
+} from "./h3_policy_core.mjs?v=0.5.7";
 import {
     resolveAudioContextLength,
     resolveTransitionPolicy,
-} from "./h3_socket_presentation_core.mjs?v=0.5.6";
+} from "./h3_socket_presentation_core.mjs?v=0.5.7";
 
 // This scene editor is an original implementation. Its quick @ reference and
 // # dialogue interactions are inspired by nkxx188/ComfyUI-MiniMaxH3-Easy,
