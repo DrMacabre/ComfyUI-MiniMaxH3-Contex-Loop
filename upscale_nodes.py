@@ -395,6 +395,118 @@ def _mark_h3_upscale_motion_policy(
     return output
 
 
+def _conditioning_from_tagged_upscale_override(
+        state: dict[str, Any], clip: Any, video_vae: Any, audio_vae: Any,
+        references: Any, prompt: str, ref_image_size: str,
+        motion_ref_mode: str, reference_policy: str,
+        target_video_latent: Any = None) -> tuple[Any, str, str]:
+    """Build one coherent live Ref2VA payload for a deferred upscale scene."""
+    source = _source_segment(state)
+    manifest = state["source_manifest"]
+    compatibility = manifest.get("compatibility") or {}
+    scene = int(state["index"])
+    scene_count = len(manifest["segments"])
+    length = int(source.get("raw_frames", 0))
+    width = int(compatibility.get("width", 0))
+    height = int(compatibility.get("height", 0))
+    if target_video_latent is not None:
+        _video, width, height = _target_video_geometry(target_video_latent)
+
+    compiled, summary, bindings = chain._compile_tagged_reference_prompt(
+        references, scene, scene_count, prompt, reference_policy)
+    resolved_videos = []
+    slice_details = []
+    for entry in bindings["videos"]:
+        video, paired_audio, detail = chain._scheduled_video_reference_slice(
+            entry, None, scene, scene_count, length)
+        resolved_videos.append({"video": video, "audio": paired_audio})
+        if detail:
+            slice_details.append(detail)
+    resolved_audios = []
+    for entry in bindings["audios"]:
+        audio, detail = chain._tagged_audio_reference_value(
+            entry, None, scene, scene_count, length)
+        resolved_audios.append(audio)
+        if detail:
+            slice_details.append(detail)
+
+    pictures = [entry["value"] for entry in bindings["pictures"]]
+    has_visual_refs = bool(pictures or resolved_videos)
+    has_audio_refs = bool(
+        resolved_audios or any(
+            item.get("audio") is not None for item in resolved_videos))
+    if has_visual_refs and not callable(getattr(video_vae, "encode", None)):
+        raise ValueError(
+            "Connected upscale Tagged Picture/Video refs require the "
+            "original MiniMax H3 video VAE on video_vae.")
+    if has_audio_refs and not callable(getattr(audio_vae, "encode", None)):
+        raise ValueError(
+            "Connected upscale Tagged Audio or paired-video audio refs "
+            "require the MiniMax H3 audio VAE on audio_vae.")
+
+    semantic_anchors = bindings.get("semantic_anchors") or []
+    semantic_presentation = None
+    if semantic_anchors:
+        semantic_presentation = {
+            "version": chain.SEMANTIC_PRESENTATION_VERSION,
+            "width": width,
+            "height": height,
+            "length": length,
+            "ref_image_size": ref_image_size,
+            "semantic_anchor_size": "512",
+            "semantic_anchor_mode": "timestamped_video",
+            "pictures": pictures,
+            "videos": [{
+                "video": item["video"],
+                "paired_audio": item.get("audio") is not None,
+            } for item in resolved_videos],
+            "standalone_audio_count": len(resolved_audios),
+            "anchors": [{
+                "tag": anchor["tag"],
+                "image": anchor["entry"]["value"],
+                "timestamps": tuple(anchor["timestamps"]),
+            } for anchor in semantic_anchors],
+        }
+
+    presentation, blocks, _source_images = (
+        chain._h3_reference_cache_payload(
+            video_vae, audio_vae, pictures, resolved_videos,
+            resolved_audios, width, height, length, ref_image_size,
+            semantic_presentation))
+    presentation, blocks = chain._h3_motion_reference_policy(
+        presentation, blocks, motion_ref_mode)
+    clip_items = []
+    for item in presentation:
+        public = {"type": item["type"]}
+        if "timestamps" in item:
+            public["timestamps"] = item["timestamps"]
+        if "data" in item:
+            public["data"] = item["data"]
+        clip_items.append(public)
+    tokens = clip.tokenize(compiled, minimax_ref_items=clip_items)
+    conditioning = clip.encode_from_tokens_scheduled(tokens)
+    if blocks:
+        try:
+            import node_helpers
+        except ImportError as exc:
+            raise RuntimeError(
+                "Live upscale reference conditioning requires ComfyUI "
+                "node_helpers.") from exc
+        conditioning = node_helpers.conditioning_set_values(
+            conditioning, {"minimax_refs": blocks})
+    conditioning = _mark_h3_upscale_motion_policy(
+        conditioning, motion_ref_mode, ref_image_size,
+        picture_refs_target_sized=bool(
+            target_video_latent is not None and ref_image_size == "match"))
+    if slice_details:
+        summary += "; " + "; ".join(slice_details)
+    status = (
+        "%s; connected Tagged refs replace cached refs; canvas=%dx%d; "
+        "picture policy=%s; motion refs=%s" % (
+            summary, width, height, ref_image_size, motion_ref_mode))
+    return conditioning, compiled, status
+
+
 def _sample_members(samples: Any) -> tuple[list[Any], bool]:
     if chain.torch is not None and chain.torch.is_tensor(samples):
         return [samples], False
@@ -759,6 +871,94 @@ class MiniMaxH3ChainUpscaleCurrent:
                 state.get("previous_latent"), status)
 
 
+class MiniMaxH3UpscaleReferencePromptOverride:
+    """Inline editor that remains on the normal Tagged Reference chain."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "prompt_override": ("STRING", {
+                    "default": "", "multiline": True,
+                    "dynamicPrompts": True,
+                    "tooltip": "Optional pass-2 prompt. Blank tells Upscale "
+                               "Reference Conditioning to reuse the source "
+                               "scene prompt."}),
+                "disabled_tags": ("STRING", {
+                    "default": "",
+                    "tooltip": "Optional comma-separated @tags to remove "
+                               "from the connected pass-2 registry. Leave "
+                               "blank to preserve the reference line exactly."}),
+            },
+            "optional": {
+                "references": (chain.TAGGED_REFERENCE_TYPE, {
+                    "tooltip": "Normal Tagged Picture/Video/Audio Ref line. "
+                               "When connected downstream, this explicit "
+                               "registry replaces the automatic cached refs."}),
+            },
+        }
+
+    RETURN_TYPES = (chain.TAGGED_REFERENCE_TYPE, "STRING", "STRING", "STRING")
+    RETURN_NAMES = (
+        "references", "prompt_override", "reference_fingerprint", "status")
+    OUTPUT_TOOLTIPS = (
+        "The same Tagged Ref line, optionally filtered by disabled_tags.",
+        "Pass-2 prompt override; blank preserves the source scene prompt.",
+        "Fingerprint of the effective connected registry, or blank.",
+        "Whether the node passed, filtered, or omitted connected refs.",
+    )
+    FUNCTION = "override"
+    CATEGORY = "conditioning/minimax/contex_loop/upscale"
+    DESCRIPTION = (
+        "Stay inline on the standard H3 Tagged Reference chain while selecting "
+        "the explicit refs and text used only by deferred upscale. Connected "
+        "refs replace the automatic cached payload; an unconnected reference "
+        "socket leaves automatic cache restore active.")
+
+    def override(self, prompt_override="", disabled_tags="", references=None):
+        prompt = str(prompt_override or "").replace(
+            "\r\n", "\n").replace("\r", "\n").strip()
+        if references is None:
+            status = (
+                "no connected Tagged refs; automatic cache remains active"
+                + ("; prompt overridden" if prompt else
+                   "; source prompt preserved"))
+            return None, prompt, "", status
+
+        entries = chain._tagged_reference_entries(references)
+        disabled = {
+            value.strip().lstrip("@")
+            for value in str(disabled_tags or "").split(",")
+            if value.strip().lstrip("@")
+        }
+        unknown = disabled.difference({
+            alias for entry in entries
+            for alias in chain._reference_entry_tags(entry)
+        })
+        if unknown:
+            raise ValueError(
+                "Upscale reference override cannot disable unknown tag @%s." %
+                sorted(unknown)[0])
+        if disabled:
+            effective_entries = [
+                entry for entry in entries
+                if not disabled.intersection(
+                    chain._reference_entry_tags(entry))]
+            effective = chain._make_tagged_references(effective_entries)
+        else:
+            effective_entries = entries
+            effective = references
+        fingerprint = str(effective.get("fingerprint") or "")
+        status = "%d connected Tagged ref(s) replace cache" % len(
+            effective_entries)
+        if disabled:
+            status += "; disabled %s" % ", ".join(
+                "@" + tag for tag in sorted(disabled))
+        status += "; " + (
+            "prompt overridden" if prompt else "source prompt preserved")
+        return effective, prompt, fingerprint, status
+
+
 class MiniMaxH3ChainUpscaleReferenceConditioning:
     @classmethod
     def INPUT_TYPES(cls):
@@ -798,6 +998,25 @@ class MiniMaxH3ChainUpscaleReferenceConditioning:
                                "exact compiled generation prompt. Use a concise "
                                "appearance/detail prompt to avoid repeating "
                                "source motion or camera instructions."}),
+                "tagged_references": (chain.TAGGED_REFERENCE_TYPE, {
+                    "tooltip": "Optional pass-2 Tagged Ref line from Upscale "
+                               "Reference + Prompt Override. When connected, "
+                               "it replaces the cached reference payload and "
+                               "is compiled with prompt_override."}),
+                "audio_vae": ("VAE", {
+                    "tooltip": "MiniMax H3 audio VAE. It is needed only when "
+                               "the connected override registry activates "
+                               "standalone or paired reference audio."}),
+                "override_ref_image_size": (("inherit", "match", "max"), {
+                    "default": "inherit",
+                    "tooltip": "Picture sizing for connected override refs. "
+                               "inherit uses the source cache's match/max "
+                               "policy when available, otherwise match."}),
+                "override_reference_policy": (
+                    list(chain.REFERENCE_COMPLIANCE_MODES), {
+                        "default": "strict",
+                        "tooltip": "Prompt/tag validation for connected "
+                                   "pass-2 Tagged refs."}),
             },
         }
 
@@ -805,28 +1024,33 @@ class MiniMaxH3ChainUpscaleReferenceConditioning:
     RETURN_NAMES = (
         "positive", "compiled_prompt", "reference_cache_used", "status")
     OUTPUT_TOOLTIPS = (
-        "Pass-2 H3 conditioning rebuilt from cached Ref2VA media. With a "
-        "target latent and video VAE, match pictures are re-encoded at the "
-        "actual pass-2 canvas. Motion video follows motion_ref_mode.",
+        "Pass-2 H3 conditioning rebuilt from cached or explicitly connected "
+        "Ref2VA media. Match pictures remain canvas-aware and motion video "
+        "follows motion_ref_mode.",
         "Prompt actually encoded for pass 2: custom override, exact cached "
         "compiled prompt, or saved source prompt.",
-        "True when native reference blocks and Qwen presentation were restored.",
+        "True only when the automatic cache was used; connected live refs "
+        "report False even though their conditioning is active.",
         "Scene-local cache lookup result and fingerprint summary.",
     )
     FUNCTION = "condition"
     CATEGORY = "conditioning/minimax/contex_loop/upscale"
     DESCRIPTION = (
-        "Automatically restore a scene-local H3 reference payload and, when "
+        "Automatically restore a scene-local H3 reference payload or replace "
+        "it with a connected pass-2 Tagged Ref line and, when "
         "given the upscaled video latent plus H3 video VAE, rebuild all "
         "resolution-dependent pass-2 picture conditioning. The motion policy "
         "filters both Qwen presentation and native H3 reference blocks. No "
-        "Plan, registry, source audio, or original reference wires are required.")
+        "Plan or Source Timeline wiring is required.")
 
     def condition(self, state, clip, missing_cache="text_only",
                   target_video_latent=None, video_vae=None,
                   prompt_override="",
-                  motion_ref_mode="exclude_video_keep_audio"):
-        if (target_video_latent is None) != (video_vae is None):
+                  motion_ref_mode="exclude_video_keep_audio",
+                  tagged_references=None, audio_vae=None,
+                  override_ref_image_size="inherit",
+                  override_reference_policy="strict"):
+        if target_video_latent is not None and video_vae is None:
             raise ValueError(
                 "Target-resolution H3 conditioning needs both "
                 "target_video_latent and video_vae.")
@@ -846,6 +1070,37 @@ class MiniMaxH3ChainUpscaleReferenceConditioning:
         height = int(compatibility.get("height", 0))
         length = int(source.get("raw_frames", 0))
         descriptor = source.get("reference_cache")
+        if tagged_references is not None:
+            if override_ref_image_size not in ("inherit", "match", "max"):
+                raise ValueError(
+                    "Override ref_image_size must be inherit, match, or max.")
+            ref_image_size = str(override_ref_image_size)
+            if ref_image_size == "inherit":
+                inherited_cache = None
+                try:
+                    inherited_cache = (
+                        chain._load_run_reference_cache_descriptor(
+                            manifest.get("run_name"), scene, descriptor)
+                        if isinstance(descriptor, dict) else
+                        chain._find_reference_cache(
+                            fingerprint, scene, scene_count, prompt, width,
+                            height, length))
+                except (OSError, TypeError, ValueError, json.JSONDecodeError):
+                    # The explicit live registry is self-contained. A stale
+                    # source cache must not block it merely because inherit
+                    # was selected; match is the documented fallback.
+                    inherited_cache = None
+                ref_image_size = str(
+                    (inherited_cache or {}).get("ref_image_size") or "match")
+            conditioning, compiled, status = (
+                _conditioning_from_tagged_upscale_override(
+                    state, clip, video_vae, audio_vae, tagged_references,
+                    custom_prompt or prompt, ref_image_size,
+                    motion_ref_mode, override_reference_policy,
+                    target_video_latent))
+            if custom_prompt:
+                status += "; custom pass-2 prompt override"
+            return conditioning, compiled, False, status
         cached = (chain._load_run_reference_cache_descriptor(
                       manifest.get("run_name"), scene, descriptor)
                   if isinstance(descriptor, dict) else
@@ -1687,6 +1942,8 @@ class MiniMaxH3ChainUpscaleMerge:
 UPSCALE_NODE_CLASS_MAPPINGS = {
     "MiniMaxH3ChainUpscaleAdapter": MiniMaxH3ChainUpscaleAdapter,
     "MiniMaxH3ChainUpscaleCurrent": MiniMaxH3ChainUpscaleCurrent,
+    "MiniMaxH3UpscaleReferencePromptOverride": (
+        MiniMaxH3UpscaleReferencePromptOverride),
     "MiniMaxH3ChainUpscaleReferenceConditioning": (
         MiniMaxH3ChainUpscaleReferenceConditioning),
     "H3ConditioningSyncFromLatents": H3ConditioningSyncFromLatents,
@@ -1699,6 +1956,8 @@ UPSCALE_NODE_CLASS_MAPPINGS = {
 UPSCALE_NODE_DISPLAY_NAME_MAPPINGS = {
     "MiniMaxH3ChainUpscaleAdapter": "MiniMax H3 Checkpoint Upscale Adapter",
     "MiniMaxH3ChainUpscaleCurrent": "MiniMax H3 Upscale Current Scene",
+    "MiniMaxH3UpscaleReferencePromptOverride": (
+        "MiniMax H3 Upscale Reference + Prompt Override"),
     "MiniMaxH3ChainUpscaleReferenceConditioning": (
         "MiniMax H3 Upscale Reference Conditioning"),
     "H3ConditioningSyncFromLatents": "H3 Conditioning Sync From Latents",

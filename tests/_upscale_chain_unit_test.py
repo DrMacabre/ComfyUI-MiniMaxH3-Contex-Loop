@@ -53,6 +53,7 @@ def main():
     required = {
         "MiniMaxH3ChainUpscaleAdapter",
         "MiniMaxH3ChainUpscaleCurrent",
+        "MiniMaxH3UpscaleReferencePromptOverride",
         "MiniMaxH3ChainUpscaleReferenceConditioning",
         "H3ConditioningSyncFromLatents",
         "MiniMaxH3ChainPass2Prepare",
@@ -178,6 +179,26 @@ def main():
             def encode_from_tokens_scheduled(self, tokens):
                 return [[torch.zeros((1, 1, 4)), {"tokens": tokens}]]
 
+        first_override_refs = chain.MiniMaxH3TaggedPictureReference().add(
+            torch.ones((1, 80, 96, 3), dtype=torch.float32),
+            "detail_face")[0]
+        override_refs = chain.MiniMaxH3TaggedPictureReference().add(
+            torch.zeros((1, 64, 64, 3), dtype=torch.float32),
+            "optional_style", previous=first_override_refs)[0]
+        inline_override = (
+            upscale.MiniMaxH3UpscaleReferencePromptOverride().override(
+                prompt_override="@detail_face preserves the subject.",
+                disabled_tags="@optional_style",
+                references=override_refs))
+        assert len(chain._tagged_reference_entries(inline_override[0])) == 1
+        assert inline_override[1] == "@detail_face preserves the subject."
+        assert inline_override[2] == inline_override[0]["fingerprint"]
+        assert "disabled @optional_style" in inline_override[3]
+        no_refs_override = (
+            upscale.MiniMaxH3UpscaleReferencePromptOverride().override())
+        assert no_refs_override[:3] == (None, "", "")
+        assert "automatic cache remains active" in no_refs_override[3]
+
         cache_status = chain._cache_reference_scene(
             fingerprint="unit-test", scene=1, scene_count=2,
             prompt=source["prompt"],
@@ -255,6 +276,22 @@ def main():
                 migrated_cache)
         cached_upscale_state = dict(upscale_state)
         cached_upscale_state["source_manifest"] = relocated_manifest
+        live_override_conditioning = (
+            upscale.MiniMaxH3ChainUpscaleReferenceConditioning().condition(
+                cached_upscale_state, FakeClip(), "error",
+                video_vae=FakeVideoVAE(),
+                prompt_override=inline_override[1],
+                tagged_references=inline_override[0],
+                override_ref_image_size="max"))
+        assert live_override_conditioning[1] == (
+            "<Picture 1> preserves the subject.")
+        assert live_override_conditioning[2] is False
+        live_metadata = live_override_conditioning[0][0][1]
+        assert len(live_metadata["minimax_refs"]) == 1
+        assert live_metadata["_h3_upscale_ref_image_size"] == "max"
+        assert live_metadata["_h3_upscale_picture_refs_target_sized"] is False
+        assert "connected Tagged refs replace cached refs" in (
+            live_override_conditioning[3])
         cached_conditioning = (
             upscale.MiniMaxH3ChainUpscaleReferenceConditioning().condition(
                 cached_upscale_state, FakeClip(), "error"))

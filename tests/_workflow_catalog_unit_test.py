@@ -828,6 +828,7 @@ def validate_deferred_h3_upscale(path):
         "MiniMaxH3ChainCheckpointManager",
         "MiniMaxH3ChainUpscaleAdapter",
         "MiniMaxH3ChainUpscaleCurrent",
+        "MiniMaxH3UpscaleReferencePromptOverride",
         "MiniMaxH3ChainUpscaleReferenceConditioning",
         "H3ConditioningSyncFromLatents",
         "MinimaxH3LatentUpscaler3D",
@@ -874,18 +875,28 @@ def validate_deferred_h3_upscale(path):
         socket(prepare["inputs"], "source_audio")["link"]]
     conditioner = node(
         workflow, "MiniMaxH3ChainUpscaleReferenceConditioning")
+    override = node(workflow, "MiniMaxH3UpscaleReferencePromptOverride")
     assert socket(conditioner["inputs"], "state")["link"] in socket(
         current["outputs"], "state")["links"]
     assert socket(prepare["inputs"], "state")["link"] in socket(
         current["outputs"], "state")["links"]
     assert conditioner["widgets_values"][:2] == [
         "text_only", "exclude_video_keep_audio"]
-    assert conditioner["widgets_values"][2].startswith(
+    assert conditioner["widgets_values"][2:] == ["", "inherit", "strict"]
+    assert override["widgets_values"][0].startswith(
         "Preserve the existing video's identity")
+    assert override["widgets_values"][1] == ""
+    assert socket(override["inputs"], "references")["link"] is None
+    assert socket(conditioner["inputs"], "tagged_references")["link"] == (
+        socket(override["outputs"], "references")["links"][0])
+    assert socket(conditioner["inputs"], "prompt_override")["link"] == (
+        socket(override["outputs"], "prompt_override")["links"][0])
     assert socket(conditioner["outputs"], "positive")["links"] == [
         socket(sync["inputs"], "positive")["link"]]
     assert socket(conditioner["inputs"], "target_video_latent")["link"] is None
-    assert socket(conditioner["inputs"], "video_vae")["link"] is None
+    assert origin_for_input(
+        workflow, socket(conditioner["inputs"], "video_vae"))["type"] == (
+            "VAELoader")
     assert socket(learned["outputs"], "latent")["links"] == [
         socket(prepare["inputs"], "upscaled_video")["link"],
         socket(sync["inputs"], "upscaled_latent")["link"]]
@@ -917,7 +928,8 @@ def validate_deferred_h3_upscale(path):
         str(item.get("widgets_values", [""])[0])
         for item in workflow["nodes"] if item.get("type") == "Note")
     assert "selected_manifest cable is the complete parent-chain contract" in notes
-    assert "No Plan, Source Timeline, source audio, external context" in notes
+    assert "No Plan, Source Timeline, source audio" in notes
+    assert "normal H3 Tagged Ref line" in notes
     assert "H3 Conditioning Sync From Latents" in notes
     assert "resizes match picture minimax_refs plus minimax_keyframes" in notes
     assert "keeping max picture refs at their cached geometry" in notes
