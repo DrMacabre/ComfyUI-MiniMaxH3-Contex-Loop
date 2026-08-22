@@ -123,4 +123,3 @@ def install_minimax_tokenizer_compat(
         "compat",
         "Installed MiniMax H3 additional special-token backport",
     )
-

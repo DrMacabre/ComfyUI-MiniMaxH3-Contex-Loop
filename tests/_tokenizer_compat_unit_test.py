@@ -77,4 +77,3 @@ incompatible = SimpleNamespace(Qwen3VLSDTokenizer=object)
 assert compat.install_minimax_tokenizer_compat(incompatible)["state"] == "unavailable"
 
 print("MiniMax H3 tokenizer: native detection and guarded PR #15808 backport pass")
-
