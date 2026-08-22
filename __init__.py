@@ -11,9 +11,10 @@ original Motion Context, Save Latent, and Load Latent ids remain exclusively
 owned by Niko's upstream pack; this pack exports its stricter Loop Trim, a
 distinctly named Seam Probe adaptation, and the specialized H3 Chain nodes.
 
-Registers the loop nodes without changing ComfyUI's runtime behavior. On older
-ComfyUI builds, Chain Context activates two internal fallback patches inline on
-first execution:
+Registers the loop nodes without changing ordinary ComfyUI or general Qwen
+behavior. On older ComfyUI builds, startup adds the released H3-only tokenizer
+tokens through a module-local alias, and Chain Context activates two internal
+fallback patches inline on first execution:
 
   patch_layout   lifts the first/last-only keyframe anchor restriction,
                  moves pinned audio onto the clip's own timeline, and
@@ -34,6 +35,12 @@ alignment, and keyframe/ref payload merging. This pack switches automatically
 to native guide records and installs no H3 layout or payload wrapper. Version
 0.5 emits a one-time update warning before using the legacy fallback.
 """
+
+from .tokenizer_compat import (
+    install_minimax_tokenizer_compat as _install_minimax_tokenizer_compat,
+)
+
+_MINIMAX_TOKENIZER_COMPAT_STATUS = _install_minimax_tokenizer_compat()
 
 from .nodes import (
     NODE_CLASS_MAPPINGS as _CONTEXT_NODE_CLASS_MAPPINGS,

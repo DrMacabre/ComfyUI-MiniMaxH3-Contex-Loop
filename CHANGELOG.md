@@ -4,6 +4,11 @@ Newest first. This file keeps release history out of the onboarding README.
 
 ## Unreleased — Deferred checkpoint upscaling
 
+- Added a guarded compatibility backport for ComfyUI PR #15808. Older core
+  builds now register MiniMax H3's seven released dialogue, cutoff, lyrics,
+  and caption tokens on the MiniMax-only Qwen tokenizer; updated ComfyUI
+  builds are detected and remain fully core-owned.
+
 - Added an opt-in **Reference Video Fade** MODEL patch for native H3 Ref2VA
   video blocks. It keeps the complete 24 fps reference at full early
   influence, then applies a full-schedule half-cosine attention-value fade
