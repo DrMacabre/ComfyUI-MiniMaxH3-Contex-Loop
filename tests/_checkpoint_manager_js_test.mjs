@@ -8,6 +8,7 @@ import {
     checkpointDependencyText,
     checkpointRevisionKey,
     checkpointRevisionLineage,
+    checkpointSelectionJson,
     formatCheckpointBytes,
     selectedCheckpointRevision,
 } from "../web/h3_checkpoint_manager_core.mjs";
@@ -51,6 +52,15 @@ assert.deepEqual(
     checkpointRevisionLineage(payload, payload.revisions[1]),
     [{scene:1, revision:a}, {scene:2, revision:b}],
 );
+assert.equal(
+    checkpointSelectionJson(payload, " demo-run ", payload.revisions[2]),
+    JSON.stringify({
+        run_name:"demo-run",
+        lineage:[{scene:1, revision:a}, {scene:2, revision:c}],
+    }),
+    "selecting an alternate branch serializes its complete lineage",
+);
+assert.equal(checkpointSelectionJson(payload, "", payload.revisions[2]), "");
 assert.match(checkpointDependencyText(payload.revisions[1]),
     /Scene 2 · hall uses Video 39f \/ Audio 44f via guide/);
 assert.match(checkpointDependencyText(payload.revisions[2]),
@@ -69,6 +79,9 @@ assert.match(source, /MiniMaxH3ChainCheckpointManager/);
 assert.match(source, /MiniMaxH3ChainPlan/);
 assert.match(source, /selection_json/);
 assert.match(source, /checkpointRevisionLineage/);
+assert.match(source, /selectionWidget\.callback\?\.\(value\)/);
+assert.match(source, /node\.graph\?\.setDirtyCanvas\?\.\(true, true\)/);
+assert.match(source, /Select this branch through scene/);
 assert.match(source, /checkpoint-revisions\/delete-preview/);
 assert.match(source, /checkpoint-revisions\/delete/);
 assert.match(source, /checkpoint-revisions\/restore/);

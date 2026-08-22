@@ -74,6 +74,14 @@ export function checkpointRevisionLineage(payload, selected) {
     return lineage;
 }
 
+export function checkpointSelectionJson(payload, runName, selected) {
+    const normalizedRun = String(runName ?? "").trim();
+    const lineage = checkpointRevisionLineage(payload, selected);
+    return normalizedRun && lineage.length
+        ? JSON.stringify({run_name: normalizedRun, lineage})
+        : "";
+}
+
 export function checkpointDependencyText(item) {
     const scene = Number(item?.scene) || 0;
     const id = String(item?.scene_id ?? `clip_${String(scene).padStart(4, "0")}`);

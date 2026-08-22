@@ -4,6 +4,11 @@ Newest first. This file keeps release history out of the onboarding README.
 
 ## Unreleased — Deferred checkpoint upscaling
 
+- Fixed Checkpoint Manager branch clicks so the selected lineage is committed
+  through the hidden Comfy widget callback and immediately available to
+  `selected_manifest`. Branch headers now select their final revision, and
+  the UI distinguishes the current selection from the saved active lineage.
+
 - Added an inline **Upscale Reference + Prompt Override** on the existing
   `H3_TAGGED_REFERENCES` line. Connected Tagged refs replace the automatic
   cache for pass 2, optional tag filtering can remove unwanted refs, and the
