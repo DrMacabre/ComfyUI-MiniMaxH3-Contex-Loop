@@ -2,6 +2,13 @@
 
 Newest first. This file keeps release history out of the onboarding README.
 
+## Unreleased
+
+- Added a guarded compatibility backport for ComfyUI PR #15808. Older core
+  builds now register MiniMax H3's seven released dialogue, cutoff, lyrics,
+  and caption tokens on the MiniMax-only Qwen tokenizer; updated ComfyUI
+  builds are detected and remain fully core-owned.
+
 ## v0.5.6 — Simplified 0.5 release and deferred checkpoint upscaling
 
 - Ported the strict authoring layer from the standalone H3 Prompt IDE into

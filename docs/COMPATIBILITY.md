@@ -54,6 +54,19 @@ Priority** before Contex Loop Context. It can replace only a recognized sibling
 implementation. Unknown wrappers fail with an ownership explanation rather
 than being overwritten.
 
+## Native MiniMax H3 tokenizer tokens
+
+[ComfyUI PR #15808](https://github.com/Comfy-Org/ComfyUI/pull/15808)
+registers the seven additional tokens declared by MiniMax H3's released
+`tokenizer_config.json`: dialogue open/close, cutoff, lyrics open/close, and
+caption open/close. On an older ComfyUI build, this pack installs the same
+token list on the module-local MiniMax Qwen tokenizer during startup and
+refreshes its inverse vocabulary. General Qwen tokenizers are not changed.
+
+When core exposes its native `MiniMaxQwenSDTokenizer`, the compatibility hook
+stands down. Restart ComfyUI after updating core so tokenizer ownership is
+detected before any H3 text encoder is loaded.
+
 ## Native MiniMax H3 Add Guide
 
 When ComfyUI provides native **MiniMax H3 Add Guide**, core owns arbitrary
