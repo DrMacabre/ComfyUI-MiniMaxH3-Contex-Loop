@@ -196,6 +196,43 @@ def validate_no_node_overlap(workflow):
             assert not overlaps, (first[:2], second[:2])
 
 
+def validate_no_group_clipping(workflow):
+    """Nodes sit wholly inside or wholly outside disjoint stage groups."""
+    groups = []
+    for item in workflow.get("groups", []):
+        bounds = item.get("bounding")
+        if not (isinstance(bounds, list) and len(bounds) >= 4):
+            continue
+        groups.append((
+            item.get("title"), float(bounds[0]), float(bounds[1]),
+            float(bounds[2]), float(bounds[3]),
+        ))
+
+    for index, first in enumerate(groups):
+        _, ax, ay, aw, ah = first
+        for second in groups[index + 1:]:
+            _, bx, by, bw, bh = second
+            overlaps = (ax < bx + bw and bx < ax + aw
+                        and ay < by + bh and by < ay + ah)
+            assert not overlaps, (first[0], second[0])
+
+    for item in workflow["nodes"]:
+        position = item.get("pos")
+        size = item.get("size")
+        if not (isinstance(position, list) and isinstance(size, list)
+                and len(position) >= 2 and len(size) >= 2):
+            continue
+        nx, ny = float(position[0]), float(position[1])
+        nw, nh = float(size[0]), float(size[1])
+        for title, gx, gy, gw, gh in groups:
+            intersects = (nx < gx + gw and gx < nx + nw
+                          and ny < gy + gh and gy < ny + nh)
+            contained = (nx >= gx and ny >= gy
+                         and nx + nw <= gx + gw
+                         and ny + nh <= gy + gh)
+            assert not intersects or contained, (item.get("type"), title)
+
+
 def validate_crab_extension(path, expected_shots, tagged):
     workflow = load(path)
     validate_links(workflow)
@@ -906,7 +943,7 @@ def validate_seedvr2_full_chain(path):
         "VAELoader",
         "SeedVR2LoadDiTModel",
         "SeedVR2LoadVAEModel",
-        "SeedVR2DirectVideoUpscaler",
+        "SeedVR2VideoPathUpscaler",
         "SaveVideo",
     } <= node_types
     assert not {
@@ -916,10 +953,12 @@ def validate_seedvr2_full_chain(path):
     }.intersection(node_types)
     manager = node(workflow, "MiniMaxH3ChainCheckpointManager")
     adapter = node(workflow, "MiniMaxH3ChainLatentVideoAdapter")
-    direct = node(workflow, "SeedVR2DirectVideoUpscaler")
+    path_upscaler = node(workflow, "SeedVR2VideoPathUpscaler")
     assert manager["size"][0] >= 1200 and manager["size"][1] >= 1000
-    assert direct["size"][0] >= 600 and direct["size"][1] >= 700
+    assert (path_upscaler["size"][0] >= 700
+            and path_upscaler["size"][1] >= 1000)
     saver = node(workflow, "SaveVideo")
+    assert socket(manager["inputs"], "plan")["link"] is None
     assert socket(manager["outputs"], "selected_manifest")["links"] == [
         socket(adapter["inputs"], "manifest")["link"]]
     assert node(workflow, "VAELoader")["widgets_values"] == [
@@ -927,16 +966,24 @@ def validate_seedvr2_full_chain(path):
     assert adapter["widgets_values"] == [
         "plan", "plan", "disk-backed", True, 256]
     assert socket(adapter["outputs"], "video")["links"] == [
-        socket(direct["inputs"], "video")["link"]]
-    assert direct["widgets_values"][5:8] == [21, 2, False]
-    assert socket(direct["outputs"], "video")["links"] == [
+        socket(path_upscaler["inputs"], "video")["link"]]
+    assert path_upscaler["widgets_values"][:9] == [
+        42, "fixed", 1080, 0, 5, 21, "lab", 2, False]
+    dit = node(workflow, "SeedVR2LoadDiTModel")
+    assert dit["widgets_values"] == [
+        "seedvr2_ema_7b_fp8_e4m3fn_mixed_block35_fp16.safetensors",
+        "cuda:0", 32, False, "cpu", False, "sageattn_2"]
+    assert socket(path_upscaler["outputs"], "video")["links"] == [
         socket(saver["inputs"], "video")["link"]]
+    assert saver["widgets_values"] == [
+        "video/h3_seedvr2_%date:yyyy-MM-dd%", "auto", "auto"]
     notes = "\n".join(
         str(item.get("widgets_values", [""])[0])
         for item in workflow["nodes"] if item.get("type") == "Note")
     assert "disk-backed" in notes
     assert "Do not select minimax_h3_audio_vae" in notes
     assert "No Plan, Source Timeline" in notes
+    assert "SeedVR2 Addon" in notes
     return workflow
 
 
@@ -991,6 +1038,8 @@ def main():
     }
     for path in EXAMPLES.glob("*.json"):
         workflow = load(path)
+        validate_no_node_overlap(workflow)
+        validate_no_group_clipping(workflow)
         if path in {deferred_upscale_path, seedvr2_full_chain_path}:
             continue
         if path == masked_bridge_path:

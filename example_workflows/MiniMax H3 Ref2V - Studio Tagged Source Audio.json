@@ -182,7 +182,7 @@
       "id": 1906,
       "type": "Note",
       "pos": [
-        -3008,
+        -3936,
         -1088
       ],
       "size": [
@@ -1660,7 +1660,7 @@
       "type": "Note",
       "pos": [
         3136,
-        512
+        1312
       ],
       "size": [
         576,
@@ -2181,7 +2181,7 @@
       "type": "MiniMaxH3ChainPlanStudio",
       "pos": [
         384,
-        544
+        1344
       ],
       "size": [
         1536,
@@ -2325,7 +2325,7 @@
       "type": "MiniMaxH3ChainRichScenePromptEditor",
       "pos": [
         1984,
-        544
+        1344
       ],
       "size": [
         1088,
@@ -2367,7 +2367,7 @@
       "type": "MiniMaxH3ChainPlan",
       "pos": [
         -640,
-        544
+        1344
       ],
       "size": [
         992,
@@ -2473,7 +2473,7 @@
       "type": "MiniMaxH3SourceTimeline",
       "pos": [
         -2176,
-        -256
+        512
       ],
       "size": [
         352,
@@ -2528,7 +2528,7 @@
       "type": "MiniMaxH3ChainPolicy",
       "pos": [
         -1060,
-        704
+        1504
       ],
       "size": [
         340,
@@ -3196,9 +3196,9 @@
       "title": "H3 MODEL STACK",
       "bounding": [
         -2112,
-        -1024,
+        -1536,
         2200,
-        650
+        1162
       ],
       "color": "#3f789e",
       "flags": {}
@@ -3210,7 +3210,7 @@
         -448,
         -352,
         5792,
-        800
+        1568
       ],
       "color": "#744c8c",
       "flags": {}
@@ -3243,10 +3243,10 @@
       "id": 6,
       "title": "REF2V — PLAN STUDIO + RICH PROMPT EDITOR",
       "bounding": [
-        -672,
-        480,
-        3764,
-        1392
+        -1152,
+        1280,
+        4244,
+        1472
       ],
       "color": "#3f789e",
       "flags": {}
@@ -3258,7 +3258,7 @@
         -2656,
         -352,
         1544,
-        864
+        1152
       ],
       "color": "#744c8c",
       "flags": {}
@@ -3270,9 +3270,21 @@
         -1088,
         -352,
         608,
-        688
+        720
       ],
       "color": "#432f66",
+      "flags": {}
+    },
+    {
+      "id": 9,
+      "title": "WORKFLOW GUIDE",
+      "bounding": [
+        -4000,
+        -1152,
+        864,
+        1280
+      ],
+      "color": "#2f596b",
       "flags": {}
     }
   ],
