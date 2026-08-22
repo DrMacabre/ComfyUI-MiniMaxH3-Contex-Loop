@@ -252,6 +252,56 @@ def main():
     assert not torch.count_nonzero(audio_mask[..., :prefix_audio_steps])
     assert torch.all(audio_mask[..., prefix_audio_steps:] == 1.0)
 
+    class ColorVideoVAE:
+        def decode(self, value):
+            level = value[:, :3].float().mean()
+            return torch.full((39, 32, 48, 3), float(level))
+
+        def encode(self, value):
+            level = value[..., :3].float().mean() + 0.25
+            return torch.full((1, 16, 12, 2, 3), float(level))
+
+    color_previous_video = torch.full_like(previous_video, 0.5)
+    color_previous = {"samples": NestedTensor((
+        color_previous_video, previous_audio,
+    ))}
+    anchor_stats = {
+        "version": "h3_latent_color_stats_v1",
+        "luma_percentiles": [100.0, 100.0, 100.0],
+        "saturation_percentiles": [80.0, 80.0, 80.0],
+        "sampled_frames": 12,
+    }
+    current_stats = {
+        "version": "h3_latent_color_stats_v1",
+        "luma_percentiles": [112.0, 112.0, 112.0],
+        "saturation_percentiles": [80.0, 80.0, 80.0],
+        "sampled_frames": 12,
+    }
+    _, color_out, color_trim = masked.apply_masked_prefix(
+        conditioning=conditioning,
+        vae=ColorVideoVAE(),
+        latent=target,
+        previous_frames=frames,
+        context_length=39,
+        crop="disabled",
+        previous_latent=color_previous,
+        latent_color_carry={
+            "anchor_stats": anchor_stats,
+            "current_stats": current_stats,
+        },
+    )
+    color_video, color_audio = color_out["samples"].unbind()
+    assert color_trim == 39
+    assert torch.equal(
+        color_video[:, :, 0], color_previous_video[:, :, -12])
+    assert torch.all(
+        color_video[:, :, 11] < color_previous_video[:, :, -1])
+    assert torch.equal(
+        color_audio[..., :prefix_audio_steps],
+        previous_audio[..., -prefix_audio_steps:])
+    assert torch.equal(color_previous_video, torch.full_like(
+        color_previous_video, 0.5))
+
     _, proxy_out, proxy_trim = masked.apply_masked_prefix(
         conditioning=conditioning,
         vae=UnexpectedVideoVAE(),
@@ -545,6 +595,18 @@ def main():
 
     chain = _load("chain_nodes")
     assert chain._context_spatial_proxy_size(1376, 768) == (1152, 640)
+    color_history = chain._state_latent_color_carry({
+        "segments": [
+            {"index": 1, "latent_color_stats": anchor_stats},
+            {"index": 2, "latent_color_stats": current_stats},
+        ],
+    })
+    assert color_history == {
+        "anchor_stats": anchor_stats,
+        "current_stats": current_stats,
+        "anchor_scene": 1,
+        "source_scene": 2,
+    }
 
     # Guide must reproduce the mixed-resolution operation in latent space:
     # full saved 48x86 predecessor -> complete 40x72 decode -> delivered tail.
@@ -679,7 +741,7 @@ def main():
         "detail_av_recipe"] == chain.DETAIL_AV_RECIPE
 
     assert chain.DISPOSABLE_PREFIX_CONTINUATION_MODES == frozenset((
-        "tapered_av", "drift_control_av"))
+        "tapered_av", "drift_control_av", "color_stable_drift_av"))
     clean_blend_source = frames.clone()
     noisy_blend = torch.full((12, 32, 48, 3), -7.0)
     clean_prefix = chain._detail_av_clean_blend_prefix(

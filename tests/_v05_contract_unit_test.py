@@ -78,7 +78,21 @@ def main():
     assert contracts.PREFLIGHT_VERSION == "h3_preflight_v1"
     assert contracts.ADVANCED_TRANSITION_PRESETS == (
         "cut", "guide", "tone_guide", "latent_guide", "detail_guide",
-        "detail_av", "drift_av", "hard_av", "soft_av")
+        "detail_av", "drift_av", "color_drift_av", "hard_av", "soft_av")
+    assert contracts.LATENT_COLOR_CARRY_RECIPE == {
+        "version": "h3_latent_color_delta_v1",
+        "context_frames": 39,
+        "video_steps": 12,
+        "anchor": "first_generated_scene_delivered_tail",
+        "source": "current_predecessor_delivered_tail",
+        "strength": 0.50,
+        "max_luma_shift_code_values": 6.0,
+        "max_saturation_change": 0.06,
+        "spatial_lowpass_kernel": 3,
+        "temporal_taper": "full_prefix_smoothstep_zero_to_one",
+        "delta_rule": "E(graded_D(z))-E(D(z))",
+        "audio": "unchanged",
+    }
     assert contracts.CONTEXT_SPATIAL_PROXY_MODES == (
         "off", "rgb_5_6", "latent_5_6")
     assert contracts.CONTEXT_SPATIAL_PROXY_RECIPE[
@@ -199,6 +213,7 @@ def main():
         "detail_guide": ("tapered_guide", 22),
         "detail_av": ("tapered_av", 39),
         "drift_av": ("drift_control_av", 39),
+        "color_drift_av": ("color_stable_drift_av", 39),
         "hard_av": ("masked_av", 39),
         "soft_av": ("audio_feathered_av", 39),
         "audio_feather_av": ("audio_feathered_av", 39),
@@ -258,6 +273,15 @@ def main():
         assert "exactly 39" in str(exc)
     else:
         raise AssertionError("90-frame Drift-Control AV transition was accepted")
+    try:
+        contracts.transition_policy(
+            "color_drift_av", expert_override=True,
+            continuation_mode="color_stable_drift_av", context_length=90)
+    except ValueError as exc:
+        assert "exactly 39" in str(exc)
+    else:
+        raise AssertionError(
+            "90-frame Color-Stable Drift AV transition was accepted")
     try:
         contracts.transition_policy(
             "guide", expert_override=True,

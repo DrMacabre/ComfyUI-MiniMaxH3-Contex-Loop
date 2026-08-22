@@ -79,6 +79,10 @@ def build_transition(preset="guide", expert_override=False,
         status += (
             "; experimental preset; schedule-matched 8+4 mask at 39f; "
             "20-step baseline")
+    elif policy["preset"] == "color_drift_av":
+        status += (
+            "; experimental preset; schedule-matched 8+4 mask plus "
+            "scene-one VAE delta at 39f; 20-step baseline")
     else:
         status += "; tested preset"
     return (policy, policy["continuation_mode"],
@@ -87,10 +91,11 @@ def build_transition(preset="guide", expert_override=False,
 
 preset_choices = (
     "cut", "guide", "tone_guide", "latent_guide", "detail_guide",
-    "detail_av", "drift_av", "hard_av", "soft_av")
+    "detail_av", "drift_av", "color_drift_av", "hard_av", "soft_av")
 assert "soft_av" in preset_choices
 assert "detail_av" in preset_choices
 assert "drift_av" in preset_choices
+assert "color_drift_av" in preset_choices
 assert "audio_feather_av" not in preset_choices
 expected = {
     "cut": ("guide", 0),
@@ -100,6 +105,7 @@ expected = {
     "detail_guide": ("tapered_guide", 22),
     "detail_av": ("tapered_av", 39),
     "drift_av": ("drift_control_av", 39),
+    "color_drift_av": ("color_stable_drift_av", 39),
     "hard_av": ("masked_av", 39),
     "soft_av": ("audio_feathered_av", 39),
     "audio_feather_av": ("audio_feathered_av", 39),
@@ -112,7 +118,9 @@ for preset, (mode, context) in expected.items():
     assert policy["expert_override"] is False
     assert output_mode == mode and output_context == context
     assert " -> " in status
-    if preset in ("tone_guide", "detail_guide", "detail_av", "drift_av"):
+    if preset in (
+            "tone_guide", "detail_guide", "detail_av", "drift_av",
+            "color_drift_av"):
         assert "experimental preset" in status
     else:
         assert "tested preset" in status
@@ -128,6 +136,10 @@ drift_av_status = build_transition("drift_av")[3]
 assert drift_av_status.startswith(
     "Drift-Control AV -> Drift-Control AV + 39 frames")
 assert "schedule-matched 8+4 mask" in drift_av_status
+color_drift_status = build_transition("color_drift_av")[3]
+assert color_drift_status.startswith(
+    "Color-Stable Drift AV -> Color-Stable Drift AV + 39 frames")
+assert "scene-one VAE delta" in color_drift_status
 audio_feather_status = build_transition("audio_feather_av")[3]
 assert audio_feather_status.startswith(
     "Audio Feather AV (legacy alias) -> Audio-Feathered AV + 39 frames")
@@ -203,6 +215,15 @@ except ValueError as exc:
     assert "exactly 39" in str(exc)
 else:
     raise AssertionError("Drift-Control AV accepted a non-v1 90-frame context")
+
+try:
+    build_transition(
+        "color_drift_av", True, "color_stable_drift_av", 90)
+except ValueError as exc:
+    assert "exactly 39" in str(exc)
+else:
+    raise AssertionError(
+        "Color-Stable Drift AV accepted a non-v1 90-frame context")
 
 tapered_expert, tapered_mode, tapered_context, _ = build_transition(
     "detail_guide", True, "tapered_guide", 39)
@@ -363,14 +384,22 @@ drift_plan = make_plan(drift_policy)
 drift_plan["shots"][1]["steps"] = 20
 masked_stub = types.ModuleType(PACKAGE + ".masked_context")
 masked_stub._require_h3_mask_support = lambda: True
-masked_stub.apply_masked_prefix = lambda **_kwargs: (
-    "drift-conditioning",
-    {"samples": [
-        torch.zeros((1, 16, 12, 2, 2)),
-        torch.zeros((1, 32, 2, 65)),
-    ]},
-    39,
-)
+masked_calls = []
+
+
+def apply_masked_stub(**kwargs):
+    masked_calls.append(kwargs)
+    return (
+        "drift-conditioning",
+        {"samples": [
+            torch.zeros((1, 16, 12, 2, 2)),
+            torch.zeros((1, 32, 2, 65)),
+        ]},
+        39,
+    )
+
+
+masked_stub.apply_masked_prefix = apply_masked_stub
 drift_stub = types.ModuleType(PACKAGE + ".drift_control")
 drift_calls = []
 
@@ -479,6 +508,52 @@ try:
     assert inline_result == (
         ("patched-model", "second-h3-model", 12),)
     assert drift_calls[-1] == ("second-h3-model", 12, full_sigmas)
+
+    color_policy = build_transition("color_drift_av")[0]
+    color_plan = make_plan(color_policy)
+    color_plan["shots"][1]["steps"] = 20
+    color_plan["shots"].append({
+        **color_plan["shots"][1], "id": "three", "steps": 20,
+    })
+    anchor_stats = {
+        "version": "h3_latent_color_stats_v1",
+        "luma_percentiles": [100.0, 100.0, 100.0],
+        "saturation_percentiles": [80.0, 80.0, 80.0],
+        "sampled_frames": 12,
+    }
+    source_stats = {
+        **anchor_stats,
+        "luma_percentiles": [110.0, 110.0, 110.0],
+    }
+    color_state = {
+        "index": 3,
+        "plan": color_plan,
+        "previous_frames": source,
+        "previous_latent": original_latent,
+        "segments": [
+            {"index": 1, "latent_color_stats": anchor_stats},
+            {"index": 2, "latent_color_stats": source_stats},
+        ],
+    }
+    color_result = chain.MiniMaxH3ChainContext().apply(
+        state=color_state,
+        conditioning="stock-conditioning",
+        vae=object(),
+        latent="target-latent",
+        model="h3-model",
+        drift_sigmas=full_sigmas,
+    )
+    assert color_result[:3] == ("drift-conditioning", 39, True)
+    assert color_result[4] == ("patched-model", "h3-model", 12)
+    assert masked_calls[-1]["latent_color_carry"] == {
+        "anchor_stats": anchor_stats,
+        "current_stats": source_stats,
+        "anchor_scene": 1,
+        "source_scene": 2,
+    }
+    assert inline.patch(
+        "second-h3-model", color_state, color_result[3], full_sigmas,
+    ) == (("patched-model", "second-h3-model", 12),)
 finally:
     sys.modules.pop(masked_stub.__name__, None)
     sys.modules.pop(drift_stub.__name__, None)
@@ -560,7 +635,8 @@ assert legacy_overlay["audio_context_length"] == 33
 
 print(
     "transition policy: Cut/Guide/Tone Carry Guide/Latent Guide/Detail Guide/"
-    "Detail AV/Drift-Control AV/Hard AV/Soft AV/Audio Feather AV presets, "
+    "Detail AV/Drift-Control AV/Color-Stable Drift AV/Hard AV/Soft AV/"
+    "Audio Feather AV presets, "
     "advanced/raw "
     "overrides, zero-context delivery, AV safety validation, legacy fallback "
     "and adapter, Plan resolution, and one-wire registration pass")

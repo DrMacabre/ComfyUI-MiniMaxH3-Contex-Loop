@@ -526,6 +526,7 @@ def apply_masked_prefix(
     detail_video_taper=False,
     detail_video_seed=0,
     context_spatial_proxy="off",
+    latent_color_carry=None,
 ):
     """Return conditioning, masked target latent, and repeated trim length."""
     _require_h3_mask_support()
@@ -584,6 +585,29 @@ def apply_masked_prefix(
         raise ValueError(
             "h3_context_spatial_proxy: masked AV accepts only off or "
             "latent_5_6, got %r." % context_spatial_proxy)
+
+    latent_color_summary = None
+    if latent_color_carry is not None:
+        if previous_latent is None:
+            raise ValueError(
+                "h3_latent_color_carry: Color-Stable Drift AV requires a "
+                "sampled generated predecessor latent; imported scene-1 "
+                "context is not eligible.")
+        if not isinstance(latent_color_carry, dict):
+            raise ValueError(
+                "h3_latent_color_carry: scene anchor data is malformed.")
+        from .latent_color_carry import apply_delta_vae_color_carry
+
+        video_prefix, latent_color_summary = apply_delta_vae_color_carry(
+            video_prefix,
+            vae,
+            latent_color_carry.get("anchor_stats"),
+            latent_color_carry.get("current_stats"),
+        )
+        if bool(latent_color_summary.get("applied", False)):
+            video_source += " + tapered scene-one VAE-delta color carry"
+        else:
+            video_source += " + scene-one color carry (neutral)"
 
     detail_scale = None
     detail_alphas = ()
@@ -688,6 +712,13 @@ def apply_masked_prefix(
             (float(detail_alphas[0]), float(detail_alphas[-1]),
              int(DETAIL_AV_RECIPE["ramp_steps"]), float(detail_scale),
              int(detail_video_seed)))
+    if latent_color_summary is not None:
+        mask_summary += (
+            "; scene-one latent color delta %s, brightness %+.4f, "
+            "saturation %.4f, audio unchanged" %
+            ("applied" if latent_color_summary.get("applied") else "neutral",
+             float(latent_color_summary.get("brightness", 0.0)),
+             float(latent_color_summary.get("saturation", 1.0))))
     _LOG.info(
         "h3_masked_prefix: preserved %d target frames = %d video steps / %d "
         "audio steps (%.3fs, video from %s, audio from %s); %s; target %d "

@@ -25,14 +25,14 @@ PAIRED_AUDIO_POLICIES = ("off", "embedded")
 PRIMARY_TRANSITION_PRESETS = ("cut", "guide", "hard_av", "soft_av")
 ADVANCED_TRANSITION_PRESETS = (
     "cut", "guide", "tone_guide", "latent_guide", "detail_guide",
-    "detail_av", "drift_av", "hard_av", "soft_av",
+    "detail_av", "drift_av", "color_drift_av", "hard_av", "soft_av",
 )
 DEFAULT_AUDIO_CONTEXT_LENGTH = 22
 CONTEXT_SPATIAL_PROXY_MODES = ("off", "rgb_5_6", "latent_5_6")
 CONTINUATION_POLICIES = (
     "guide", "tone_carry_guide", "latent_guide", "tapered_guide",
     "masked_av", "tapered_av", "feathered_av", "audio_feathered_av",
-    "drift_control_av")
+    "drift_control_av", "color_stable_drift_av")
 TRANSITION_CONTEXT_LENGTHS = (
     0, 1, 5, 22, 39, 56, 73, 90, 107, 124,
     141, 158, 175, 192, 209, 226, 243,
@@ -71,6 +71,28 @@ DRIFT_CONTROL_AV_RECIPE = {
     "mask_quantization": 256,
     "audio": "unchanged_policy_mask",
     "validated_steps": 20,
+}
+
+# Optional scene-one color anchor layered onto Drift-Control AV.  Only the
+# disposable copied video prefix is touched.  Two encodes isolate the desired
+# RGB change from ordinary VAE reconstruction error:
+# E(graded decode) - E(original decode).  The low-frequency delta fades from
+# zero at the old overlap edge to full strength beside the generated future.
+# Saved predecessor video/audio latents and the complete audio path remain
+# immutable.
+LATENT_COLOR_CARRY_RECIPE = {
+    "version": "h3_latent_color_delta_v1",
+    "context_frames": 39,
+    "video_steps": 12,
+    "anchor": "first_generated_scene_delivered_tail",
+    "source": "current_predecessor_delivered_tail",
+    "strength": 0.50,
+    "max_luma_shift_code_values": 6.0,
+    "max_saturation_change": 0.06,
+    "spatial_lowpass_kernel": 3,
+    "temporal_taper": "full_prefix_smoothstep_zero_to_one",
+    "delta_rule": "E(graded_D(z))-E(D(z))",
+    "audio": "unchanged",
 }
 
 # Boundary-only low-grid experiment reconstructed from a mixed-resolution
@@ -149,6 +171,11 @@ TRANSITION_PRESETS = {
         "continuation_mode": "drift_control_av",
         "context_length": 39,
         "label": "Drift-Control AV continuation (experimental)",
+    },
+    "color_drift_av": {
+        "continuation_mode": "color_stable_drift_av",
+        "context_length": 39,
+        "label": "Color-Stable Drift AV continuation (experimental)",
     },
     "hard_av": {
         "continuation_mode": "masked_av",
@@ -361,7 +388,8 @@ def transition_policy(
                 "H3 Latent Guide requires at least 5 context frames.")
         if (mode in (
                 "masked_av", "tapered_av", "feathered_av",
-                "audio_feathered_av", "drift_control_av"
+                "audio_feathered_av", "drift_control_av",
+                "color_stable_drift_av"
         ) and context > 0 and context not in AV_TRANSITION_CONTEXT_LENGTHS):
             raise ValueError(
                 "H3 AV transition implementations require an exact shared "
@@ -372,11 +400,13 @@ def transition_policy(
             raise ValueError(
                 "H3 Detail AV currently requires exactly 39 context frames "
                 "(or 0 to disable continuation).")
-        if (mode == "drift_control_av" and context not in (
+        if (mode in ("drift_control_av", "color_stable_drift_av")
+                and context not in (
                 0, int(DRIFT_CONTROL_AV_RECIPE["context_frames"]))):
             raise ValueError(
-                "H3 Drift-Control AV currently requires exactly 39 context "
-                "frames (or 0 to disable continuation).")
+                "H3 Drift-Control AV and Color-Stable Drift AV currently "
+                "require exactly 39 context frames (or 0 to disable "
+                "continuation).")
         resolved["continuation_mode"] = mode
         resolved["context_length"] = context
     resolved["expert_override"] = expert

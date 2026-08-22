@@ -104,6 +104,7 @@ from .contracts_v05 import (
     CONTINUATION_POLICIES,
     DETAIL_AV_RECIPE,
     DRIFT_CONTROL_AV_RECIPE,
+    LATENT_COLOR_CARRY_RECIPE,
     DEPENDENCY_SCOPES,
     FINAL_AUDIO_POLICIES,
     GENERATED_CONTINUITY_POLICIES,
@@ -161,15 +162,19 @@ AUDIO_MODES = ("source_track", "generated_audio", "source_plus_timeline")
 CONTINUATION_MODES = (
     "guide", "tone_carry_guide", "latent_guide", "tapered_guide",
     "masked_av", "tapered_av", "feathered_av", "audio_feathered_av",
-    "drift_control_av")
+    "drift_control_av", "color_stable_drift_av")
 LOOP_MEMORY_POLICIES = ("off", "unload_models", "fresh_scene")
 GUIDE_CONTINUATION_MODES = frozenset((
     "guide", "tone_carry_guide", "latent_guide", "tapered_guide"))
 MASKED_CONTINUATION_MODES = frozenset((
     "masked_av", "tapered_av", "feathered_av", "audio_feathered_av",
-    "drift_control_av"))
+    "drift_control_av", "color_stable_drift_av"))
 DISPOSABLE_PREFIX_CONTINUATION_MODES = frozenset((
-    "tapered_av", "drift_control_av"))
+    "tapered_av", "drift_control_av", "color_stable_drift_av"))
+DRIFT_CONTROL_CONTINUATION_MODES = frozenset((
+    "drift_control_av", "color_stable_drift_av"))
+LATENT_COLOR_CARRY_CONTINUATION_MODES = frozenset((
+    "color_stable_drift_av",))
 RGB_PROXY_GUIDE_MODES = frozenset((
     "guide", "tone_carry_guide", "tapered_guide"))
 REFERENCE_AUDIO_TIMELINE_MODES = ("standalone", "source_timeline")
@@ -337,7 +342,7 @@ def _resolved_transition_policy(value: Any) -> dict[str, Any]:
     preset = "legacy"
     for candidate in (
             "cut", "guide", "tone_guide", "latent_guide", "detail_guide",
-            "detail_av", "drift_av", "hard_av", "soft_av",
+            "detail_av", "drift_av", "color_drift_av", "hard_av", "soft_av",
             "audio_feather_av"):
         resolved = _contract_transition_policy(candidate)
         if (resolved["continuation_mode"] == mode and
@@ -371,6 +376,7 @@ def _transition_policy_display(value: Any) -> str:
         "detail_guide": "Detail Guide",
         "detail_av": "Detail AV",
         "drift_av": "Drift-Control AV",
+        "color_drift_av": "Color-Stable Drift AV",
         "hard_av": "Hard AV",
         "soft_av": "Soft AV",
         "audio_feather_av": "Audio Feather AV (legacy alias)",
@@ -386,6 +392,7 @@ def _transition_policy_display(value: Any) -> str:
         "feathered_av": "Feathered AV",
         "audio_feathered_av": "Audio-Feathered AV",
         "drift_control_av": "Drift-Control AV",
+        "color_stable_drift_av": "Color-Stable Drift AV",
     }
     preset = str(policy["preset"])
     implementation = str(policy["continuation_mode"])
@@ -3984,9 +3991,12 @@ def _scene_dependency_record(
     if transition == "tapered_av":
         scopes["incoming_boundary"]["detail_av_recipe"] = dict(
             DETAIL_AV_RECIPE)
-    if transition == "drift_control_av":
+    if transition in DRIFT_CONTROL_CONTINUATION_MODES:
         scopes["incoming_boundary"]["drift_control_av_recipe"] = dict(
             DRIFT_CONTROL_AV_RECIPE)
+    if transition in LATENT_COLOR_CARRY_CONTINUATION_MODES:
+        scopes["incoming_boundary"]["latent_color_carry_recipe"] = dict(
+            LATENT_COLOR_CARRY_RECIPE)
     fingerprints = {scope: _fingerprint(scopes[scope])
                     for scope in DEPENDENCY_SCOPES}
     generation_hash = _fingerprint({
@@ -4744,12 +4754,12 @@ def _normalize_plan(
                     "H3 Detail AV currently requires exactly %d context "
                     "frames (shot %d)." %
                     (int(DETAIL_AV_RECIPE["context_frames"]), index))
-            if (shot_continuation_mode == "drift_control_av" and
+            if (shot_continuation_mode in DRIFT_CONTROL_CONTINUATION_MODES and
                     shot_context_length != int(
                         DRIFT_CONTROL_AV_RECIPE["context_frames"])):
                 raise ValueError(
-                    "H3 Drift-Control AV currently requires exactly %d "
-                    "context frames (shot %d)." %
+                    "H3 Drift-Control AV and Color-Stable Drift AV currently "
+                    "require exactly %d context frames (shot %d)." %
                     (int(DRIFT_CONTROL_AV_RECIPE["context_frames"]), index))
         if (shot_context_length and
                 shot_continuation_mode == "latent_guide"):
@@ -5623,6 +5633,73 @@ def _compact_latent(latent: dict[str, Any]) -> dict[str, Any]:
                         _tensor_cpu_clone(parts[1])]}
 
 
+def _plan_uses_latent_color_carry(plan: dict[str, Any]) -> bool:
+    compatibility = plan.get("compatibility") or {}
+    fallback = str(compatibility.get("continuation_mode", "guide"))
+    return any(
+        migrate_continuation_mode(shot.get("continuation_mode", fallback))
+        in LATENT_COLOR_CARRY_CONTINUATION_MODES
+        for shot in (plan.get("shots") or ()))
+
+
+def _segment_latent_color_stats(
+    segment: dict[str, Any],
+) -> dict[str, Any]:
+    """Return saved tail-color stats, recovering old checkpoints lazily."""
+    existing = segment.get("latent_color_stats")
+    if isinstance(existing, dict):
+        return existing
+    if _st_load is None:
+        raise RuntimeError(
+            "H3 latent color carry needs safetensors to recover an older "
+            "scene anchor.")
+    checkpoint_value = segment.get("checkpoint")
+    if not isinstance(checkpoint_value, str):
+        raise ValueError(
+            "H3 latent color carry scene %d has no checkpoint path." %
+            int(segment.get("index", 0)))
+    checkpoint = _absolute_output_path(checkpoint_value)
+    tensors = _st_load(checkpoint)
+    frames = tensors.get("context_frames")
+    if (not torch.is_tensor(frames) or frames.ndim != 4
+            or int(frames.shape[0]) < 1):
+        raise ValueError(
+            "H3 latent color carry scene %d checkpoint has no retained RGB "
+            "tail. Regenerate that scene once with the current node version."
+            % int(segment.get("index", 0)))
+    from .latent_color_carry import tensor_scene_color_stats
+
+    stats = tensor_scene_color_stats(frames)
+    # This mutates only the in-memory resume record. Existing on-disk metadata
+    # remains immutable and will gain the field if the scene is regenerated.
+    segment["latent_color_stats"] = stats
+    _LOG.info(
+        "H3 latent color carry recovered scene %d tail statistics from its "
+        "saved checkpoint; no scene was regenerated.",
+        int(segment.get("index", 0)))
+    return stats
+
+
+def _state_latent_color_carry(
+    state: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Resolve first-generated-scene anchor and current predecessor stats."""
+    segments = state.get("segments")
+    if not isinstance(segments, list) or not segments:
+        return None
+    anchor_segment = segments[0]
+    current_segment = segments[-1]
+    if not isinstance(anchor_segment, dict) or not isinstance(
+            current_segment, dict):
+        raise ValueError("H3 latent color carry has malformed scene history.")
+    return {
+        "anchor_stats": _segment_latent_color_stats(anchor_segment),
+        "current_stats": _segment_latent_color_stats(current_segment),
+        "anchor_scene": int(anchor_segment.get("index", 1)),
+        "source_scene": int(current_segment.get("index", 0)),
+    }
+
+
 def _detail_av_clean_blend_prefix(
         state: dict[str, Any], images_with_overlap: Any,
         blend_frames: int) -> Any:
@@ -5743,6 +5820,7 @@ def _public_segment(value: dict[str, Any]) -> dict[str, Any]:
         "audio_context_length", "context_spatial_proxy",
         "guide_tone_carry",
         "guide_tone_input_applied",
+        "latent_color_stats",
         "resolved_context_length",
         "resolved_audio_context_length",
         "sample_rate", "segment_sha256",
@@ -8693,8 +8771,11 @@ class MiniMaxH3AdvancedPolicy:
                         "default": "drift_av",
                         "tooltip": "Semantic incoming-boundary recipe. "
                                    "Tone, Latent, Detail, and Drift-Control "
-                                   "choices expose experimental behavior "
-                                   "without mixing it with legacy 0.4 audio "
+                                   "choices expose experimental behavior. "
+                                   "Color-Stable Drift adds a tapered "
+                                   "scene-one VAE delta to the copied video "
+                                   "prefix while leaving audio untouched. It "
+                                   "does not mix with legacy 0.4 audio "
                                    "settings. The recipe also supplies its "
                                    "matching generated-audio context length."}),
             },
@@ -8711,8 +8792,9 @@ class MiniMaxH3AdvancedPolicy:
     CATEGORY = "conditioning/minimax/contex_loop/policies"
     DESCRIPTION = (
         "Layer a named advanced incoming-transition recipe onto an existing "
-        "Chain Policy. This is the normal route for Tone, Latent, Detail, or "
-        "Drift-Control continuation. It never replaces Final audio, Source "
+        "Chain Policy. This is the normal route for Tone, Latent, Detail, "
+        "Drift-Control, or Color-Stable Drift continuation. It never "
+        "replaces Final audio, Source "
         "reference, Generated continuity, or Lock source audio. Chain another "
         "policy layer after it when a later override must win."
     )
@@ -8811,7 +8893,8 @@ class MiniMaxH3Legacy04PolicyAdapter:
         matched_preset = None
         for candidate in (
                 "cut", "guide", "tone_guide", "latent_guide",
-                "detail_guide", "detail_av", "drift_av", "hard_av", "soft_av",
+                "detail_guide", "detail_av", "drift_av", "color_drift_av",
+                "hard_av", "soft_av",
                 "audio_feather_av"):
             resolved = _contract_transition_policy(candidate)
             if (resolved["continuation_mode"] == mode and
@@ -8900,7 +8983,7 @@ class MiniMaxH3ChainPlan:
                                "previous-scene video frames used to "
                                "continue motion. Use 22 for guide mode and 39 "
                                "for masked_av, tapered_av, feathered_av, or "
-                               "audio_feathered_av/drift_control_av so the AV "
+                               "audio_feathered_av/Drift AV so the AV "
                                "clocks meet exactly. "
                                "A scene's Advanced selector can override this; "
                                "blank inherits it and 0 starts a visually new scene. "
@@ -10728,7 +10811,8 @@ class MiniMaxH3ChainContext:
                                "may be left disconnected only when neither "
                                "behavior is active."}),
                 "model": ("MODEL", {
-                    "tooltip": "Required only by Drift-Control AV. Connect "
+                    "tooltip": "Required by Drift-Control AV and Color-Stable "
+                               "Drift AV. Connect "
                                "one MiniMax H3 MODEL here for a single-model "
                                "sampler. For a sigma split that switches "
                                "models, leave this disconnected, connect the "
@@ -10738,7 +10822,7 @@ class MiniMaxH3ChainContext:
                                "through unchanged."}),
                 "drift_sigmas": ("SIGMAS", {
                     "tooltip": "Optional original FULL sigma schedule before "
-                               "any split. Connect it for Drift-Control AV "
+                               "any split. Connect it for either Drift AV "
                                "when sampling is divided across stages so "
                                "both model branches use one canonical "
                                "next-sigma schedule. This also selects the "
@@ -10763,7 +10847,8 @@ class MiniMaxH3ChainContext:
         "Guide/Cut modes. AV mask modes additionally preserve the selected "
         "video prefix. Wire this output to the sampler so Plan can switch "
         "safely.",
-        "H3 MODEL patched only while Drift-Control AV is active; otherwise "
+        "H3 MODEL patched only while either Drift-Control AV mode is active; "
+        "otherwise "
         "the optional input MODEL passes through unchanged. This is None on "
         "the external sigma-split route, where each raw model instead passes "
         "through its own Drift-Control Model Patch.",
@@ -10772,7 +10857,8 @@ class MiniMaxH3ChainContext:
     CATEGORY = "conditioning/minimax/contex_loop"
     DESCRIPTION = ("Apply each scene's inherited or overridden RGB guide, "
                    "tone-carry RGB guide, latent guide, masked AV, full AV "
-                   "latent taper, schedule-matched drift control, feather, or "
+                   "latent taper, schedule-matched drift control, scene-one "
+                   "latent color carry, feather, or "
                    "audio-only "
                    "AV feather, "
                    "including "
@@ -10818,8 +10904,8 @@ class MiniMaxH3ChainContext:
             drift_required = any(
                 candidate.get(
                     "continuation_mode",
-                    cfg.get("continuation_mode", "guide")) ==
-                "drift_control_av"
+                    cfg.get("continuation_mode", "guide")) in
+                DRIFT_CONTROL_CONTINUATION_MODES
                 and _shot_context_length(
                     candidate, int(cfg["context_length"])) > 0
                 for candidate in plan["shots"])
@@ -10855,6 +10941,11 @@ class MiniMaxH3ChainContext:
             from .masked_context import apply_masked_prefix
 
             previous_latent = state.get("previous_latent")
+            latent_color_carry = (
+                _state_latent_color_carry(state)
+                if continuation_mode in LATENT_COLOR_CARRY_CONTINUATION_MODES
+                and previous_latent is not None
+                else None)
             preserve_audio_prefix = (
                 _audio_policy_uses_generated_continuity(cfg)
                 and not source_audio_locked
@@ -10879,9 +10970,10 @@ class MiniMaxH3ChainContext:
                 detail_video_taper=(continuation_mode == "tapered_av"),
                 detail_video_seed=detail_video_seed,
                 context_spatial_proxy=context_spatial_proxy,
+                latent_color_carry=latent_color_carry,
             )
             out_model = model
-            if continuation_mode == "drift_control_av":
+            if continuation_mode in DRIFT_CONTROL_CONTINUATION_MODES:
                 if trim != int(DRIFT_CONTROL_AV_RECIPE["context_frames"]):
                     raise RuntimeError(
                         "H3 Drift-Control AV expected a %d-frame prefix, got "
@@ -10896,9 +10988,13 @@ class MiniMaxH3ChainContext:
                     DRIFT_CONTROL_AV_RECIPE["validated_steps"])
                 if int(shot["steps"]) != validated_steps:
                     _LOG.warning(
-                        "H3 Drift-Control AV scene %d uses %d steps; the "
+                        "H3 %s scene %d uses %d steps; the "
                         "initial validated baseline is %d steps. This run is "
                         "experimental.",
+                        ("Color-Stable Drift AV"
+                         if continuation_mode in
+                         LATENT_COLOR_CARRY_CONTINUATION_MODES
+                         else "Drift-Control AV"),
                         index, int(shot["steps"]), validated_steps)
                 prefix_steps = int(DRIFT_CONTROL_AV_RECIPE["video_steps"])
                 out_latent = mark_drift_control_latent(
@@ -11025,7 +11121,8 @@ class MiniMaxH3DriftControlModelPatch:
     CATEGORY = "conditioning/minimax/contex_loop"
     DESCRIPTION = (
         "Lightweight inline patch for sigma-split workflows that switch H3 "
-        "models. It stores the small full sigma tuple plus a non-copying "
+        "models. It also serves Color-Stable Drift AV. It stores the small "
+        "full sigma tuple plus a non-copying "
         "reference to Chain Context's clean latent, and clones ModelPatcher "
         "metadata; it does not duplicate or jointly load model weights or "
         "latent data. Leave Chain Context's MODEL input disconnected, connect "
@@ -11044,7 +11141,7 @@ class MiniMaxH3DriftControlModelPatch:
         context_length = _shot_context_length(
             shot, int(cfg.get("context_length", 0)))
         active = (
-            continuation_mode == "drift_control_av"
+            continuation_mode in DRIFT_CONTROL_CONTINUATION_MODES
             and context_length > 0
             and (index > 1 or bool(state.get("external_context")))
         )
@@ -11212,6 +11309,15 @@ class MiniMaxH3ChainSegmentSave:
         context_length = min(_plan_context_storage_length(plan), actual_frames)
         context_frames = _tensor_cpu_clone(
             images[:0] if context_length == 0 else images[-context_length:])
+        latent_color_stats = None
+        if _plan_uses_latent_color_carry(plan):
+            if int(context_frames.shape[0]) < 1:
+                raise ValueError(
+                    "H3 Color-Stable Drift AV requires at least one retained "
+                    "RGB context frame in every generated scene checkpoint.")
+            from .latent_color_carry import tensor_scene_color_stats
+
+            latent_color_stats = tensor_scene_color_stats(context_frames)
         parts = compact["samples"]
         tensors = {
             "context_frames": context_frames,
@@ -11434,6 +11540,8 @@ class MiniMaxH3ChainSegmentSave:
                 segment["guide_tone_input_applied"] = True
             if guide_tone_carry is not None:
                 segment["guide_tone_carry"] = guide_tone_carry
+            if latent_color_stats is not None:
+                segment["latent_color_stats"] = latent_color_stats
             # These are dependencies on a preceding saved scene. Imported
             # context used to begin scene 1 is tracked separately by 0.5's
             # scene dependency contract.

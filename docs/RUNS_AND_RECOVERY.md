@@ -422,6 +422,16 @@ checkpoints or future continuation input. It is disabled by default. Enabling
 it uses the same single pixel-processing encode as a visual blend; on a hard-cut
 assembly it replaces the otherwise lossless stream copy with one encode.
 
+For an experimental correction that can influence later generation instead of
+only the final MP4, choose **Color-Stable Drift AV** through Advanced Policy or
+on a scene's incoming transition. It applies a bounded scene-one correction to
+the disposable copied video latent as a VAE delta, tapering from zero to full
+strength across the 39-frame context. Scene 1 remains the anchor, scene 2 is
+neutral, and scene 3 onward can receive a corrected predecessor tail. It does
+not alter the saved predecessor checkpoint or audio. Because this changes
+generation conditioning, it is recorded in the incoming-boundary dependency
+and is intentionally separate from this assembly-only option.
+
 Enable `copy_to_output` to keep the canonical final in the run folder and also
 publish an MP4 into the regular ComfyUI output tree. `output_subfolder` is
 relative to that output root, supports nested folders and the same date tokens,

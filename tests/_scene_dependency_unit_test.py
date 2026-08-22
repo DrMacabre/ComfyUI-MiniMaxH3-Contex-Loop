@@ -211,6 +211,35 @@ assert drift_diffs == [{
     "regeneration_required": True,
 }]
 
+color_drift_plan = chain._normalize_plan(
+    json.dumps({"shots": [
+        {"id": "one", "prompt": "@actor opens.", "length": 90},
+        {"id": "two", "prompt": "@actor continues.", "length": 90},
+    ]}),
+    "color-drift-av-dependency-test", 64, 64, 39, "video", "head",
+    "disabled", "source_track", 39, 1.0, 20, 11, 18, "body:auto:v1",
+    0, "color_stable_drift_av")
+color_drift_dependency = chain._scene_dependency_record(
+    color_drift_plan, 2, None)
+color_boundary = color_drift_dependency["scopes"]["incoming_boundary"]
+assert color_boundary[
+    "drift_control_av_recipe"] == chain.DRIFT_CONTROL_AV_RECIPE
+assert color_boundary[
+    "latent_color_carry_recipe"] == chain.LATENT_COLOR_CARRY_RECIPE
+changed_color_dependency = json.loads(json.dumps(color_drift_dependency))
+changed_color_dependency["scopes"]["incoming_boundary"][
+    "latent_color_carry_recipe"]["strength"] = 0.25
+color_diffs = chain._scene_dependency_diffs(
+    changed_color_dependency, color_drift_dependency)
+assert color_diffs == [{
+    "scope": "incoming_boundary",
+    "scene": 2,
+    "field": "latent_color_carry_recipe.strength",
+    "saved": 0.25,
+    "current": 0.50,
+    "regeneration_required": True,
+}]
+
 # Spatial reset is scheduled on the incoming scene, not inherited globally.
 proxy_plan = chain._normalize_plan(
     json.dumps({"shots": [

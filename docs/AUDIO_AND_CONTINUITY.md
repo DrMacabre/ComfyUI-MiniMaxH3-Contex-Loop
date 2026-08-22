@@ -149,6 +149,17 @@ incoming-boundary dependency fingerprint. Changing the mode or recipe therefore
 requires regenerating that incoming scene, while the saved predecessor remains
 unchanged.
 
+**Color-Stable Drift AV** is the opt-in latent-domain counterpart to Final
+Assembly's scene-one color stabilizer. It keeps Drift-Control's 39-frame mask,
+but adds only the difference between a VAE encode of a weakly corrected RGB
+decode and an encode of the unchanged RGB decode. The shared VAE reconstruction
+error cancels. That low-frequency delta ramps from zero at the old overlap edge
+to full strength beside the generated future. The first generated scene is the
+anchor; scene 2 is therefore neutral, while scene 3 onward can resist recursive
+exposure/saturation drift. Audio and saved checkpoints remain exact. It costs
+one 39-frame decode and two 39-frame encodes only when a non-neutral correction
+is detected.
+
 In Plan Studio, a scene normally chooses Inherit, Cut, Guide, Hard AV, or Soft
 AV. That single choice writes the matching visual and generated-audio overlap.
 The raw per-scene implementation and separate visual/audio context fields are
