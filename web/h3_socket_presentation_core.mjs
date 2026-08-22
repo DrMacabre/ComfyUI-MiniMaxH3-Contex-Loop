@@ -31,6 +31,7 @@ const ADVANCED_OUTPUTS = Object.freeze({
         "clip_count", "shot_id", "steps", "audio_start", "audio_duration",
         "status",
     ],
+    MiniMaxH3ChainContext: ["model"],
     MiniMaxH3ChainLoopEnd: [
         "manifest_json", "last_context_frames", "last_context_latent",
     ],
@@ -44,8 +45,22 @@ const ALWAYS_ADVANCED_WIDGETS = Object.freeze({
     // diagnostic surfaces elsewhere in the 0.5 graph.
     MiniMaxH3AdvancedPolicy: ["incoming_transition"],
     MiniMaxH3ChainCurrent: ["align_audio_reference"],
+    MiniMaxH3ReferenceVideoFadeModelPatch: [
+        "preset", "custom_fade_start", "custom_end_strength",
+    ],
+    MiniMaxH3ChainAssemble: [
+        "boundary_tone_match", "color_stabilization",
+    ],
     MiniMaxH3ChainPlanStudio: ["verify_resume_history"],
     MiniMaxH3ChainPreflight: ["verify_resume_history"],
+});
+
+const ALWAYS_ADVANCED_INPUTS = Object.freeze({
+    MiniMaxH3ChainContext: ["model", "drift_sigmas"],
+    MiniMaxH3DriftControlModelPatch: [
+        "model", "state", "latent", "full_sigmas",
+    ],
+    MiniMaxH3ReferenceVideoFadeModelPatch: ["full_sigmas"],
 });
 
 export function nodeType(node) {
@@ -346,6 +361,9 @@ export function presentationForNode(node, showAdvanced = false) {
     if (!showAdvanced) {
         for (const name of advancedOutputNames(node)) hiddenOutputs.add(name);
         for (const name of advancedWidgetNames(node, policy)) hiddenWidgets.add(name);
+        for (const name of ALWAYS_ADVANCED_INPUTS[nodeType(node)] ?? []) {
+            hiddenInputs.add(name);
+        }
         const sourceAudio = inputByName(node, "source_audio");
         if (sourceAudio && !sourceAudioInputNeeded(node, policy)) {
             hiddenInputs.add("source_audio");

@@ -14,9 +14,12 @@ Newest first. This file keeps release history out of the onboarding README.
   toggle as the focused editor.
 - Simplified the default 0.5 control surface without removing functionality.
   Experimental transition recipes and source-audio grid alignment now stay
-  behind the existing **Show advanced H3 controls** action; Plan and Plan
-  Studio retain their click-to-open raw boundary controls, and Studio's
-  experimental cut-window diagnostic follows that disclosure.
+  behind the existing **Show advanced H3 controls** action. The same disclosure
+  now covers Drift-Control wiring, Reference Video Fade tuning, boundary tone
+  matching, and scene-one color stabilization; already-linked sockets remain
+  visible for saved-workflow compatibility. Plan and Plan Studio retain their
+  click-to-open raw boundary controls, and Studio's experimental cut-window
+  diagnostic follows that disclosure.
 - Added an opt-in **Reference Video Fade** MODEL patch for native H3 Ref2VA
   video blocks. It keeps the complete 24 fps reference at full early
   influence, then applies a full-schedule half-cosine attention-value fade

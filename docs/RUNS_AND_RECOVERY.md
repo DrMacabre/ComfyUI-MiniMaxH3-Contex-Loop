@@ -440,6 +440,11 @@ bounded luma/saturation correction for each later scene. A correction is capped
 at six code values of luma and six percent of saturation, at half the measured
 strength.
 
+This remains experimental. On the simplified 0.5 surface, right-click Assemble
+and choose **Show advanced H3 controls** to reveal `color_stabilization` (and
+the experimental `boundary_tone_match` control) without changing their saved
+values or backend behavior.
+
 The exact join inherits the preceding scene's accepted correction. Starting
 after the retained overlap, that correction moves smoothly to the next scene's
 target over 72 frames. Consequently the option cannot introduce a new grade

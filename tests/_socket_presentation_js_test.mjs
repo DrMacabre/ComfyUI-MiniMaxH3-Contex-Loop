@@ -145,6 +145,68 @@ assert.equal(
     "advanced disclosure restores the experimental recipe selector",
 );
 
+const chainContext = node(25, "MiniMaxH3ChainContext", [
+    ["state", null], ["conditioning", null], ["vae", null], ["latent", null],
+    ["model", null], ["drift_sigmas", null],
+], [["conditioning", null], ["trim_frames", null], ["is_continuation", null],
+    ["latent", null], ["model", null]]);
+const compactContext = presentationForNode(chainContext, false);
+assert.equal(compactContext.hiddenInputs.has("model"), true);
+assert.equal(compactContext.hiddenInputs.has("drift_sigmas"), true);
+assert.equal(compactContext.hiddenOutputs.has("model"), true);
+applySocketPresentation(chainContext, false);
+assert.equal(chainContext.inputs[4].hidden, true,
+    "unwired Drift-Control MODEL routing stays compact");
+assert.equal(chainContext.inputs[5].hidden, true,
+    "unwired Drift-Control sigma routing stays compact");
+assert.equal(chainContext.outputs[4].hidden, true,
+    "unused Drift-Control MODEL output stays compact");
+chainContext.inputs[4].link = 91;
+chainContext.outputs[4].links = [92];
+applySocketPresentation(chainContext, false);
+assert.equal(chainContext.inputs[4].hidden, false,
+    "saved Drift-Control MODEL links remain visible");
+assert.equal(chainContext.outputs[4].hidden, false,
+    "saved Drift-Control MODEL output links remain visible");
+
+const driftPatch = node(26, "MiniMaxH3DriftControlModelPatch", [
+    ["model", null], ["state", null], ["latent", null], ["full_sigmas", null],
+], [["model", null]]);
+assert.deepEqual(
+    [...presentationForNode(driftPatch, false).hiddenInputs].sort(),
+    ["full_sigmas", "latent", "model", "state"],
+    "the dedicated experimental Drift-Control patch opens only on disclosure",
+);
+assert.equal(presentationForNode(driftPatch, true).hiddenInputs.size, 0);
+
+const referenceFade = node(27, "MiniMaxH3ReferenceVideoFadeModelPatch", [
+    ["model", null], ["full_sigmas", null],
+], [["model", null]], [
+    ["preset", "balanced"], ["custom_fade_start", 0.67],
+    ["custom_end_strength", 0.2],
+]);
+const compactReferenceFade = presentationForNode(referenceFade, false);
+assert.equal(compactReferenceFade.hiddenWidgets.has("preset"), true);
+assert.equal(compactReferenceFade.hiddenWidgets.has("custom_fade_start"), true);
+assert.equal(compactReferenceFade.hiddenWidgets.has("custom_end_strength"), true);
+assert.equal(compactReferenceFade.hiddenInputs.has("full_sigmas"), true);
+assert.equal(compactReferenceFade.hiddenInputs.has("model"), false);
+assert.equal(presentationForNode(referenceFade, true).hiddenWidgets.size, 0);
+referenceFade.inputs[1].link = 93;
+applySocketPresentation(referenceFade, false);
+assert.equal(referenceFade.inputs[1].hidden, false,
+    "a saved full-schedule fade connection remains visible");
+
+const assemble = node(28, "MiniMaxH3ChainAssemble", [], [], [
+    ["boundary_tone_match", "off"], ["color_stabilization", "off"],
+    ["audio_source", "plan"],
+]);
+const compactAssemble = presentationForNode(assemble, false);
+assert.equal(compactAssemble.hiddenWidgets.has("boundary_tone_match"), true);
+assert.equal(compactAssemble.hiddenWidgets.has("color_stabilization"), true);
+assert.equal(compactAssemble.hiddenWidgets.has("audio_source"), false);
+assert.equal(presentationForNode(assemble, true).hiddenWidgets.size, 0);
+
 const linkedStatus = node(6, "MiniMaxH3ChainSegmentSave", [], [
     ["segment", null], ["status", [22]],
 ]);
