@@ -1,3 +1,5 @@
+import {H3_ALL_SECTIONS} from "./h3_prompt_schema_core.mjs?v=0.5.5";
+
 export const RICH_PROMPT_GUIDES = Object.freeze([
     {id: "auto", label: "Auto · H3 mode"},
     {id: "general", label: "H3 General"},
@@ -67,7 +69,15 @@ export function referenceRecordMap(records) {
 // Keep this alias grammar aligned with chain_nodes.py's reference compiler.
 // In particular, sentence punctuation such as the period in "Use @hero."
 // belongs to the surrounding prompt, not to the decorated reference token.
-const RICH_TOKEN_PATTERN = /((?<![A-Za-z0-9_])#[A-Za-z][A-Za-z0-9_-]{0,63}\[[0-9]+(?:\.[0-9]+)?s?\]|(?<![A-Za-z0-9_])@[A-Za-z][A-Za-z0-9_-]{0,63}(?![A-Za-z0-9_-])|<(?:Picture|Video|Audio|Subject)\s+\d+>|<\/?d>)/gi;
+const RICH_SECTION_ALTERNATION = H3_ALL_SECTIONS.join("|");
+const RICH_TOKEN_PATTERN = new RegExp(
+    `^(${RICH_SECTION_ALTERNATION}):|`
+    + "((?<![A-Za-z0-9_])#[A-Za-z][A-Za-z0-9_-]{0,63}\\[[0-9]+(?:\\.[0-9]+)?s?\\]"
+    + "|(?<![A-Za-z0-9_])@[A-Za-z][A-Za-z0-9_-]{0,63}(?![A-Za-z0-9_-])"
+    + "|<(?:Picture|Video|Audio|Subject)\\s+\\d+>|<\\/?d>|<scenetrans>|<cutoff>"
+    + "|(?<![A-Za-z0-9_])\\(S\\d+(?:,S\\d+)*\\))",
+    "gim",
+);
 
 export function tokenizeRichPrompt(text, records = []) {
     const source = String(text ?? "");
@@ -79,10 +89,14 @@ export function tokenizeRichPrompt(text, records = []) {
         if (index > offset) parts.push({type: "text", text: source.slice(offset, index)});
         const token = match[0];
         const lower = token.toLowerCase();
+        const section = lower.endsWith(":")
+            ? H3_ALL_SECTIONS.find((item) => `${item}:` === lower) : null;
         const semanticMatch = /^#([a-z][a-z0-9_-]{0,63})\[([0-9]+(?:\.[0-9]+)?)s?\]$/i.exec(token);
         const recordKey = semanticMatch ? `@${semanticMatch[1]}`.toLowerCase() : lower;
         const record = recordMap.get(recordKey) ?? null;
-        if (record || lower.startsWith("@") || semanticMatch || /^<(?:picture|video|audio)\s/i.test(lower)) {
+        if (section) {
+            parts.push({type:"section", kind:"section", text:token, section, unresolved:false});
+        } else if (record || lower.startsWith("@") || semanticMatch || /^<(?:picture|video|audio)\s/i.test(lower)) {
             const namedKind = lower.startsWith("<picture") ? "picture"
                 : lower.startsWith("<video") ? "video"
                     : lower.startsWith("<audio") ? "audio" : null;
@@ -98,6 +112,10 @@ export function tokenizeRichPrompt(text, records = []) {
             });
         } else if (lower.startsWith("<subject")) {
             parts.push({type: "subject", text: token});
+        } else if (lower === "<scenetrans>" || lower === "<cutoff>") {
+            parts.push({type:"flow", kind:"flow", text:token, unresolved:false});
+        } else if (lower.startsWith("(s")) {
+            parts.push({type:"speaker", kind:"speaker", text:token, unresolved:false});
         } else {
             parts.push({type: "dialogue", text: token});
         }

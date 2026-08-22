@@ -40,6 +40,7 @@ import {
     tokenizeRichPrompt,
 } from "./h3_rich_prompt_editor_core.mjs?v=0.5.5";
 import {createPromptCompletionController} from "./h3_prompt_completion_core.mjs?v=0.5.5";
+import {createH3PromptSchemaController} from "./h3_prompt_schema_ui.mjs?v=0.5.5";
 import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.5.5";
 
 const {publishCompanionScene, rebaseScenePrompt} = promptCompanionSync;
@@ -56,6 +57,7 @@ const PLAN_NAME = "MiniMaxH3ChainPlan";
 const ACTIVE_PROPERTY = "h3_rich_prompt_active_scene";
 const FONT_PROPERTY = "h3_rich_prompt_font_size";
 const GUIDE_PROPERTY = "h3_rich_prompt_guide";
+const PRESENTATION_PROPERTY = "h3_rich_prompt_rich_text";
 const DEFAULT_FONT = 17;
 const MIN_FONT = 12;
 const MAX_FONT = 32;
@@ -67,6 +69,9 @@ const ICONS = Object.freeze({
     subject: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M5 21c.8-4.2 3.1-6.3 7-6.3s6.2 2.1 7 6.3"/></svg>',
     dialogue: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h14v11H9l-4 3z"/><path d="M8 9h8M8 12h6"/></svg>',
     reference: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.1.1l2-2a5 5 0 0 0-7.1-7.1l-1.1 1.1"/><path d="M14 11a5 5 0 0 0-7.1-.1l-2 2A5 5 0 0 0 12 20l1.1-1.1"/></svg>',
+    section: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h14M5 12h14M5 19h14"/></svg>',
+    flow: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h11M12 4l3 3-3 3M20 17H9M12 14l-3 3 3 3"/></svg>',
+    speaker: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10v4h4l5 4V6L8 10z"/><path d="M16 9c1.5 1.5 1.5 4.5 0 6"/></svg>',
     sparkle: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 2 1.4 5.1L18 9l-4.6 1.9L12 16l-1.4-5.1L6 9l4.6-1.9zM19 15l.7 2.3L22 18l-2.3.7L19 21l-.7-2.3L16 18l2.3-.7z"/></svg>',
     stop: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>',
 });
@@ -88,6 +93,9 @@ function injectStyles() {
         --h3rp-token-audio:color-mix(in srgb,var(--h3rp-text) 42%,#d47700);
         --h3rp-token-subject:color-mix(in srgb,var(--h3rp-text) 42%,#26934a);
         --h3rp-token-dialogue:color-mix(in srgb,var(--h3rp-text) 42%,#cf3976);
+        --h3rp-token-section:color-mix(in srgb,var(--h3rp-text) 38%,#5f87ff);
+        --h3rp-token-flow:color-mix(in srgb,var(--h3rp-text) 42%,#00a99d);
+        --h3rp-token-speaker:color-mix(in srgb,var(--h3rp-text) 42%,#d268b7);
         --h3rp-token-danger:color-mix(in srgb,var(--h3rp-text) 42%,#d44747);
         --h3rp-font-size:17px; box-sizing:border-box; width:100%; height:100%;
         min-height:560px; display:flex; flex-direction:column; gap:8px; overflow:hidden; padding:10px;
@@ -128,7 +136,13 @@ function injectStyles() {
       .h3rp-token-audio { color:var(--h3rp-token-audio); }
       .h3rp-token-subject { color:var(--h3rp-token-subject); }
       .h3rp-token-dialogue { color:var(--h3rp-token-dialogue); }
+      .h3rp-token-section { display:inline; margin:0; padding:0; border:0; border-radius:0;
+        color:var(--h3rp-token-section); background:none; font-weight:650; cursor:text; user-select:text; }
+      .h3rp-token-flow { color:var(--h3rp-token-flow); }
+      .h3rp-token-speaker { color:var(--h3rp-token-speaker); }
       .h3rp-token-unknown,.h3rp-token-inactive { color:var(--h3rp-token-danger); border-style:dashed; }
+      .h3rp-presentation-active { border-color:var(--h3rp-accent) !important;
+        color:var(--h3rp-accent) !important; }
       .h3rp-token-thumb { width:18px; height:18px; flex:0 0 18px; object-fit:cover; border-radius:3px;
         background:rgba(255,255,255,.09); }
       .h3rp-token-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -534,8 +548,9 @@ function mount(node) {
         active:Math.max(0, Number(node.properties[ACTIVE_PROPERTY]) || 0),
         fontSize:clamp(node.properties[FONT_PROPERTY], MIN_FONT, MAX_FONT, DEFAULT_FONT),
         guide:normalizeRichGuide(node.properties[GUIDE_PROPERTY]),
+        decorated:node.properties[PRESENTATION_PROPERTY] !== false,
         records:[], referenceMode:null, editor:null, refs:null, status:null, optimizerStatus:null,
-        completion:null,
+        completion:null, schema:null,
         history:{sceneKey:"", data:null, revisionId:null, host:null, loadToken:0, loadPromise:null,
             saveTimer:null, pendingDraft:null, savePromise:null, error:"", treeOpen:false,
             showArchived:false},
@@ -555,6 +570,7 @@ function mount(node) {
         node.properties[ACTIVE_PROPERTY] = state.active;
         node.properties[FONT_PROPERTY] = state.fontSize;
         node.properties[GUIDE_PROPERTY] = state.guide;
+        node.properties[PRESENTATION_PROPERTY] = state.decorated;
         dirty();
     }
 
@@ -925,6 +941,11 @@ function mount(node) {
         token.dataset.token = part.text;
         if (part.unresolved) token.classList.add("h3rp-token-unknown");
         if (part.record && !part.record.active) token.classList.add("h3rp-token-inactive");
+        if (part.type === "section") {
+            token.append(element("span", "h3rp-token-label", part.text));
+            token.title = `H3 section · ${part.section}`;
+            return token;
+        }
         const mediaKind = kind === "picture" ? "image" : kind;
         const media = part.record?.source ? findMediaPreview(part.record.source, mediaKind) : null;
         if (kind === "picture" && media?.url) {
@@ -950,6 +971,18 @@ function mount(node) {
     function renderEditorText(text, caret = null, editableSelection = null) {
         if (!state.editor) return;
         const source = String(text ?? "");
+        if (!state.decorated) {
+            state.editor.replaceChildren(document.createTextNode(source));
+            if (editableSelection?.selectionStart != null
+                    && editableSelection?.selectionEnd != null) {
+                restoreTextSelection(
+                    state.editor,
+                    editableSelection.selectionStart,
+                    editableSelection.selectionEnd,
+                );
+            } else if (caret != null) restoreCaret(state.editor, caret);
+            return;
+        }
         const parts = tokenizeRichPrompt(source, state.records);
         const fragment = document.createDocumentFragment();
         let sourceOffset = 0;
@@ -1379,6 +1412,7 @@ function mount(node) {
     function showFailure(message) {
         state.completion?.destroy();
         state.completion = null;
+        state.schema = null;
         state.editor = null;
         state.history.host = null;
         root.replaceChildren(
@@ -1405,6 +1439,7 @@ function mount(node) {
         hidePopover();
         state.completion?.destroy();
         state.completion = null;
+        state.schema = null;
         if (!state.plan?.shots?.length) return showFailure("The connected Plan has no scenes.");
         state.active = Math.max(0, Math.min(state.active, state.plan.shots.length - 1));
         root.style.setProperty("--h3rp-font-size", `${state.fontSize}px`);
@@ -1470,6 +1505,22 @@ function mount(node) {
             insertDecoratedText(`<d>${selected}</d>`);
         }, "dialogue");
         dialogue.dataset.h3rpLock = "";
+        const presentation = button(
+            state.decorated ? "Rich text" : "Plain text",
+            state.decorated
+                ? "Show the same prompt as plain text"
+                : "Color H3 sections, references, speakers, flow markers, and dialogue tags",
+            () => {
+                const text = editorPlainText(state.editor);
+                const caret = selectionTextOffset(state.editor);
+                state.decorated = !state.decorated;
+                persistView();
+                renderEditorText(text, caret);
+                state.editor.focus();
+            },
+        );
+        presentation.classList.toggle("h3rp-presentation-active", state.decorated);
+        presentation.dataset.h3rpLock = "";
         const guide = element("select", "h3rp-guide");
         guide.title = "Prompt Guide used by one-click optimization";
         guide.dataset.h3rpLock = "";
@@ -1490,7 +1541,10 @@ function mount(node) {
         applyPending.hidden = true;
         const optimizerStatus = element("span", "h3rp-status");
         state.optimizerStatus = optimizerStatus;
-        toolbar.replaceChildren(refsButton, dialogue, guide, optimize, stop, applyPending, optimizerStatus);
+        toolbar.replaceChildren(
+            refsButton, dialogue, presentation, guide,
+            optimize, stop, applyPending, optimizerStatus,
+        );
 
         const refs = element("div", "h3rp-ref-tray");
         state.refs = refs;
@@ -1511,6 +1565,7 @@ function mount(node) {
         editor.addEventListener("input", (event) => {
             saveEditorInput(event);
             state.completion?.refresh();
+            state.schema?.refresh();
         });
         editor.addEventListener("beforeinput", (event) => {
             if (event.inputType === "insertParagraph" || event.inputType === "insertLineBreak") {
@@ -1530,6 +1585,7 @@ function mount(node) {
             shot.prompt = promptTextToLines(text);
             writePlan(direction === "undo" ? "Undo saved to Plan" : "Redo saved to Plan");
             scheduleHistoryDraft(shotId, text);
+            state.schema?.refresh();
             editor.focus();
             return true;
         };
@@ -1548,31 +1604,62 @@ function mount(node) {
             renderEditorText(text);
         });
         editorShell.append(editor);
+
+        const replacePromptText = (result, message = "H3 edit saved to Plan") => {
+            const text = String(result.text ?? "");
+            if (state.referenceMode === "tagged") {
+                const refreshed = availableReferenceRecords(
+                    node, state.active + 1, {
+                        includeInactive:true,
+                        prompt:[sharedPrompt(state.plan).text.trim(), text.trim()]
+                            .filter(Boolean).join("\n\n"),
+                    },
+                );
+                state.records = refreshed.records;
+                state.referenceMode = refreshed.mode;
+            }
+            state.promptUndo?.record(text, {inputType:"insertReplacementText"});
+            shot.prompt = promptTextToLines(text);
+            renderEditorText(text, result.caret, result);
+            writePlan(message);
+            scheduleHistoryDraft(shotId, text);
+            state.schema?.refresh();
+            editor.focus();
+        };
+
+        state.schema = createH3PromptSchemaController({
+            node,
+            propertyPrefix:"h3_rich_scene_prompt_editor",
+            getText:() => editorPlainText(editor),
+            replaceText:replacePromptText,
+            focusAt:(caret) => {
+                const text = editorPlainText(editor);
+                const position = Math.max(0, Math.min(text.length, Number(caret) || 0));
+                renderEditorText(text, position);
+                editor.focus();
+            },
+            getRecords:() => state.records,
+            defaultDuration:Number(shot.duration_seconds)
+                || Number(shot.length) / 24 || 6,
+            defaultMode:["tagged", "scheduled", "native"].includes(state.referenceMode)
+                ? "ref2va"
+                : state.referenceMode === "native_keyframes"
+                  ? state.records.filter((record) => record.active && record.kind === "picture").length >= 2
+                    ? "fl2va" : "i2va"
+                  : "auto",
+            scopeKey:shotId,
+            markDirty:dirty,
+        });
+        if (state.schema) toolbar.prepend(state.schema.modeSelect, state.schema.toggle);
+
         state.completion = createPromptCompletionController({
             input:editor,
             getText:() => editorPlainText(editor),
             getCaret:() => selectionTextOffset(editor),
             getRecords:() => state.records,
             getReferenceMode:() => state.referenceMode,
-            replaceText:(result) => {
-                const text = result.text;
-                if (state.referenceMode === "tagged") {
-                    const refreshed = availableReferenceRecords(
-                        node, state.active + 1, {
-                            includeInactive:true,
-                            prompt:[sharedPrompt(state.plan).text.trim(), text.trim()]
-                                .filter(Boolean).join("\n\n"),
-                        },
-                    );
-                    state.records = refreshed.records;
-                    state.referenceMode = refreshed.mode;
-                }
-                state.promptUndo?.record(text, {inputType:"insertReplacementText"});
-                shot.prompt = promptTextToLines(text);
-                renderEditorText(text, result.caret, result);
-                writePlan("Completion saved to Plan");
-                scheduleHistoryDraft(shotId, text);
-            },
+            getMode:() => state.schema?.getMode() ?? "auto",
+            replaceText:(result) => replacePromptText(result, "Completion saved to Plan"),
         });
 
         const footer = element("div", "h3rp-footer");
@@ -1585,10 +1672,13 @@ function mount(node) {
 
         const completionHint = element(
             "span", "h3rp-muted",
-            "Type @, #, <, or [ · Ctrl/Cmd+Space for all H3 completions",
+            "Type @, #, <, or [; use ( for speakers · Ctrl/Cmd+Space for all H3 completions",
         );
         toolbar.append(completionHint);
-        root.append(head, nav, toolbar, refs, editorShell, footer);
+        if (state.schema) identity.append(document.createTextNode(" · "), state.schema.counts);
+        root.append(head, nav, toolbar);
+        if (state.schema) root.append(state.schema.panel);
+        root.append(refs, editorShell, footer);
         refreshOptimizerUi();
         void loadHistory(shotId, editorPlainText(editor));
     }
@@ -1705,6 +1795,7 @@ function mount(node) {
                 scheduleHistoryDraft(
                     String(state.plan.shots[index].id || `clip_${String(index + 1).padStart(4, "0")}`),
                     text);
+                state.schema?.refresh();
             }
         }
         state.lastValue = String(state.planWidget?.value ?? state.lastValue);

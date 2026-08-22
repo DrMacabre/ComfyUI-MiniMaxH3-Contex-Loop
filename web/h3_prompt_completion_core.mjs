@@ -1,43 +1,38 @@
-export const H3_PROMPT_SECTIONS = Object.freeze([
-    "integrated_multimodal_description:",
-    "subject_definitions:",
-    "summary:",
-    "retention_analysis:",
-    "detailed_description:",
-    "overall_soundscape:",
-    "non_diegetic_music:",
-]);
+import {
+    effectiveH3Mode,
+    H3_ALL_SECTIONS,
+    H3_TASK_DIRECTIVES,
+    h3SectionsForMode,
+} from "./h3_prompt_schema_core.mjs?v=0.5.5";
+
+export const H3_PROMPT_SECTIONS = Object.freeze(
+    H3_ALL_SECTIONS.map((section) => `${section}:`),
+);
 
 // These are the generation-intent declarations used by the H3 prompt
 // formats represented in the shipped workflows. Keep audio reference and
 // audio reuse separate: they describe different final-audio behavior.
-export const H3_BRACKET_DIRECTIVES = Object.freeze([
-    "[reference generation]",
+export const H3_LANGUAGE_MARKERS = Object.freeze([
+    "[English]", "[French]", "[Spanish]", "[German]", "[Italian]",
+    "[Portuguese]", "[Chinese]", "[Japanese]", "[Korean]", "[Arabic]",
+    "[unclear]",
+]);
+
+// Keep the chain editor's previously useful, validator-approved combinations
+// in addition to the standalone IDE's canonical authoring catalog.
+const H3_CHAIN_TASK_DIRECTIVES = Object.freeze([
     "[reference generation + audio reference]",
     "[reference generation + audio reuse]",
-    "[reference generation + video editing]",
-    "[reference generation + video editing + audio reference]",
-    "[reference generation + video editing + audio reuse]",
-    "[video continuation]",
-    "[video continuation + audio reference]",
-    "[video continuation + audio reuse]",
-    "[video continuation + reference generation]",
-    "[video continuation + reference generation + audio reference]",
-    "[video continuation + reference generation + audio reuse]",
-    "[video editing]",
     "[video editing + audio reference]",
     "[video editing + audio reuse]",
-    "[audio reference]",
-    "[audio reuse]",
-    "[Shot 1]",
-    "[Shot 2]",
-    "[Shot 3]",
-    "[Shot 4]",
-    "[Shot 5]",
-    "[Shot 6]",
-    "[Shot 7]",
-    "[Shot 8]",
-    "[English]",
+    "[video continuation + audio reference]",
+    "[video continuation + audio reuse]",
+]);
+
+export const H3_BRACKET_DIRECTIVES = Object.freeze([
+    ...new Set([...H3_TASK_DIRECTIVES, ...H3_CHAIN_TASK_DIRECTIVES]),
+    ...Array.from({length:12}, (_, index) => `[Shot ${index + 1}]`),
+    ...H3_LANGUAGE_MARKERS,
 ]);
 
 function clampedCaret(text, caret) {
@@ -76,6 +71,7 @@ export function promptCompletionQuery(value, caret, {manual = false} = {}) {
         ["#", /(?:^|[^A-Za-z0-9_])(#[A-Za-z0-9_-]*)$/],
         ["<", /(<[^>\n]{0,64})$/],
         ["[", /(\[[^\]\n]{0,96})$/],
+        ["(", /(\(S[0-9,]*)$/i],
     ];
     for (const [trigger, pattern] of queries) {
         const result = specialQuery(before, trigger, pattern);
@@ -110,8 +106,8 @@ export function promptCompletionQuery(value, caret, {manual = false} = {}) {
 }
 
 function normalizedSearch(value) {
-    return String(value ?? "").toLowerCase().replace(/^[#@<\[]/, "")
-        .replace(/[>\]]$/, "").replace(/[_+:-]+/g, " ")
+    return String(value ?? "").toLowerCase().replace(/^[#@<\[(]/, "")
+        .replace(/[>\])]$/, "").replace(/[_+:-]+/g, " ")
         .replace(/\s+/g, " ").trim();
 }
 
@@ -227,7 +223,50 @@ function nativeLabelItems(records, referenceMode) {
             detail: "Close an H3 dialogue span",
             priority: 21,
         },
+        {
+            id: "flow:scene-transition",
+            kind: "flow",
+            label: "<scenetrans>",
+            insertText: "<scenetrans>",
+            filterText: "scenetrans scene transition dialogue flow",
+            detail: "H3 dialogue-flow marker; keep it inside <d>…</d>",
+            priority: 22,
+        },
+        {
+            id: "flow:cutoff",
+            kind: "flow",
+            label: "<cutoff>",
+            insertText: "<cutoff>",
+            filterText: "cutoff interrupted dialogue flow",
+            detail: "H3 dialogue cutoff marker; keep it inside <d>…</d>",
+            priority: 23,
+        },
     );
+    return items;
+}
+
+function speakerItems() {
+    const items = Array.from({length:8}, (_, index) => {
+        const label = `(S${index + 1})`;
+        return {
+            id:`speaker:${index + 1}`,
+            kind:"speaker",
+            label,
+            insertText:label,
+            filterText:label,
+            detail:"H3 dialogue speaker marker",
+            priority:index,
+        };
+    });
+    items.push({
+        id:"speaker:pair",
+        kind:"speaker",
+        label:"(S1,S2)",
+        insertText:"(S1,S2)",
+        filterText:"S1 S2 multiple speakers",
+        detail:"H3 simultaneous-speaker marker",
+        priority:9,
+    });
     return items;
 }
 
@@ -235,33 +274,39 @@ function bracketItems() {
     return H3_BRACKET_DIRECTIVES.map((directive, index) => ({
         id: `directive:${directive}`,
         kind: directive.startsWith("[Shot ") ? "shot"
-            : directive === "[English]" ? "language" : "directive",
+            : H3_LANGUAGE_MARKERS.includes(directive)
+              ? "language" : "directive",
         label: directive,
         insertText: directive,
         filterText: directive,
         detail: directive.startsWith("[Shot ")
-            ? "H3 shot marker" : directive === "[English]"
+            ? "H3 shot marker" : H3_LANGUAGE_MARKERS.includes(directive)
               ? "Dialogue language marker" : "H3 summary intent",
         priority: index,
     }));
 }
 
-function sectionItems() {
-    return H3_PROMPT_SECTIONS.map((section, index) => ({
-        id: `section:${section}`,
-        kind: "section",
-        label: section,
-        insertText: section,
-        filterText: section,
-        detail: section === "integrated_multimodal_description:"
-            ? "T2VA/I2VA scene section" : "Ref2VA prompt section",
-        priority: index,
-    }));
+function sectionItems(text = "", mode = "auto") {
+    const sections = h3SectionsForMode(effectiveH3Mode(text, mode));
+    return sections.map((name, index) => {
+        const section = `${name}:`;
+        return {
+            id: `section:${section}`,
+            kind: "section",
+            label: section,
+            insertText: section,
+            filterText: section,
+            detail: `Required ${effectiveH3Mode(text, mode).toUpperCase()} section`,
+            priority: index,
+        };
+    });
 }
 
 /** Return filtered, ranked completion items for a detected query. */
 export function promptCompletionItems(query, records = [], {
     referenceMode = null,
+    text = "",
+    mode = "auto",
     limit = 40,
 } = {}) {
     if (!query) return [];
@@ -272,14 +317,17 @@ export function promptCompletionItems(query, records = [], {
         items = nativeLabelItems(records, referenceMode);
     } else if (query.trigger === "[") {
         items = bracketItems();
+    } else if (query.trigger === "(") {
+        items = speakerItems();
     } else if (query.trigger === "section") {
-        items = sectionItems();
+        items = sectionItems(text, mode);
     } else {
         items = [
             ...referenceItems(records, referenceMode, "@"),
             ...nativeLabelItems(records, referenceMode),
             ...bracketItems(),
-            ...sectionItems(),
+            ...speakerItems(),
+            ...sectionItems(text, mode),
         ];
         if (referenceMode === "tagged") {
             items.push(...referenceItems(records, referenceMode, "#"));
@@ -367,6 +415,7 @@ export function createPromptCompletionController({
     getCaret,
     getRecords = () => [],
     getReferenceMode = () => null,
+    getMode = () => "auto",
     replaceText,
     maxItems = 12,
 } = {}) {
@@ -470,6 +519,8 @@ export function createPromptCompletionController({
         currentQuery = nextQuery;
         currentItems = promptCompletionItems(currentQuery, getRecords(), {
             referenceMode: getReferenceMode(),
+            text,
+            mode:getMode(),
             limit: maxItems,
         });
         selected = Math.min(selected, Math.max(0, currentItems.length - 1));
