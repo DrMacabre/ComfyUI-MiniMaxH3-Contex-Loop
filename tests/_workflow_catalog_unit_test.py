@@ -760,8 +760,9 @@ def validate_deferred_h3_upscale(path):
         "MiniMaxH3ChainUpscaleAdapter",
         "MiniMaxH3ChainUpscaleCurrent",
         "MiniMaxH3ChainUpscaleReferenceConditioning",
-        "MiniMaxH3LatentUpscaleCombined",
-        "MiniMaxH3Pass2StaggeredScheduler",
+        "MinimaxH3LatentUpscaler3D",
+        "MiniMaxH3ChainPass2Prepare",
+        "BasicScheduler",
         "SamplerCustomAdvanced",
         "MiniMaxH3ChainUpscaleSegmentSave",
         "MiniMaxH3ChainUpscaleLoopEnd",
@@ -776,8 +777,9 @@ def validate_deferred_h3_upscale(path):
     manager = node(workflow, "MiniMaxH3ChainCheckpointManager")
     adapter = node(workflow, "MiniMaxH3ChainUpscaleAdapter")
     current = node(workflow, "MiniMaxH3ChainUpscaleCurrent")
-    combined = node(workflow, "MiniMaxH3LatentUpscaleCombined")
-    scheduler = node(workflow, "MiniMaxH3Pass2StaggeredScheduler")
+    learned = node(workflow, "MinimaxH3LatentUpscaler3D")
+    prepare = node(workflow, "MiniMaxH3ChainPass2Prepare")
+    scheduler = node(workflow, "BasicScheduler")
     sampler = node(workflow, "SamplerCustomAdvanced")
     saver = node(workflow, "MiniMaxH3ChainUpscaleSegmentSave")
     loop_end = node(workflow, "MiniMaxH3ChainUpscaleLoopEnd")
@@ -788,29 +790,41 @@ def validate_deferred_h3_upscale(path):
         "selected_manifest"]
     assert socket(manager["outputs"], "selected_manifest")["links"] == [
         socket(adapter["inputs"], "source_manifest")["link"]]
-    assert adapter["widgets_values"][0:2] == ["h3_learned_2x", "h3_latent"]
+    assert adapter["widgets_values"][0:2] == ["h3_lbh_3d", "h3_latent"]
     assert adapter["widgets_values"][3:7] == [1, 0, False, 18]
     assert socket(adapter["outputs"], "flow")["links"] == [
         socket(loop_end["inputs"], "flow")["link"]]
-    assert socket(current["outputs"], "source_latent")["links"] == [
-        socket(combined["inputs"], "samples")["link"]]
+    assert socket(current["outputs"], "source_latent")["links"] is None
+    assert socket(current["outputs"], "source_video_latent")["links"] == [
+        socket(learned["inputs"], "latent")["link"]]
+    assert socket(current["outputs"], "source_audio_latent")["links"] == [
+        socket(prepare["inputs"], "source_audio")["link"]]
     conditioner = node(
         workflow, "MiniMaxH3ChainUpscaleReferenceConditioning")
     assert socket(current["outputs"], "state")["links"][-1] == socket(
         conditioner["inputs"], "state")["link"]
     assert conditioner["widgets_values"] == ["text_only"]
     assert socket(conditioner["outputs"], "positive")["links"] == [
-        socket(combined["inputs"], "positive")["link"]]
-    assert scheduler["widgets_values"] == [
-        4, 0.45, 7.0, "karras", 8, "normal"]
-    assert combined["widgets_values"][0] == "learned model"
-    assert combined["widgets_values"][2:] == [0.0, "independent", 0.0]
+        socket(node(workflow, "BasicGuider")["inputs"], "conditioning")["link"]]
+    assert socket(learned["outputs"], "latent")["links"] == [
+        socket(prepare["inputs"], "upscaled_video")["link"],
+        socket(conditioner["inputs"], "target_video_latent")["link"]]
+    assert socket(node(workflow, "VAELoader")["outputs"], "VAE")["links"][1] == (
+        socket(conditioner["inputs"], "video_vae")["link"])
+    assert scheduler["widgets_values"] == ["simple", 2, 0.24]
+    assert learned["widgets_values"] == [
+        "minimax_h3_latent_upscaler_3d_fp16.safetensors", "megapixels",
+        1.5, 32, "cuda", "fp16"]
     attention = node(workflow, "ModelAttentionBackend")
     assert attention["mode"] == 4
-    assert "PYTORCH ATTENTION" in attention["title"]
+    for functional in workflow["nodes"]:
+        if functional.get("type") != "Note":
+            assert "title" not in functional, functional.get("type")
     guider = node(workflow, "BasicGuider")
-    assert socket(combined["outputs"], "positive")["links"] == [
+    assert socket(conditioner["outputs"], "positive")["links"] == [
         socket(guider["inputs"], "conditioning")["link"]]
+    assert socket(prepare["outputs"], "latent")["links"] == [
+        socket(sampler["inputs"], "latent_image")["link"]]
     assert node(workflow, "KSamplerSelect")["widgets_values"] == ["euler"]
     assert socket(sampler["outputs"], "output")["links"]
     assert socket(saver["inputs"], "images")["link"] is not None
@@ -822,11 +836,11 @@ def validate_deferred_h3_upscale(path):
     notes = "\n".join(
         str(item.get("widgets_values", [""])[0])
         for item in workflow["nodes"] if item.get("type") == "Note")
-    assert "selected_manifest cable is the entire parent-chain contract" in notes
-    assert "no Plan, Source Timeline, source audio, external context" in notes
-    assert "AUTO-RESTORE finds its compact native H3 reference latents" in notes
+    assert "selected_manifest cable is the complete parent-chain contract" in notes
+    assert "No Plan, Source Timeline, source audio, external context" in notes
+    assert "V2 caches retain original picture masters" in notes
     assert "save_latent is OFF" in notes
-    assert "ComfyUI-MiniMaxH3_LatentUpscaler" in notes
+    assert "Comfyui_Minimax_h3_latent_Upscaler" in notes
     h3_video_vae = node(workflow, "VAELoader")
     assert h3_video_vae["widgets_values"] == [
         "MiniMaw-H3/minimax_h3_video_vae_fp16.safetensors"]
@@ -895,7 +909,7 @@ def main():
     sequential_path = (
         EXAMPLES / "EXPERIMENTAL MiniMax H3 Ref2V - Sequential Motion.json")
     deferred_upscale_path = (
-        EXAMPLES / "MiniMax H3 Deferred Upscale - H3 Learned 2x.json")
+        EXAMPLES / "MiniMax H3 Deferred Upscale - H3 LBH 3D.json")
     seedvr2_full_chain_path = (
         EXAMPLES / "MiniMax H3 Deferred Upscale - SeedVR2 Full Chain.json")
     masked_inpaint_path = (
@@ -1153,7 +1167,7 @@ def main():
           "experimental sequential-motion Ref2VA, masked video inpaint, "
           "picture-conditioned masked Ref2VA inpaint, "
           "looped masked AV extension, two-ended masked AV bridge, and "
-          "deferred learned H3 2x and whole-chain SeedVR2; "
+          "deferred LBH 3D H3 and whole-chain SeedVR2; "
           "valid links, bundled "
           "assets, timeline wiring, six-section prompts, restoration, and "
           "attribution pass")

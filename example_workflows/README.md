@@ -23,7 +23,7 @@ example_workflows/
 │   ├── soldier_crabs_inpaint_mask.png
 │   └── soldier_crabs_reference_cc0.png
 ├── EXPERIMENTAL MiniMax H3 Ref2V - Sequential Motion.json
-├── MiniMax H3 Deferred Upscale - H3 Learned 2x.json
+├── MiniMax H3 Deferred Upscale - H3 LBH 3D.json
 ├── MiniMax H3 Deferred Upscale - SeedVR2 Full Chain.json
 ├── MiniMax H3 - Masked AV Bridge - Two Clips.json
 ├── MiniMax H3 - Masked AV Extension - Chain + Reference Image.json
@@ -69,7 +69,7 @@ VIDEO directly to core Save Video. Install the
 [ethanfel SeedVR2 fork](https://github.com/ethanfel/ComfyUI-SeedVR2_VideoUpscaler)
 before opening the graph.
 
-[`MiniMax H3 Deferred Upscale - H3 Learned 2x.json`](<MiniMax H3 Deferred Upscale - H3 Learned 2x.json>)
+[`MiniMax H3 Deferred Upscale - H3 LBH 3D.json`](<MiniMax H3 Deferred Upscale - H3 LBH 3D.json>)
 is a standalone second-pass workflow: it contains no first-pass generation
 loop or source Plan. Select the latest generated scene you want in Checkpoint
 Manager, then queue the child upscale profile. The selected lineage may be
@@ -77,16 +77,23 @@ shorter than the saved Plan; for example, scene 1 can be upscaled while scenes
 2–4 are still ungenerated. The manager emits that verified immutable lineage
 directly; recovery-only Source Timeline metadata stays embedded in the manifest.
 
-The loop uses Tr1dae's **MiniMax H3 Latent Upscale Combined 2x**, the learned
-clean-latent path, a four-step staggered refinement schedule at denoise 0.45,
-Euler, and locked parent audio. It restores the scene's automatic Ref2VA cache
-when available, otherwise falls back to text-only conditioning, then sends the
-returned high-resolution conditioning into a new Guider. Install
-[ComfyUI-MiniMaxH3_LatentUpscaler](https://github.com/Tr1dae/ComfyUI-MiniMaxH3_LatentUpscaler)
-before opening the graph.
+The loop sends only the clean 24-channel video x0 through LBH's temporal
+**MiniMax H3 Latent Upscaler (3D)**. The default target is 1.5 MP on a grid-32
+canvas, followed by a conservative two-step pass at denoise 0.24 with Euler.
+The pack rejoins the untouched 32-channel audio, performs NestedTensor-safe
+video-only CONST re-noise, and masks audio out of pass 2. Install
+[Comfyui_Minimax_h3_latent_Upscaler](https://github.com/LBH-123-AI/Comfyui_Minimax_h3_latent_Upscaler)
+and place its 3D checkpoint in `models/latent_upscale_models/` before opening
+the graph.
+
+Pass-2 conditioning is rebuilt independently from the learned latent. For
+`match` picture refs, the node uses LBH's actual output canvas to re-encode the
+picture VAE latent and Qwen presentation before creating a new Guider. `max`
+pictures, video refs, audio refs, and Qwen-only semantic anchors keep their
+native geometry instead of being blindly multiplied by the upscale factor.
 
 The included Comfy Kitchen attention override is bypassed intentionally. At
-learned 2x sizes, Sage prequantized attention can exceed its int32 tensor-stride
+large target canvases, Sage prequantized attention can exceed its int32 tensor-stride
 range even with ample VRAM; the graph therefore keeps ComfyUI's PyTorch
 attention backend.
 
@@ -94,14 +101,17 @@ attention backend.
 sidecar, integrity record, partial manifest, and final merge remains under
 `output/h3_chains/<run>/upscaled/<profile>/`; enable latent saving only when
 the full HQ sampler latent itself is needed later. Current Tagged and Scheduled
-Ref2VA nodes save the active native VAE/audio reference blocks plus compact
-Qwen presentation frames. Segment Save automatically adopts them under
+Ref2VA nodes save the active native VAE/audio reference blocks, compact Qwen
+presentation frames, and—starting with cache v2—the original picture masters
+needed for target-resolution `match` conditioning. Segment Save automatically
+adopts them under
 `output/h3_chains/<run>/reference_cache/` and records that run-local descriptor
 on the exact source revision. The child workflow therefore finds the matching
 scene from the source manifest alone: no Plan, registry, picture, video, or
 reference-audio wire is required. Runs created before this cache was introduced
-use the node's `text_only` fallback; select `error` when an exact cached Ref2VA
-pass is mandatory.
+remain supported: they scale the saved presentation picture as a pass-2
+fallback. Runs without any cache use the node's `text_only` fallback; select
+`error` when an exact cached Ref2VA pass is mandatory.
 
 The masked-video workflow uses the same Chain Loop, checkpoint/review, resume,
 and assembly path as the generation examples. A pack-native source-target node

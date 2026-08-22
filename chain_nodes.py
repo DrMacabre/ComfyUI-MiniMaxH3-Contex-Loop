@@ -3052,7 +3052,13 @@ def _replace_conditioning_presentation(
     return merged, status
 
 
-REFERENCE_CACHE_FORMAT = "h3_reference_cache_v1"
+REFERENCE_CACHE_FORMAT = "h3_reference_cache_v2"
+REFERENCE_CACHE_LEGACY_FORMATS = frozenset(("h3_reference_cache_v1",))
+
+
+def _is_reference_cache_format(value: Any) -> bool:
+    return str(value or "") in (
+        {REFERENCE_CACHE_FORMAT} | REFERENCE_CACHE_LEGACY_FORMATS)
 
 
 def _reference_cache_signature(
@@ -3142,16 +3148,23 @@ def _h3_reference_cache_payload(
         videos: list[dict[str, Any]], audios: list[Any], width: int,
         height: int, length: int, ref_image_size: str,
         semantic_presentation: Any = None
-        ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[Any]]:
     """Encode the stock H3 Ref2VA payload before target-layout packing."""
     frame_count = _h3_aligned_frame_count(length)
     presentation_items: list[dict[str, Any]] = []
     reference_blocks: list[dict[str, Any]] = []
+    # V2 keeps one RGB master per native picture.  The compact V1 payload was
+    # sufficient to reproduce pass 1, but a larger pass-2 ``match`` canvas
+    # needs the pre-resize picture to avoid enlarging the low-resolution Qwen
+    # presentation frame.
+    source_images: list[Any] = []
     for image in pictures:
         resized = _h3_picture_presentation(
             image, width, height, ref_image_size)
         latent = vae.encode(resized)
-        presentation_items.append({"type": "image", "data": resized})
+        presentation_items.append({
+            "type": "image", "data": resized, "role": "native_picture"})
+        source_images.append(image[:1, ..., :3])
         reference_blocks.append({
             "kind": "image",
             "latent_h": int(resized.shape[1]) // 16,
@@ -3185,11 +3198,12 @@ def _h3_reference_cache_payload(
         if paired_audio is not None:
             audio_latent, audio_ticks = _h3_encode_reference_audio(
                 audio_vae, paired_audio)
-            presentation_items.append({"type": "audio"})
+            presentation_items.append({"type": "audio", "role": "native_audio"})
         sample_indices = list(range(0, usable, FPS // 2))
         presentation_items.append({
             "type": "video",
             "data": frames[sample_indices],
+            "role": "native_video",
             "timestamps": [index / 2.0 for index in range(
                 len(sample_indices))],
         })
@@ -3205,7 +3219,7 @@ def _h3_reference_cache_payload(
     for audio in audios:
         audio_latent, audio_ticks = _h3_encode_reference_audio(
             audio_vae, audio)
-        presentation_items.append({"type": "audio"})
+        presentation_items.append({"type": "audio", "role": "native_audio"})
         reference_blocks.append({
             "kind": "audio",
             "ref_audio_t": audio_ticks,
@@ -3214,7 +3228,15 @@ def _h3_reference_cache_payload(
     if semantic_presentation is not None:
         presentation_items, _status = _semantic_presentation_items(
             semantic_presentation)
-    return presentation_items, reference_blocks
+        # Native pictures are always emitted first by
+        # _semantic_presentation_items; later image/video entries may be
+        # Qwen-only semantic anchors and must keep their configured size.
+        native_pictures = len(pictures)
+        for index, item in enumerate(presentation_items):
+            item["role"] = (
+                "native_picture" if index < native_pictures
+                else "semantic_presentation")
+    return presentation_items, reference_blocks, source_images
 
 
 def _cache_reference_scene(
@@ -3234,13 +3256,15 @@ def _cache_reference_scene(
     paths = _reference_cache_paths(fingerprint, scene, signature)
     if _reference_cache_existing(paths, signature):
         return "reference cache reused %s" % signature[:12]
-    presentation, blocks = _h3_reference_cache_payload(
+    presentation, blocks, source_images = _h3_reference_cache_payload(
         vae, audio_vae, pictures, videos, audios, width, height, length,
         ref_image_size, semantic_presentation)
     tensors: dict[str, Any] = {}
     public_presentation = []
     for index, item in enumerate(presentation):
         record = {"type": str(item["type"])}
+        if item.get("role"):
+            record["role"] = str(item["role"])
         if "timestamps" in item:
             record["timestamps"] = [float(value) for value in item["timestamps"]]
         data = item.get("data")
@@ -3251,6 +3275,13 @@ def _cache_reference_scene(
                     torch.uint8).contiguous()
             record["data_tensor"] = key
         public_presentation.append(record)
+    public_source_images = []
+    for index, image in enumerate(source_images):
+        key = "source_image_%03d" % index
+        tensors[key] = torch.clamp(
+            image.detach().cpu().float(), 0.0, 1.0).mul(255).round().to(
+                torch.uint8).contiguous()
+        public_source_images.append({"data_tensor": key})
     public_blocks = []
     for index, block in enumerate(blocks):
         record = {key: value for key, value in block.items()
@@ -3287,6 +3318,7 @@ def _cache_reference_scene(
         "ref_image_size": str(ref_image_size),
         "presentation_contract": presentation_contract,
         "presentation": public_presentation,
+        "source_images": public_source_images,
         "reference_blocks": public_blocks,
         "metadata": _relative_output_path(paths["metadata"]),
         "tensors": _relative_output_path(paths["tensors"]),
@@ -3299,8 +3331,8 @@ def _cache_reference_scene(
 
 
 def _reference_cache_descriptor(metadata: Any) -> dict[str, Any] | None:
-    if not isinstance(metadata, dict) or metadata.get(
-            "format") != REFERENCE_CACHE_FORMAT:
+    if not isinstance(metadata, dict) or not _is_reference_cache_format(
+            metadata.get("format")):
         return None
     required = ("signature", "reference_fingerprint", "metadata", "tensors",
                 "tensors_sha256")
@@ -3450,7 +3482,7 @@ def _find_reference_cache(
             metadata = _read_json(path)
         except (OSError, ValueError, json.JSONDecodeError):
             continue
-        if (metadata.get("format") != REFERENCE_CACHE_FORMAT
+        if (not _is_reference_cache_format(metadata.get("format"))
                 or metadata.get("reference_fingerprint") != str(fingerprint)
                 or int(metadata.get("scene", -1)) != int(scene)
                 or int(metadata.get("scene_count", -1)) != int(scene_count)
@@ -3466,8 +3498,9 @@ def _find_reference_cache(
     return max(candidates, key=lambda item: item[0])[1]
 
 
-def _conditioning_from_reference_cache(clip: Any,
-                                       metadata: dict[str, Any]) -> Any:
+def _reference_payload_from_cache(
+        metadata: dict[str, Any]
+        ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[Any]]:
     if _st_load is None or torch is None:
         raise RuntimeError(
             "safetensors and torch are required to load H3 reference cache.")
@@ -3479,7 +3512,10 @@ def _conditioning_from_reference_cache(clip: Any,
     tensors = _st_load(tensor_path)
     presentation = []
     for record in metadata.get("presentation", ()):
-        item = {"type": str(record["type"])}
+        item = {
+            "type": str(record["type"]),
+            "role": str(record.get("role") or ""),
+        }
         if "timestamps" in record:
             item["timestamps"] = [float(value) for value in record["timestamps"]]
         key = record.get("data_tensor")
@@ -3489,6 +3525,13 @@ def _conditioning_from_reference_cache(clip: Any,
                     "H3 reference cache is missing presentation tensor %s." % key)
             item["data"] = tensors[key].float().div(255.0)
         presentation.append(item)
+    source_images = []
+    for record in metadata.get("source_images", ()):
+        key = record.get("data_tensor") if isinstance(record, dict) else None
+        if not key or key not in tensors:
+            raise ValueError(
+                "H3 reference cache is missing source image tensor %s." % key)
+        source_images.append(tensors[key].float().div(255.0))
     blocks = []
     for record in metadata.get("reference_blocks", ()):
         block = {key: value for key, value in record.items()
@@ -3504,8 +3547,135 @@ def _conditioning_from_reference_cache(clip: Any,
             elif field == "audio_latent" and block.get("kind") == "video":
                 block[field] = None
         blocks.append(block)
+    return presentation, blocks, source_images
+
+
+def _conditioning_from_reference_cache_target(
+        clip: Any, vae: Any, metadata: dict[str, Any],
+        target_width: int, target_height: int) -> tuple[Any, dict[str, Any]]:
+    """Rebuild cached Ref2VA conditioning for an actual pass-2 canvas.
+
+    Only native picture references using Core H3's ``match`` policy are tied
+    to generation area.  ``max`` pictures, video-reference canvases, audio,
+    and Qwen-only semantic anchors retain their original geometry.  V2 caches
+    keep the original picture master; V1 caches safely fall back to their
+    pass-1 presentation frame.
+    """
+    target_width, target_height = int(target_width), int(target_height)
+    if target_width < 32 or target_height < 32:
+        raise ValueError("Pass-2 conditioning target must be at least 32x32.")
+    if not callable(getattr(vae, "encode", None)):
+        raise ValueError(
+            "Pass-2 target conditioning requires the MiniMax H3 video VAE.")
+    presentation, blocks, source_images = _reference_payload_from_cache(
+        metadata)
+    policy = str(metadata.get("ref_image_size") or "match")
+    rebuilt = 0
+    master_rebuilds = 0
+    fallback_rebuilds = 0
+    if policy == "match":
+        image_blocks = [
+            block for block in blocks if block.get("kind") == "image"]
+        marked = [
+            index for index, item in enumerate(presentation)
+            if item.get("type") == "image"
+            and item.get("role") == "native_picture"]
+        if len(marked) < len(image_blocks):
+            # V1 did not persist roles. Native pictures were serialized before
+            # videos/audio and before any semantic-anchor presentation.
+            marked = [
+                index for index, item in enumerate(presentation)
+                if item.get("type") == "image"][:len(image_blocks)]
+        if len(marked) < len(image_blocks):
+            raise ValueError(
+                "H3 reference cache has %d native image blocks but only %d "
+                "matching Qwen pictures." % (len(image_blocks), len(marked)))
+        for index, block in enumerate(image_blocks):
+            presentation_item = presentation[marked[index]]
+            has_master = index < len(source_images)
+            master = (source_images[index] if has_master
+                      else presentation_item.get("data"))
+            if master is None:
+                raise ValueError(
+                    "H3 reference cache image %d has no reusable picture." %
+                    (index + 1))
+            if has_master:
+                resized = _h3_picture_presentation(
+                    master, target_width, target_height, "match")
+            else:
+                # V1 contains only the pass-1 presentation frame. Approximate
+                # the missing source master by scaling that frame with the
+                # output-area ratio, matching the community conditioning-sync
+                # approach while keeping H/W on Core H3's 32px grid.
+                source_width = max(1, int(metadata.get("width", 0)))
+                source_height = max(1, int(metadata.get("height", 0)))
+                area_scale = math.sqrt(
+                    (target_width * target_height) /
+                    float(source_width * source_height))
+                fallback_width = max(
+                    32, round(int(master.shape[2]) * area_scale / 32) * 32)
+                fallback_height = max(
+                    32, round(int(master.shape[1]) * area_scale / 32) * 32)
+                resized = _resize(
+                    master[:1], fallback_width, fallback_height, "disabled")
+            latent = vae.encode(resized)
+            block["latent"] = latent
+            block["latent_h"] = int(latent.shape[-2])
+            block["latent_w"] = int(latent.shape[-1])
+            presentation_item["data"] = resized
+            rebuilt += 1
+            if has_master:
+                master_rebuilds += 1
+            else:
+                fallback_rebuilds += 1
+    elif policy != "max":
+        raise ValueError(
+            "Cached H3 ref_image_size must be match or max, got %r." % policy)
+
     prompt = str(metadata.get("compiled_prompt") or "")
-    tokens = clip.tokenize(prompt, minimax_ref_items=presentation)
+    clip_presentation = []
+    for item in presentation:
+        public = {"type": item["type"]}
+        if "timestamps" in item:
+            public["timestamps"] = item["timestamps"]
+        if "data" in item:
+            public["data"] = item["data"]
+        clip_presentation.append(public)
+    tokens = clip.tokenize(prompt, minimax_ref_items=clip_presentation)
+    conditioning = clip.encode_from_tokens_scheduled(tokens)
+    if blocks:
+        try:
+            import node_helpers
+        except ImportError as exc:
+            raise RuntimeError(
+                "H3 reference cache conditioning requires ComfyUI node_helpers.") from exc
+        conditioning = node_helpers.conditioning_set_values(
+            conditioning, {"minimax_refs": blocks})
+    return conditioning, {
+        "policy": policy,
+        "target_width": target_width,
+        "target_height": target_height,
+        "rebuilt_images": rebuilt,
+        "master_rebuilds": master_rebuilds,
+        "fallback_rebuilds": fallback_rebuilds,
+        "preserved_blocks": len(blocks) - rebuilt,
+    }
+
+
+def _conditioning_from_reference_cache(clip: Any,
+                                       metadata: dict[str, Any]) -> Any:
+    presentation, blocks, _source_images = _reference_payload_from_cache(
+        metadata)
+    prompt = str(metadata.get("compiled_prompt") or "")
+    clip_presentation = []
+    for item in presentation:
+        public = {"type": item["type"]}
+        if "timestamps" in item:
+            public["timestamps"] = item["timestamps"]
+        if "data" in item:
+            public["data"] = item["data"]
+        clip_presentation.append(public)
+    tokens = clip.tokenize(prompt, minimax_ref_items=clip_presentation)
     conditioning = clip.encode_from_tokens_scheduled(tokens)
     if blocks:
         try:
@@ -8003,11 +8173,13 @@ class MiniMaxH3ScheduledReferenceToVideo:
                                "real execution errors."}),
                 "cache_for_upscale": ("BOOLEAN", {
                     "default": True,
-                    "tooltip": "Automatically save the active scene's compact "
-                               "native H3 reference latents and Qwen preview "
-                               "frames. Deferred upscale workflows discover "
-                               "them from the checkpoint fingerprint without "
-                               "reconnecting the original reference media."}),
+                    "tooltip": "Automatically save the active scene's native "
+                               "H3 reference latents, compact Qwen preview "
+                               "frames, and original picture masters needed "
+                               "for target-resolution pass-2 conditioning. "
+                               "Deferred upscale discovers them from the "
+                               "checkpoint fingerprint without reconnecting "
+                               "the original reference media."}),
             },
         }
 
@@ -8235,10 +8407,11 @@ class MiniMaxH3TaggedReferenceToVideo:
                                "Neither mode creates a VAE reference."}),
             "cache_for_upscale": ("BOOLEAN", {
                 "default": True,
-                "tooltip": "Automatically save compact native H3 reference "
-                           "latents and Qwen presentation frames for this "
-                           "scene. Deferred upscale discovers the cache from "
-                           "the source checkpoint fingerprint."}),
+                "tooltip": "Automatically save native H3 reference latents, "
+                           "compact Qwen presentation frames, and original "
+                           "picture masters for target-resolution pass 2. "
+                           "Deferred upscale discovers the cache from the "
+                           "source checkpoint fingerprint."}),
         }
         return {"required": ordered, "optional": optional}
 

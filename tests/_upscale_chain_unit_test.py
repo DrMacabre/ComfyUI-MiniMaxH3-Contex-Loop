@@ -54,6 +54,7 @@ def main():
         "MiniMaxH3ChainUpscaleAdapter",
         "MiniMaxH3ChainUpscaleCurrent",
         "MiniMaxH3ChainUpscaleReferenceConditioning",
+        "MiniMaxH3ChainPass2Prepare",
         "MiniMaxH3ChainUpscaleSegmentSave",
         "MiniMaxH3ChainUpscaleLoopEnd",
         "MiniMaxH3ChainUpscaleMerge",
@@ -183,12 +184,14 @@ def main():
                 "deferred upscale test", "<Picture 1> test"),
             width=32, height=32, length=5, ref_image_size="match",
             vae=FakeVideoVAE(), audio_vae=None,
-            pictures=[torch.ones((1, 32, 32, 3))], videos=[], audios=[])
+            pictures=[torch.ones((1, 64, 128, 3))], videos=[], audios=[])
         assert "reference cache saved" in cache_status
         cache_metadata = chain._find_reference_cache(
             "unit-test", 1, 2, source["prompt"], 32, 32, 5)
         cache_descriptor = chain._reference_cache_descriptor(cache_metadata)
         assert cache_descriptor is not None
+        assert cache_metadata["format"] == "h3_reference_cache_v2"
+        assert len(cache_metadata["source_images"]) == 1
         assert chain._load_reference_cache_descriptor(
             cache_descriptor)["signature"] == cache_metadata["signature"]
         cached_source = chain.MiniMaxH3ChainSegmentSave().save(
@@ -260,6 +263,86 @@ def main():
         assert len(cached_refs) == 1
         assert cached_refs[0]["kind"] == "image"
         assert torch.all(cached_refs[0]["latent"] == 0.625)
+
+        target_video = {
+            "samples": torch.zeros((1, 24, 2, 4, 4), dtype=torch.float32)}
+        target_conditioning = (
+            upscale.MiniMaxH3ChainUpscaleReferenceConditioning().condition(
+                cached_upscale_state, FakeClip(), "error",
+                target_video, FakeVideoVAE()))
+        target_refs = target_conditioning[0][0][1]["minimax_refs"]
+        assert tuple(target_refs[0]["latent"].shape[-2:]) == (2, 6)
+        target_presentation = target_conditioning[0][0][1]["tokens"][
+            "presentation"]
+        assert tuple(target_presentation[0]["data"].shape[1:3]) == (32, 96)
+        assert "pass-2 64x64 policy=match" in target_conditioning[3]
+        assert "1 source masters" in target_conditioning[3]
+
+        legacy_cache = dict(chain._load_reference_cache_descriptor(
+            migrated_cache))
+        legacy_cache["format"] = "h3_reference_cache_v1"
+        legacy_cache.pop("source_images", None)
+        legacy_cache["presentation"] = [
+            {key: value for key, value in item.items() if key != "role"}
+            for item in legacy_cache["presentation"]]
+        assert chain._reference_cache_descriptor(legacy_cache) is not None
+        legacy_conditioning, legacy_detail = (
+            chain._conditioning_from_reference_cache_target(
+                FakeClip(), FakeVideoVAE(), legacy_cache, 64, 64))
+        assert legacy_detail["master_rebuilds"] == 0
+        assert legacy_detail["fallback_rebuilds"] == 1
+        legacy_refs = legacy_conditioning[0][1]["minimax_refs"]
+        assert tuple(legacy_refs[0]["latent"].shape[-2:]) == (4, 4)
+
+        max_cache = dict(chain._load_reference_cache_descriptor(
+            migrated_cache))
+        max_cache["ref_image_size"] = "max"
+        max_conditioning, max_detail = (
+            chain._conditioning_from_reference_cache_target(
+                FakeClip(), FakeVideoVAE(), max_cache, 64, 64))
+        max_refs = max_conditioning[0][1]["minimax_refs"]
+        assert max_detail["rebuilt_images"] == 0
+        assert tuple(max_refs[0]["latent"].shape[-2:]) == (2, 2)
+
+        class FakeSampling:
+            @staticmethod
+            def noise_scaling(sigma, generated, latent):
+                return latent + sigma * generated
+
+            @staticmethod
+            def inverse_noise_scaling(_sigma, mixed):
+                return mixed
+
+        class FakeModel:
+            objects = {
+                "model_sampling": FakeSampling(),
+                "process_latent_in": lambda samples: samples,
+                "process_latent_out": lambda samples: samples,
+            }
+
+            def get_model_object(self, name):
+                return self.objects[name]
+
+        class FakeNoise:
+            @staticmethod
+            def generate_noise(latent):
+                return torch.ones_like(latent["samples"])
+
+        prepared = upscale.MiniMaxH3ChainPass2Prepare().prepare(
+            {"samples": torch.ones(
+                (1, 24, 2, 4, 6), dtype=torch.float32)},
+            current[3], FakeModel(), FakeNoise(),
+            torch.tensor([0.24, 0.0], dtype=torch.float32))
+        prepared_streams = chain._streams_from_latent(prepared[0])
+        prepared_masks = chain._streams_from_latent({
+            "samples": prepared[0]["noise_mask"]})
+        assert prepared[1:3] == (96, 64)
+        assert torch.allclose(
+            prepared_streams[0], torch.full_like(prepared_streams[0], 1.24))
+        assert torch.all(prepared_streams[1] == 0.75)
+        assert torch.all(prepared_masks[0] == 1)
+        assert torch.all(prepared_masks[1] == 0)
+        assert "audio" in prepared[3] and "locked" in prepared[3]
 
         hq_images = torch.zeros((5, 64, 64, 3), dtype=torch.float32)
         saved_result = upscale.MiniMaxH3ChainUpscaleSegmentSave().save(

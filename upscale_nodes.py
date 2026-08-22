@@ -161,6 +161,39 @@ def _packed_samples(streams: list[Any]) -> Any:
     return streams
 
 
+def _single_latent_tensor(latent: Any, label: str) -> Any:
+    if not isinstance(latent, dict) or "samples" not in latent:
+        raise ValueError("%s must be a LATENT with samples." % label)
+    samples = latent["samples"]
+    if chain.torch is not None and chain.torch.is_tensor(samples):
+        return samples
+    streams = chain._streams_from_latent(latent)
+    if len(streams) != 1:
+        raise ValueError("%s must contain exactly one latent stream." % label)
+    return streams[0]
+
+
+def _target_video_geometry(latent: Any) -> tuple[Any, int, int]:
+    video = _single_latent_tensor(latent, "Pass-2 video latent")
+    if getattr(video, "ndim", 0) != 5 or int(video.shape[1]) != 24:
+        raise ValueError(
+            "Pass-2 video latent must be [B,24,T,H,W], got %s." %
+            (tuple(getattr(video, "shape", ())),))
+    return video, int(video.shape[-1]) * 16, int(video.shape[-2]) * 16
+
+
+def _sample_members(samples: Any) -> tuple[list[Any], bool]:
+    if chain.torch is not None and chain.torch.is_tensor(samples):
+        return [samples], False
+    if hasattr(samples, "unbind"):
+        members = list(samples.unbind())
+        if members:
+            return members, True
+    if isinstance(samples, (list, tuple)):
+        return list(samples), len(samples) > 1
+    raise TypeError("Unsupported MiniMax H3 latent container %r." % type(samples))
+
+
 def _cpu_latent(latent: dict[str, Any] | None) -> dict[str, Any] | None:
     if latent is None:
         return None
@@ -469,14 +502,26 @@ class MiniMaxH3ChainUpscaleReferenceConditioning:
                                "usable when no matching cache exists. error "
                                "requires the exact automatic Ref2VA cache."}),
             },
+            "optional": {
+                "target_video_latent": ("LATENT", {
+                    "tooltip": "Actual 24-channel pass-2 video latent. When "
+                               "connected with video_vae, match-sized picture "
+                               "refs and their Qwen presentation are rebuilt "
+                               "for its exact H3 canvas."}),
+                "video_vae": ("VAE", {
+                    "tooltip": "Original MiniMax H3 video VAE used to "
+                               "re-encode match-sized picture references at "
+                               "the pass-2 canvas. Never use the audio VAE."}),
+            },
         }
 
     RETURN_TYPES = ("CONDITIONING", "STRING", "BOOLEAN", "STRING")
     RETURN_NAMES = (
         "positive", "compiled_prompt", "reference_cache_used", "status")
     OUTPUT_TOOLTIPS = (
-        "Pass-2 H3 conditioning rebuilt from cached native Ref2VA latents, or "
-        "text-only conditioning under the selected fallback policy.",
+        "Pass-2 H3 conditioning rebuilt from cached Ref2VA media. With a "
+        "target latent and video VAE, match pictures are re-encoded at the "
+        "actual pass-2 canvas while max/video/audio refs remain native.",
         "Exact cached prompt after @tag compilation, or the saved source prompt.",
         "True when native reference blocks and Qwen presentation were restored.",
         "Scene-local cache lookup result and fingerprint summary.",
@@ -484,12 +529,17 @@ class MiniMaxH3ChainUpscaleReferenceConditioning:
     FUNCTION = "condition"
     CATEGORY = "conditioning/minimax/contex_loop/upscale"
     DESCRIPTION = (
-        "Automatically restore the exact scene-local H3 reference payload "
-        "saved during source Ref2VA generation. No Plan, reference registry, "
-        "source audio, or original image/video wires are needed in the "
-        "deferred upscale workflow.")
+        "Automatically restore a scene-local H3 reference payload and, when "
+        "given the upscaled video latent plus H3 video VAE, rebuild all "
+        "resolution-dependent pass-2 picture conditioning. No Plan, registry, "
+        "source audio, or original reference wires are required.")
 
-    def condition(self, state, clip, missing_cache="text_only"):
+    def condition(self, state, clip, missing_cache="text_only",
+                  target_video_latent=None, video_vae=None):
+        if (target_video_latent is None) != (video_vae is None):
+            raise ValueError(
+                "Target-resolution H3 conditioning needs both "
+                "target_video_latent and video_vae.")
         source = _source_segment(state)
         manifest = state["source_manifest"]
         compatibility = manifest.get("compatibility") or {}
@@ -509,8 +559,16 @@ class MiniMaxH3ChainUpscaleReferenceConditioning:
                       fingerprint, scene, scene_count, prompt, width, height,
                       length))
         if cached is not None:
-            conditioning = chain._conditioning_from_reference_cache(
-                clip, cached)
+            target_detail = None
+            if target_video_latent is not None:
+                _video, target_width, target_height = _target_video_geometry(
+                    target_video_latent)
+                conditioning, target_detail = (
+                    chain._conditioning_from_reference_cache_target(
+                        clip, video_vae, cached, target_width, target_height))
+            else:
+                conditioning = chain._conditioning_from_reference_cache(
+                    clip, cached)
             compiled = str(cached.get("compiled_prompt") or prompt)
             status = (
                 "scene %d/%d restored Ref2VA cache %s (%d blocks, %d "
@@ -518,6 +576,18 @@ class MiniMaxH3ChainUpscaleReferenceConditioning:
                     scene, scene_count, str(cached.get("signature") or "")[:12],
                     len(cached.get("reference_blocks") or ()),
                     len(cached.get("presentation") or ())))
+            if target_detail is not None:
+                status += (
+                    "; pass-2 %dx%d policy=%s: rebuilt %d match pictures "
+                    "(%d source masters, %d V1 fallbacks), preserved %d "
+                    "native blocks" % (
+                        target_detail["target_width"],
+                        target_detail["target_height"],
+                        target_detail["policy"],
+                        target_detail["rebuilt_images"],
+                        target_detail["master_rebuilds"],
+                        target_detail["fallback_rebuilds"],
+                        target_detail["preserved_blocks"]))
             return conditioning, compiled, True, status
         if str(missing_cache) == "error":
             raise FileNotFoundError(
@@ -534,6 +604,133 @@ class MiniMaxH3ChainUpscaleReferenceConditioning:
                 " (generation fingerprint %s)" % fingerprint[:12]
                 if fingerprint else ""))
         return conditioning, prompt, False, status
+
+
+class MiniMaxH3ChainPass2Prepare:
+    """Rejoin LBH's video-only result with clean audio and CONST re-noise."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "upscaled_video": ("LATENT", {
+                    "tooltip": "24-channel clean H3 video latent emitted by "
+                               "LBH's 2D/3D latent upscaler."}),
+                "source_audio": ("LATENT", {
+                    "tooltip": "Untouched 32-channel audio latent from H3 "
+                               "Upscale Current Scene."}),
+                "model": ("MODEL", {
+                    "tooltip": "The exact pass-2 H3 model after LoRA and "
+                               "sigma-shift patches."}),
+                "noise": ("NOISE", {
+                    "tooltip": "Pass-2 random noise. Only the video member is "
+                               "generated; audio stays at the saved x0."}),
+                "sigmas": ("SIGMAS", {
+                    "tooltip": "Pass-2 sigma schedule. Its first sigma is "
+                               "used for NestedTensor-safe CONST re-noise."}),
+            },
+        }
+
+    RETURN_TYPES = ("LATENT", "INT", "INT", "STRING")
+    RETURN_NAMES = ("latent", "width", "height", "status")
+    OUTPUT_TOOLTIPS = (
+        "Joint H3 AV latent ready for Sampler Custom Advanced with Disable "
+        "Noise; video is re-noised and audio is masked clean.",
+        "Exact output pixel width inferred from the upscaled latent.",
+        "Exact output pixel height inferred from the upscaled latent.",
+        "Verified stream geometry, audio lock, and sigma start.",
+    )
+    FUNCTION = "prepare"
+    CATEGORY = "conditioning/minimax/contex_loop/upscale"
+    DESCRIPTION = (
+        "Adapt a video-only learned upscale into a joint MiniMax H3 pass-2 "
+        "latent. Rejoins the saved audio, applies MiniMax CONST re-noise to "
+        "video only, inverse-scales for Disable Noise sampling, and installs "
+        "an audio-zero denoise mask so pass 2 cannot rewrite speech.")
+
+    def prepare(self, upscaled_video, source_audio, model, noise, sigmas):
+        if chain.torch is None:
+            raise RuntimeError("PyTorch is required for H3 pass-2 preparation.")
+        video, width, height = _target_video_geometry(upscaled_video)
+        audio = _single_latent_tensor(source_audio, "Source audio latent")
+        if getattr(audio, "ndim", 0) != 4 or int(audio.shape[1]) != 32:
+            raise ValueError(
+                "Source audio latent must be [B,32,2,T], got %s." %
+                (tuple(getattr(audio, "shape", ())),))
+        if int(video.shape[0]) != int(audio.shape[0]):
+            raise ValueError(
+                "Upscaled video/audio batch sizes differ: %d vs %d." %
+                (int(video.shape[0]), int(audio.shape[0])))
+        sigma_count = int(getattr(sigmas, "numel", lambda: len(sigmas))())
+        if sigma_count < 1:
+            raise ValueError("Pass-2 sigma schedule is empty.")
+
+        joint = {"samples": _packed_samples([video, audio])}
+        generated = noise.generate_noise({"samples": video})
+        generated_members, _generated_nested = _sample_members(generated)
+        if len(generated_members) != 1:
+            raise ValueError(
+                "Pass-2 noise source returned %d video streams; expected 1." %
+                len(generated_members))
+        video_noise = generated_members[0]
+        if tuple(video_noise.shape) != tuple(video.shape):
+            raise ValueError(
+                "Pass-2 video noise shape %s does not match latent %s." %
+                (tuple(video_noise.shape), tuple(video.shape)))
+        joint_noise = _packed_samples([
+            video_noise, chain.torch.zeros_like(audio)])
+
+        process_in = model.get_model_object("process_latent_in")
+        process_out = model.get_model_object("process_latent_out")
+        model_sampling = model.get_model_object("model_sampling")
+        processed = process_in(joint["samples"])
+        latent_members, latent_nested = _sample_members(processed)
+        noise_members, noise_nested = _sample_members(joint_noise)
+        if len(latent_members) != 2 or len(noise_members) != 2:
+            raise ValueError(
+                "MiniMax pass-2 AV preparation expected two joint streams.")
+        sigma_start = sigmas[0]
+        mixed_members = []
+        for latent_member, noise_member in zip(
+                latent_members, noise_members):
+            mixed = model_sampling.noise_scaling(
+                sigma_start, noise_member, latent_member)
+            inverse = getattr(model_sampling, "inverse_noise_scaling", None)
+            if callable(inverse):
+                mixed = inverse(sigma_start, mixed)
+            mixed_members.append(mixed)
+        mixed = _packed_samples(mixed_members)
+        # Preserve the real Comfy NestedTensor container even if a test double
+        # returned list-like members from process_latent_in.
+        if not (latent_nested or noise_nested) and _ComfyNestedTensor is None:
+            mixed = mixed_members
+        output_samples = process_out(mixed)
+        output_members, _ = _sample_members(output_samples)
+        output_samples = _packed_samples([
+            chain.torch.nan_to_num(member, nan=0.0, posinf=0.0, neginf=0.0)
+            for member in output_members])
+
+        output_video, output_audio = output_members[:2]
+        video_mask = chain.torch.ones(
+            (output_video.shape[0], 1, output_video.shape[2],
+             output_video.shape[3], output_video.shape[4]),
+            device=output_video.device, dtype=chain.torch.float32)
+        audio_mask = chain.torch.zeros(
+            (output_audio.shape[0], 1, output_audio.shape[2],
+             output_audio.shape[3]),
+            device=output_audio.device, dtype=chain.torch.float32)
+        result = {
+            "samples": output_samples,
+            "noise_mask": _packed_samples([video_mask, audio_mask]),
+        }
+        sigma_value = float(sigma_start.detach().cpu().item()) if hasattr(
+            sigma_start, "detach") else float(sigma_start)
+        status = (
+            "prepared H3 pass 2 at %dx%d: video %s, audio %s locked, "
+            "sigma_start=%.6g" % (
+                width, height, tuple(video.shape), tuple(audio.shape),
+                sigma_value))
+        return result, width, height, status
 
 
 class MiniMaxH3ChainUpscaleSegmentSave:
@@ -1061,6 +1258,7 @@ UPSCALE_NODE_CLASS_MAPPINGS = {
     "MiniMaxH3ChainUpscaleCurrent": MiniMaxH3ChainUpscaleCurrent,
     "MiniMaxH3ChainUpscaleReferenceConditioning": (
         MiniMaxH3ChainUpscaleReferenceConditioning),
+    "MiniMaxH3ChainPass2Prepare": MiniMaxH3ChainPass2Prepare,
     "MiniMaxH3ChainUpscaleSegmentSave": MiniMaxH3ChainUpscaleSegmentSave,
     "MiniMaxH3ChainUpscaleLoopEnd": MiniMaxH3ChainUpscaleLoopEnd,
     "MiniMaxH3ChainUpscaleMerge": MiniMaxH3ChainUpscaleMerge,
@@ -1071,6 +1269,7 @@ UPSCALE_NODE_DISPLAY_NAME_MAPPINGS = {
     "MiniMaxH3ChainUpscaleCurrent": "MiniMax H3 Upscale Current Scene",
     "MiniMaxH3ChainUpscaleReferenceConditioning": (
         "MiniMax H3 Upscale Reference Conditioning"),
+    "MiniMaxH3ChainPass2Prepare": "MiniMax H3 Pass-2 AV Prepare",
     "MiniMaxH3ChainUpscaleSegmentSave": "MiniMax H3 Upscale Segment Save",
     "MiniMaxH3ChainUpscaleLoopEnd": "MiniMax H3 Upscale Loop End",
     "MiniMaxH3ChainUpscaleMerge": "MiniMax H3 Upscale Merger",

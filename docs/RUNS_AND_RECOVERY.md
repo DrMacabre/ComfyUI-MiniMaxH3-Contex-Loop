@@ -217,7 +217,7 @@ alternate muxing graphs.
 
 ### Deferred H3 upscale child runs
 
-Select the final scene of the complete branch you want in Checkpoint Manager,
+Select the right-hand generated tip you want in Checkpoint Manager,
 then connect its **selected_manifest** output to **MiniMax H3 Checkpoint Upscale
 Adapter**. The manager verifies the immutable lineage and embeds recovery-only
 compatibility and Source Timeline metadata directly. No source Plan, Chain
@@ -235,11 +235,11 @@ Segment + Checkpoint and falls back to the terminal sampler latent in older
 checkpoints. It exposes the joint H3 AV latent as well as separate video and
 audio latents:
 
-- Tr1dae/Mamad8 combined-style nodes can consume `source_latent` directly.
-- Video-only LBH-style nodes consume `source_video_latent`; recombine their
-  result with `source_audio_latent` before an H3 refinement pass when that graph
-  expects joint AV. Preserve the parent audio unless intentional audio
-  regeneration is part of the recipe.
+- Combined-style nodes can consume `source_latent` directly.
+- Video-only LBH nodes consume `source_video_latent`. **MiniMax H3 Pass-2 AV
+  Prepare** recombines their output with `source_audio_latent`, performs
+  NestedTensor-safe CONST re-noise on video only, and locks the saved audio
+  with a zero denoise mask.
 - LTX 2.5 is a decoded-video V2V path, not an H3-latent path. Decode the H3
   source latent, run the LTX refinement/upscale graph, and send its raw frame
   batch to Upscale Segment Save.
@@ -248,11 +248,15 @@ For H3 pass-2 conditioning, **Upscale Reference Conditioning** first reads the
 exact cache descriptor recorded on the selected source revision. Tagged and
 Scheduled Ref2VA create that cache automatically: native H3 reference latents
 remain in safetensors while compact Qwen presentation frames allow the saved
-compiled prompt to be tokenized again. Thus the child graph needs no reference
-registry or original picture/video/audio connections. Older revisions without
-a descriptor can discover a matching cache by `generation_fingerprint`, or
-use the node's `text_only` fallback. Select `error` when the second pass must
-not proceed without cached Ref2VA conditioning.
+compiled prompt to be tokenized again. Cache v2 additionally keeps the original
+picture masters. When the target video latent and H3 video VAE are connected,
+`match` pictures are re-encoded for the actual pass-2 canvas; `max` pictures,
+video/audio refs, and semantic anchors preserve their native geometry. Thus the
+child graph needs no reference registry or original picture/video/audio
+connections. V1 caches remain valid and scale their saved presentation picture
+as an approximate rebuild source. Revisions without a cache can use
+`text_only`; select
+`error` when the second pass must not proceed without Ref2VA conditioning.
 
 Segment Save adopts each verified cache object into
 `output/h3_chains/<run_name>/reference_cache/` and records only that run-local
