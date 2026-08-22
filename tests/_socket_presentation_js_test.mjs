@@ -127,6 +127,20 @@ assert.equal(
     false,
 );
 
+const upscaleAdapter = node(25, "MiniMaxH3ChainUpscaleAdapter", [], [], [
+    ["recipe_json", '{"upscaler":"LBH 3D"}'],
+]);
+assert.equal(
+    presentationForNode(upscaleAdapter, false).hiddenWidgets.has("recipe_json"),
+    true,
+    "upscale recipe provenance is hidden in the compact view",
+);
+assert.equal(
+    presentationForNode(upscaleAdapter, true).hiddenWidgets.has("recipe_json"),
+    false,
+    "advanced disclosure keeps the recipe editable",
+);
+
 const advancedPolicy = node(18, ADVANCED_POLICY_NODE, [
     ["chain_policy", null],
 ], [["chain_policy", null], ["status", null]], [

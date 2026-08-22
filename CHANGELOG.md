@@ -4,6 +4,12 @@ Newest first. This file keeps release history out of the onboarding README.
 
 ## Unreleased
 
+## v0.5.10 — Compact upscale adapter
+
+- Hid the Upscale Adapter's provenance-only `recipe_json` in the default
+  presentation. It remains serialized for resume validation and can be edited
+  through **Show advanced H3 controls**.
+
 ## v0.5.9 — Checkpoint branch selection repair
 
 - Fixed Checkpoint Manager branch clicks so the selected lineage is committed

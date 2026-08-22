@@ -3,7 +3,7 @@ import {
     TRANSITION_PRESETS,
     transitionPreset,
     transitionPresetName,
-} from "./h3_policy_core.mjs?v=0.5.9";
+} from "./h3_policy_core.mjs?v=0.5.10";
 
 export const CHAIN_POLICY_NODE = "MiniMaxH3ChainPolicy";
 export const ADVANCED_POLICY_NODE = "MiniMaxH3AdvancedPolicy";
@@ -53,6 +53,7 @@ const ALWAYS_ADVANCED_WIDGETS = Object.freeze({
     ],
     MiniMaxH3ChainPlanStudio: ["verify_resume_history"],
     MiniMaxH3ChainPreflight: ["verify_resume_history"],
+    MiniMaxH3ChainUpscaleAdapter: ["recipe_json"],
 });
 
 const ALWAYS_ADVANCED_INPUTS = Object.freeze({

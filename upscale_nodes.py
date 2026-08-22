@@ -706,8 +706,9 @@ class MiniMaxH3ChainUpscaleAdapter:
                                "not constrain which nodes you place in the loop."}),
                 "recipe_json": ("STRING", {
                     "default": "{}", "multiline": True,
-                    "tooltip": "Provenance-only backend/model/sigma settings. "
-                               "The visible graph remains authoritative."}),
+                    "tooltip": "Advanced, provenance-only backend/model/sigma "
+                               "settings, hidden by default. The visible graph "
+                               "remains authoritative."}),
                 "start_clip": ("INT", {
                     "default": 1, "min": 1, "max": chain.MAX_SHOTS,
                     "tooltip": "First upscale scene. Values above 1 verify and "
