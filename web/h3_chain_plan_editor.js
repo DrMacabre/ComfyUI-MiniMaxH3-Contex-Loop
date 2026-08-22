@@ -504,7 +504,8 @@ function mountEditor(node) {
             if (!card) continue;
             const label = card.querySelector(".h3c-timing");
             if (label) {
-                label.textContent = `${row.rawFrames || "—"} raw / ${row.deliveredFrames || "—"} delivered · ${formatClock(row.deliveredSeconds)}`;
+                const tail = row.tailTrimFrames ? ` · tail −${row.tailTrimFrames}` : "";
+                label.textContent = `${row.requestedFrames || "—"} final / ${row.rawFrames || "—"} raw${tail} · ${formatClock(row.deliveredSeconds)}`;
                 label.title = row.errors.join("\n") || `Generation starts at delivered frame ${row.generationStartFrame}.`;
             }
             card.classList.toggle("h3c-invalid", row.errors.length > 0);
@@ -701,7 +702,7 @@ function mountEditor(node) {
 
         const lengthRow = element("div", "h3c-length-row");
         const mode = element("select");
-        mode.title = "Choose whether this scene inherits the plan duration, requests seconds that are rounded up, or specifies an exact H3-valid frame count.";
+        mode.title = "Choose whether this scene inherits the plan duration, requests final seconds, or specifies the exact final delivered frame count.";
         for (const [value, label] of [["default", "Plan default"], ["seconds", "Seconds"], ["frames", "Exact frames"]]) {
             const option = element("option", "", label);
             option.value = value;
@@ -719,15 +720,15 @@ function mountEditor(node) {
                 value.max = String(3592 / 24);
                 value.step = "0.01";
                 value.value = shot.duration_seconds ?? "";
-                lengthHelp.textContent = "Rounded up to 17k+5.";
-                value.title = "Requested seconds. The backend rounds up to the next H3-valid 17k+5 frame length at 24 fps.";
+                lengthHelp.textContent = "Final timeline duration at 24 fps.";
+                value.title = "Requested final scene duration. It is converted to the nearest whole frame at 24 fps; H3 raw-grid padding is internal and trimmed away.";
             } else if (selected === "frames") {
-                value.min = "5";
+                value.min = "1";
                 value.max = "3592";
-                value.step = "17";
+                value.step = "1";
                 value.value = shot.length ?? shot.frames ?? "";
-                lengthHelp.textContent = "Must satisfy length % 17 = 5.";
-                value.title = "Exact raw generation frames. Valid values satisfy frames % 17 = 5 and range from 5 to 3592.";
+                lengthHelp.textContent = "Exact FINAL frames in the edit timeline.";
+                value.title = "Exact delivered scene frames at 24 fps. The backend adds context, rounds the raw H3 target up to 17k+5, then trims any raw tail surplus.";
             } else {
                 value.value = "";
                 lengthHelp.textContent = "Uses JSON defaults, then node defaults.";

@@ -344,7 +344,7 @@ export function h3FrameLength(seconds) {
         throw new Error("Duration must be a finite positive number.");
     }
     const requested = Math.max(5, Math.ceil(numeric * FPS - 1e-9));
-    const length = requested + ((5 - (requested % 17)) % 17);
+    const length = requested + (((5 - (requested % 17)) + 17) % 17);
     if (length > MAX_H3_FRAMES) {
         throw new Error(
             `Duration rounds to ${length} frames; H3's largest valid length is ${MAX_H3_FRAMES}.`,
@@ -387,7 +387,8 @@ export function setShotLengthMode(shot, mode, fallbackSeconds = 15) {
     // Compute the replacement before deleting the active representation. If
     // conversion fails (for example an out-of-range duration), the scene stays
     // untouched and the editor can continue to report the original problem.
-    const replacement = mode === "frames" ? h3FrameLength(currentSeconds)
+    const replacement = mode === "frames"
+        ? validateRequestedFrameLength(Math.max(1, Math.round(currentSeconds * FPS)))
         : mode === "seconds" ? currentSeconds : null;
     delete shot.length;
     delete shot.frames;
@@ -447,25 +448,46 @@ export function sceneAudioContextLength(
     return resolved;
 }
 
-export function validateH3Length(value) {
+export function validateRequestedFrameLength(value) {
     const length = Number(value);
-    if (!Number.isInteger(length) || length < 5 || length > MAX_H3_FRAMES || length % 17 !== 5) {
-        throw new Error(
-            `Exact length must be 5..${MAX_H3_FRAMES} frames with length % 17 == 5.`,
-        );
+    if (!Number.isInteger(length) || length < 1 || length > MAX_H3_FRAMES) {
+        throw new Error(`Final length must be 1..${MAX_H3_FRAMES} frames.`);
     }
     return length;
 }
 
-function sceneRawFrames(shot, defaultDuration) {
+function sceneRequestedFrames(shot, defaultDuration) {
     if (shot.length !== undefined && shot.length !== null && shot.length !== "") {
-        return validateH3Length(shot.length);
+        return validateRequestedFrameLength(shot.length);
     }
     if (shot.frames !== undefined && shot.frames !== null && shot.frames !== "") {
-        return validateH3Length(shot.frames);
+        return validateRequestedFrameLength(shot.frames);
     }
-    const duration = shot.duration_seconds ?? defaultDuration;
-    return h3FrameLength(duration);
+    const duration = Number(shot.duration_seconds ?? defaultDuration);
+    if (!Number.isFinite(duration) || duration <= 0) {
+        throw new Error("Duration must be a finite positive number.");
+    }
+    return validateRequestedFrameLength(Math.max(1, Math.round(duration * FPS)));
+}
+
+export function quantizedH3Delivery(targetDelivery, trimFrames = 0) {
+    const target = validateRequestedFrameLength(Math.round(Number(targetDelivery)));
+    const trim = Math.max(0, Math.trunc(Number(trimFrames) || 0));
+    const targetRaw = target + trim;
+    const rawFrames = Math.max(
+        5, targetRaw + (((5 - (targetRaw % 17)) + 17) % 17),
+    );
+    if (rawFrames > MAX_H3_FRAMES) {
+        throw new Error(
+            `Final length ${target} with ${trim} context frames needs ${rawFrames} raw frames; `
+            + `H3's maximum is ${MAX_H3_FRAMES}.`,
+        );
+    }
+    return {
+        rawFrames,
+        deliveredFrames: target,
+        tailTrimFrames: rawFrames - trim - target,
+    };
 }
 
 function validateSeed(seed) {
@@ -571,32 +593,34 @@ export function calculatePlanTiming(plan, settings = {}) {
             rowErrors.push(error.message);
         }
 
+        let requestedFrames = 0;
         let rawFrames = 0;
+        let deliveredFrames = 0;
+        let tailTrimFrames = 0;
+        let generationStartFrame = stitchedFrames;
         try {
-            rawFrames = sceneRawFrames(shot, planDefaultDuration);
+            requestedFrames = sceneRequestedFrames(shot, planDefaultDuration);
+            const headTrim = index > 1 && anchorMode === "head" ? sceneContext : 0;
+            const quantized = quantizedH3Delivery(requestedFrames, headTrim);
+            rawFrames = quantized.rawFrames;
+            deliveredFrames = quantized.deliveredFrames;
+            tailTrimFrames = quantized.tailTrimFrames;
+            if (index > 1 && anchorMode === "head") {
+                generationStartFrame = stitchedFrames - sceneContext;
+            }
         } catch (error) {
             rowErrors.push(error.message);
-        }
-
-        let deliveredFrames = rawFrames;
-        let generationStartFrame = stitchedFrames;
-        if (index > 1 && anchorMode === "head") {
-            if (sceneContext > 0 && rawFrames <= sceneContext) {
-                rowErrors.push(
-                    `${rawFrames} raw frames are not longer than the ${sceneContext}-frame overlap.`,
-                );
-            }
-            deliveredFrames = Math.max(0, rawFrames - sceneContext);
-            generationStartFrame = stitchedFrames - sceneContext;
         }
 
         rows.push({
             index,
             id,
+            requestedFrames,
             rawFrames,
             rawSeconds: rawFrames / FPS,
             deliveredFrames,
             deliveredSeconds: deliveredFrames / FPS,
+            tailTrimFrames,
             generationStartFrame,
             contextLength: sceneContext,
             audioContextLength: continuationMode === "masked_av"

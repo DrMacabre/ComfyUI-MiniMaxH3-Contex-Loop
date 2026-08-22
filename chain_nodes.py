@@ -95,6 +95,9 @@ from .checkpoint_manager import (
 
 _LOG = logging.getLogger("minimax_h3_context_loop.chain")
 
+CHAIN_BUILD = "FFL_2026-08-22_PASS2_RANGE_LOCALRESUME_REROLL_V3"
+_LOG.info("MiniMax H3 Context Loop chain build: %s", CHAIN_BUILD)
+
 FPS = 24
 PLAN_VERSION = 2
 MAX_SHOTS = 128
@@ -260,6 +263,44 @@ def _validate_h3_length(length: Any, label: str) -> int:
             "with length %% 17 == 5; got %d." %
             (label, MAX_H3_FRAMES, length))
     return length
+
+
+def _validate_requested_frame_length(length: Any, label: str) -> int:
+    """Validate a user-requested delivered scene length.
+
+    The requested value no longer has to live on H3's 17k+5 raw grid. The
+    planner quantizes raw generation lengths internally while carrying timing
+    error forward, so cumulative scene boundaries stay as close as possible to
+    the requested edit timeline without sacrificing latent-to-latent context.
+    """
+    length = int(length)
+    if length < 1 or length > MAX_H3_FRAMES:
+        raise ValueError(
+            "%s must be between 1 and %d final frames; got %d." %
+            (label, MAX_H3_FRAMES, length))
+    return length
+
+
+def _quantized_h3_delivery(target_delivery: Any, trim_frames: Any,
+                           label: str) -> tuple[int, int]:
+    """Return an H3-valid raw length that delivers the EXACT requested length.
+
+    ``target_delivery`` is the authoritative edit-timeline frame count. H3's
+    internal target is rounded UP to the next 17k+5 length only after adding
+    the repeated head context. Any resulting surplus belongs to the raw tail
+    and is discarded after decoding; it never advances the edit/audio cursor.
+    """
+    target = max(1, int(round(float(target_delivery))))
+    trim = max(0, int(trim_frames))
+    target_raw = target + trim
+    raw = target_raw + (5 - target_raw % 17) % 17
+    raw = max(5, raw)
+    if raw > MAX_H3_FRAMES:
+        raise ValueError(
+            "%s needs %d raw frames after %d context frames; H3's largest "
+            "valid 17k+5 length is %d." %
+            (label, raw, trim, MAX_H3_FRAMES))
+    return raw, target
 
 
 def _parse_scene_range(value: Any, total: int,
@@ -791,9 +832,8 @@ def _tagged_audio_reference_value(
             external_lead, pad_silence=bool(compatibility.get(
                 "source_audio_silent_padding")))
     else:
-        sliced = _slice_audio(
-            audio, current["audio_start_seconds"],
-            current["audio_duration_seconds"],
+        sliced = _source_audio_slice_for_shot(
+            audio, current,
             pad_silence=bool(compatibility.get(
                 "source_audio_silent_padding")))
     if bool(entry.get("align_audio_reference")):
@@ -802,7 +842,9 @@ def _tagged_audio_reference_value(
     else:
         alignment = "frame-exact"
     start = float(current["audio_start_seconds"])
-    end = start + float(current["audio_duration_seconds"])
+    end = start + (
+        int(current["raw_frames"]) - int(current.get("tail_trim_frames", 0))
+    ) / float(FPS)
     detail = "@%s source timeline %.3f..%.3fs; %s" % (
         entry.get("tag", "audio"), start, end, alignment)
     return sliced, detail
@@ -1118,7 +1160,25 @@ def _plan_context_storage_length(plan: dict[str, Any]) -> int:
     return int(cfg.get("context_storage_length", cfg["context_length"]))
 
 
-def _history_contract(plan: dict[str, Any], through_index: int) -> dict[str, Any]:
+# H3_OPTION_B_V1: resume only depends on settings that can change the generated
+# H3 state. Output encoding/blending, the complete mutable reference bank and the
+# maximum tail requested by FUTURE scenes must not invalidate frozen checkpoints.
+_RESUME_IGNORED_COMPATIBILITY = frozenset((
+    "segment_crf",
+    "video_blend_frames",
+    "generation_fingerprint",
+    "context_storage_length",
+))
+
+
+def _resume_compatibility(compatibility: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value for key, value in compatibility.items()
+        if key not in _RESUME_IGNORED_COMPATIBILITY
+    }
+
+
+def _history_shots(plan: dict[str, Any], through_index: int) -> list[dict[str, Any]]:
     shots = []
     for shot in plan["shots"][:int(through_index)]:
         contract = {
@@ -1130,9 +1190,6 @@ def _history_contract(plan: dict[str, Any], through_index: int) -> dict[str, Any
             "delivered_frames": shot["delivered_frames"],
             "generation_start_frame": shot["generation_start_frame"],
         }
-        # Keep legacy/default-guide history hashes stable. An explicit scene
-        # override is generation-significant and must invalidate only that
-        # scene and the continuation history after it.
         if "continuation_mode" in shot:
             contract["continuation_mode"] = shot["continuation_mode"]
         if "context_length" in shot:
@@ -1140,15 +1197,67 @@ def _history_contract(plan: dict[str, Any], through_index: int) -> dict[str, Any
         if "audio_context_length" in shot:
             contract["audio_context_length"] = shot["audio_context_length"]
         shots.append(contract)
+    return shots
+
+
+def _history_contract(plan: dict[str, Any], through_index: int) -> dict[str, Any]:
     return {
         "version": PLAN_VERSION,
-        "compatibility": plan["compatibility"],
-        "shots": shots,
+        "compatibility": _resume_compatibility(plan["compatibility"]),
+        "shots": _history_shots(plan, through_index),
     }
 
 
 def _history_hash(plan: dict[str, Any], through_index: int) -> str:
     return _fingerprint(_history_contract(plan, through_index))
+
+
+def _legacy_history_hash_for_resume(
+        plan: dict[str, Any], through_index: int,
+        saved_compatibility: dict[str, Any]) -> str:
+    """Recreate the pre-Option-B hash while freezing only ignored saved fields.
+
+    This lets existing checkpoints survive changes to CRF/blend/global reference
+    bank/future storage length, while still rejecting real prompt/seed/timing/
+    generation-setting changes.
+    """
+    compatibility = dict(plan["compatibility"])
+    for key in _RESUME_IGNORED_COMPATIBILITY:
+        if key in saved_compatibility:
+            compatibility[key] = saved_compatibility[key]
+        else:
+            compatibility.pop(key, None)
+    return _fingerprint({
+        "version": PLAN_VERSION,
+        "compatibility": compatibility,
+        "shots": _history_shots(plan, through_index),
+    })
+
+
+def _resume_difference_summary(
+        metadata: dict[str, Any], plan: dict[str, Any], index: int) -> str:
+    saved = _resume_compatibility(
+        metadata.get("compatibility") if isinstance(
+            metadata.get("compatibility"), dict) else {})
+    current = _resume_compatibility(plan["compatibility"])
+    differences = []
+    for key in sorted(set(saved) | set(current)):
+        if saved.get(key) != current.get(key):
+            differences.append(
+                "compatibility.%s: saved=%r current=%r" %
+                (key, saved.get(key), current.get(key)))
+    segment = metadata.get("segment") if isinstance(
+        metadata.get("segment"), dict) else {}
+    shot = plan["shots"][int(index) - 1]
+    for key in ("id", "prompt_hash", "seed", "steps",
+                "raw_frames", "delivered_frames"):
+        saved_value = segment.get(key)
+        current_value = shot.get(key)
+        if saved_value is not None and str(saved_value) != str(current_value):
+            differences.append(
+                "scene.%s: saved=%r current=%r" %
+                (key, saved_value, current_value))
+    return "; ".join(differences[:8])
 
 
 def _audio_fingerprint(audio: Any) -> str:
@@ -1399,28 +1508,27 @@ def _plan_with_external_context(
     stitched_frames = 0
     anchor_mode = prepared["compatibility"]["anchor_mode"]
     for offset, shot in enumerate(prepared["shots"]):
-        raw_frames = int(shot["raw_frames"])
+        requested_frames = int(shot.get(
+            "requested_frames", shot.get("delivered_frames", shot["raw_frames"])))
         if offset == 0:
-            if anchor_mode == "head":
-                if raw_frames <= span:
-                    raise ValueError(
-                        "H3 scene 1 has %d raw frames, not enough for the "
-                        "%d-frame imported-video overlap." % (raw_frames, span))
-                generation_start = -span
-                delivered_frames = raw_frames - span
-            else:
-                generation_start = 0
-                delivered_frames = raw_frames
+            trim_frames = span if anchor_mode == "head" else 0
+            raw_frames, delivered_frames = _quantized_h3_delivery(
+                requested_frames, trim_frames, "Shot 1 requested length")
+            generation_start = -span if trim_frames else 0
             shot["external_context_frames"] = span
-        elif anchor_mode == "head":
-            scene_context = _shot_context_length(shot, default_context)
-            generation_start = stitched_frames - scene_context
-            delivered_frames = raw_frames - scene_context
         else:
-            generation_start = stitched_frames
-            delivered_frames = raw_frames
+            scene_context = _shot_context_length(shot, default_context)
+            trim_frames = scene_context if anchor_mode == "head" else 0
+            raw_frames, delivered_frames = _quantized_h3_delivery(
+                requested_frames, trim_frames,
+                "Shot %d requested length" % (offset + 1))
+            generation_start = (stitched_frames - scene_context
+                                if anchor_mode == "head" else stitched_frames)
+        shot["raw_frames"] = raw_frames
         shot["generation_start_frame"] = generation_start
         shot["delivered_frames"] = delivered_frames
+        shot["tail_trim_frames"] = max(
+            0, raw_frames - trim_frames - delivered_frames)
         # Scene 1's negative pre-roll comes from the imported video/audio, not
         # from the extension soundtrack. Current Shot builds that composite
         # explicitly and begins the new source track at frame zero.
@@ -1509,38 +1617,34 @@ def _retime_review_plan(plan: dict[str, Any]) -> None:
     external_span = int(
         plan["compatibility"].get("external_context_frames", 0))
     stitched_frames = 0
+    requested_timeline_frames = 0
     for offset, shot in enumerate(plan["shots"]):
-        raw_frames = _validate_h3_length(
-            shot["raw_frames"], "Shot %d length" % (offset + 1))
+        requested_frames = _validate_requested_frame_length(
+            shot.get("requested_frames", shot.get("delivered_frames", shot["raw_frames"])),
+            "Shot %d requested length" % (offset + 1))
+        requested_timeline_frames += requested_frames
+        desired_delivery = requested_timeline_frames - stitched_frames
         if offset == 0:
-            if external_span and anchor_mode == "head":
-                if raw_frames <= external_span:
-                    raise ValueError(
-                        "H3 scene 1 has %d raw frames, not enough for the "
-                        "%d-frame imported-video overlap." %
-                        (raw_frames, external_span))
-                generation_start = -external_span
-                delivered_frames = raw_frames - external_span
-            else:
-                generation_start = 0
-                delivered_frames = raw_frames
+            trim_frames = external_span if (external_span and anchor_mode == "head") else 0
+            raw_frames, delivered_frames = _quantized_h3_delivery(
+                desired_delivery, trim_frames, "Shot 1 requested length")
+            generation_start = -external_span if trim_frames else 0
             if external_span:
                 shot["external_context_frames"] = external_span
         else:
             scene_context = _shot_context_length(shot, context_length)
-            if scene_context and raw_frames <= scene_context:
-                raise ValueError(
-                    "Shot %d has %d raw frames, not enough for a %d-frame "
-                    "continuation overlap." %
-                    (offset + 1, raw_frames, scene_context))
-            if anchor_mode == "head":
-                generation_start = stitched_frames - scene_context
-                delivered_frames = raw_frames - scene_context
-            else:
-                generation_start = stitched_frames
-                delivered_frames = raw_frames
+            trim_frames = scene_context if anchor_mode == "head" else 0
+            raw_frames, delivered_frames = _quantized_h3_delivery(
+                desired_delivery, trim_frames,
+                "Shot %d requested length" % (offset + 1))
+            generation_start = (stitched_frames - scene_context
+                                if anchor_mode == "head" else stitched_frames)
+        shot["requested_frames"] = requested_frames
+        shot["raw_frames"] = raw_frames
         shot["generation_start_frame"] = generation_start
         shot["delivered_frames"] = delivered_frames
+        shot["tail_trim_frames"] = max(
+            0, raw_frames - trim_frames - delivered_frames)
         shot["audio_start_seconds"] = max(0, generation_start) / float(FPS)
         shot["audio_duration_seconds"] = raw_frames / float(FPS)
         stitched_frames += delivered_frames
@@ -1592,8 +1696,8 @@ def _plan_with_review_revision(plan: dict[str, Any], index: int,
         full_prompt.encode("utf-8")).hexdigest()
     shot["seed"] = seed
     if raw_frames is not None:
-        shot["raw_frames"] = _validate_h3_length(
-            raw_frames, "H3 review retry length")
+        shot["requested_frames"] = _validate_requested_frame_length(
+            raw_frames, "H3 review retry requested length")
     _retime_review_plan(revised)
 
     overrides = dict(revised.get("review_overrides") or {})
@@ -1601,6 +1705,7 @@ def _plan_with_review_revision(plan: dict[str, Any], index: int,
         "scene_prompt": scene_prompt,
         "prompt_hash": shot["prompt_hash"],
         "seed": seed,
+        "requested_frames": int(shot.get("requested_frames", shot["delivered_frames"])),
         "raw_frames": int(shot["raw_frames"]),
     }
     revised["review_overrides"] = overrides
@@ -1706,6 +1811,7 @@ def _normalize_plan(
     resolved_continuation_modes: list[str] = []
     resolved_context_lengths: list[int] = []
     stitched_frames = 0
+    requested_timeline_frames = 0
     for offset, item in enumerate(raw_shots):
         index = offset + 1
         if isinstance(item, str):
@@ -1765,28 +1871,30 @@ def _normalize_plan(
             if not math.isfinite(duration) or duration <= 0:
                 raise ValueError(
                     "Shot %d duration must be a finite positive number." % index)
-            raw_frames = _h3_frame_length(duration)
+            requested_frames = _validate_requested_frame_length(
+                max(1, int(round(duration * float(FPS)))),
+                "Shot %d requested length" % index)
         else:
-            raw_frames = _validate_h3_length(explicit_length,
-                                                   "Shot %d length" % index)
+            requested_frames = _validate_requested_frame_length(
+                explicit_length, "Shot %d requested length" % index)
 
+        requested_timeline_frames += requested_frames
+        desired_delivery = requested_timeline_frames - stitched_frames
         if index == 1:
+            trim_frames = 0
+            raw_frames, delivered_frames = _quantized_h3_delivery(
+                desired_delivery, trim_frames, "Shot %d requested length" % index)
             generation_start_frame = 0
-            delivered_frames = raw_frames
         else:
-            if shot_context_length and raw_frames <= shot_context_length:
-                raise ValueError(
-                    "Shot %d has %d raw frames, not enough for a %d-frame "
-                    "continuation overlap." %
-                    (index, raw_frames, shot_context_length))
+            trim_frames = shot_context_length if anchor_mode == "head" else 0
+            raw_frames, delivered_frames = _quantized_h3_delivery(
+                desired_delivery, trim_frames, "Shot %d requested length" % index)
             if anchor_mode == "head":
                 generation_start_frame = stitched_frames - shot_context_length
-                delivered_frames = raw_frames - shot_context_length
             else:
                 # `before` places context at negative coordinates, so no
                 # repeated head is delivered or trimmed from the new clip.
                 generation_start_frame = stitched_frames
-                delivered_frames = raw_frames
 
         steps = int(item.get("steps", default_steps))
         if steps < 1 or steps > 10000:
@@ -1807,8 +1915,10 @@ def _normalize_plan(
             "prompt_hash": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
             "seed": seed,
             "steps": steps,
+            "requested_frames": requested_frames,
             "raw_frames": raw_frames,
             "delivered_frames": delivered_frames,
+            "tail_trim_frames": max(0, raw_frames - trim_frames - delivered_frames),
             "generation_start_frame": generation_start_frame,
             "audio_start_seconds": generation_start_frame / float(FPS),
             "audio_duration_seconds": raw_frames / float(FPS),
@@ -2148,7 +2258,7 @@ def _effective_editor_plan(plan: dict[str, Any]) -> dict[str, Any]:
         "shots": [dict({
             "id": shot["id"],
             "prompt": shot.get("scene_prompt", ""),
-            "length": int(shot["raw_frames"]),
+            "length": int(shot.get("requested_frames", shot["delivered_frames"])),
             "steps": int(shot["steps"]),
             # A decimal string remains exact when the workflow passes through
             # JavaScript, including uint64 values above Number.MAX_SAFE_INTEGER.
@@ -2325,11 +2435,13 @@ def _public_segment(value: dict[str, Any]) -> dict[str, Any]:
         "revision", "revision_metadata", "supersedes", "prompt_file",
         "created_at", "branch_id", "forked_from_branch_id",
         "generated_audio", "generated_audio_sha256",
-        "raw_frames", "delivered_frames", "history_hash",
+        "raw_frames", "delivered_frames", "tail_trim_frames", "history_hash",
         "prompt_prefix", "scene_prompt", "prompt", "prompt_hash", "archives",
         "seed", "steps", "continuation_mode", "context_length",
         "audio_context_length", "resolved_context_length",
         "resolved_audio_context_length",
+        "active_references", "active_reference_fingerprint",
+        "active_reference_snapshot",
         "sample_rate", "segment_sha256",
         "checkpoint_sha256", "prompt_file_sha256", "predecessor_revision",
         "predecessor_checkpoint_sha256") if key in value}
@@ -2417,7 +2529,13 @@ def _verify_segment_artifacts(segment: dict[str, Any], index: int) -> None:
                 "check." % index)
 
 
-def _load_resume_state(plan: dict[str, Any], start_clip: int) -> dict[str, Any]:
+def _load_resume_state_full(plan: dict[str, Any], start_clip: int) -> dict[str, Any]:
+    """Strictly validate the complete accepted history before ``start_clip``.
+
+    This is intentionally kept for Manifest Load, whose job is to prove that
+    every saved clip still matches the current Plan. Interactive late-scene
+    resume uses the local predecessor loader below instead.
+    """
     if _st_load is None:
         raise RuntimeError("safetensors is required to resume H3 chains.")
     previous_index = start_clip - 1
@@ -2431,14 +2549,29 @@ def _load_resume_state(plan: dict[str, Any], start_clip: int) -> dict[str, Any]:
                 "missing: %s" % (start_clip, index, paths["metadata"]))
         metadata = _read_json(paths["metadata"])
         expected = _history_hash(plan, index)
-        if metadata.get("history_hash") != expected:
-            raise ValueError(
-                "Cannot resume clip %d: clip %d was generated from different "
-                "settings, prompts, seeds, or durations." % (start_clip, index))
+        saved_hash = str(metadata.get("history_hash") or "")
+        if saved_hash != expected:
+            saved_compatibility = (
+                metadata.get("compatibility")
+                if isinstance(metadata.get("compatibility"), dict) else {})
+            legacy_expected = _legacy_history_hash_for_resume(
+                plan, index, saved_compatibility)
+            if saved_hash != legacy_expected:
+                details = _resume_difference_summary(metadata, plan, index)
+                raise ValueError(
+                    "Cannot resume clip %d: predecessor clip %d really differs "
+                    "from the current generation contract.%s" %
+                    (start_clip, index,
+                     (" Differences: " + details) if details else ""))
+            _LOG.warning(
+                "H3 Chain resume accepted legacy clip %d: only non-generation "
+                "fields/global reference-bank history differ from the current plan.",
+                index)
         segment = metadata.get("segment")
         if not isinstance(segment, dict):
             raise ValueError("Checkpoint metadata for clip %d has no segment." % index)
-        if segment.get("history_hash") != expected:
+        segment_hash = str(segment.get("history_hash") or "")
+        if segment_hash not in (expected, saved_hash):
             raise ValueError(
                 "Checkpoint segment record for clip %d has a mismatched history."
                 % index)
@@ -2457,22 +2590,226 @@ def _load_resume_state(plan: dict[str, Any], start_clip: int) -> dict[str, Any]:
     missing = sorted(required - set(tensors))
     if missing:
         raise ValueError("H3 chain checkpoint is missing tensors: %s" % missing)
-    expected_context = min(
-        _plan_context_storage_length(plan),
-        int(plan["shots"][previous_index - 1]["delivered_frames"]))
-    if int(tensors["context_frames"].shape[0]) != expected_context:
+
+    available_context = int(tensors["context_frames"].shape[0])
+    next_shot = plan["shots"][start_clip - 1]
+    requested_context = _shot_context_length(
+        next_shot, int(plan["compatibility"]["context_length"]))
+    predecessor_delivered = int(
+        plan["shots"][previous_index - 1]["delivered_frames"])
+    next_mode = next_shot.get(
+        "continuation_mode",
+        plan["compatibility"].get("continuation_mode", "guide"))
+    required_context = (0 if next_mode == "masked_av" else
+                        min(requested_context, predecessor_delivered))
+    if required_context > available_context:
         raise ValueError(
-            "H3 chain predecessor checkpoint contains %d context frames; "
-            "expected %d." %
-            (int(tensors["context_frames"].shape[0]), expected_context))
+            "Cannot resume clip %d: predecessor checkpoint retains %d context "
+            "frames but the next scene now needs %d. Re-render clip %d once "
+            "with the new context requirement; later checkpoints will retain "
+            "the larger tail automatically." %
+            (start_clip, available_context, required_context, previous_index))
     return {
         "plan": plan,
         "index": start_clip,
         "previous_frames": tensors["context_frames"],
         "previous_latent": {"samples": [tensors["video"], tensors["audio"]]},
+        "previous_latent_timeline_exact": int(
+            plan["shots"][previous_index - 1].get("tail_trim_frames", 0)) == 0,
         "segments": segments,
         "resumed_from": previous_index,
     }
+
+
+def _resume_local_difference_summary(
+        metadata: dict[str, Any], plan: dict[str, Any], index: int) -> str:
+    """Compare only the checkpoint actually consumed by the next scene."""
+    differences = []
+    saved_compatibility = metadata.get("compatibility")
+    if not isinstance(saved_compatibility, dict):
+        saved_compatibility = {}
+    saved_cfg = _resume_compatibility(saved_compatibility)
+    current_cfg = _resume_compatibility(plan["compatibility"])
+    for key in sorted(set(saved_cfg) | set(current_cfg)):
+        if saved_cfg.get(key) != current_cfg.get(key):
+            differences.append(
+                "compatibility.%s: saved=%r current=%r" %
+                (key, saved_cfg.get(key), current_cfg.get(key)))
+
+    segment = metadata.get("segment")
+    if not isinstance(segment, dict):
+        differences.append("segment metadata missing")
+        return "; ".join(differences[:10])
+    shot = plan["shots"][int(index) - 1]
+    for key in ("id", "prompt_hash", "seed", "steps",
+                "raw_frames", "delivered_frames"):
+        saved_value = segment.get(key)
+        current_value = shot.get(key)
+        if saved_value is not None and str(saved_value) != str(current_value):
+            differences.append(
+                "scene.%s: saved=%r current=%r" %
+                (key, saved_value, current_value))
+    for key, resolver in (
+            ("context_length", lambda s: _shot_context_length(
+                s, int(plan["compatibility"]["context_length"]))),
+            ("audio_context_length", lambda s: _shot_audio_context_length(
+                s, int(plan["compatibility"]["audio_context_length"]),
+                _shot_context_length(
+                    s, int(plan["compatibility"]["context_length"]))))):
+        saved_value = segment.get(key)
+        if saved_value is not None:
+            current_value = resolver(shot)
+            if str(saved_value) != str(current_value):
+                differences.append(
+                    "scene.%s: saved=%r current=%r" %
+                    (key, saved_value, current_value))
+    return "; ".join(differences[:10])
+
+
+def _load_resume_state(plan: dict[str, Any], start_clip: int) -> dict[str, Any]:
+    """Resume from the immediate predecessor checkpoint only.
+
+    A continuation into scene N consumes scene N-1's saved frames/latent, not
+    the prompts or seeds that happened to be present in the editor when N-1
+    was rendered. This matters after Review Gate rerolls/retries: the accepted
+    checkpoint is the authoritative predecessor even if the visible Plan UI
+    still contains an older prompt/seed revision.
+
+    Resume therefore validates:
+      * the saved predecessor artifact integrity;
+      * generation-level compatibility (canvas/model fingerprint/audio mode...);
+      * that the checkpoint contains enough context for the CURRENT next scene.
+
+    It deliberately does NOT compare predecessor prompt_hash/seed/steps/length
+    against the current editable Plan. Starting at N explicitly means "use the
+    accepted saved N-1 checkpoint as predecessor".
+    """
+    if _st_load is None:
+        raise RuntimeError("safetensors is required to resume H3 chains.")
+    start_clip = int(start_clip)
+    previous_index = start_clip - 1
+    if previous_index < 1:
+        raise ValueError("Local H3 resume requires start_clip above 1.")
+
+    previous_paths = _artifact_paths(plan, previous_index)
+    if not os.path.isfile(previous_paths["metadata"]):
+        raise FileNotFoundError(
+            "Cannot resume clip %d: immediate predecessor clip %d metadata is "
+            "missing: %s" %
+            (start_clip, previous_index, previous_paths["metadata"]))
+    previous_meta = _read_json(previous_paths["metadata"])
+    previous_segment = previous_meta.get("segment")
+    if not isinstance(previous_segment, dict):
+        raise ValueError(
+            "Checkpoint metadata for immediate predecessor clip %d has no segment."
+            % previous_index)
+
+    # Only generation-level compatibility must match. The predecessor's own
+    # prompt/seed/steps are historical facts already embodied by the accepted
+    # checkpoint and are intentionally not compared to the live editor Plan.
+    saved_compatibility = previous_meta.get("compatibility")
+    if not isinstance(saved_compatibility, dict):
+        saved_compatibility = {}
+    saved_cfg = _resume_compatibility(saved_compatibility)
+    current_cfg = _resume_compatibility(plan["compatibility"])
+    compatibility_differences = []
+    for key in sorted(set(saved_cfg) | set(current_cfg)):
+        if saved_cfg.get(key) != current_cfg.get(key):
+            compatibility_differences.append(
+                "compatibility.%s: saved=%r current=%r" %
+                (key, saved_cfg.get(key), current_cfg.get(key)))
+    if compatibility_differences:
+        raise ValueError(
+            "Cannot resume clip %d from immediate predecessor clip %d: the "
+            "saved checkpoint is generation-incompatible with the current "
+            "workflow. Differences: %s" %
+            (start_clip, previous_index,
+             "; ".join(compatibility_differences[:10])))
+
+    _verify_segment_artifacts(previous_segment, previous_index)
+
+    checkpoint = _absolute_output_path(previous_segment["checkpoint"])
+    tensors = _st_load(checkpoint)
+    required = {"context_frames", "video", "audio"}
+    missing = sorted(required - set(tensors))
+    if missing:
+        raise ValueError("H3 chain checkpoint is missing tensors: %s" % missing)
+
+    available_context = int(tensors["context_frames"].shape[0])
+    next_shot = plan["shots"][start_clip - 1]
+    requested_context = _shot_context_length(
+        next_shot, int(plan["compatibility"]["context_length"]))
+    predecessor_delivered = int(previous_segment.get(
+        "delivered_frames",
+        getattr(tensors["context_frames"], "shape", (0,))[0]))
+    next_mode = next_shot.get(
+        "continuation_mode",
+        plan["compatibility"].get("continuation_mode", "guide"))
+    required_context = (0 if next_mode == "masked_av" else
+                        min(requested_context, predecessor_delivered))
+    if required_context > available_context:
+        raise ValueError(
+            "Cannot resume clip %d: immediate predecessor clip %d retains %d "
+            "context frames but the next scene needs %d." %
+            (start_clip, previous_index, available_context, required_context))
+
+    # Restore the longest contiguous saved suffix ending at N-1. These older
+    # segments are assembly material only and never gate continuation.
+    restored_reversed = []
+    for index in range(previous_index, 0, -1):
+        paths = _artifact_paths(plan, index)
+        if not os.path.isfile(paths["metadata"]):
+            break
+        try:
+            metadata = _read_json(paths["metadata"])
+            segment = metadata.get("segment")
+            if not isinstance(segment, dict):
+                break
+            _verify_segment_artifacts(segment, index)
+        except (OSError, ValueError, FileNotFoundError, json.JSONDecodeError) as exc:
+            _LOG.warning(
+                "H3 Chain local resume stopped historical assembly recovery at "
+                "clip %d: %s", index, exc)
+            break
+        restored_reversed.append(_public_segment(segment))
+    segments = list(reversed(restored_reversed))
+
+    # Derive latent-timeline exactness from the SAVED predecessor revision,
+    # never from the current editable Plan (which may have been rerolled or
+    # retimed since that accepted checkpoint was written).
+    previous_tail_trim = int(previous_segment.get("tail_trim_frames", 0))
+
+    return {
+        "plan": plan,
+        "index": start_clip,
+        "previous_frames": tensors["context_frames"],
+        "previous_latent": {"samples": [tensors["video"], tensors["audio"]]},
+        "previous_latent_timeline_exact": previous_tail_trim == 0,
+        "segments": segments,
+        "resumed_from": previous_index,
+        "local_resume": True,
+        "resume_build": CHAIN_BUILD,
+    }
+
+def _shot_requires_predecessor(plan: dict[str, Any], index: int) -> bool:
+    """Return whether this scene genuinely consumes the preceding checkpoint."""
+    index = int(index)
+    if index <= 1:
+        return False
+    shot = plan["shots"][index - 1]
+    cfg = plan["compatibility"]
+    video_context = _shot_context_length(shot, int(cfg["context_length"]))
+    continuation_mode = shot.get(
+        "continuation_mode", cfg.get("continuation_mode", "guide"))
+    if video_context > 0:
+        return True
+    if continuation_mode != "guide":
+        return False
+    if cfg["audio_mode"] not in ("generated_audio", "source_plus_timeline"):
+        return False
+    audio_context = _shot_audio_context_length(
+        shot, int(cfg["audio_context_length"]), video_context)
+    return audio_context > 0
 
 
 def _initial_state(plan: dict[str, Any], start_clip: int,
@@ -2487,22 +2824,26 @@ def _initial_state(plan: dict[str, Any], start_clip: int,
         raise ValueError(
             "end_clip must be between start_clip %d and %d." %
             (start_clip, total))
-    if start_clip > 1:
+    requires_predecessor = _shot_requires_predecessor(plan, start_clip)
+    if start_clip > 1 and requires_predecessor:
         state = _load_resume_state(plan, start_clip)
     else:
         state = {
             "plan": plan,
-            "index": 1,
+            "index": start_clip,
             "previous_frames": (
                 external_context.get("context_frames")
-                if isinstance(external_context, dict) else None),
+                if start_clip == 1 and isinstance(external_context, dict) else None),
             "previous_latent": None,
+            "previous_latent_timeline_exact": True,
             "previous_audio": (
                 external_context.get("context_audio")
-                if isinstance(external_context, dict) else None),
-            "external_context": bool(external_context is not None),
+                if start_clip == 1 and isinstance(external_context, dict) else None),
+            "external_context": bool(
+                start_clip == 1 and external_context is not None),
             "segments": [],
             "resumed_from": 0,
+            "independent_start": bool(start_clip > 1),
         }
     state["range_start"] = start_clip
     state["end_clip"] = end_clip
@@ -2569,6 +2910,33 @@ def _align_audio_reference_to_h3_grid(
         "audio ref aligned %d->%d samples (target %d steps, safe %.6fs)" %
         (current_samples, target_samples, target_steps,
          target_32k_samples / 32000.0))
+
+
+def _source_audio_slice_for_shot(
+        audio: dict[str, Any], shot: dict[str, Any],
+        pad_silence: bool = False) -> dict[str, Any]:
+    """Build the raw H3 reference window without leaking hidden tail audio.
+
+    The visible source timeline ends at the delivered edit boundary. If H3's
+    17k+5 grid needs extra raw tail frames, those reference samples are padded
+    with silence instead of borrowing the next scene's lyrics/performance.
+    """
+    raw_frames = int(shot["raw_frames"])
+    tail_trim = max(0, int(shot.get("tail_trim_frames", 0)))
+    visible_raw_frames = raw_frames - tail_trim
+    if visible_raw_frames < 1:
+        raise ValueError("H3 source-audio visible window is empty.")
+    sliced = _slice_audio(
+        audio, float(shot["audio_start_seconds"]),
+        visible_raw_frames / float(FPS), pad_silence=pad_silence)
+    if tail_trim:
+        waveform, sample_rate = _validate_audio(
+            sliced, "H3 source audio visible window")
+        raw_samples = int(round(raw_frames / float(FPS) * sample_rate))
+        sliced = _pad_audio_to_samples(
+            {"waveform": waveform, "sample_rate": sample_rate}, raw_samples,
+            "H3 source audio raw-grid padding")
+    return sliced
 
 
 def _slice_audio_after_external_context(
@@ -3175,6 +3543,58 @@ class MiniMaxH3TaggedPictureReference:
         return references, references["fingerprint"], status
 
 
+
+class MiniMaxH3OptionalTaggedPictureReference:
+    """Permanent picture-ref bank slot that can be disabled without evaluation."""
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "enabled": ("BOOLEAN", {
+                    "default": True,
+                    "tooltip": "Off = this slot is absent from the tagged-ref chain; "
+                               "its image input stays lazy and does not affect generation."}),
+                "tag": ("STRING", {
+                    "default": "ref_slot",
+                    "tooltip": "Stable @tag used by scene prompts while this slot is enabled."}),
+            },
+            "optional": {
+                "image": ("IMAGE", {
+                    "lazy": True,
+                    "tooltip": "Reference picture. Not evaluated while enabled is off."}),
+                "previous": (TAGGED_REFERENCE_TYPE, {
+                    "tooltip": "Preceding permanent reference-bank slot."}),
+            },
+            "hidden": {"dynprompt": "DYNPROMPT", "unique_id": "UNIQUE_ID"},
+        }
+
+    RETURN_TYPES = (TAGGED_REFERENCE_TYPE, "STRING", "STRING")
+    RETURN_NAMES = ("references", "reference_fingerprint", "status")
+    FUNCTION = "add"
+    CATEGORY = "conditioning/minimax/contex_loop/references/prompt_driven"
+    DESCRIPTION = ("Permanent prompt-driven picture slot. Disabled slots are "
+                   "true pass-throughs and their image is not evaluated.")
+
+    def check_lazy_status(self, enabled, tag, image=None, previous=None, **kwargs):
+        if bool(enabled) and image is None:
+            return ["image"]
+        return []
+
+    def add(self, enabled, tag, image=None, previous=None,
+            dynprompt=None, unique_id=None):
+        if not bool(enabled):
+            references = (previous if isinstance(previous, dict)
+                          else _make_tagged_references([]))
+            fingerprint = str(references.get("fingerprint") or _fingerprint({
+                "tagged_references": []}))
+            return references, fingerprint, "@%s picture slot disabled" % (
+                _normalize_reference_tag(tag, "Tagged reference") if str(tag).strip()
+                else "ref_slot")
+        if image is None:
+            raise ValueError("Enabled H3 picture reference slot has no image.")
+        return MiniMaxH3TaggedPictureReference().add(
+            image, tag, previous, dynprompt, unique_id)
+
 class MiniMaxH3TaggedVideoReference:
     @classmethod
     def INPUT_TYPES(cls):
@@ -3542,16 +3962,21 @@ class MiniMaxH3TaggedReferenceToVideo:
             return str(exc)
         return True
 
-    RETURN_TYPES = ("CONDITIONING", "LATENT", "STRING", "STRING", "STRING")
+    RETURN_TYPES = (
+        "CONDITIONING", "LATENT", "STRING", "STRING", "STRING",
+        "STRING", "STRING")
     RETURN_NAMES = (
         "positive", "latent", "compiled_prompt", "active_references",
-        "reference_fingerprint")
+        "reference_fingerprint", "active_reference_fingerprint",
+        "active_reference_snapshot")
     OUTPUT_TOOLTIPS = (
         "Positive conditioning produced by stock MiniMax H3 Ref2VA.",
         "Empty MiniMax H3 AV latent produced by stock Ref2VA.",
         "Exact prompt sent to H3 after used registered tags become native labels.",
         "Scene-local mapping of prompt-used tags to native reference labels.",
-        "Fingerprint of the complete registered source set for Plan checkpoint safety.",
+        "Fingerprint of the complete registered source set (legacy output).",
+        "Fingerprint of ONLY the refs actually active in this scene.",
+        "JSON snapshot of the exact tags/content hashes active in this scene.",
     )
     FUNCTION = "apply"
     CATEGORY = "conditioning/minimax/contex_loop/references/prompt_driven"
@@ -3608,11 +4033,39 @@ class MiniMaxH3TaggedReferenceToVideo:
         else:
             raise ValueError(
                 "Tagged references have no valid reference fingerprint.")
+        active_items = []
+        seen_items = set()
+        for item in bindings["presentation"]:
+            entry = item["entry"]
+            role = str(item.get("role") or entry.get("kind") or "reference")
+            tag = str(item.get("tag") or entry.get("tag") or "")
+            if role == "audio" and tag == str(entry.get("audio_tag") or ""):
+                content_hash = str(entry.get("audio_hash") or "")
+            else:
+                content_hash = str(entry.get("content_hash") or "")
+            key = (role, tag, content_hash)
+            if key in seen_items:
+                continue
+            seen_items.add(key)
+            active_items.append({
+                "tag": tag,
+                "label": str(item.get("label") or ""),
+                "role": role,
+                "kind": str(entry.get("kind") or role),
+                "content_hash": content_hash,
+            })
+        active_fingerprint = _fingerprint({
+            "active_tagged_references": active_items,
+        })
+        active_snapshot = json.dumps(
+            active_items, sort_keys=True, separators=(",", ":"),
+            ensure_ascii=False)
         if slice_details:
             summary += "; " + "; ".join(slice_details)
         return {
             "result": (
-                ref2va.out(0), ref2va.out(1), compiled, summary, fingerprint),
+                ref2va.out(0), ref2va.out(1), compiled, summary, fingerprint,
+                active_fingerprint, active_snapshot),
             "expand": graph.finalize(),
         }
 
@@ -4429,10 +4882,11 @@ class MiniMaxH3ChainLoopStart:
                     "default": 1, "min": 1, "max": MAX_SHOTS,
                     "tooltip": "Legacy/resume scene to render next. Use 1 for "
                                "a new chain. A non-empty scene_range overrides "
-                               "this value. "
-                               "A value above 1 loads and validates the saved "
-                               "checkpoint for the preceding scene before "
-                               "resuming."}),
+                               "this value. A value above 1 loads and validates "
+                               "the predecessor only when the selected first "
+                               "scene actually consumes predecessor video or "
+                               "generated-audio context. A scene with no such "
+                               "context cold-starts directly."}),
             },
             "optional": {
                 "scene_range": ("STRING", {
@@ -4440,9 +4894,11 @@ class MiniMaxH3ChainLoopStart:
                     "tooltip": "Inclusive contiguous scenes to generate. "
                                "Leave blank to run from start_clip through the "
                                "end; use 3 for only scene 3 or 3:8 for scenes "
-                               "3 through 8. A start above 1 requires the "
-                               "preceding checkpoint. Disjoint comma selections "
-                               "are rejected because they break continuity."}),
+                               "3 through 8. A start above 1 uses the preceding "
+                               "checkpoint only when the first selected scene "
+                               "needs predecessor context; an independent scene "
+                               "starts directly. Disjoint comma selections are "
+                               "rejected because they break continuity."}),
                 "source_audio": ("AUDIO", {
                     "tooltip": "Full external soundtrack. Required by "
                                "source_track and source_plus_timeline. Current "
@@ -4470,8 +4926,9 @@ class MiniMaxH3ChainLoopStart:
     FUNCTION = "start"
     CATEGORY = "conditioning/minimax/contex_loop"
     DESCRIPTION = ("Start or resume a contiguous range of a sequential H3 "
-                   "chain. Ranges beginning above 1 load and validate the "
-                   "preceding segment checkpoint.")
+                   "chain. Ranges beginning above 1 resume from the preceding "
+                   "checkpoint only when the first selected scene actually "
+                   "needs predecessor context; independent scenes cold-start.")
 
     @classmethod
     def IS_CHANGED(cls, *args, **kwargs):
@@ -4494,11 +4951,13 @@ class MiniMaxH3ChainLoopStart:
                 raise ValueError("H3 chain plan changed during recursive execution.")
             state["plan"] = prepared_plan
         end_clip = int(state.get("end_clip", len(prepared_plan["shots"])))
-        status = "clip %d/%d; selected range %d:%d" % (
+        status = "clip %d/%d; selected range %d:%d; build=%s" % (
             state["index"], len(prepared_plan["shots"]),
-            int(state.get("range_start", state["index"])), end_clip)
+            int(state.get("range_start", state["index"])), end_clip, CHAIN_BUILD)
         if state.get("resumed_from"):
             status += "; resumed from clip %d" % state["resumed_from"]
+        elif state.get("independent_start"):
+            status += "; independent start (no predecessor context required)"
         if prepared_plan["compatibility"].get("source_audio_silent_padding"):
             status += "; silent source audio will be padded to the plan duration"
         if prepared_plan["compatibility"].get("external_context_hash"):
@@ -4587,9 +5046,8 @@ class MiniMaxH3ChainCurrent:
                     pad_silence=bool(plan["compatibility"].get(
                         "source_audio_silent_padding")))
             else:
-                audio_slice = _slice_audio(
-                    source_audio, shot["audio_start_seconds"],
-                    shot["audio_duration_seconds"],
+                audio_slice = _source_audio_slice_for_shot(
+                    source_audio, shot,
                     pad_silence=bool(plan["compatibility"].get(
                         "source_audio_silent_padding")))
             if bool(align_audio_reference):
@@ -4604,13 +5062,20 @@ class MiniMaxH3ChainCurrent:
                 external_lead / float(FPS),
                 int(shot["delivered_frames"]) / float(FPS))
         else:
+            visible_audio_duration = (
+                int(shot["raw_frames"]) - int(shot.get("tail_trim_frames", 0))
+            ) / float(FPS)
             audio_status = "song %.3f..%.3fs" % (
                 shot["audio_start_seconds"],
-                shot["audio_start_seconds"] + shot["audio_duration_seconds"])
-        status = ("clip %d/%d %s; raw=%df delivered=%df; %s; %s; seed=%d" %
-                  (index, len(plan["shots"]), shot["id"], shot["raw_frames"],
-                   shot["delivered_frames"], audio_status, alignment_status,
-                   shot["seed"]))
+                shot["audio_start_seconds"] + visible_audio_duration)
+            if int(shot.get("tail_trim_frames", 0)):
+                audio_status += " + %df silent raw tail" % int(
+                    shot["tail_trim_frames"])
+        status = ("clip %d/%d %s; requested=%df raw=%df delivered=%df; %s; %s; seed=%d" %
+                  (index, len(plan["shots"]), shot["id"],
+                   shot.get("requested_frames", shot["delivered_frames"]),
+                   shot["raw_frames"], shot["delivered_frames"], audio_status,
+                   alignment_status, shot["seed"]))
         cfg = plan["compatibility"]
         result = (
             state, index, len(plan["shots"]), shot["id"], shot["prompt"],
@@ -4779,21 +5244,49 @@ class MiniMaxH3ChainContext:
         if previous_frames is None:
             raise ValueError("H3 chain continuation has no previous frame checkpoint.")
         if continuation_mode == "masked_av":
-            from .masked_context import apply_masked_prefix
+            from .masked_context import (
+                apply_masked_prefix,
+                apply_masked_prefix_from_latent,
+            )
 
             previous_latent = state.get("previous_latent")
-            out_conditioning, out_latent, trim = apply_masked_prefix(
-                conditioning=conditioning,
-                vae=vae,
-                latent=latent,
-                previous_frames=previous_frames,
-                context_length=context_length,
-                crop=cfg["crop"],
-                previous_latent=previous_latent,
-                audio_vae=audio_vae,
-                previous_audio=(state.get("previous_audio")
-                                if external_first else None),
-            )
+            latent_timeline_exact = bool(
+                state.get("previous_latent_timeline_exact", True))
+            preserve_audio = cfg["audio_mode"] not in (
+                "source_track", "source_plus_timeline")
+            if previous_latent is not None and latent_timeline_exact:
+                # Direct latent continuation is safe only when the sampler's raw
+                # endpoint is also the delivered edit boundary. Otherwise its tail
+                # contains H3 grid padding that must never become hidden context.
+                out_conditioning, out_latent, trim = (
+                    apply_masked_prefix_from_latent(
+                        conditioning=conditioning,
+                        latent=latent,
+                        previous_latent=previous_latent,
+                        context_length=context_length,
+                        audio_feather_ticks=8,
+                        preserve_audio=preserve_audio,
+                    )
+                )
+            else:
+                if previous_latent is not None and not latent_timeline_exact:
+                    _LOG.info(
+                        "H3 masked AV clip %d: predecessor has raw tail padding; "
+                        "re-encoding only the delivered %d-frame visual tail.",
+                        index, context_length)
+                out_conditioning, out_latent, trim = apply_masked_prefix(
+                    conditioning=conditioning,
+                    vae=vae,
+                    latent=latent,
+                    previous_frames=previous_frames,
+                    context_length=context_length,
+                    crop=cfg["crop"],
+                    previous_latent=(previous_latent if preserve_audio else None),
+                    audio_vae=audio_vae,
+                    previous_audio=(state.get("previous_audio")
+                                    if external_first else None),
+                    preserve_audio=preserve_audio,
+                )
             return (out_conditioning, trim, True, out_latent)
         previous_latent = (state.get("previous_latent")
                            if generated_audio_context else None)
@@ -4819,6 +5312,131 @@ class MiniMaxH3ChainContext:
             context_audio=previous_audio,
         )
         return (out, trim, True, latent)
+
+
+class MiniMaxH3SecondPassSwitch:
+    """Lazy scene-aware selector for optional Pass 2 delivery + context."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "state": (STATE_TYPE, {
+                    "tooltip": "Current state from H3 Chain Current Shot. Used "
+                               "only to resolve the current scene against the "
+                               "optional scene selector."}),
+                "pass1_images": ("IMAGE", {
+                    "tooltip": "Delivered Pass 1 frames after Loop Trim. They "
+                               "are returned unchanged whenever Pass 2 is disabled."}),
+                "pass1_latent": ("LATENT", {
+                    "tooltip": "Raw sampled Pass 1 H3 AV latent. It is the "
+                               "fallback continuation latent and always remains "
+                               "the authority for the audio stream."}),
+                "enabled": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Global Pass 2 switch. Off is a true lazy bypass: "
+                               "the refined image/latent branch is not evaluated."}),
+                "scenes": ("STRING", {
+                    "default": "all",
+                    "tooltip": "Optional one-based scene selector for Pass 2. "
+                               "Use all/blank, 3, 3:8, or 1,3,5:8. The global "
+                               "enabled switch must also be on."}),
+            },
+            "optional": {
+                "refined_images": ("IMAGE", {
+                    "lazy": True,
+                    "tooltip": "Delivered Pass 2 frames. Requested only when "
+                               "Pass 2 is active for the current scene."}),
+                "refined_latent": ("LATENT", {
+                    "lazy": True,
+                    "tooltip": "Raw Pass 2 sampled H3 latent. Its VIDEO stream "
+                               "becomes the continuation authority when Pass 2 is "
+                               "active; the AUDIO stream is kept from Pass 1."}),
+            },
+        }
+
+    RETURN_TYPES = ("IMAGE", "LATENT", "BOOLEAN", "STRING")
+    RETURN_NAMES = ("images", "latent", "pass2_active", "status")
+    OUTPUT_TOOLTIPS = (
+        "Selected delivered frames: Pass 1 on bypass, Pass 2 when active.",
+        "Continuation/checkpoint AV latent. Pass 2 contributes only the video "
+        "stream; Pass 1 audio is preserved exactly.",
+        "True only when the refined Pass 2 delivery/context is selected.",
+        "Current scene and Pass 2 selection status.",
+    )
+    FUNCTION = "select"
+    CATEGORY = "conditioning/minimax/contex_loop"
+    DESCRIPTION = ("Lazy production switch for an optional second pass. When "
+                   "active, the visible Pass 2 frames AND its video latent feed "
+                   "the next H3 continuation so masked AV starts from the exact "
+                   "version the viewer just saw. Pass 1 audio remains canonical.")
+
+    @staticmethod
+    def _active(state, enabled, scenes) -> tuple[bool, int, int]:
+        if not isinstance(state, dict) or not isinstance(state.get("plan"), dict):
+            raise ValueError("H3 Second Pass Switch requires Current Shot state.")
+        index = int(state.get("index", 0))
+        total = len(state["plan"].get("shots") or [])
+        if index < 1 or total < 1 or index > total:
+            raise ValueError("H3 Second Pass Switch received an invalid scene state.")
+        if not bool(enabled):
+            return False, index, total
+        ranges = _parse_reference_selector(scenes, total)
+        active = (not ranges or any(
+            int(start) <= index <= int(end) for start, end in ranges))
+        return active, index, total
+
+    @staticmethod
+    def _visual_pass2_audio_pass1_latent(pass1_latent, refined_latent):
+        pass1_parts = _streams_from_latent(pass1_latent)
+        refined_parts = _streams_from_latent(refined_latent)
+        if len(pass1_parts) < 2 or len(refined_parts) < 2:
+            raise ValueError(
+                "H3 Second Pass Switch requires MiniMax H3 AV latents with "
+                "video and audio streams.")
+        # The second pass is visual-only. Carry its refined VIDEO stream into
+        # the next masked-AV scene, but preserve the exact Pass 1 AUDIO stream
+        # so source/generated-audio continuity is never accidentally denoised.
+        return {"samples": [refined_parts[0], pass1_parts[1]]}
+
+    def check_lazy_status(self, state, pass1_images, pass1_latent, enabled, scenes,
+                          refined_images=None, refined_latent=None, **kwargs):
+        active, _index, _total = self._active(state, enabled, scenes)
+        if not active:
+            return []
+        needed = []
+        if refined_images is None:
+            needed.append("refined_images")
+        if refined_latent is None:
+            needed.append("refined_latent")
+        return needed
+
+    def select(self, state, pass1_images, pass1_latent, enabled, scenes,
+               refined_images=None, refined_latent=None):
+        active, index, total = self._active(state, enabled, scenes)
+        if not active:
+            return (pass1_images, pass1_latent, False,
+                    "scene %d/%d: Pass 2 bypassed; Pass 1 delivery/context selected" %
+                    (index, total))
+        if refined_images is None or refined_latent is None:
+            raise ValueError(
+                "H3 Second Pass Switch is enabled for scene %d but its refined "
+                "image/latent inputs are not both connected." % index)
+        if (torch is None or not torch.is_tensor(pass1_images) or
+                not torch.is_tensor(refined_images)):
+            raise ValueError("H3 Second Pass Switch requires IMAGE tensors.")
+        if pass1_images.ndim != 4 or refined_images.ndim != 4:
+            raise ValueError("H3 Second Pass Switch requires 4D IMAGE batches.")
+        if tuple(pass1_images.shape) != tuple(refined_images.shape):
+            raise ValueError(
+                "H3 Pass 2 must preserve the exact delivered frame count and "
+                "canvas. Pass 1 is %r; Pass 2 is %r." %
+                (tuple(pass1_images.shape), tuple(refined_images.shape)))
+        selected_latent = self._visual_pass2_audio_pass1_latent(
+            pass1_latent, refined_latent)
+        return (refined_images, selected_latent, True,
+                "scene %d/%d: Pass 2 enabled; refined delivery + visual context selected" %
+                (index, total))
 
 
 class MiniMaxH3ChainSegmentSave:
@@ -4856,6 +5474,18 @@ class MiniMaxH3ChainSegmentSave:
                                "Saved beside the terminal sampler output so a "
                                "deferred learned upscaler can prefer explicit "
                                "clean x0 while older checkpoints remain usable."}),
+                "active_references": ("STRING", {
+                    "tooltip": "Scene-local human-readable @tag -> native label map "
+                               "from Tagged Ref2VA."}),
+                "active_reference_fingerprint": ("STRING", {
+                    "tooltip": "Hash of only the reference contents used by this scene."}),
+                "active_reference_snapshot": ("STRING", {
+                    "tooltip": "JSON snapshot of the exact refs used by this scene."}),
+                "context_images": ("IMAGE", {
+                    "tooltip": "Optional explicit continuation-frame source. Normally leave "
+                               "this disconnected so the exact selected delivery images "
+                               "are checkpointed. It remains for backward compatibility "
+                               "with custom workflows."}),
             },
             "hidden": {
                 "prompt": "PROMPT",
@@ -4882,7 +5512,9 @@ class MiniMaxH3ChainSegmentSave:
 
     def save(self, state, images, sampled_latent, audio=None,
              images_with_overlap=None, denoised_latent=None,
-             prompt=None, extra_pnginfo=None):
+             active_references=None, active_reference_fingerprint=None,
+             active_reference_snapshot=None,
+             context_images=None, prompt=None, extra_pnginfo=None):
         if _st_save is None:
             raise RuntimeError("safetensors is required for H3 chain checkpoints.")
         plan = state["plan"]
@@ -4890,16 +5522,25 @@ class MiniMaxH3ChainSegmentSave:
         shot = plan["shots"][index - 1]
         actual_frames = int(images.shape[0])
         expected_frames = int(shot["delivered_frames"])
-        if actual_frames != expected_frames:
+        if actual_frames < expected_frames:
             raise ValueError(
-                "H3 chain clip %d produced %d delivered frames; expected %d. "
-                "Wire decoded images through MiniMax H3 Contex Loop Trim before "
-                "Segment Save." % (index, actual_frames, expected_frames))
+                "H3 chain clip %d produced only %d frames after head trim; "
+                "the exact edit timeline requires %d." %
+                (index, actual_frames, expected_frames))
+        tail_trim_frames = actual_frames - expected_frames
+        if tail_trim_frames:
+            images = images[:expected_frames]
+            _LOG.info(
+                "H3 Chain clip %d: discarded %d raw H3 tail frame(s); final "
+                "scene length is exactly %d frames.",
+                index, tail_trim_frames, expected_frames)
+        actual_frames = expected_frames
 
         configured_blend = int(
             plan["compatibility"].get("video_blend_frames", 0))
         repeated_frames = max(
-            0, int(shot["raw_frames"]) - int(shot["delivered_frames"]))
+            0, int(shot["raw_frames"]) - int(shot["delivered_frames"])
+            - int(shot.get("tail_trim_frames", 0)))
         blend_frames = min(configured_blend, repeated_frames)
         if blend_frames:
             if images_with_overlap is None:
@@ -4910,13 +5551,14 @@ class MiniMaxH3ChainSegmentSave:
                     "to Segment Save." % (index, blend_frames))
             blend_count = int(images_with_overlap.shape[0])
             expected_blend_count = expected_frames + blend_frames
-            if blend_count != expected_blend_count:
+            if blend_count < expected_blend_count:
                 raise ValueError(
-                    "H3 chain clip %d received %d blend-ready frames; expected "
-                    "%d (%d retained overlap + %d delivered). Check the Plan "
-                    "and Loop Trim blend connections." %
+                    "H3 chain clip %d received only %d blend-ready frames; "
+                    "expected at least %d (%d retained overlap + %d delivered)." %
                     (index, blend_count, expected_blend_count, blend_frames,
                      expected_frames))
+            if blend_count > expected_blend_count:
+                images_with_overlap = images_with_overlap[:expected_blend_count]
 
         mode = plan["compatibility"]["audio_mode"]
         if mode == "generated_audio" and audio is None:
@@ -4924,8 +5566,23 @@ class MiniMaxH3ChainSegmentSave:
                 "H3 chain generated_audio mode requires decoded audio on Segment "
                 "Save. Wire it through MiniMax H3 Contex Loop Trim first.")
         compact = _compact_latent(sampled_latent)
-        context_length = min(_plan_context_storage_length(plan), actual_frames)
-        context_frames = _tensor_cpu_clone(images[-context_length:])
+        canonical_images = images if context_images is None else context_images
+        if (torch is None or not torch.is_tensor(canonical_images) or
+                canonical_images.ndim != 4):
+            raise ValueError(
+                "H3 chain canonical context_images must be an IMAGE tensor.")
+        canonical_frames = int(canonical_images.shape[0])
+        if canonical_frames < expected_frames:
+            raise ValueError(
+                "H3 chain clip %d canonical context contains only %d frames; "
+                "the scene delivers %d. Connect the post-Trim Pass 1 images." %
+                (index, canonical_frames, expected_frames))
+        if canonical_frames > expected_frames:
+            canonical_images = canonical_images[:expected_frames]
+        context_length = min(
+            _plan_context_storage_length(plan), int(canonical_images.shape[0]))
+        context_frames = _tensor_cpu_clone(
+            canonical_images[-context_length:])
         parts = compact["samples"]
         tensors = {
             "context_frames": context_frames,
@@ -4941,8 +5598,16 @@ class MiniMaxH3ChainSegmentSave:
         sample_rate = 0
         if audio is not None:
             waveform, sample_rate = _validate_audio(
-                audio, "H3 chain clip %d delivered audio" % index,
-                expected_frames=expected_frames)
+                audio, "H3 chain clip %d post-head-trim audio" % index)
+            wanted_samples = int(round(
+                expected_frames / float(FPS) * sample_rate))
+            have_samples = int(waveform.shape[-1])
+            if have_samples < wanted_samples:
+                raise ValueError(
+                    "H3 chain clip %d audio has %d samples after head trim; "
+                    "%d are required for %d final frames." %
+                    (index, have_samples, wanted_samples, expected_frames))
+            waveform = waveform[..., :wanted_samples]
             tensors["delivered_audio"] = _tensor_cpu_clone(waveform)
 
         paths = _artifact_paths(plan, index)
@@ -5029,6 +5694,7 @@ class MiniMaxH3ChainSegmentSave:
                 "prompt_file": _relative_output_path(published_prompt),
                 "raw_frames": shot["raw_frames"],
                 "delivered_frames": shot["delivered_frames"],
+                "tail_trim_frames": int(shot.get("tail_trim_frames", tail_trim_frames)),
                 "history_hash": _history_hash(plan, index),
                 **_prompt_fields(plan, index),
                 "archives": archives,
@@ -5061,6 +5727,23 @@ class MiniMaxH3ChainSegmentSave:
                 "resolved_context_length": resolved_context,
                 "resolved_audio_context_length": resolved_audio_context,
             })
+            if active_references is not None:
+                segment["active_references"] = str(active_references)
+            if active_reference_fingerprint is not None:
+                segment["active_reference_fingerprint"] = str(
+                    active_reference_fingerprint)
+            if active_reference_snapshot is not None:
+                # Validate once before persisting so a broken custom connection
+                # cannot poison checkpoint metadata.
+                try:
+                    parsed_snapshot = json.loads(str(active_reference_snapshot))
+                except json.JSONDecodeError as exc:
+                    raise ValueError(
+                        "H3 active reference snapshot is not valid JSON: %s" % exc)
+                if not isinstance(parsed_snapshot, list):
+                    raise ValueError(
+                        "H3 active reference snapshot must be a JSON list.")
+                segment["active_reference_snapshot"] = parsed_snapshot
             if "context_length" in shot:
                 segment["context_length"] = shot["context_length"]
             if "audio_context_length" in shot:
@@ -5187,9 +5870,14 @@ def _review_video(plan: dict[str, Any], segment: dict[str, Any],
         }, False, "No audio is connected; this review is silent.")
 
     expected_frames = int(segment["delivered_frames"])
-    waveform, sample_rate = _validate_audio(
-        audio, "H3 Chain Review audio", expected_frames=expected_frames)
-    audio_value = {"waveform": waveform, "sample_rate": sample_rate}
+    waveform, sample_rate = _validate_audio(audio, "H3 Chain Review audio")
+    wanted_samples = int(round(expected_frames / float(FPS) * sample_rate))
+    if int(waveform.shape[-1]) < wanted_samples:
+        raise ValueError(
+            "H3 Chain Review audio is shorter than the %d-frame delivered scene." %
+            expected_frames)
+    audio_value = {"waveform": waveform[..., :wanted_samples],
+                   "sample_rate": sample_rate}
     audio_hash = _audio_fingerprint(audio_value)
     video_hash = str(segment.get("segment_sha256") or _file_sha256(source))
     index = int(segment["index"])
@@ -5624,7 +6312,8 @@ class MiniMaxH3ChainReview:
             "prompt_prefix": str(plan.get("prompt_prefix") or ""),
             "seed": str(shot["seed"]),
             "raw_frames": int(shot["raw_frames"]),
-            "duration_seconds": int(shot["raw_frames"]) / float(FPS),
+            "requested_frames": int(shot.get("requested_frames", shot["delivered_frames"])),
+            "duration_seconds": int(shot.get("requested_frames", shot["delivered_frames"])) / float(FPS),
             "video": video,
             "has_audio": False,
             "warning": ("Preparing synchronized audio preview…"
@@ -5647,7 +6336,8 @@ class MiniMaxH3ChainReview:
             "public": payload,
             "plan": plan,
             "current_seed": int(shot["seed"]),
-            "current_length": int(shot["raw_frames"]),
+            "current_length": int(shot.get(
+                "requested_frames", shot["delivered_frames"])),
             "candidates": candidates,
         }
         PromptServer.instance.send_sync(
@@ -5768,7 +6458,8 @@ class MiniMaxH3ChainReview:
                         accepted_state, accepted_segment,
                         partial_audio_source, source_audio)
                     partial_item = _video_output_item(partial_path)
-                    status += "; partial video: %s" % partial_path
+                    status += "; saved partial through clip %d (%d scenes): %s" % (
+                        index, index, partial_path)
                     if partial_warning:
                         status += "; %s" % partial_warning
                 except Exception as exc:
@@ -5818,21 +6509,30 @@ def _manifest_from_segments(plan: dict[str, Any], values: list[dict[str, Any]],
         if archives:
             segment.setdefault("archives", archives)
         segments.append(segment)
-    expected_count = len(plan["shots"]) if complete else len(segments)
-    if expected_count < 1:
+    if not segments:
         raise ValueError("H3 chain manifest requires at least one saved clip.")
-    if len(segments) != expected_count:
-        raise ValueError(
-            "H3 chain manifest is incomplete: found %d persisted clips, expected %d."
-            % (len(segments), expected_count))
+
     indexes = [int(item.get("index", -1)) for item in segments]
-    if indexes != list(range(1, expected_count + 1)):
-        raise ValueError("H3 chain manifest segment indexes are not contiguous.")
-    total_frames = int(plan["total_delivered_frames"]) if complete else sum(
+    first_index, last_index = indexes[0], indexes[-1]
+    if first_index < 1 or last_index > len(plan["shots"]):
+        raise ValueError("H3 chain manifest contains an out-of-range segment index.")
+    if indexes != list(range(first_index, last_index + 1)):
+        raise ValueError(
+            "H3 chain manifest segment indexes must form one contiguous range; "
+            "got %r." % indexes)
+    if complete and indexes != list(range(1, len(plan["shots"]) + 1)):
+        raise ValueError(
+            "H3 chain complete manifest requires every planned clip 1..%d; "
+            "got %d..%d (%d clips)." %
+            (len(plan["shots"]), first_index, last_index, len(segments)))
+
+    total_frames = (int(plan["total_delivered_frames"]) if complete else sum(
         int(item.get(
             "delivered_frames",
             plan["shots"][int(item["index"]) - 1]["delivered_frames"]))
-        for item in segments)
+        for item in segments))
+    timeline_start_frame = sum(
+        int(shot["delivered_frames"]) for shot in plan["shots"][:first_index - 1])
     manifest = {
         "format": ("h3_chain_manifest_v3" if complete
                    else "h3_chain_partial_manifest_v3"),
@@ -5840,18 +6540,23 @@ def _manifest_from_segments(plan: dict[str, Any], values: list[dict[str, Any]],
         "plan_hash": plan["plan_hash"],
         "prompt_prefix": str(plan.get("prompt_prefix") or ""),
         "compatibility": plan["compatibility"],
-        "clip_count": expected_count,
+        "clip_count": len(segments),
+        "first_completed_clip": first_index,
+        "last_completed_clip": last_index,
+        "timeline_start_frame": timeline_start_frame,
+        "timeline_end_frame": timeline_start_frame + total_frames,
         "total_delivered_frames": total_frames,
         "duration_seconds": total_frames / float(FPS),
         "segments": segments,
     }
     if archives:
         manifest["archives"] = archives
-    if isinstance(plan.get("prelude"), dict):
+    # The imported prelude belongs only to outputs that actually begin at the
+    # extension's first scene. A late partial range must not prepend it.
+    if first_index == 1 and isinstance(plan.get("prelude"), dict):
         manifest["prelude"] = _json_document(plan["prelude"])
     if not complete:
         manifest["planned_clip_count"] = len(plan["shots"])
-        manifest["last_completed_clip"] = len(segments)
     return manifest
 
 
@@ -5863,13 +6568,45 @@ def _partial_manifest(state: dict[str, Any],
                       segment: dict[str, Any]) -> dict[str, Any]:
     plan = state["plan"]
     index = int(state["index"])
-    values = list(state.get("segments", [])) + [_public_segment(segment)]
-    if index != len(values):
-        raise ValueError(
-            "H3 partial manifest expected clip %d after %d predecessors." %
-            (index, len(values) - 1))
-    return _manifest_from_segments(plan, values, False)
 
+    # H3_OPTION_B_AUDIO_STOP_FIX: Segment Save runs before Review. Approve &
+    # Stop therefore rebuilds the accepted prefix from the authoritative atomic
+    # files on disk instead of trusting recursive in-memory state. This makes
+    # a stop through clip N contain exactly clips 1..N, including after resume,
+    # retry, or a frontend/executor state hiccup.
+    existing = list(state.get("segments", []))
+    if existing:
+        first_index = int(existing[0].get("index", 1))
+    else:
+        first_index = int(state.get("range_start", index))
+    first_index = max(1, min(first_index, index))
+
+    values = []
+    for clip_index in range(first_index, index + 1):
+        if clip_index == index:
+            item = _public_segment(segment)
+            _verify_segment_artifacts(item, clip_index)
+        else:
+            paths = _artifact_paths(plan, clip_index)
+            if not os.path.isfile(paths["metadata"]):
+                raise FileNotFoundError(
+                    "Approve & Stop cannot assemble clip %d: saved metadata "
+                    "for clip %d is missing: %s" %
+                    (index, clip_index, paths["metadata"]))
+            metadata = _read_json(paths["metadata"])
+            saved = metadata.get("segment")
+            if not isinstance(saved, dict):
+                raise ValueError(
+                    "Approve & Stop: clip %d metadata has no saved segment." %
+                    clip_index)
+            _verify_segment_artifacts(saved, clip_index)
+            item = _public_segment(saved)
+        values.append(item)
+
+    _LOG.info(
+        "H3 Chain Approve & Stop partial manifest rebuilt from disk: "
+        "%d saved scenes (%d..%d)", len(values), first_index, index)
+    return _manifest_from_segments(plan, values, False)
 
 def _manifest_path(plan: dict[str, Any]) -> str:
     return os.path.join(_run_dir(plan), "manifest.json")
@@ -6053,6 +6790,7 @@ class MiniMaxH3ChainLoopEnd:
             return self._recurse(flow, retry_state, dynprompt, unique_id)
         selected_frames = images
         selected_latent = sampled_latent
+        selected_candidate = False
         if (isinstance(review, dict)
                 and review.get("action") == "candidate_selected"):
             selected_plan = review.get("plan")
@@ -6063,6 +6801,16 @@ class MiniMaxH3ChainLoopEnd:
                 raise ValueError(
                     "Selected H3 candidate is missing its continuation state.")
             plan = selected_plan
+            selected_candidate = True
+        shot = plan["shots"][index - 1]
+        expected_frames = int(shot["delivered_frames"])
+        if not selected_candidate:
+            if int(selected_frames.shape[0]) < expected_frames:
+                raise ValueError(
+                    "H3 Chain End received only %d post-head-trim frames for clip %d; "
+                    "the plan requires %d final frames." %
+                    (int(selected_frames.shape[0]), index, expected_frames))
+            selected_frames = selected_frames[:expected_frames]
         context_length = min(
             _plan_context_storage_length(plan), int(selected_frames.shape[0]))
         next_state = {
@@ -6074,6 +6822,8 @@ class MiniMaxH3ChainLoopEnd:
             "previous_frames": _tensor_cpu_clone(
                 selected_frames[-context_length:]),
             "previous_latent": _compact_latent(selected_latent),
+            "previous_latent_timeline_exact": int(
+                shot.get("tail_trim_frames", 0)) == 0,
             "segments": list(state.get("segments", [])) +
                         [_public_segment(segment)],
             "resumed_from": state.get("resumed_from", 0),
@@ -6082,7 +6832,12 @@ class MiniMaxH3ChainLoopEnd:
         if index < end_clip:
             return self._recurse(flow, next_state, dynprompt, unique_id)
 
-        complete = end_clip == len(plan["shots"])
+        segment_indexes = [
+            int(item.get("index", -1)) for item in next_state["segments"]]
+        complete = (
+            end_clip == len(plan["shots"]) and
+            segment_indexes == list(range(1, len(plan["shots"]) + 1))
+        )
         manifest = _manifest_from_segments(
             plan, next_state["segments"], complete=complete)
         # A normal chain has already created its run directory in Segment Save.
@@ -6092,9 +6847,15 @@ class MiniMaxH3ChainLoopEnd:
             if complete:
                 manifest_path = _manifest_path(plan)
             else:
+                first_saved = int(manifest["first_completed_clip"])
+                last_saved = int(manifest["last_completed_clip"])
+                if first_saved == 1:
+                    partial_name = "through_clip_%04d.manifest.json" % last_saved
+                else:
+                    partial_name = "clips_%04d_%04d.manifest.json" % (
+                        first_saved, last_saved)
                 manifest_path = os.path.join(
-                    _run_dir(plan), "partial",
-                    "through_clip_%04d.manifest.json" % end_clip)
+                    _run_dir(plan), "partial", partial_name)
             _atomic_json(manifest_path, manifest)
         manifest_json = json.dumps(manifest, ensure_ascii=False, indent=2,
                                    sort_keys=True)
@@ -6146,7 +6907,7 @@ class MiniMaxH3ChainManifestLoad:
     def load(self, plan, source_audio=None, external_context=None):
         prepared_plan = _plan_with_external_context(plan, external_context)
         prepared_plan = _plan_with_source_audio(prepared_plan, source_audio)
-        completed = _load_resume_state(
+        completed = _load_resume_state_full(
             prepared_plan, len(prepared_plan["shots"]) + 1)
         manifest = _manifest_from_state(completed)
         _atomic_json(_manifest_path(prepared_plan), manifest)
@@ -6304,9 +7065,17 @@ def _validate_manifest(manifest: dict[str, Any]) -> list[dict[str, Any]]:
         raise ValueError(
             "H3 chain manifest contains %d segments; expected %d." %
             (len(segments), clip_count))
+    indexes = [int(segment.get("index", -1)) for segment in segments]
+    if not indexes or indexes != list(range(indexes[0], indexes[-1] + 1)):
+        raise ValueError(
+            "H3 chain manifest segment indexes must form one contiguous range; "
+            "got %r." % indexes)
+    if manifest.get("format") == "h3_chain_manifest_v3" and indexes[0] != 1:
+        raise ValueError("Completed H3 chain manifest must start at clip 1.")
     total_frames = 0
-    for index, segment in enumerate(segments, start=1):
-        _verify_segment_artifacts(segment, index)
+    for segment in segments:
+        scene_index = int(segment.get("index", -1))
+        _verify_segment_artifacts(segment, scene_index)
         total_frames += int(segment.get("delivered_frames", 0))
     expected_frames = int(manifest.get("total_delivered_frames", -1))
     if total_frames != expected_frames:
@@ -6498,7 +7267,9 @@ def _blend_video_records(
 
     for item in segments:
         delivered = int(item["delivered_frames"])
-        repeated = max(0, int(item.get("raw_frames", delivered)) - delivered)
+        repeated = max(
+            0, int(item.get("raw_frames", delivered)) - delivered
+            - int(item.get("tail_trim_frames", 0)))
         expected_blend = min(configured, repeated) if has_predecessor else 0
         if expected_blend:
             recorded_blend = int(item.get("blend_frames", 0))
@@ -6812,16 +7583,18 @@ def _checkpoint_export_segments(manifest: dict[str, Any]) -> list[dict[str, Any]
         raise ValueError(
             "H3 PNG export manifest contains %d segments; expected %d." %
             (len(segments), clip_count))
+    indexes = [int(segment.get("index", -1)) for segment in segments]
+    if not indexes or indexes != list(range(indexes[0], indexes[-1] + 1)):
+        raise ValueError(
+            "H3 PNG export requires one contiguous segment range; got %r." %
+            indexes)
     delivered_total = 0
-    for expected_index, segment in enumerate(segments, start=1):
-        if int(segment.get("index", -1)) != expected_index:
-            raise ValueError(
-                "H3 PNG export requires contiguous segment indexes starting "
-                "at 1; expected clip %d." % expected_index)
+    for segment in segments:
+        scene_index = int(segment.get("index", -1))
         checkpoint_value = segment.get("checkpoint")
         if not isinstance(checkpoint_value, str):
             raise ValueError(
-                "H3 PNG export clip %d has no checkpoint path." % expected_index)
+                "H3 PNG export clip %d has no checkpoint path." % scene_index)
         checkpoint = _absolute_output_path(checkpoint_value)
         if not os.path.isfile(checkpoint):
             raise FileNotFoundError(
@@ -6830,13 +7603,13 @@ def _checkpoint_export_segments(manifest: dict[str, Any]) -> list[dict[str, Any]
         if expected_hash and _file_sha256(checkpoint) != expected_hash:
             raise ValueError(
                 "H3 PNG export clip %d checkpoint failed its SHA-256 integrity "
-                "check." % expected_index)
+                "check." % scene_index)
         raw_frames = int(segment.get("raw_frames", 0))
         delivered_frames = int(segment.get("delivered_frames", 0))
         if raw_frames < 1 or delivered_frames < 1 or delivered_frames > raw_frames:
             raise ValueError(
                 "H3 PNG export clip %d has invalid raw/delivered frame counts "
-                "%d/%d." % (expected_index, raw_frames, delivered_frames))
+                "%d/%d." % (scene_index, raw_frames, delivered_frames))
         delivered_total += delivered_frames
     expected_total = int(manifest.get("total_delivered_frames", -1))
     if delivered_total != expected_total:
@@ -6987,13 +7760,17 @@ class MiniMaxH3ChainExportPNG:
 
             raw_frames = int(segment["raw_frames"])
             delivered_frames = int(segment["delivered_frames"])
-            trim_frames = raw_frames - delivered_frames
+            tail_trim = int(segment.get("tail_trim_frames", 0))
+            head_trim = raw_frames - delivered_frames - tail_trim
+            if head_trim < 0:
+                raise ValueError(
+                    "H3 PNG export clip %d has invalid head/tail trim metadata." % index)
             if int(images.shape[0]) != raw_frames:
                 raise ValueError(
                     "H3 PNG export decoded %d frames for clip %d; its manifest "
-                    "requires %d raw frames before trimming %d overlap frames." %
-                    (int(images.shape[0]), index, raw_frames, trim_frames))
-            images = images[trim_frames:trim_frames + delivered_frames]
+                    "requires %d raw frames before trimming %d head + %d tail." %
+                    (int(images.shape[0]), index, raw_frames, head_trim, tail_trim))
+            images = images[head_trim:head_trim + delivered_frames]
             clip_first = frame_number
             prompt = str(segment.get("prompt") or "")
             scene_metadata = json.dumps({
@@ -7169,25 +7946,12 @@ class MiniMaxH3ChainAssemble:
             _validate_source_audio_hash(
                 manifest["compatibility"], source_audio,
                 "H3 Chain Assemble")
-            waveform, sample_rate = _validate_audio(
-                source_audio, "H3 Chain Assemble source audio")
-            required_samples = int(round(
-                int(manifest["total_delivered_frames"]) /
-                float(FPS) * sample_rate))
-            if int(waveform.shape[-1]) < required_samples:
-                if manifest["compatibility"].get(
-                        "source_audio_silent_padding") and _audio_is_silent(waveform):
-                    audio = _pad_audio_to_samples(
-                        source_audio, required_samples,
-                        "H3 Chain Assemble silent placeholder audio")
-                else:
-                    raise ValueError(
-                        "H3 Chain Assemble source audio has %d samples; at least "
-                        "%d are required for %d video frames." %
-                        (int(waveform.shape[-1]), required_samples,
-                         int(manifest["total_delivered_frames"])))
-            else:
-                audio = source_audio
+            timeline_start_frame = int(manifest.get("timeline_start_frame", 0))
+            audio = _slice_audio(
+                source_audio, timeline_start_frame / float(FPS),
+                int(manifest["total_delivered_frames"]) / float(FPS),
+                pad_silence=bool(manifest["compatibility"].get(
+                    "source_audio_silent_padding")))
         elif selected == "generated":
             audio = generated_track
         elif selected != "none":
@@ -7429,9 +8193,9 @@ async def _submit_review_decision(request):
             return web.json_response(
                 {"error": "The retry prompt is too large."}, status=400)
         try:
-            raw_frames = _validate_h3_length(
+            raw_frames = _validate_requested_frame_length(
                 body.get("length", pending.get("current_length")),
-                "H3 review retry length")
+                "H3 review retry final length")
         except (TypeError, ValueError) as exc:
             return web.json_response({"error": str(exc)}, status=400)
         if action == "reroll":
@@ -7822,6 +8586,11 @@ async def _list_saved_checkpoints(request):
                     "ready": ready,
                     "raw_frames": int(segment.get("raw_frames", 0)),
                     "delivered_frames": int(segment.get("delivered_frames", 0)),
+                    "active_references": str(segment.get("active_references") or ""),
+                    "active_reference_fingerprint": str(
+                        segment.get("active_reference_fingerprint") or ""),
+                    "active_reference_snapshot": segment.get(
+                        "active_reference_snapshot") or [],
                 }
                 if os.path.isfile(segment_path):
                     item["video"] = _video_output_item(segment_path)
@@ -8053,6 +8822,7 @@ CHAIN_NODE_CLASS_MAPPINGS = {
     "MiniMaxH3ScheduledAudioReference": MiniMaxH3ScheduledAudioReference,
     "MiniMaxH3ScheduledReferenceToVideo": MiniMaxH3ScheduledReferenceToVideo,
     "MiniMaxH3TaggedPictureReference": MiniMaxH3TaggedPictureReference,
+    "MiniMaxH3OptionalTaggedPictureReference": MiniMaxH3OptionalTaggedPictureReference,
     "MiniMaxH3TaggedVideoReference": MiniMaxH3TaggedVideoReference,
     "MiniMaxH3TaggedAudioReference": MiniMaxH3TaggedAudioReference,
     "MiniMaxH3TaggedReferenceToVideo": MiniMaxH3TaggedReferenceToVideo,
@@ -8061,6 +8831,7 @@ CHAIN_NODE_CLASS_MAPPINGS = {
     "MiniMaxH3ChainCurrent": MiniMaxH3ChainCurrent,
     "MiniMaxH3PatchPriority": MiniMaxH3PatchPriority,
     "MiniMaxH3ChainContext": MiniMaxH3ChainContext,
+    "MiniMaxH3SecondPassSwitch": MiniMaxH3SecondPassSwitch,
     "MiniMaxH3ChainSegmentSave": MiniMaxH3ChainSegmentSave,
     "MiniMaxH3ChainReview": MiniMaxH3ChainReview,
     "MiniMaxH3ChainLoopEnd": MiniMaxH3ChainLoopEnd,
@@ -8085,6 +8856,7 @@ CHAIN_NODE_DISPLAY_NAME_MAPPINGS = {
     "MiniMaxH3ScheduledAudioReference": "MiniMax H3 Scheduled Audio Ref",
     "MiniMaxH3ScheduledReferenceToVideo": "MiniMax H3 Scheduled Ref2VA",
     "MiniMaxH3TaggedPictureReference": "MiniMax H3 Tagged Picture Ref",
+    "MiniMaxH3OptionalTaggedPictureReference": "MiniMax H3 Optional Tagged Picture Ref",
     "MiniMaxH3TaggedVideoReference": "MiniMax H3 Tagged Video Ref",
     "MiniMaxH3TaggedAudioReference": "MiniMax H3 Tagged Audio Ref",
     "MiniMaxH3TaggedReferenceToVideo": "MiniMax H3 Tagged Ref2VA",
@@ -8093,6 +8865,7 @@ CHAIN_NODE_DISPLAY_NAME_MAPPINGS = {
     "MiniMaxH3ChainCurrent": "MiniMax H3 Contex Loop Current Shot",
     "MiniMaxH3PatchPriority": "MiniMax H3 Patch Priority",
     "MiniMaxH3ChainContext": "MiniMax H3 Contex Loop Context",
+    "MiniMaxH3SecondPassSwitch": "MiniMax H3 Second Pass Switch",
     "MiniMaxH3ChainSegmentSave": "MiniMax H3 Contex Loop Segment + Checkpoint",
     "MiniMaxH3ChainReview": "MiniMax H3 Contex Loop Review Gate",
     "MiniMaxH3ChainLoopEnd": "MiniMax H3 Contex Loop End",

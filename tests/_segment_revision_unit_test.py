@@ -43,14 +43,13 @@ spec.loader.exec_module(chain)
 
 
 class FakeImages:
-    shape = (5, 1, 1, 3)
-
-    def __getitem__(self, _key):
-        return self
+    def __new__(cls):
+        return torch.zeros((5, 1, 1, 3), dtype=torch.float32)
 
 
-class FakeBlendImages(FakeImages):
-    shape = (7, 1, 1, 3)
+class FakeBlendImages:
+    def __new__(cls):
+        return torch.zeros((7, 1, 1, 3), dtype=torch.float32)
 
 
 def main():

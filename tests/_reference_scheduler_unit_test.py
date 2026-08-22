@@ -532,10 +532,10 @@ assert context_choices == [
 ]
 normalized = chain.MiniMaxH3ChainPlan().build(
     *i2va_plan_node["widgets_values"])[0]
-assert [shot["raw_frames"] for shot in normalized["shots"]] == [243, 243]
-assert [shot["delivered_frames"] for shot in normalized["shots"]] == [243, 238]
-assert normalized["total_delivered_frames"] == 481
-assert normalized["total_delivered_frames"] / chain.FPS > 20
+assert [shot["raw_frames"] for shot in normalized["shots"]] == [243, 260]
+assert [shot["delivered_frames"] for shot in normalized["shots"]] == [240, 240]
+assert normalized["total_delivered_frames"] == 480
+assert normalized["total_delivered_frames"] / chain.FPS == 20
 assert normalized["compatibility"]["context_length"] == 5
 assert "<Picture 1>" in normalized["shots"][0]["scene_prompt"]
 assert "<Picture" not in normalized["shots"][1]["scene_prompt"]

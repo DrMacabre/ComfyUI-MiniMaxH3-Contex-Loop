@@ -224,6 +224,298 @@ def _drop_prefix_guides(conditioning, prefix_frames):
     return out
 
 
+# SEITANISM_DIRECT_LATENT_AV_V1
+# Generated-H3 -> generated-H3 direct latent continuation.
+# Design adapted from seitanism/ComfyUI-H3-Motion-Context-MultiRef
+# H3 Generated AV Masked Context (GPL-3.0).
+def _snap_joint_av_prefix_length(requested, available, target_frames):
+    """Snap to an H3 video run whose endpoint is also exact on the 40-Hz audio grid."""
+    cap = min(int(requested), int(available), int(target_frames) - 1)
+    candidates = []
+    for value in VIDEO_RUN_GRID:
+        if value > cap:
+            continue
+        audio_position = value / float(FPS) * AUDIO_HZ
+        if abs(audio_position - round(audio_position)) < 1e-9:
+            candidates.append(int(value))
+    run = max(candidates, default=0)
+    if run < 39:
+        raise ValueError(
+            "h3_masked_prefix: direct latent AV continuation needs at least "
+            "39 usable frames. Exact joint AV boundaries are "
+            "39/90/141/192/243/... at 24 fps / 40 Hz."
+        )
+    if run != int(requested):
+        _LOG.warning(
+            "h3_masked_prefix: direct latent context_length %d -> exact joint "
+            "AV prefix %d (39/90/141/192/243/...)",
+            int(requested), run,
+        )
+    return run
+
+
+def _apply_audio_context_feather(audio_mask, audio_steps, feather_ticks):
+    """Protect an audio prefix, then half-cosine release its final latent ticks."""
+    audio_steps = int(audio_steps)
+    feather = max(0, min(int(feather_ticks), audio_steps))
+    hard = audio_steps - feather
+    if hard > 0:
+        audio_mask[..., :hard] = 0.0
+    if feather > 0:
+        i = torch.arange(
+            1, feather + 1,
+            device=audio_mask.device,
+            dtype=audio_mask.dtype,
+        )
+        ramp = 0.5 - 0.5 * torch.cos(torch.pi * i / float(feather))
+        shape = [1] * audio_mask.ndim
+        shape[-1] = feather
+        audio_mask[..., hard:audio_steps] = ramp.view(*shape)
+    return audio_mask
+
+
+def apply_masked_prefix_from_latent(
+    conditioning,
+    latent,
+    previous_latent,
+    context_length,
+    audio_feather_ticks=8,
+):
+    """Copy the previous generated H3 AV latent tail directly into the new target."""
+    _require_h3_mask_support()
+
+    target_video, target_audio, target_frames = _validate_target_streams(latent)
+    source_parts = _streams_from_latent(previous_latent)
+    if len(source_parts) < 2:
+        raise ValueError(
+            "h3_masked_prefix: previous generated latent has no audio stream."
+        )
+    source_video, source_audio = source_parts[:2]
+
+    if source_video.ndim == 4:
+        source_video = source_video.unsqueeze(0)
+    if source_audio.ndim == 3:
+        source_audio = source_audio.unsqueeze(0)
+
+    if source_video.ndim != 5:
+        raise ValueError(
+            "h3_masked_prefix: previous video latent must be [B,C,T,H,W], got %s."
+            % (tuple(source_video.shape),)
+        )
+    if source_audio.ndim != 4:
+        raise ValueError(
+            "h3_masked_prefix: previous audio latent must be [B,C,2,T], got %s."
+            % (tuple(source_audio.shape),)
+        )
+    if int(source_video.shape[0]) != 1 or int(source_audio.shape[0]) != 1:
+        raise ValueError(
+            "h3_masked_prefix: direct latent AV continuation supports batch size 1."
+        )
+
+    source_frames = _pixel_frames(int(source_video.shape[2]))
+    frames = _snap_joint_av_prefix_length(
+        context_length, source_frames, target_frames)
+
+    # Exact H3 temporal mapping: 5/22/39/... pixel frames -> 2/7/12/... latent steps.
+    video_steps = 2 + 5 * ((frames - 5) // 17)
+    if _pixel_frames(video_steps) != frames:
+        raise RuntimeError(
+            "h3_masked_prefix: internal direct-latent H3 mapping failed for "
+            "%d frames." % frames
+        )
+    audio_steps = int(round(frames / float(FPS) * AUDIO_HZ))
+
+    if video_steps >= int(target_video.shape[2]):
+        raise ValueError(
+            "h3_masked_prefix: direct video prefix consumes the whole target latent."
+        )
+    if audio_steps >= int(target_audio.shape[-1]):
+        raise ValueError(
+            "h3_masked_prefix: direct audio prefix consumes the whole target latent."
+        )
+    if int(source_video.shape[2]) < video_steps:
+        raise ValueError(
+            "h3_masked_prefix: previous video latent is too short for %d frames."
+            % frames
+        )
+    if int(source_audio.shape[-1]) < audio_steps:
+        raise ValueError(
+            "h3_masked_prefix: previous audio latent is too short for %d frames."
+            % frames
+        )
+
+    if tuple(source_video.shape[1:2] + source_video.shape[3:]) != tuple(
+            target_video.shape[1:2] + target_video.shape[3:]):
+        raise ValueError(
+            "h3_masked_prefix: previous/target video latent geometry differs: "
+            "%s vs %s. Keep chained clips at the same H3 resolution."
+            % (tuple(source_video.shape), tuple(target_video.shape))
+        )
+    if tuple(source_audio.shape[1:3]) != tuple(target_audio.shape[1:3]):
+        raise ValueError(
+            "h3_masked_prefix: previous/target audio latent geometry differs: "
+            "%s vs %s."
+            % (tuple(source_audio.shape), tuple(target_audio.shape))
+        )
+
+    out_video = target_video.clone()
+    out_audio = target_audio.clone()
+    out_video[:, :, :video_steps] = source_video[:, :, -video_steps:].to(
+        device=out_video.device, dtype=out_video.dtype)
+    out_audio[..., :audio_steps] = source_audio[..., -audio_steps:].to(
+        device=out_audio.device, dtype=out_audio.dtype)
+
+    # Preserve any mask already present on the target, then protect our prefix.
+    video_mask, audio_mask = _existing_mask_streams(
+        latent, out_video, out_audio)
+    video_mask[:, :, :video_steps] = 0.0
+    _apply_audio_context_feather(
+        audio_mask, audio_steps, audio_feather_ticks)
+
+    import comfy.nested_tensor
+
+    out_latent = latent.copy()
+    out_latent["samples"] = comfy.nested_tensor.NestedTensor(
+        (out_video, out_audio))
+    out_latent["noise_mask"] = comfy.nested_tensor.NestedTensor(
+        (video_mask, audio_mask))
+
+    out_conditioning = _drop_prefix_guides(conditioning, frames)
+    _LOG.info(
+        "h3_masked_prefix: DIRECT latent->latent AV preserved %d frames = "
+        "%d video steps / %d audio steps; audio feather %d ticks; "
+        "target %d frames; trim %d",
+        frames, video_steps, audio_steps,
+        max(0, min(int(audio_feather_ticks), audio_steps)),
+        target_frames, frames,
+    )
+    return out_conditioning, out_latent, frames
+
+# H3_OPTION_B_V1: direct generated-latent continuation, adapted from
+# seitanism/ComfyUI-H3-Motion-Context-MultiRef (GPL-3.0).
+def _snap_av_prefix_length(requested, available, target_frames):
+    """Resolve to a video-VAE run that also lands exactly on H3's 40 Hz audio grid."""
+    cap = min(int(requested), int(available), int(target_frames) - 1)
+    candidates = [
+        value for value in VIDEO_RUN_GRID
+        if value <= cap and (int(value) * int(AUDIO_HZ)) % int(FPS) == 0
+    ]
+    frames = max(candidates, default=0)
+    if frames < 39:
+        raise ValueError(
+            "h3_masked_prefix: direct AV continuation needs at least 39 frames; "
+            "exact shared H3 AV boundaries are 39/90/141/192/243/... .")
+    if frames != int(requested):
+        _LOG.warning(
+            "h3_masked_prefix: context_length %d -> exact joint AV prefix %d "
+            "(shared AV runs are 39/90/141/192/243/...)",
+            int(requested), frames)
+    return frames
+
+
+def _apply_audio_context_feather(audio_mask, audio_steps, feather_ticks):
+    """Half-cosine release across the end of the protected audio prefix."""
+    audio_steps = int(audio_steps)
+    feather = max(0, min(int(feather_ticks), audio_steps))
+    hard = audio_steps - feather
+    if hard > 0:
+        audio_mask[..., :hard] = 0.0
+    if feather > 0:
+        i = torch.arange(
+            1, feather + 1, device=audio_mask.device, dtype=audio_mask.dtype)
+        ramp = 0.5 - 0.5 * torch.cos(torch.pi * i / float(feather))
+        shape = [1] * audio_mask.ndim
+        shape[-1] = feather
+        audio_mask[..., hard:audio_steps] = ramp.view(*shape)
+    return audio_mask
+
+
+def apply_masked_prefix_from_latent(
+    conditioning,
+    latent,
+    previous_latent,
+    context_length,
+    audio_feather_ticks=8,
+    preserve_audio=True,
+):
+    """Copy previous generated H3 context into the new target.
+
+    preserve_audio=True is the generated-audio AV continuation path.
+    preserve_audio=False is the fixed-song/music-video path: only the video
+    latent tail is protected; the target audio stream stays fully denoisable
+    so the current scene's original-song Ref2VA slice remains authoritative.
+    """
+    _require_h3_mask_support()
+    target_video, target_audio, target_frames = _validate_target_streams(latent)
+    source_video, source_audio = _streams_from_latent(previous_latent)[:2]
+    if source_video.ndim == 4:
+        source_video = source_video.unsqueeze(0)
+    if source_audio.ndim == 3:
+        source_audio = source_audio.unsqueeze(0)
+    if source_video.ndim != 5 or source_audio.ndim != 4:
+        raise ValueError(
+            "h3_masked_prefix: previous_latent is not a joint H3 video/audio latent.")
+    if int(source_video.shape[0]) != 1 or int(source_audio.shape[0]) != 1:
+        raise ValueError(
+            "h3_masked_prefix: direct AV continuation supports H3 batch size 1.")
+
+    source_frames = _pixel_frames(int(source_video.shape[2]))
+    frames = _snap_av_prefix_length(context_length, source_frames, target_frames)
+    video_steps = 2 + 5 * ((frames - 5) // 17)
+    if _pixel_frames(video_steps) != frames:
+        raise RuntimeError(
+            "h3_masked_prefix: internal H3 context mapping failed for %d frames."
+            % frames)
+    audio_steps = int(round(frames / float(FPS) * AUDIO_HZ))
+    if video_steps >= int(target_video.shape[2]):
+        raise ValueError("h3_masked_prefix: video context consumes the whole target latent.")
+    if preserve_audio and audio_steps >= int(target_audio.shape[-1]):
+        raise ValueError("h3_masked_prefix: audio context consumes the whole target latent.")
+    if int(source_video.shape[2]) < video_steps:
+        raise ValueError("h3_masked_prefix: previous latent has too few video steps.")
+    if preserve_audio and int(source_audio.shape[-1]) < audio_steps:
+        raise ValueError("h3_masked_prefix: previous latent has too few audio steps.")
+    if tuple(source_video.shape[1:2] + source_video.shape[3:]) != tuple(
+            target_video.shape[1:2] + target_video.shape[3:]):
+        raise ValueError(
+            "h3_masked_prefix: source/target video latent geometry differs: %s vs %s. "
+            "Keep chained scenes at the same H3 resolution." %
+            (tuple(source_video.shape), tuple(target_video.shape)))
+    if preserve_audio and tuple(source_audio.shape[1:3]) != tuple(target_audio.shape[1:3]):
+        raise ValueError(
+            "h3_masked_prefix: source/target audio latent geometry differs: %s vs %s." %
+            (tuple(source_audio.shape), tuple(target_audio.shape)))
+
+    out_video = target_video.clone()
+    out_audio = target_audio.clone()
+    out_video[:, :, :video_steps] = source_video[:, :, -video_steps:].to(
+        device=out_video.device, dtype=out_video.dtype)
+    video_mask, audio_mask = _existing_mask_streams(latent, out_video, out_audio)
+    video_mask[:, :, :video_steps] = 0.0
+    if preserve_audio:
+        out_audio[..., :audio_steps] = source_audio[..., -audio_steps:].to(
+            device=out_audio.device, dtype=out_audio.dtype)
+        _apply_audio_context_feather(audio_mask, audio_steps, audio_feather_ticks)
+
+    import comfy.nested_tensor
+    out_latent = latent.copy()
+    out_latent["samples"] = comfy.nested_tensor.NestedTensor((out_video, out_audio))
+    out_latent["noise_mask"] = comfy.nested_tensor.NestedTensor((video_mask, audio_mask))
+    out_conditioning = _drop_prefix_guides(conditioning, frames)
+    if preserve_audio:
+        _LOG.info(
+            "h3_masked_prefix: direct latent->latent AV prefix %d frames = %d video "
+            "steps / %d audio steps; audio feather %d ticks; trim %d",
+            frames, video_steps, audio_steps,
+            max(0, min(int(audio_feather_ticks), audio_steps)), frames)
+    else:
+        _LOG.info(
+            "h3_masked_prefix: MUSIC/SOURCE mode direct VIDEO-only prefix %d frames "
+            "= %d video steps; audio remains fully generated from current source "
+            "reference; trim %d", frames, video_steps, frames)
+    return out_conditioning, out_latent, frames
+
+
 def apply_masked_prefix(
     conditioning,
     vae,
@@ -234,8 +526,14 @@ def apply_masked_prefix(
     previous_latent=None,
     audio_vae=None,
     previous_audio=None,
+    preserve_audio=True,
 ):
-    """Return conditioning, masked target latent, and repeated trim length."""
+    """Return conditioning, masked target latent, and repeated trim length.
+
+    ``preserve_audio=False`` is used for exact source-track timelines when an
+    off-grid final edit boundary makes the previous raw latent unsafe: only the
+    delivered VIDEO tail is re-encoded and target audio stays fully denoisable.
+    """
     _require_h3_mask_support()
     target_video, target_audio, target_frames = _validate_target_streams(latent)
 
@@ -268,54 +566,61 @@ def apply_masked_prefix(
             "h3_masked_prefix: video prefix consumes the whole target latent."
         )
 
-    if previous_latent is not None:
-        audio_prefix, audio_steps, overhang = _audio_tail_from_latent(
-            previous_latent, frames)
-        audio_source = "previous sampled latent"
-        if abs(overhang) > 1e-9:
-            _LOG.warning(
-                "h3_masked_prefix: predecessor audio grid ends %.3f latent "
-                "steps from its last video frame; the copied %d-step prefix "
-                "is end-aligned. Use 39/90/141/... context frames for an exact "
-                "prefix duration.",
-                overhang, audio_steps,
+    audio_prefix = None
+    audio_steps = 0
+    audio_source = "current source timeline"
+    if preserve_audio:
+        if previous_latent is not None:
+            audio_prefix, audio_steps, overhang = _audio_tail_from_latent(
+                previous_latent, frames)
+            audio_source = "previous sampled latent"
+            if abs(overhang) > 1e-9:
+                _LOG.warning(
+                    "h3_masked_prefix: predecessor audio grid ends %.3f latent "
+                    "steps from its last video frame; the copied %d-step prefix "
+                    "is end-aligned. Use 39/90/141/... context frames for an exact "
+                    "prefix duration.",
+                    overhang, audio_steps,
+                )
+        else:
+            audio_prefix, audio_steps, audio_source = _encode_imported_audio(
+                audio_vae, previous_audio, frames)
+        expected_audio_steps = int(round(frames / float(FPS) * AUDIO_HZ))
+        if audio_steps != expected_audio_steps:
+            raise RuntimeError(
+                "h3_masked_prefix: %d video frames require %d audio steps, got %d."
+                % (frames, expected_audio_steps, audio_steps)
             )
-    else:
-        audio_prefix, audio_steps, audio_source = _encode_imported_audio(
-            audio_vae, previous_audio, frames)
-    expected_audio_steps = int(round(frames / float(FPS) * AUDIO_HZ))
-    if audio_steps != expected_audio_steps:
-        raise RuntimeError(
-            "h3_masked_prefix: %d video frames require %d audio steps, got %d."
-            % (frames, expected_audio_steps, audio_steps)
-        )
-    if audio_steps >= int(target_audio.shape[-1]):
-        raise ValueError(
-            "h3_masked_prefix: audio prefix consumes the whole target latent."
-        )
+        if audio_steps >= int(target_audio.shape[-1]):
+            raise ValueError(
+                "h3_masked_prefix: audio prefix consumes the whole target latent."
+            )
 
     out_video = target_video.clone()
     out_audio = target_audio.clone()
     vp = video_prefix[:1].to(out_video.device, out_video.dtype)
-    ap = audio_prefix[:1].to(out_audio.device, out_audio.dtype)
+    ap = (audio_prefix[:1].to(out_audio.device, out_audio.dtype)
+          if audio_prefix is not None else None)
     if (int(vp.shape[1]) != int(out_video.shape[1])
             or tuple(vp.shape[3:]) != tuple(out_video.shape[3:])):
         raise ValueError(
             "h3_masked_prefix: encoded video prefix shape %s does not match "
             "target %s." % (tuple(vp.shape), tuple(out_video.shape))
         )
-    if tuple(ap.shape[1:3]) != tuple(out_audio.shape[1:3]):
+    if ap is not None and tuple(ap.shape[1:3]) != tuple(out_audio.shape[1:3]):
         raise ValueError(
             "h3_masked_prefix: audio prefix shape %s does not match target %s."
             % (tuple(ap.shape), tuple(out_audio.shape))
         )
     out_video[:, :, :video_steps] = vp
-    out_audio[..., :audio_steps] = ap
+    if ap is not None:
+        out_audio[..., :audio_steps] = ap
 
     video_mask, audio_mask = _existing_mask_streams(
         latent, out_video, out_audio)
     video_mask[:, :, :video_steps] = 0.0
-    audio_mask[..., :audio_steps] = 0.0
+    if ap is not None:
+        audio_mask[..., :audio_steps] = 0.0
 
     import comfy.nested_tensor
 
@@ -326,10 +631,18 @@ def apply_masked_prefix(
         (video_mask, audio_mask))
     out_conditioning = _drop_prefix_guides(conditioning, frames)
 
-    _LOG.info(
-        "h3_masked_prefix: preserved %d target frames = %d video steps / %d "
-        "audio steps (%.3fs, audio from %s); target %d frames at %dx%d; trim %d",
-        frames, video_steps, audio_steps, frames / float(FPS), audio_source,
-        target_frames, width, height, frames,
-    )
+    if preserve_audio:
+        _LOG.info(
+            "h3_masked_prefix: preserved %d target frames = %d video steps / %d "
+            "audio steps (%.3fs, audio from %s); target %d frames at %dx%d; trim %d",
+            frames, video_steps, audio_steps, frames / float(FPS), audio_source,
+            target_frames, width, height, frames,
+        )
+    else:
+        _LOG.info(
+            "h3_masked_prefix: preserved %d target VIDEO frames = %d video "
+            "steps; audio untouched for current source timeline; target %d "
+            "frames at %dx%d; trim %d",
+            frames, video_steps, target_frames, width, height, frames,
+        )
     return out_conditioning, out_latent, frames

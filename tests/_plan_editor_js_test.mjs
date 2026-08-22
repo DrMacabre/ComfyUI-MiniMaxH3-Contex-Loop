@@ -15,6 +15,7 @@ import {
     parsePlanJson,
     planToJson,
     promptValueToText,
+    quantizedH3Delivery,
     randomSceneSeed,
     sceneAudioContextLength,
     sceneContextLength,
@@ -23,7 +24,7 @@ import {
     setSharedPrompt,
     shotLengthMode,
     sharedPrompt,
-    validateH3Length,
+    validateRequestedFrameLength,
 } from "../web/h3_chain_plan_core.mjs";
 
 assert.equal(AUTO_SCENE_COLORS.length, 12);
@@ -58,13 +59,13 @@ assert.deepEqual(exactLengthShot, {length: 209});
 
 const requestedSecondsShot = {duration_seconds: 10};
 setShotLengthMode(requestedSecondsShot, "frames", 15);
-assert.deepEqual(requestedSecondsShot, {length: 243});
+assert.deepEqual(requestedSecondsShot, {length: 240});
 setShotLengthMode(requestedSecondsShot, "seconds", 15);
-assert.deepEqual(requestedSecondsShot, {duration_seconds: 243 / 24});
+assert.deepEqual(requestedSecondsShot, {duration_seconds: 240 / 24});
 
 const inheritedLengthShot = {};
 setShotLengthMode(inheritedLengthShot, "frames", 15);
-assert.deepEqual(inheritedLengthShot, {length: 362});
+assert.deepEqual(inheritedLengthShot, {length: 360});
 setShotLengthMode(inheritedLengthShot, "default", 15);
 assert.deepEqual(inheritedLengthShot, {});
 
@@ -141,8 +142,14 @@ assert.equal(shorthandDefaults.shots[0].steps, 12);
 assert.equal(h3FrameLength(5), 124);
 assert.equal(h3FrameLength(10), 243);
 assert.equal(h3FrameLength(15), 362);
-assert.equal(validateH3Length(260), 260);
-assert.throws(() => validateH3Length(240), /length % 17/);
+assert.equal(validateRequestedFrameLength(260), 260);
+assert.equal(validateRequestedFrameLength(240), 240);
+assert.throws(() => validateRequestedFrameLength(0), /1\.\./);
+assert.deepEqual(quantizedH3Delivery(240, 22), {
+    rawFrames: 277,
+    deliveredFrames: 240,
+    tailTrimFrames: 15,
+});
 
 const timing = calculatePlanTiming(plan, {
     contextLength: 22,
@@ -152,10 +159,10 @@ const timing = calculatePlanTiming(plan, {
     defaultDurationSeconds: 5,
     defaultSteps: 10,
 });
-assert.deepEqual(timing.shots.map((shot) => shot.rawFrames), [362, 260]);
-assert.deepEqual(timing.shots.map((shot) => shot.deliveredFrames), [362, 238]);
-assert.equal(timing.shots[1].generationStartFrame, 340);
-assert.equal(timing.totalFrames, 600);
+assert.deepEqual(timing.shots.map((shot) => shot.rawFrames), [362, 294]);
+assert.deepEqual(timing.shots.map((shot) => shot.deliveredFrames), [360, 260]);
+assert.equal(timing.shots[1].generationStartFrame, 338);
+assert.equal(timing.totalFrames, 620);
 assert.deepEqual(timing.errors, []);
 assert.deepEqual(
     timing.shots.map((shot) => shot.continuationMode),
@@ -264,8 +271,8 @@ const longTiming = calculatePlanTiming(longPlan, {
     defaultDurationSeconds: 15,
     defaultSteps: 20,
 });
-assert.equal(longTiming.totalFrames, 4544);
-assert.equal(longTiming.totalSeconds, 189 + 1 / 3);
+assert.equal(longTiming.totalFrames, 4800);
+assert.equal(longTiming.totalSeconds, 200);
 assert.deepEqual(longTiming.errors, []);
 
 duplicateShot(plan.shots, 0);

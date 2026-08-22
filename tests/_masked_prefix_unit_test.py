@@ -251,7 +251,7 @@ def main():
         "masked_av",
     )
     assert plan["compatibility"]["continuation_mode"] == "masked_av"
-    assert plan["shots"][1]["delivered_frames"] == 153
+    assert plan["shots"][1]["delivered_frames"] == 192
     assert "context=39/masked_av" in plan["summary"]
     assert chain._history_contract(plan, 1)["compatibility"][
         "continuation_mode"] == "masked_av"

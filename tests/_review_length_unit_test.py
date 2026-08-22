@@ -87,13 +87,13 @@ revised = chain._plan_with_review_revision(
     plan, 2, "Longer second scene.", 999, 73)
 
 assert revised["shots"][0]["raw_frames"] == 39
-assert revised["shots"][1]["raw_frames"] == 73
-assert revised["shots"][1]["delivered_frames"] == 51
+assert revised["shots"][1]["raw_frames"] == 107
+assert revised["shots"][1]["delivered_frames"] == 73
 assert revised["shots"][1]["generation_start_frame"] == 17
-assert revised["shots"][2]["generation_start_frame"] == 68
-assert revised["shots"][2]["audio_start_seconds"] == 68 / 24
-assert revised["total_delivered_frames"] == 107
-assert revised["review_overrides"]["2"]["raw_frames"] == 73
+assert revised["shots"][2]["generation_start_frame"] == 90
+assert revised["shots"][2]["audio_start_seconds"] == 90 / 24
+assert revised["total_delivered_frames"] == 129
+assert revised["review_overrides"]["2"]["raw_frames"] == 107
 assert revised["base_plan_hash"] == plan["base_plan_hash"]
 assert chain._history_hash(revised, 1) == chain._history_hash(plan, 1)
 assert chain._history_hash(revised, 2) != chain._history_hash(plan, 2)
@@ -112,14 +112,14 @@ external["shots"][0]["external_context_frames"] = 22
 external_revision = chain._plan_with_review_revision(
     external, 1, "Longer imported-video continuation.", 777, 73)
 assert external_revision["shots"][0]["generation_start_frame"] == -22
-assert external_revision["shots"][0]["delivered_frames"] == 51
-assert external_revision["shots"][1]["generation_start_frame"] == 29
-assert external_revision["total_delivered_frames"] == 68
+assert external_revision["shots"][0]["delivered_frames"] == 73
+assert external_revision["shots"][1]["generation_start_frame"] == 51
+assert external_revision["total_delivered_frames"] == 90
 
 try:
-    chain._plan_with_review_revision(plan, 2, "Too short.", 999, 22)
+    chain._plan_with_review_revision(plan, 2, "Too short.", 999, 21)
 except ValueError as exc:
-    assert "17k+5" in str(exc) or "continuation overlap" in str(exc)
+    assert "next clip" in str(exc)
 else:
     raise AssertionError("Review retry accepted an invalid H3 length")
 
@@ -153,7 +153,7 @@ async def check_route_validation():
     }
     try:
         rejected = await chain._submit_review_decision(
-            RetryRequest(token, 39))
+            RetryRequest(token, 21))
         assert rejected.status == 400
         assert "next clip requires" in json.loads(rejected.text)["error"]
         assert not future.done()

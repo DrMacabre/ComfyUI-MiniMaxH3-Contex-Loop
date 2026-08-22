@@ -69,7 +69,7 @@ def main():
     plan = normalized()
     assert plan["compatibility"]["context_length"] == 90
     assert plan["compatibility"]["video_blend_frames"] == 39
-    assert plan["shots"][1]["delivered_frames"] == 34
+    assert plan["shots"][1]["delivered_frames"] == 124
     assert "blend=39" in plan["summary"]
     try:
         normalized(context=22, blend=23)
