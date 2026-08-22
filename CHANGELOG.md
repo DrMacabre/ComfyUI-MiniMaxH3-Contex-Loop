@@ -2,7 +2,16 @@
 
 Newest first. This file keeps release history out of the onboarding README.
 
-## Unreleased — Deferred checkpoint upscaling
+## v0.4.21 — Exact final timelines and deferred checkpoint upscaling
+
+- Scene lengths now describe exact final delivered frames. H3 raw generation
+  rounds up internally after head context, trims surplus tail frames before
+  persistence and assembly, and advances source audio only by delivered frames.
+- Preserved frame-exact continuation checkpoints, generated-audio alignment,
+  review retries, scheduled references, and cumulative video blending under
+  the exact timeline contract.
+- Fixed chained FFmpeg crossfades losing their final frame on some builds while
+  retaining the CFR normalization introduced for multi-clip assemblies.
 
 - Added a backend-neutral recursive upscale child run: Checkpoint Manager Plan
   passthrough → Upscale Adapter → Current Scene → H3/LTX/custom backend →

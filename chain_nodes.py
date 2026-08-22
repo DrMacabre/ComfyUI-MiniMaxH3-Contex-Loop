@@ -7340,8 +7340,9 @@ def _ffmpeg_blend_video(
         previous = output
         cumulative += int(record["delivered_frames"])
     filters.append(
-        "[%s]fps=%d,trim=end_frame=%d,setpts=N/(%d*TB),format=yuv420p[outv]" %
-        (previous, FPS, int(total_frames), FPS))
+        "[%s]fps=%d,tpad=stop_mode=clone:stop_duration=%.9f,"
+        "trim=end_frame=%d,setpts=N/(%d*TB),format=yuv420p[outv]" %
+        (previous, FPS, 1.0 / float(FPS), int(total_frames), FPS))
     command.extend([
         "-filter_complex", ";".join(filters),
         "-map", "[outv]", "-map_metadata", str(len(records)), "-an",
