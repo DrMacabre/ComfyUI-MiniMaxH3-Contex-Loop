@@ -14,6 +14,7 @@ const H3_NODE_TYPES = new Set([
     "MiniMaxH3LoopTrim",
     "MiniMaxH3ContexLoopSeamProbe",
     "MiniMaxH3ChainPlan",
+    "MiniMaxH3ChainCheckpointManager",
     "MiniMaxH3ChainScenePromptEditor",
     "MiniMaxH3ChainRunManager",
     "MiniMaxH3ReferenceVideoPrepare",

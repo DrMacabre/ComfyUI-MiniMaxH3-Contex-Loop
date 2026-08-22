@@ -162,6 +162,7 @@ const integrationSource = fs.readFileSync(
 assert.match(integrationSource, /MiniMaxH3ContexLoop\.legacyWidgetWidthFix/);
 assert.match(integrationSource, /LegacyWidgetWidthFix/);
 assert.match(integrationSource, /MiniMaxH3ChainScenePromptEditor/);
+assert.match(integrationSource, /MiniMaxH3ChainCheckpointManager/);
 assert.match(integrationSource, /MiniMaxH3ChainRunManager/);
 assert.match(integrationSource, /MiniMaxH3ContexLoopSeamProbe/);
 assert.match(integrationSource, /afterConfigureGraph/);
@@ -263,5 +264,25 @@ assert.equal(
 integrationHost.onRemoved();
 integrationExisting.widgets[0].width = 450;
 assert.equal(integrationExisting.widgets[0].width, 450);
+
+class StandaloneCheckpointManager extends IntegrationNode {}
+extension.beforeRegisterNodeDef(StandaloneCheckpointManager, {
+    name: "MiniMaxH3ChainCheckpointManager",
+});
+const checkpointManager = new StandaloneCheckpointManager(
+    "MiniMaxH3ChainCheckpointManager",
+);
+checkpointManager.graph = integrationGraph;
+integrationGraph._nodes.push(checkpointManager);
+checkpointManager.onAdded();
+extension.nodeCreated(checkpointManager);
+assert.equal(
+    integrationExisting.widgets[0].width,
+    undefined,
+    "a standalone Checkpoint Manager activates the embedded repair",
+);
+checkpointManager.onRemoved();
+integrationExisting.widgets[0].width = 455;
+assert.equal(integrationExisting.widgets[0].width, 455);
 
 console.log("H3 embedded legacy widget-width repair: lifecycle, all-node coverage, Vue passthrough, and standalone coexistence pass");
