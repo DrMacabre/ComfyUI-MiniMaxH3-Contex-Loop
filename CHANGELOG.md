@@ -4,6 +4,11 @@ Newest first. This file keeps release history out of the onboarding README.
 
 ## Unreleased — Deferred checkpoint upscaling
 
+- Fixed deferred H3 conditioning sync enlarging `max` picture-reference
+  latents with the output canvas. Max refs now retain their Core H3 capped
+  geometry, while `match` refs remain canvas-aware and cache-v2 masters that
+  were already rebuilt at pass-2 size are protected from double scaling.
+
 - Added a guarded compatibility backport for ComfyUI PR #15808. Older core
   builds now register MiniMax H3's seven released dialogue, cutoff, lyrics,
   and caption tokens on the MiniMax-only Qwen tokenizer; updated ComfyUI

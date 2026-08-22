@@ -266,6 +266,10 @@ def main():
         assert torch.all(cached_refs[0]["latent"] == 0.625)
         assert cached_conditioning[0][0][1][
             "_h3_upscale_motion_ref_mode"] == "exclude_video_keep_audio"
+        assert cached_conditioning[0][0][1][
+            "_h3_upscale_ref_image_size"] == "match"
+        assert cached_conditioning[0][0][1][
+            "_h3_upscale_picture_refs_target_sized"] is False
         override_conditioning = (
             upscale.MiniMaxH3ChainUpscaleReferenceConditioning().condition(
                 cached_upscale_state, FakeClip(), "error",
@@ -288,6 +292,15 @@ def main():
         assert tuple(target_presentation[0]["data"].shape[1:3]) == (32, 96)
         assert "pass-2 64x64 policy=match" in target_conditioning[3]
         assert "1 source masters" in target_conditioning[3]
+        assert target_conditioning[0][0][1][
+            "_h3_upscale_ref_image_size"] == "match"
+        assert target_conditioning[0][0][1][
+            "_h3_upscale_picture_refs_target_sized"] is True
+        synced_target = upscale.H3ConditioningSyncFromLatents().sync(
+            {"samples": torch.zeros((1, 24, 2, 2, 2))},
+            target_video, target_conditioning[0], "bilinear")[0][0][1]
+        assert tuple(synced_target["minimax_refs"][0][
+            "latent"].shape[-2:]) == (2, 6)
 
         legacy_cache = dict(chain._load_reference_cache_descriptor(
             migrated_cache))
@@ -314,6 +327,16 @@ def main():
         max_refs = max_conditioning[0][1]["minimax_refs"]
         assert max_detail["rebuilt_images"] == 0
         assert tuple(max_refs[0]["latent"].shape[-2:]) == (2, 2)
+        marked_max = upscale._mark_h3_upscale_motion_policy(
+            max_conditioning, "exclude_video_keep_audio", "max")
+        synced_max = upscale.H3ConditioningSyncFromLatents().sync(
+            {"samples": torch.zeros((1, 24, 2, 2, 2))},
+            {"samples": torch.zeros((1, 24, 2, 4, 6))},
+            marked_max, "bilinear")[0][0][1]
+        assert tuple(synced_max["minimax_refs"][0][
+            "latent"].shape[-2:]) == (2, 2)
+        assert synced_max["minimax_refs"][0]["latent_h"] == 2
+        assert synced_max["minimax_refs"][0]["latent_w"] == 2
 
         sync_positive = [[torch.zeros((1, 1, 4)), {
             "minimax_refs": [{
@@ -369,6 +392,19 @@ def main():
         assert synced_meta["unchanged"] == "metadata"
         assert tuple(sync_positive[0][1]["minimax_refs"][0][
             "latent"].shape) == (1, 24, 1, 2, 3)
+
+        max_sync_positive = upscale._mark_h3_upscale_motion_policy(
+            sync_positive, "exclude_video_keep_audio", "max")
+        max_synced_meta = upscale.H3ConditioningSyncFromLatents().sync(
+            {"samples": torch.zeros((1, 24, 2, 2, 2))},
+            {"samples": torch.zeros((1, 24, 2, 4, 6))},
+            max_sync_positive, "bilinear")[0][0][1]
+        assert tuple(max_synced_meta["minimax_refs"][0][
+            "latent"].shape) == (1, 24, 1, 2, 3)
+        assert max_synced_meta["minimax_refs"][0]["latent_h"] == 2
+        assert max_synced_meta["minimax_refs"][0]["latent_w"] == 3
+        assert tuple(max_synced_meta["minimax_keyframes"][0][
+            "latent"].shape) == (1, 24, 1, 4, 6)
 
         filtered_presentation, filtered_blocks = (
             chain._h3_motion_reference_policy([{

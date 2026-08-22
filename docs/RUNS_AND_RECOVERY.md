@@ -250,9 +250,12 @@ Scheduled Ref2VA create that cache automatically: native H3 reference latents
 remain in safetensors while compact Qwen presentation frames allow the saved
 compiled prompt to be tokenized again. **H3 Conditioning Sync From Latents**
 then compares the original scene video latent with the actual LBH output. It
-applies the exact horizontal and vertical scale to picture `minimax_refs` and
-`minimax_keyframes`, updates reference H/W metadata, and deliberately leaves
-text, temporal positions, and audio conditioning untouched. Upscale Reference
+applies the exact horizontal and vertical scale to `match` picture
+`minimax_refs` and `minimax_keyframes`, while preserving `max` picture refs at
+their Core H3 capped geometry. Pictures already rebuilt from a cache-v2 RGB
+master at the pass-2 canvas are not scaled twice. It updates changed reference
+H/W metadata and deliberately leaves text, temporal positions, and audio
+conditioning untouched. Upscale Reference
 Conditioning's default `exclude_video_keep_audio` policy removes both the Qwen
 motion-video presentation and native motion-video latent because the pass-2
 source latent already contains the generated motion; audio paired with a video

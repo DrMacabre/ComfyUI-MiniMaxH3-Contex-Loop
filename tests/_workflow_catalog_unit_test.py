@@ -874,7 +874,8 @@ def validate_deferred_h3_upscale(path):
     assert "selected_manifest cable is the complete parent-chain contract" in notes
     assert "No Plan, Source Timeline, source audio, external context" in notes
     assert "H3 Conditioning Sync From Latents" in notes
-    assert "picture minimax_refs and minimax_keyframes" in notes
+    assert "resizes match picture minimax_refs plus minimax_keyframes" in notes
+    assert "keeping max picture refs at their cached geometry" in notes
     assert "excludes both the Qwen motion-video presentation" in notes
     assert "prompt override" in notes
     assert "12-step pass-2 prefix" in notes
