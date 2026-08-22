@@ -4,6 +4,15 @@ Newest first. This file keeps release history out of the onboarding README.
 
 ## Unreleased — Deferred checkpoint upscaling
 
+- Ported the strict authoring layer from the standalone H3 Prompt IDE into
+  both scene prompt editors. They now share Auto/T2VA/I2VA/FL2VA/L2VA/Ref2VA
+  schema selection, ordered-section diagnostics and repair, exact keyframe
+  alignment helpers, live word/character counts, and mode-aware completion.
+  Completion and rich presentation now also understand 12 shot markers,
+  multilingual dialogue markers, stable speaker IDs, `<scenetrans>`, and
+  `<cutoff>`; the Rich Scene Prompt Editor gained the same Plain/Rich source
+  toggle as the focused editor.
+
 - Reference insertion from the Scene Prompt Editor's top menu now preserves
   the last rich-text or plain-text selection, so a chosen reference replaces
   the selection or appears at the requested caret instead of jumping to the

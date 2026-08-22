@@ -51,14 +51,26 @@ second prompt copy.
 - Typing `#` offers valid dedicated Semantic Picture Anchors (and legacy
   Tagged Picture compatibility anchors) only.
 - Typing `<` offers H3 subjects, dialogue tags, and available native reference
-  labels. Typing `[` filters shot markers and summary-intent combinations; for
-  example, `[re` lists the supported reference-generation combinations.
+  labels, plus `<scenetrans>` and `<cutoff>` dialogue-flow markers. Typing
+  `[` filters 12 shot markers, multilingual dialogue markers, and canonical
+  summary-intent combinations; for example, `[re` lists the supported
+  reference-generation combinations. Typing `(S` offers stable speaker IDs.
 - Typing the start of an H3 section name at the beginning of a line completes
   `subject_definitions:`, `integrated_multimodal_description:`, and the other
   standard sections. `Ctrl+Space` (`Cmd+Space` on macOS) opens the full H3
   completion catalog. Use arrows to select and `Enter` or `Tab` to insert.
 - **@ Reference** remains available for browsing connected media previews.
 - **Dialogue** wraps a selection in `<d>` tags.
+- Choose **Auto schema**, T2VA, I2VA, FL2VA, L2VA, or Ref2VA, then open
+  **Sections** to inspect the exact required order, jump to a category, insert
+  a missing category, or normalize the mode's keyframe-alignment line.
+  Diagnostics cover section spelling/order, shot numbering and timestamps,
+  Ref2VA task directives and definitions, dialogue/language/flow balance, and
+  connected native references. FL2VA/L2VA expose duration and final-shot
+  controls for their exact alignment sentence.
+- Live word/character counts stay in the footer. Both dedicated editors can
+  switch between the ordinary prompt source and rich H3 token presentation;
+  this changes presentation only, never Plan text.
 - `#picture[2.50s]` adds a scene-local Qwen semantic checkpoint when the
   picture is supplied through Semantic Anchor Bundle. With the Bundle set to
   `picture_storyboard`, it instead becomes a separate Qwen-only Picture plus
@@ -71,6 +83,13 @@ The reference tray discovers downstream Scheduled Ref2VA, core Ref2VA, and core
 Image to Video nodes without introducing an execution socket or graph cycle.
 Hovering a loader-backed reference previews its image, video, or audio; computed
 tensors remain usable even when no browser-playable source file can be found.
+
+The schema inspector and completion catalog are shared by the focused Scene
+Prompt Editor and the optimizer-enabled Rich Scene Prompt Editor. They are
+backported from the standalone
+[H3 Prompt IDE](https://github.com/ethanfel/ComfyUI-H3-Prompt-IDE), while these
+nodes retain Motion Context Plan synchronization, revisions, `@tags`,
+semantic anchors, and optimizer integration.
 
 ## Prompt revisions
 

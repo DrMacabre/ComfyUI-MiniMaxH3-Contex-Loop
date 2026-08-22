@@ -39,6 +39,7 @@ import {
     tokenizeRichPrompt,
 } from "./h3_rich_prompt_editor_core.mjs?v=0.6.13";
 import {createPromptCompletionController} from "./h3_prompt_completion_core.mjs?v=0.6.13";
+import {createH3PromptSchemaController} from "./h3_prompt_schema_ui.mjs?v=0.6.13";
 import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.6.13";
 
 const {publishCompanionScene, rebaseScenePrompt} = promptCompanionSync;
@@ -71,6 +72,9 @@ const ICONS = Object.freeze({
     subject: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M5 21c.8-4.2 3.1-6.3 7-6.3s6.2 2.1 7 6.3"/></svg>',
     dialogue: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h14v11H9l-4 3z"/><path d="M8 9h8M8 12h6"/></svg>',
     reference: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.1.1l2-2a5 5 0 0 0-7.1-7.1l-1.1 1.1"/><path d="M14 11a5 5 0 0 0-7.1-.1l-2 2A5 5 0 0 0 12 20l1.1-1.1"/></svg>',
+    section: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h14M5 12h14M5 19h14"/></svg>',
+    flow: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h11M12 4l3 3-3 3M20 17H9M12 14l-3 3 3 3"/></svg>',
+    speaker: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10v4h4l5 4V6L8 10z"/><path d="M16 9c1.5 1.5 1.5 4.5 0 6"/></svg>',
 });
 
 function injectStyles() {
@@ -93,6 +97,9 @@ function injectStyles() {
             --h3sp-token-audio: color-mix(in srgb, var(--h3sp-text) 42%, #d47700);
             --h3sp-token-subject: color-mix(in srgb, var(--h3sp-text) 42%, #26934a);
             --h3sp-token-dialogue: color-mix(in srgb, var(--h3sp-text) 42%, #cf3976);
+            --h3sp-token-section: color-mix(in srgb, var(--h3sp-text) 38%, #5f87ff);
+            --h3sp-token-flow: color-mix(in srgb, var(--h3sp-text) 42%, #00a99d);
+            --h3sp-token-speaker: color-mix(in srgb, var(--h3sp-text) 42%, #d268b7);
             --h3sp-token-danger: color-mix(in srgb, var(--h3sp-text) 42%, #d44747);
             --h3sp-font-size: 18px;
             box-sizing:border-box; width:100%; height:100%; min-height:420px;
@@ -149,6 +156,11 @@ function injectStyles() {
         .h3sp-token-audio { color:var(--h3sp-token-audio); }
         .h3sp-token-subject { color:var(--h3sp-token-subject); }
         .h3sp-token-dialogue { color:var(--h3sp-token-dialogue); }
+        .h3sp-token-section { display:inline; margin:0; padding:0; border:0;
+            border-radius:0; color:var(--h3sp-token-section); background:none;
+            font-weight:650; cursor:text; user-select:text; }
+        .h3sp-token-flow { color:var(--h3sp-token-flow); }
+        .h3sp-token-speaker { color:var(--h3sp-token-speaker); }
         .h3sp-token-unknown, .h3sp-token-inactive { color:var(--h3sp-token-danger);
             border-style:dashed; }
         .h3sp-token-icon { width:16px; height:16px; display:inline-flex;
@@ -701,6 +713,7 @@ function mount(node) {
         referenceMode: null,
         referenceSyntax: new Map(),
         completion: null,
+        schema: null,
         promptTextarea: null,
         richEditor: null,
         promptSelection: null,
@@ -1982,6 +1995,11 @@ function mount(node) {
         token.dataset.token = part.text;
         if (part.unresolved) token.classList.add("h3sp-token-unknown");
         if (part.record && !part.record.active) token.classList.add("h3sp-token-inactive");
+        if (part.type === "section") {
+            token.append(element("span", "h3sp-token-label", part.text));
+            token.title = `H3 section · ${part.section}`;
+            return token;
+        }
         const mediaKind = kind === "picture" ? "image" : kind;
         const media = part.record?.source ? findMediaPreview(part.record.source, mediaKind) : null;
         if (kind === "picture" && media?.url) {
@@ -2338,6 +2356,7 @@ function mount(node) {
         hidePopover(true);
         state.completion?.destroy();
         state.completion = null;
+        state.schema = null;
         state.active = Math.max(0, Math.min(state.active, state.plan.shots.length - 1));
         root.style.setProperty("--h3sp-font-size", `${state.fontSize}px`);
         assistant.host = null;
@@ -2458,7 +2477,7 @@ function mount(node) {
             dialogueButton,
             presentationButton,
             element("span", "h3sp-hint",
-                "Alt+←/→ scenes · type @ # < [ · Ctrl/Cmd+Space for all"),
+                "Alt+←/→ scenes · type @ # < [ ( · Ctrl/Cmd+Space for all"),
         );
         const footer = element("div", "h3sp-footer");
         const identity = element(
@@ -2487,6 +2506,7 @@ function mount(node) {
             if (target === textarea) textarea.setSelectionRange(text.length, text.length);
             target.focus();
             refreshAssistant();
+            state.schema?.refresh();
             return true;
         };
         const handlePromptUndo = (event, target) => {
@@ -2507,6 +2527,7 @@ function mount(node) {
             if (document.activeElement !== richEditor) renderRichEditorText(textarea.value);
             refreshAssistant();
             state.completion?.refresh();
+            state.schema?.refresh();
         });
         for (const eventName of ["focus", "pointerup", "keyup", "select"]) {
             textarea.addEventListener(eventName, rememberPromptSelection);
@@ -2568,6 +2589,74 @@ function mount(node) {
             renderRichEditorText(editorPlainText(richEditor));
         });
 
+        const replacePromptText = (result, message = "H3 edit saved to Plan") => {
+            const text = String(result.text ?? "");
+            const refreshed = availableReferenceRecords(
+                node, state.active + 1, {
+                    includeInactive:true,
+                    prompt:[sharedPrompt(state.plan).text.trim(), text.trim()]
+                        .filter(Boolean).join("\n\n"),
+                },
+            );
+            state.records = refreshed.records;
+            state.referenceMode = refreshed.mode;
+            textarea.value = text;
+            if (state.decorated) {
+                state.richInputType = "insertReplacementText";
+                try {
+                    textarea.dispatchEvent(new Event("input", {bubbles:true}));
+                } finally {
+                    state.richInputType = "";
+                }
+                renderRichEditorText(text, result.caret, result);
+                richEditor.focus();
+            } else {
+                textarea.setSelectionRange(
+                    result.selectionStart ?? result.caret,
+                    result.selectionEnd ?? result.caret,
+                );
+                textarea.dispatchEvent(new InputEvent("input", {
+                    bubbles:true,
+                    inputType:"insertReplacementText",
+                }));
+                textarea.focus();
+            }
+            status.textContent = message;
+        };
+
+        state.schema = createH3PromptSchemaController({
+            node,
+            propertyPrefix:"h3_scene_prompt_editor",
+            getText:() => state.decorated
+                ? editorPlainText(richEditor) : textarea.value,
+            replaceText:replacePromptText,
+            focusAt:(caret) => {
+                const position = Math.max(0, Math.min(textarea.value.length, Number(caret) || 0));
+                if (state.decorated) {
+                    renderRichEditorText(textarea.value, position);
+                    richEditor.focus();
+                } else {
+                    textarea.focus();
+                    textarea.setSelectionRange(position, position);
+                }
+            },
+            getRecords:() => state.records,
+            defaultDuration:Number(shot.duration_seconds)
+                || Number(shot.length) / 24 || 6,
+            defaultMode:["tagged", "scheduled", "native"].includes(state.referenceMode)
+                ? "ref2va"
+                : state.referenceMode === "native_keyframes"
+                  ? state.records.filter((record) => record.active && record.kind === "picture").length >= 2
+                    ? "fl2va" : "i2va"
+                  : "auto",
+            scopeKey:shotId,
+            markDirty:dirty,
+        });
+        if (state.schema) {
+            tools.prepend(state.schema.modeSelect, state.schema.toggle);
+            identity.append(document.createTextNode(" · "), state.schema.counts);
+        }
+
         const activeInput = state.decorated ? richEditor : textarea;
         state.completion = createPromptCompletionController({
             input:activeInput,
@@ -2578,40 +2667,13 @@ function mount(node) {
                 ? selectionTextOffset(richEditor) : textarea.selectionStart,
             getRecords:() => state.records,
             getReferenceMode:() => state.referenceMode,
-            replaceText:(result) => {
-                const text = result.text;
-                const refreshed = availableReferenceRecords(
-                    node, state.active + 1, {
-                        includeInactive:true,
-                        prompt:[sharedPrompt(state.plan).text.trim(), text.trim()]
-                            .filter(Boolean).join("\n\n"),
-                    },
-                );
-                state.records = refreshed.records;
-                state.referenceMode = refreshed.mode;
-                textarea.value = text;
-                if (state.decorated) {
-                    state.richInputType = "insertReplacementText";
-                    try {
-                        textarea.dispatchEvent(new Event("input", {bubbles:true}));
-                    } finally {
-                        state.richInputType = "";
-                    }
-                    renderRichEditorText(text, result.caret, result);
-                } else {
-                    textarea.setSelectionRange(
-                        result.selectionStart ?? result.caret,
-                        result.selectionEnd ?? result.caret,
-                    );
-                    textarea.dispatchEvent(new InputEvent("input", {
-                        bubbles:true,
-                        inputType:"insertReplacementText",
-                    }));
-                }
-            },
+            getMode:() => state.schema?.getMode() ?? "auto",
+            replaceText:(result) => replacePromptText(result, "Completion saved to Plan"),
         });
 
-        root.append(head, nav, tools, refs, textarea, editorShell);
+        root.append(head, nav, tools);
+        if (state.schema) root.append(state.schema.panel);
+        root.append(refs, textarea, editorShell);
         if (PROMPT_ASSISTANT_ENABLED) {
             const assistantHost = element("div", "h3sp-assist");
             assistant.host = assistantHost;
@@ -2754,6 +2816,7 @@ function mount(node) {
                     String(state.plan.shots[index].id || `clip_${String(index + 1).padStart(4, "0")}`),
                     text);
                 refreshAssistant();
+                state.schema?.refresh();
             }
         }
         state.lastValue = String(state.planWidget?.value ?? state.lastValue);
