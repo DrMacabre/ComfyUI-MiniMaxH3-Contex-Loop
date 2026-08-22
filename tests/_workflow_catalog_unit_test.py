@@ -806,7 +806,10 @@ def validate_deferred_h3_upscale(path):
         workflow, "MiniMaxH3ChainUpscaleReferenceConditioning")
     assert socket(current["outputs"], "state")["links"][-1] == socket(
         conditioner["inputs"], "state")["link"]
-    assert conditioner["widgets_values"] == ["text_only"]
+    assert conditioner["widgets_values"][:2] == [
+        "text_only", "exclude_video_keep_audio"]
+    assert conditioner["widgets_values"][2].startswith(
+        "Preserve the existing video's identity")
     assert socket(conditioner["outputs"], "positive")["links"] == [
         socket(sync["inputs"], "positive")["link"]]
     assert socket(conditioner["inputs"], "target_video_latent")["link"] is None
@@ -814,7 +817,8 @@ def validate_deferred_h3_upscale(path):
     assert socket(learned["outputs"], "latent")["links"] == [
         socket(prepare["inputs"], "upscaled_video")["link"],
         socket(sync["inputs"], "upscaled_latent")["link"]]
-    assert sync["widgets_values"] == ["bilinear"]
+    assert sync["widgets_values"] == [
+        "bilinear", "conditioning_policy"]
     assert scheduler["widgets_values"] == ["simple", 2, 0.24]
     assert learned["widgets_values"] == [
         "minimax_h3_latent_upscaler_3d_fp16.safetensors", "megapixels",
@@ -843,7 +847,9 @@ def validate_deferred_h3_upscale(path):
     assert "selected_manifest cable is the complete parent-chain contract" in notes
     assert "No Plan, Source Timeline, source audio, external context" in notes
     assert "H3 Conditioning Sync From Latents" in notes
-    assert "minimax_refs and minimax_keyframes" in notes
+    assert "picture minimax_refs and minimax_keyframes" in notes
+    assert "excludes both the Qwen motion-video presentation" in notes
+    assert "prompt override" in notes
     assert "save_latent is OFF" in notes
     assert "Comfyui_Minimax_h3_latent_Upscaler" in notes
     h3_video_vae = node(workflow, "VAELoader")

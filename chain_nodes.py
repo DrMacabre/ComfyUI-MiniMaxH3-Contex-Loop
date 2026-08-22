@@ -3550,9 +3550,57 @@ def _reference_payload_from_cache(
     return presentation, blocks, source_images
 
 
+_H3_MOTION_REFERENCE_MODES = frozenset((
+    "exclude_video_keep_audio", "keep_video_native", "resize_video"))
+
+
+def _h3_motion_reference_policy(
+        presentation: list[dict[str, Any]], blocks: list[dict[str, Any]],
+        mode: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Apply one upscale motion-ref policy to Qwen items and H3 blocks."""
+    mode = str(mode)
+    if mode not in _H3_MOTION_REFERENCE_MODES:
+        raise ValueError("Unknown H3 motion reference mode %r." % mode)
+    copied_presentation = [dict(item) for item in presentation]
+    copied_blocks = [dict(block) for block in blocks]
+    if mode != "exclude_video_keep_audio":
+        return copied_presentation, copied_blocks
+
+    # Native motion presentations precede any Qwen-only semantic video
+    # anchors. Remove exactly one video item per native H3 video block.
+    native_video_count = sum(
+        block.get("kind") in ("video", "video_audio")
+        for block in copied_blocks)
+    filtered_presentation = []
+    for item in copied_presentation:
+        if native_video_count and item.get("type") == "video":
+            native_video_count -= 1
+            continue
+        filtered_presentation.append(item)
+
+    filtered_blocks = []
+    for block in copied_blocks:
+        kind = block.get("kind")
+        if kind not in ("video", "video_audio"):
+            filtered_blocks.append(block)
+            continue
+        audio = block.get("audio_latent")
+        ticks = int(block.get("ref_audio_t") or 0)
+        if kind != "video_audio" or audio is None or ticks <= 0:
+            continue
+        for key in ("latent", "latent_t", "latent_h", "latent_w"):
+            block.pop(key, None)
+        block["kind"] = "audio"
+        block["ref_audio_t"] = ticks
+        filtered_blocks.append(block)
+    return filtered_presentation, filtered_blocks
+
+
 def _conditioning_from_reference_cache_target(
         clip: Any, vae: Any, metadata: dict[str, Any],
-        target_width: int, target_height: int) -> tuple[Any, dict[str, Any]]:
+        target_width: int, target_height: int,
+        prompt_override: str | None = None,
+        motion_ref_mode: str = "resize_video") -> tuple[Any, dict[str, Any]]:
     """Rebuild cached Ref2VA conditioning for an actual pass-2 canvas.
 
     Only native picture references using Core H3's ``match`` policy are tied
@@ -3569,6 +3617,8 @@ def _conditioning_from_reference_cache_target(
             "Pass-2 target conditioning requires the MiniMax H3 video VAE.")
     presentation, blocks, source_images = _reference_payload_from_cache(
         metadata)
+    presentation, blocks = _h3_motion_reference_policy(
+        presentation, blocks, motion_ref_mode)
     policy = str(metadata.get("ref_image_size") or "match")
     rebuilt = 0
     master_rebuilds = 0
@@ -3632,7 +3682,8 @@ def _conditioning_from_reference_cache_target(
         raise ValueError(
             "Cached H3 ref_image_size must be match or max, got %r." % policy)
 
-    prompt = str(metadata.get("compiled_prompt") or "")
+    prompt = (str(metadata.get("compiled_prompt") or "")
+              if prompt_override is None else str(prompt_override))
     clip_presentation = []
     for item in presentation:
         public = {"type": item["type"]}
@@ -3663,10 +3714,16 @@ def _conditioning_from_reference_cache_target(
 
 
 def _conditioning_from_reference_cache(clip: Any,
-                                       metadata: dict[str, Any]) -> Any:
+                                       metadata: dict[str, Any],
+                                       prompt_override: str | None = None,
+                                       motion_ref_mode: str = "resize_video"
+                                       ) -> Any:
     presentation, blocks, _source_images = _reference_payload_from_cache(
         metadata)
-    prompt = str(metadata.get("compiled_prompt") or "")
+    presentation, blocks = _h3_motion_reference_policy(
+        presentation, blocks, motion_ref_mode)
+    prompt = (str(metadata.get("compiled_prompt") or "")
+              if prompt_override is None else str(prompt_override))
     clip_presentation = []
     for item in presentation:
         public = {"type": item["type"]}

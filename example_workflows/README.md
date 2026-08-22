@@ -89,10 +89,19 @@ the graph.
 Pass-2 conditioning follows the latent-sync method shared by the H3 community.
 **Upscale Reference Conditioning** restores the original scene conditioning
 from cache. **H3 Conditioning Sync From Latents** compares the source video
-latent with LBH's actual output, applies the exact X/Y scale to visual
+latent with LBH's actual output, applies the exact X/Y scale to picture
 `minimax_refs` and `minimax_keyframes`, synchronizes each reference's H/W
-metadata, and leaves text, temporal positions, and audio latents unchanged. A
-new Guider is built from that returned conditioning for sampler 2.
+metadata, and leaves text, temporal positions, and audio latents unchanged.
+Upscale Reference Conditioning's default `exclude_video_keep_audio` policy
+removes both the Qwen motion-video presentation and native motion-video latent—the
+source latent already supplies motion—while retaining paired reference audio.
+Use `keep_video_native` or `resize_video` only for controlled comparisons; the
+sync node follows that policy automatically. A new Guider is built from the
+returned conditioning for sampler 2. Leave the conditioner's prompt override
+blank to reuse the exact compiled scene prompt, or provide an
+appearance/detail-only prompt to avoid repeating motion/camera instructions
+during pass 2. The bundled workflow supplies a neutral preservation/detail
+override by default; clear it to compare against the original compiled prompt.
 
 The included Comfy Kitchen attention override is bypassed intentionally. At
 large target canvases, Sage prequantized attention can exceed its int32 tensor-stride

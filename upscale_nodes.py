@@ -31,6 +31,10 @@ UPSCALE_MANIFEST_TYPE = "H3_CHAIN_UPSCALE_MANIFEST"
 UPSCALE_BACKENDS = ("h3_latent", "ltx_2_5", "custom")
 CONDITIONING_SYNC_METHODS = (
     "nearest", "nearest-exact", "bilinear", "bicubic")
+MOTION_REFERENCE_MODES = (
+    "exclude_video_keep_audio", "keep_video_native", "resize_video")
+CONDITIONING_SYNC_MOTION_MODES = (
+    "conditioning_policy",) + MOTION_REFERENCE_MODES
 
 
 def _profile_dir(run_name: str, profile: str) -> str:
@@ -226,8 +230,9 @@ def _sync_visual_latent(value: Any, scale_x: float, scale_y: float,
 
 
 def _sync_h3_conditioning(conditioning: Any, scale_x: float,
-                          scale_y: float, method: str) -> Any:
-    """Clone CONDITIONING and resize its H3 visual refs and keyframes."""
+                          scale_y: float, method: str,
+                          motion_ref_mode: str) -> Any:
+    """Clone CONDITIONING and apply the pass-2 reference policy."""
     if conditioning is None:
         return None
     output = []
@@ -240,12 +245,24 @@ def _sync_h3_conditioning(conditioning: Any, scale_x: float,
             output.append(entry)
             continue
         synced = metadata.copy()
+        effective_motion_mode = motion_ref_mode
+        if motion_ref_mode == "conditioning_policy":
+            effective_motion_mode = str(metadata.get(
+                "_h3_upscale_motion_ref_mode") or
+                "exclude_video_keep_audio")
         refs = metadata.get("minimax_refs")
         if refs is not None:
+            _unused, policy_refs = chain._h3_motion_reference_policy(
+                [], refs, effective_motion_mode)
             synced_refs = []
-            for block in refs:
+            for block in policy_refs:
                 copied = dict(block)
-                if copied.get("kind") != "audio" and copied.get("latent") is not None:
+                kind = copied.get("kind")
+                if kind in ("video", "video_audio"):
+                    if effective_motion_mode == "keep_video_native":
+                        synced_refs.append(copied)
+                        continue
+                if kind != "audio" and copied.get("latent") is not None:
                     latent = _sync_visual_latent(
                         copied["latent"], scale_x, scale_y, method)
                     copied["latent"] = latent
@@ -266,6 +283,20 @@ def _sync_h3_conditioning(conditioning: Any, scale_x: float,
                 synced_keyframes.append(copied)
             synced["minimax_keyframes"] = synced_keyframes
         output.append([embedding, synced])
+    return output
+
+
+def _mark_h3_upscale_motion_policy(conditioning: Any, mode: str) -> Any:
+    """Attach the cache/Qwen motion policy for the later sync node."""
+    output = []
+    for entry in conditioning:
+        if (not isinstance(entry, (list, tuple)) or len(entry) < 2
+                or not isinstance(entry[1], dict)):
+            output.append(entry)
+            continue
+        metadata = entry[1].copy()
+        metadata["_h3_upscale_motion_ref_mode"] = str(mode)
+        output.append([entry[0], metadata])
     return output
 
 
@@ -588,6 +619,11 @@ class MiniMaxH3ChainUpscaleReferenceConditioning:
                     "tooltip": "text_only keeps non-reference and older runs "
                                "usable when no matching cache exists. error "
                                "requires the exact automatic Ref2VA cache."}),
+                "motion_ref_mode": (MOTION_REFERENCE_MODES, {
+                    "default": "exclude_video_keep_audio",
+                    "tooltip": "Pass-2 motion-reference policy. The default "
+                               "removes both native video-ref latents and their "
+                               "Qwen presentation, while keeping paired audio."}),
             },
             "optional": {
                 "target_video_latent": ("LATENT", {
@@ -599,6 +635,12 @@ class MiniMaxH3ChainUpscaleReferenceConditioning:
                     "tooltip": "Original MiniMax H3 video VAE used to "
                                "re-encode match-sized picture references at "
                                "the pass-2 canvas. Never use the audio VAE."}),
+                "prompt_override": ("STRING", {
+                    "default": "", "multiline": True,
+                    "tooltip": "Optional pass-2 text prompt. Blank reuses the "
+                               "exact compiled generation prompt. Use a concise "
+                               "appearance/detail prompt to avoid repeating "
+                               "source motion or camera instructions."}),
             },
         }
 
@@ -608,8 +650,9 @@ class MiniMaxH3ChainUpscaleReferenceConditioning:
     OUTPUT_TOOLTIPS = (
         "Pass-2 H3 conditioning rebuilt from cached Ref2VA media. With a "
         "target latent and video VAE, match pictures are re-encoded at the "
-        "actual pass-2 canvas while max/video/audio refs remain native.",
-        "Exact cached prompt after @tag compilation, or the saved source prompt.",
+        "actual pass-2 canvas. Motion video follows motion_ref_mode.",
+        "Prompt actually encoded for pass 2: custom override, exact cached "
+        "compiled prompt, or saved source prompt.",
         "True when native reference blocks and Qwen presentation were restored.",
         "Scene-local cache lookup result and fingerprint summary.",
     )
@@ -618,11 +661,14 @@ class MiniMaxH3ChainUpscaleReferenceConditioning:
     DESCRIPTION = (
         "Automatically restore a scene-local H3 reference payload and, when "
         "given the upscaled video latent plus H3 video VAE, rebuild all "
-        "resolution-dependent pass-2 picture conditioning. No Plan, registry, "
-        "source audio, or original reference wires are required.")
+        "resolution-dependent pass-2 picture conditioning. The motion policy "
+        "filters both Qwen presentation and native H3 reference blocks. No "
+        "Plan, registry, source audio, or original reference wires are required.")
 
     def condition(self, state, clip, missing_cache="text_only",
-                  target_video_latent=None, video_vae=None):
+                  target_video_latent=None, video_vae=None,
+                  prompt_override="",
+                  motion_ref_mode="exclude_video_keep_audio"):
         if (target_video_latent is None) != (video_vae is None):
             raise ValueError(
                 "Target-resolution H3 conditioning needs both "
@@ -635,6 +681,10 @@ class MiniMaxH3ChainUpscaleReferenceConditioning:
         scene = int(state["index"])
         scene_count = len(manifest["segments"])
         prompt = str(source.get("prompt") or "")
+        custom_prompt = str(prompt_override or "").strip()
+        if motion_ref_mode not in MOTION_REFERENCE_MODES:
+            raise ValueError(
+                "Unknown H3 motion reference mode %r." % motion_ref_mode)
         width = int(compatibility.get("width", 0))
         height = int(compatibility.get("height", 0))
         length = int(source.get("raw_frames", 0))
@@ -652,11 +702,15 @@ class MiniMaxH3ChainUpscaleReferenceConditioning:
                     target_video_latent)
                 conditioning, target_detail = (
                     chain._conditioning_from_reference_cache_target(
-                        clip, video_vae, cached, target_width, target_height))
+                        clip, video_vae, cached, target_width, target_height,
+                        custom_prompt or None, motion_ref_mode))
             else:
                 conditioning = chain._conditioning_from_reference_cache(
-                    clip, cached)
-            compiled = str(cached.get("compiled_prompt") or prompt)
+                    clip, cached, custom_prompt or None, motion_ref_mode)
+            conditioning = _mark_h3_upscale_motion_policy(
+                conditioning, motion_ref_mode)
+            compiled = (custom_prompt or
+                        str(cached.get("compiled_prompt") or prompt))
             status = (
                 "scene %d/%d restored Ref2VA cache %s (%d blocks, %d "
                 "presentation items)" % (
@@ -675,6 +729,9 @@ class MiniMaxH3ChainUpscaleReferenceConditioning:
                         target_detail["master_rebuilds"],
                         target_detail["fallback_rebuilds"],
                         target_detail["preserved_blocks"]))
+            if custom_prompt:
+                status += "; custom pass-2 prompt override"
+            status += "; motion refs=%s" % motion_ref_mode
             return conditioning, compiled, True, status
         if str(missing_cache) == "error":
             raise FileNotFoundError(
@@ -682,15 +739,21 @@ class MiniMaxH3ChainUpscaleReferenceConditioning:
                 "This branch may predate reference caching; render that source "
                 "scene once with Tagged/Scheduled Ref2VA cache_for_upscale "
                 "enabled, or choose text_only." % scene)
-        tokens = clip.tokenize(prompt)
+        compiled = custom_prompt or prompt
+        tokens = clip.tokenize(compiled)
         conditioning = clip.encode_from_tokens_scheduled(tokens)
+        conditioning = _mark_h3_upscale_motion_policy(
+            conditioning, motion_ref_mode)
         status = (
             "scene %d/%d has no matching Ref2VA cache; rebuilt text-only "
             "conditioning%s" % (
                 scene, scene_count,
                 " (generation fingerprint %s)" % fingerprint[:12]
                 if fingerprint else ""))
-        return conditioning, prompt, False, status
+        if custom_prompt:
+            status += "; custom pass-2 prompt override"
+        status += "; motion refs=%s" % motion_ref_mode
+        return conditioning, compiled, False, status
 
 
 class H3ConditioningSyncFromLatents:
@@ -711,6 +774,11 @@ class H3ConditioningSyncFromLatents:
                     "default": "bilinear",
                     "tooltip": "Spatial interpolation used for visual reference "
                                "and keyframe latents. Time and audio are unchanged."}),
+                "motion_ref_mode": (CONDITIONING_SYNC_MOTION_MODES, {
+                    "default": "conditioning_policy",
+                    "tooltip": "conditioning_policy automatically follows "
+                               "Upscale Reference Conditioning. Explicit modes "
+                               "are available for standalone/A-B use."}),
             },
             "optional": {
                 "negative": ("CONDITIONING", {
@@ -736,12 +804,14 @@ class H3ConditioningSyncFromLatents:
     CATEGORY = "conditioning/minimax/contex_loop/upscale"
     DESCRIPTION = (
         "Synchronize H3 pass-2 conditioning from the original and upscaled "
-        "latents. Resizes minimax_refs and minimax_keyframes spatial latents, "
+        "latents. Resizes picture refs and keyframes, filters or retains motion "
+        "refs according to the conditioner policy (or an explicit override), "
         "updates reference H/W metadata, and leaves text, time, and audio "
         "conditioning untouched. Build a new Guider from the returned output.")
 
     def sync(self, original_latent, upscaled_latent, positive,
-             method="bilinear", negative=None):
+             method="bilinear",
+             motion_ref_mode="conditioning_policy", negative=None):
         original, _source_width, _source_height = _target_video_geometry(
             original_latent)
         upscaled, width, height = _target_video_geometry(upscaled_latent)
@@ -752,11 +822,16 @@ class H3ConditioningSyncFromLatents:
                 (tuple(original.shape[:3]), tuple(upscaled.shape[:3])))
         if method not in CONDITIONING_SYNC_METHODS:
             raise ValueError("Unknown H3 conditioning sync method %r." % method)
+        if motion_ref_mode not in CONDITIONING_SYNC_MOTION_MODES:
+            raise ValueError(
+                "Unknown H3 motion reference mode %r." % motion_ref_mode)
         scale_x = int(upscaled.shape[-1]) / float(original.shape[-1])
         scale_y = int(upscaled.shape[-2]) / float(original.shape[-2])
         return (
-            _sync_h3_conditioning(positive, scale_x, scale_y, method),
-            _sync_h3_conditioning(negative, scale_x, scale_y, method),
+            _sync_h3_conditioning(
+                positive, scale_x, scale_y, method, motion_ref_mode),
+            _sync_h3_conditioning(
+                negative, scale_x, scale_y, method, motion_ref_mode),
             width, height, scale_x, scale_y,
         )
 

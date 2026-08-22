@@ -475,6 +475,14 @@
           "link": null
         },
         {
+          "name": "motion_ref_mode",
+          "type": "COMBO",
+          "widget": {
+            "name": "motion_ref_mode"
+          },
+          "link": null
+        },
+        {
           "name": "target_video_latent",
           "type": "LATENT",
           "link": null,
@@ -485,6 +493,14 @@
           "type": "VAE",
           "link": null,
           "shape": 7
+        },
+        {
+          "name": "prompt_override",
+          "type": "STRING",
+          "widget": {
+            "name": "prompt_override"
+          },
+          "link": null
         }
       ],
       "outputs": [
@@ -515,7 +531,9 @@
         "Node name for S&R": "MiniMaxH3ChainUpscaleReferenceConditioning"
       },
       "widgets_values": [
-        "text_only"
+        "text_only",
+        "exclude_video_keep_audio",
+        "Preserve the existing video's identity, appearance, composition, framing, lighting, color, action, motion timing, and audio. Use the supplied picture references only to maintain the identities and appearance already present. Improve only fine spatial detail and high-resolution texture fidelity. Do not introduce new motion, objects, cuts, camera moves, or scene changes."
       ],
       "color": "#346434",
       "bgcolor": "rgba(24,24,27,.9)"
@@ -704,6 +722,14 @@
           "link": null
         },
         {
+          "name": "motion_ref_mode",
+          "type": "COMBO",
+          "widget": {
+            "name": "motion_ref_mode"
+          },
+          "link": null
+        },
+        {
           "name": "negative",
           "type": "CONDITIONING",
           "link": null,
@@ -748,7 +774,8 @@
         "Node name for S&R": "H3ConditioningSyncFromLatents"
       },
       "widgets_values": [
-        "bilinear"
+        "bilinear",
+        "conditioning_policy"
       ],
       "color": "#346434",
       "bgcolor": "rgba(24,24,27,.9)"
@@ -1230,7 +1257,7 @@
         "Node name for S&R": "Note"
       },
       "widgets_values": [
-        "STANDALONE H3 CHECKPOINT UPSCALE\n\n1. Open Checkpoint Manager and select the right-hand tip you want to finish. A partial generated branch is valid; no ungenerated scenes are required.\n2. The selected_manifest cable is the complete parent-chain contract. No Plan, Source Timeline, source audio, external context, or reference-media wires enter the upscale loop.\n3. Choose a unique profile in Upscale Adapter. start_clip=1/end_clip=0 processes every generated scene in the selection.\n4. Set LBH target megapixels. The default is 1.5 MP with grid-32 alignment.\n5. Queue. Each HQ scene is saved before the loop advances; Merger writes under output/h3_chains/<run>/upscaled/<profile>/final/.\n\nsave_latent is OFF by default. Enable it only when you need to reopen the HQ latent later.\n\nUpscale Reference Conditioning restores the scene's original Ref2VA conditioning from its automatic cache. H3 Conditioning Sync From Latents then measures LBH's real X/Y latent scale, resizes every visual minimax_refs and minimax_keyframes latent, updates reference H/W metadata, and leaves text, time, and audio conditioning untouched. Its positive output creates a fresh pass-2 Basic Guider. Older non-reference runs fall back to text-only by default; choose error when a Ref2VA cache is mandatory."
+        "STANDALONE H3 CHECKPOINT UPSCALE\n\n1. Open Checkpoint Manager and select the right-hand tip you want to finish. A partial generated branch is valid; no ungenerated scenes are required.\n2. The selected_manifest cable is the complete parent-chain contract. No Plan, Source Timeline, source audio, external context, or reference-media wires enter the upscale loop.\n3. Choose a unique profile in Upscale Adapter. start_clip=1/end_clip=0 processes every generated scene in the selection.\n4. Set LBH target megapixels. The default is 1.5 MP with grid-32 alignment.\n5. Queue. Each HQ scene is saved before the loop advances; Merger writes under output/h3_chains/<run>/upscaled/<profile>/final/.\n\nsave_latent is OFF by default. Enable it only when you need to reopen the HQ latent later.\n\nUpscale Reference Conditioning restores the scene's original Ref2VA conditioning from its automatic cache. This demo supplies a neutral pass-2 prompt override that preserves existing identity, framing, action, timing, and audio while requesting detail only; clear it to A/B against the exact compiled source prompt. Its default motion policy excludes both the Qwen motion-video presentation and native motion-reference latent because the source latent already contains the generated motion; paired reference audio is retained. H3 Conditioning Sync From Latents follows that policy automatically, measures LBH's real X/Y latent scale, and resizes picture minimax_refs and minimax_keyframes. Its positive output creates a fresh pass-2 Basic Guider. Older non-reference runs fall back to text-only by default; choose error when a Ref2VA cache is mandatory."
       ],
       "title": "HOW TO RUN"
     },
@@ -1255,7 +1282,7 @@
         "Node name for S&R": "Note"
       },
       "widgets_values": [
-        "REQUIRES\nhttps://github.com/LBH-123-AI/Comfyui_Minimax_h3_latent_Upscaler\nDownload minimax_h3_latent_upscaler_3d_fp16.safetensors into ComfyUI/models/latent_upscale_models/.\n\nLBH receives only the saved clean 24-channel VIDEO x0. MiniMax H3 Pass-2 AV Prepare rejoins the untouched 32-channel audio, re-noises video only, and installs an audio-zero denoise mask. H3 Conditioning Sync From Latents follows the community pass-2 method: original latent + LBH latent + original conditioning -> spatially synchronized conditioning -> new Guider -> sampler 2. The default interpolation is bilinear.\n\nConservative defaults: 1.5 MP, align 32, FP16, 2 pass-2 steps, denoise 0.24, simple schedule, Euler. Raise denoise only after checking identity and scene boundaries. The Comfy Kitchen attention override remains bypassed because large H3 target sequences can exceed Sage prequantized int32 stride limits; this graph uses ComfyUI's PyTorch attention path. Functional nodes intentionally retain their original display names."
+        "REQUIRES\nhttps://github.com/LBH-123-AI/Comfyui_Minimax_h3_latent_Upscaler\nDownload minimax_h3_latent_upscaler_3d_fp16.safetensors into ComfyUI/models/latent_upscale_models/.\n\nLBH receives only the saved clean 24-channel VIDEO x0. MiniMax H3 Pass-2 AV Prepare rejoins the untouched 32-channel audio, re-noises video only, and installs an audio-zero denoise mask. H3 Conditioning Sync From Latents follows the community pass-2 method: original latent + LBH latent + original conditioning -> spatially synchronized conditioning -> new Guider -> sampler 2. Choose motion policy once on Upscale Reference Conditioning: exclude_video_keep_audio is the upscale default; keep_video_native and resize_video remain available for controlled comparisons. Leave the sync node on conditioning_policy. The default interpolation is bilinear.\n\nConservative defaults: 1.5 MP, align 32, FP16, 2 pass-2 steps, denoise 0.24, simple schedule, Euler. Raise denoise only after checking identity and scene boundaries. The Comfy Kitchen attention override remains bypassed because large H3 target sequences can exceed Sage prequantized int32 stride limits; this graph uses ComfyUI's PyTorch attention path. Functional nodes intentionally retain their original display names."
       ],
       "title": "DEPENDENCY / PASS-2 NOTES"
     }

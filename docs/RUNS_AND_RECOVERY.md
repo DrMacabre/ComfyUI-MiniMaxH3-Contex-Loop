@@ -250,14 +250,29 @@ Scheduled Ref2VA create that cache automatically: native H3 reference latents
 remain in safetensors while compact Qwen presentation frames allow the saved
 compiled prompt to be tokenized again. **H3 Conditioning Sync From Latents**
 then compares the original scene video latent with the actual LBH output. It
-applies the exact horizontal and vertical scale to visual `minimax_refs` and
+applies the exact horizontal and vertical scale to picture `minimax_refs` and
 `minimax_keyframes`, updates reference H/W metadata, and deliberately leaves
-text, temporal positions, and audio conditioning untouched. Build sampler 2's
-new Guider from the returned conditioning rather than reusing the original
-Guider. Thus the child graph needs no reference registry or original
-picture/video/audio connections. Both cache versions retain the encoded native
-reference blocks used by sync; cache v2 additionally keeps original picture
-masters for workflows that choose target-resolution VAE re-encoding instead.
+text, temporal positions, and audio conditioning untouched. Upscale Reference
+Conditioning's default `exclude_video_keep_audio` policy removes both the Qwen
+motion-video presentation and native motion-video latent because the pass-2
+source latent already contains the generated motion; audio paired with a video
+reference is converted to an audio-only reference. `keep_video_native` and
+`resize_video` remain available for comparison, and the sync node follows the
+selected conditioning policy automatically. Build sampler 2's new
+Guider from the returned conditioning rather than reusing the original Guider.
+Thus the child graph needs no reference registry or original picture/video/audio
+connections. Both cache versions retain the encoded native reference blocks
+used by sync; cache v2 additionally keeps original picture masters for
+workflows that choose target-resolution VAE re-encoding instead.
+
+Upscale Reference Conditioning encodes the exact saved compiled prompt by
+default. Its optional `prompt_override` is encoded instead when supplied, so a
+user can provide a short appearance/detail-only pass-2 prompt without repeating
+the source scene's motion or camera instructions. Automatic natural-language
+motion stripping is intentionally avoided because it cannot reliably separate
+action from identity, framing, or continuity clauses. The bundled LBH workflow
+therefore supplies a neutral preservation/detail override; clear that widget to
+A/B against the original compiled prompt.
 Revisions without a cache can use `text_only`; select `error` when the second
 pass must not proceed without Ref2VA conditioning.
 

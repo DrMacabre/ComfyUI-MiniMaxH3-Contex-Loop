@@ -264,6 +264,16 @@ def main():
         assert len(cached_refs) == 1
         assert cached_refs[0]["kind"] == "image"
         assert torch.all(cached_refs[0]["latent"] == 0.625)
+        assert cached_conditioning[0][0][1][
+            "_h3_upscale_motion_ref_mode"] == "exclude_video_keep_audio"
+        override_conditioning = (
+            upscale.MiniMaxH3ChainUpscaleReferenceConditioning().condition(
+                cached_upscale_state, FakeClip(), "error",
+                prompt_override="Preserve identity and fine detail."))
+        assert override_conditioning[1] == "Preserve identity and fine detail."
+        assert override_conditioning[0][0][1]["tokens"]["prompt"] == (
+            "Preserve identity and fine detail.")
+        assert "custom pass-2 prompt override" in override_conditioning[3]
 
         target_video = {
             "samples": torch.zeros((1, 24, 2, 4, 4), dtype=torch.float32)}
@@ -318,10 +328,12 @@ def main():
                 "latent_t": 2,
                 "latent_h": 4,
                 "latent_w": 5,
+                "ref_audio_t": 2,
                 "latent": torch.zeros((1, 24, 2, 4, 5)),
                 "audio_latent": torch.ones((1, 32, 2, 9)),
             }, {
                 "kind": "audio",
+                "ref_audio_t": 2,
                 "audio_latent": torch.ones((1, 32, 2, 9)),
             }],
             "minimax_keyframes": [{
@@ -342,9 +354,11 @@ def main():
             1, 24, 1, 4, 10)
         assert synced_meta["minimax_refs"][0]["latent_h"] == 4
         assert synced_meta["minimax_refs"][0]["latent_w"] == 10
-        assert tuple(synced_meta["minimax_refs"][1]["latent"].shape) == (
-            1, 24, 2, 8, 16)
-        assert synced_meta["minimax_refs"][1]["latent_t"] == 2
+        assert synced_meta["minimax_refs"][1]["kind"] == "audio"
+        assert "latent" not in synced_meta["minimax_refs"][1]
+        assert "latent_t" not in synced_meta["minimax_refs"][1]
+        assert "latent_h" not in synced_meta["minimax_refs"][1]
+        assert "latent_w" not in synced_meta["minimax_refs"][1]
         assert tuple(synced_meta["minimax_refs"][1][
             "audio_latent"].shape) == (1, 32, 2, 9)
         assert "latent" not in synced_meta["minimax_refs"][2]
@@ -355,6 +369,49 @@ def main():
         assert synced_meta["unchanged"] == "metadata"
         assert tuple(sync_positive[0][1]["minimax_refs"][0][
             "latent"].shape) == (1, 24, 1, 2, 3)
+
+        filtered_presentation, filtered_blocks = (
+            chain._h3_motion_reference_policy([{
+                "type": "image", "role": "native_picture",
+            }, {
+                "type": "video", "role": "native_video",
+            }, {
+                "type": "audio", "role": "native_audio",
+            }, {
+                "type": "video", "role": "native_video",
+            }, {
+                "type": "video", "role": "semantic_presentation",
+            }], [{
+                "kind": "video_audio", "latent": torch.zeros(1),
+                "latent_t": 2, "latent_h": 4, "latent_w": 5,
+                "ref_audio_t": 2, "audio_latent": torch.ones(1),
+            }, {
+                "kind": "video", "latent": torch.zeros(1),
+                "latent_t": 2, "latent_h": 4, "latent_w": 5,
+                "ref_audio_t": 0, "audio_latent": None,
+            }, {
+                "kind": "image", "latent": torch.zeros(1),
+            }], "exclude_video_keep_audio"))
+        assert [item["type"] for item in filtered_presentation] == [
+            "image", "audio", "video"]
+        assert [block["kind"] for block in filtered_blocks] == [
+            "audio", "image"]
+        assert "latent" not in filtered_blocks[0]
+
+        native_motion = upscale.H3ConditioningSyncFromLatents().sync(
+            {"samples": torch.zeros((1, 24, 2, 2, 2))},
+            {"samples": torch.zeros((1, 24, 2, 4, 6))},
+            sync_positive, "bilinear", "keep_video_native")[0][0][1]
+        assert tuple(native_motion["minimax_refs"][1]["latent"].shape) == (
+            1, 24, 2, 4, 5)
+
+        resized_motion = upscale.H3ConditioningSyncFromLatents().sync(
+            {"samples": torch.zeros((1, 24, 2, 2, 2))},
+            {"samples": torch.zeros((1, 24, 2, 4, 6))},
+            sync_positive, "bilinear", "resize_video")[0][0][1]
+        assert tuple(resized_motion["minimax_refs"][1]["latent"].shape) == (
+            1, 24, 2, 8, 16)
+        assert resized_motion["minimax_refs"][1]["latent_t"] == 2
 
         class FakeSampling:
             @staticmethod
