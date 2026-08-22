@@ -453,6 +453,83 @@ def main():
         assert torch.all(prepared_masks[1] == 0)
         assert "audio" in prepared[3] and "locked" in prepared[3]
 
+        drift_manifest = json.loads(json.dumps(source_manifest))
+        drift_manifest["segments"][1].update({
+            "raw_frames": 44,
+            "delivered_frames": 5,
+            "continuation_mode": "drift_control_av",
+            "context_length": 39,
+        })
+        previous_hq_video = torch.arange(
+            16, dtype=torch.float32).view(1, 1, 16, 1, 1).expand(
+                1, 24, 16, 4, 4).clone()
+        previous_hq = {"samples": [
+            previous_hq_video,
+            torch.full((1, 32, 2, 9), 0.75, dtype=torch.float32),
+        ]}
+        drift_save_state = {
+            **upscale_state,
+            "profile": "drift-quality",
+            "source_manifest": drift_manifest,
+            "source_manifest_hash": upscale._source_hash(drift_manifest),
+            "segments": [],
+        }
+        drift_saved = upscale.MiniMaxH3ChainUpscaleSegmentSave().save(
+            drift_save_state,
+            torch.zeros((5, 64, 64, 3), dtype=torch.float32),
+            previous_hq)["result"][0]
+        assert not drift_saved["latent_saved"]
+        assert drift_saved["context_steps"] == 12
+        drift_checkpoint = pathlib.Path(
+            chain._absolute_output_path(drift_saved["checkpoint"]))
+        with safe_open(drift_checkpoint, framework="pt", device="cpu") as saved:
+            assert "upscaled_video_context" in saved.keys()
+            assert "upscaled_video" not in saved.keys()
+            assert tuple(saved.get_tensor(
+                "upscaled_video_context").shape) == (1, 24, 12, 4, 4)
+
+        resumed_drift_state = {
+            **drift_save_state,
+            "index": 2,
+            "segments": [drift_saved],
+            "previous_latent": None,
+        }
+        restored_context, restored_route = (
+            upscale._load_previous_upscaled_context(
+                resumed_drift_state, 2))
+        assert "compact saved HQ context" in restored_route
+        resumed_drift_state["previous_latent"] = restored_context
+        drift_prepared = upscale.MiniMaxH3ChainPass2Prepare().prepare(
+            {"samples": torch.ones(
+                (1, 24, 16, 4, 4), dtype=torch.float32)},
+            current[3], FakeModel(), FakeNoise(),
+            torch.tensor([0.24, 0.0], dtype=torch.float32),
+            resumed_drift_state)
+        drift_streams = chain._streams_from_latent(drift_prepared[0])
+        drift_masks = chain._streams_from_latent({
+            "samples": drift_prepared[0]["noise_mask"]})
+        assert torch.allclose(
+            drift_streams[0][:, :, :12], previous_hq_video[:, :, -12:])
+        assert torch.allclose(
+            drift_streams[0][:, :, 12:],
+            torch.full_like(drift_streams[0][:, :, 12:], 1.24))
+        assert torch.all(drift_masks[0][:, :, :12] == 0)
+        assert torch.all(drift_masks[0][:, :, 12:] == 1)
+        assert "previous HQ latent tail spliced and protected" in (
+            drift_prepared[3])
+        fallback_state = {**resumed_drift_state, "previous_latent": None}
+        fallback_prepared = upscale.MiniMaxH3ChainPass2Prepare().prepare(
+            {"samples": torch.ones(
+                (1, 24, 16, 4, 4), dtype=torch.float32)},
+            current[3], FakeModel(), FakeNoise(),
+            torch.tensor([0.24, 0.0], dtype=torch.float32), fallback_state)
+        fallback_streams = chain._streams_from_latent(fallback_prepared[0])
+        fallback_masks = chain._streams_from_latent({
+            "samples": fallback_prepared[0]["noise_mask"]})
+        assert torch.all(fallback_streams[0][:, :, :12] == 1)
+        assert torch.all(fallback_masks[0][:, :, :12] == 0)
+        assert "source prefix protected" in fallback_prepared[3]
+
         hq_images = torch.zeros((5, 64, 64, 3), dtype=torch.float32)
         saved_result = upscale.MiniMaxH3ChainUpscaleSegmentSave().save(
             upscale_state, hq_images)

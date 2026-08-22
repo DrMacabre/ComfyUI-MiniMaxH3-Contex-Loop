@@ -309,9 +309,16 @@ output/h3_chains/<run_name>/upscaled/<profile>/
 `save_latent` defaults off. Segment Save still writes a small verified
 safetensors checkpoint containing the assembly audio, so the child run remains
 resumable and mergeable without duplicating the much larger HQ sampler latent.
-Enable it only when you want to reopen/refine the HQ latent itself. The
-transient `upscaled_latent` connection on Loop End remains usable for scene
-continuity whether or not persistence is enabled.
+When the following source scene uses Drift-Control AV, that checkpoint also
+contains only the preceding scene's 12-step HQ video tail. Pass-2 AV Prepare
+splices this tail into scene 2+'s prefix, gives it zero added noise and a zero
+denoise mask, and refines only the new video region. This compact context is
+enough for exact interruption-safe HQ continuation without enabling full
+latent saving. Older child checkpoints without the tail safely protect their
+independently upscaled source prefix and report that fallback in node status.
+Enable full latent saving only when you want to reopen/refine the HQ latent
+itself. The transient `upscaled_latent` connection on Loop End remains usable
+for scene continuity whether or not persistence is enabled.
 
 For new parent renders, connect SamplerCustomAdvanced `denoised_output` to
 Segment + Checkpoint's optional `denoised_latent` input. Existing checkpoints

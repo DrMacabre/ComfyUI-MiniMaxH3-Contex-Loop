@@ -804,8 +804,10 @@ def validate_deferred_h3_upscale(path):
         socket(prepare["inputs"], "source_audio")["link"]]
     conditioner = node(
         workflow, "MiniMaxH3ChainUpscaleReferenceConditioning")
-    assert socket(current["outputs"], "state")["links"][-1] == socket(
-        conditioner["inputs"], "state")["link"]
+    assert socket(conditioner["inputs"], "state")["link"] in socket(
+        current["outputs"], "state")["links"]
+    assert socket(prepare["inputs"], "state")["link"] in socket(
+        current["outputs"], "state")["links"]
     assert conditioner["widgets_values"][:2] == [
         "text_only", "exclude_video_keep_audio"]
     assert conditioner["widgets_values"][2].startswith(
@@ -850,6 +852,8 @@ def validate_deferred_h3_upscale(path):
     assert "picture minimax_refs and minimax_keyframes" in notes
     assert "excludes both the Qwen motion-video presentation" in notes
     assert "prompt override" in notes
+    assert "12-step pass-2 prefix" in notes
+    assert "small 12-step HQ context tail" in notes
     assert "save_latent is OFF" in notes
     assert "Comfyui_Minimax_h3_latent_Upscaler" in notes
     h3_video_vae = node(workflow, "VAELoader")

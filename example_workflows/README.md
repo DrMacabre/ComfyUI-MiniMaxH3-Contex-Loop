@@ -81,7 +81,11 @@ The loop sends only the clean 24-channel video x0 through LBH's temporal
 **MiniMax H3 Latent Upscaler (3D)**. The default target is 1.5 MP on a grid-32
 canvas, followed by a conservative two-step pass at denoise 0.24 with Euler.
 The pack rejoins the untouched 32-channel audio, performs NestedTensor-safe
-video-only CONST re-noise, and masks audio out of pass 2. Install
+video-only CONST re-noise, and masks audio out of pass 2. For Drift-Control AV
+scene 2+, it replaces the 12-step prefix with the previous HQ latent tail,
+adds no noise there, masks that prefix out of denoising, and refines only the
+new video region. Segment Save persists just this small tail for
+interruption-safe resume even when full latent saving is disabled. Install
 [Comfyui_Minimax_h3_latent_Upscaler](https://github.com/LBH-123-AI/Comfyui_Minimax_h3_latent_Upscaler)
 and place its 3D checkpoint in `models/latent_upscale_models/` before opening
 the graph.

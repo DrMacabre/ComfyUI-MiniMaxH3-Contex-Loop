@@ -131,6 +131,81 @@ def _source_segment(state: dict[str, Any], index: int | None = None
     return source
 
 
+def _source_continuation_mode(state: dict[str, Any],
+                              index: int | None = None) -> str:
+    source = _source_segment(state, index)
+    compatibility = state["source_manifest"].get("compatibility") or {}
+    return str(source.get("continuation_mode") or
+               compatibility.get("continuation_mode") or "guide")
+
+
+def _drift_prefix_steps(state: dict[str, Any],
+                        index: int | None = None) -> int:
+    """Return the exact H3 latent prefix span for a Drift-Control scene."""
+    source = _source_segment(state, index)
+    mode = _source_continuation_mode(state, index)
+    if mode not in chain.DRIFT_CONTROL_CONTINUATION_MODES:
+        return 0
+    trim = int(source.get("raw_frames", 0)) - int(
+        source.get("delivered_frames", 0))
+    if trim <= 0:
+        return 0
+    expected_frames = int(chain.DRIFT_CONTROL_AV_RECIPE["context_frames"])
+    if trim != expected_frames:
+        raise ValueError(
+            "H3 upscale Drift-Control scene %d has a %d-frame prefix; "
+            "recipe %s requires %d." % (
+                int(source.get("index", index or 0)), trim,
+                chain.DRIFT_CONTROL_AV_RECIPE["version"], expected_frames))
+    return int(chain.DRIFT_CONTROL_AV_RECIPE["video_steps"])
+
+
+def _video_stream_from_latent(latent: Any, label: str) -> Any:
+    if not isinstance(latent, dict) or "samples" not in latent:
+        raise ValueError("%s must be a LATENT with samples." % label)
+    samples = latent["samples"]
+    streams = ([samples]
+               if chain.torch is not None and chain.torch.is_tensor(samples)
+               else chain._streams_from_latent(latent))
+    for stream in streams:
+        if (getattr(stream, "ndim", 0) == 5
+                and int(stream.shape[1]) == 24):
+            return stream
+    raise ValueError("%s has no [B,24,T,H,W] H3 video stream." % label)
+
+
+def _drift_continuation_video(video: Any, state: Any
+                              ) -> tuple[Any, int, str]:
+    """Splice the prior HQ tail into a Drift-Control pass-2 prefix."""
+    if not isinstance(state, dict):
+        return video, 0, "open video"
+    prefix_steps = _drift_prefix_steps(state)
+    if prefix_steps <= 0:
+        return video, 0, "open video"
+    if int(video.shape[2]) <= prefix_steps:
+        raise ValueError(
+            "H3 upscale Drift-Control prefix uses %d/%d latent steps; no "
+            "future remains to refine." % (prefix_steps, int(video.shape[2])))
+    previous = state.get("previous_latent")
+    if previous is None:
+        return video, prefix_steps, (
+            "source prefix protected (prior HQ context unavailable)")
+    prior = _video_stream_from_latent(previous, "Previous upscaled latent")
+    if int(prior.shape[2]) < prefix_steps:
+        raise ValueError(
+            "Previous upscaled latent has %d video steps; Drift-Control needs "
+            "%d." % (int(prior.shape[2]), prefix_steps))
+    if (int(prior.shape[0]) != int(video.shape[0]) or
+            tuple(prior.shape[-2:]) != tuple(video.shape[-2:])):
+        raise ValueError(
+            "Previous/current HQ video geometry differs: %s vs %s." % (
+                tuple(prior.shape), tuple(video.shape)))
+    output = video.clone()
+    output[:, :, :prefix_steps] = prior[:, :, -prefix_steps:].to(
+        device=video.device, dtype=video.dtype)
+    return output, prefix_steps, "previous HQ latent tail spliced and protected"
+
+
 def _load_source_tensors(source: dict[str, Any]) -> dict[str, Any]:
     if chain._st_load is None:
         raise RuntimeError("safetensors is required for deferred H3 upscaling.")
@@ -339,6 +414,60 @@ def _latent_checkpoint_tensors(latent: dict[str, Any]) -> tuple[dict[str, Any], 
              for index, value in enumerate(streams)}, "multi")
 
 
+def _next_drift_context_steps(state: dict[str, Any], index: int) -> int:
+    total = len(state["source_manifest"].get("segments") or ())
+    if int(index) >= total:
+        return 0
+    return _drift_prefix_steps(state, int(index) + 1)
+
+
+def _upscaled_context_tensor(latent: Any, steps: int) -> Any:
+    video = _video_stream_from_latent(latent, "Final upscaled latent")
+    count = int(steps)
+    if count < 1 or int(video.shape[2]) < count:
+        raise ValueError(
+            "Final upscaled video has %d steps; cannot retain %d-step "
+            "continuation context." % (int(video.shape[2]), count))
+    return chain._tensor_cpu_clone(video[:, :, -count:])
+
+
+def _load_previous_upscaled_context(
+        state: dict[str, Any], start_clip: int) -> tuple[dict[str, Any] | None,
+                                                        str]:
+    """Restore the prior HQ video tail for a resumed Drift-Control scene."""
+    steps = _drift_prefix_steps(state, int(start_clip))
+    if steps <= 0 or int(start_clip) <= 1:
+        return None, "no resumed Drift-Control context required"
+    segments = state.get("segments") or []
+    if not segments:
+        return None, "prior HQ context unavailable"
+    prior_segment = segments[-1]
+    checkpoint = chain._absolute_output_path(prior_segment["checkpoint"])
+    tensors = chain._st_load(checkpoint)
+    video = tensors.get("upscaled_video_context")
+    route = "compact saved HQ context"
+    if video is None:
+        video = tensors.get("upscaled_video")
+        route = "saved full HQ video latent fallback"
+    if video is None:
+        candidate = tensors.get("upscaled_samples")
+        if (getattr(candidate, "ndim", 0) == 5
+                and int(candidate.shape[1]) == 24):
+            video = candidate
+            route = "saved single HQ video latent fallback"
+    if video is None:
+        return None, (
+            "prior checkpoint predates compact HQ context; source prefix "
+            "will be protected")
+    if int(video.shape[2]) < steps:
+        raise ValueError(
+            "Upscale scene %d checkpoint contains %d context steps; scene %d "
+            "requires %d." % (int(start_clip) - 1, int(video.shape[2]),
+                               int(start_clip), steps))
+    context = chain._tensor_cpu_clone(video[:, :, -steps:])
+    return {"samples": context}, route
+
+
 def _load_upscale_prefix(state: dict[str, Any], start_clip: int
                          ) -> list[dict[str, Any]]:
     values = []
@@ -457,8 +586,9 @@ class MiniMaxH3ChainUpscaleAdapter:
                 "save_latent": ("BOOLEAN", {
                     "default": False,
                     "tooltip": "Persist the HQ sampler latent in each child "
-                               "checkpoint. Off still saves a tiny assembly/audio "
-                               "checkpoint for standalone merge and resume."}),
+                               "checkpoint. Off still saves assembly/audio and "
+                               "any compact Drift-Control context needed for "
+                               "standalone merge and resume."}),
                 "segment_crf": ("INT", {
                     "default": 18, "min": 0, "max": 51,
                     "tooltip": "H.264 quality for persisted HQ scene segments."}),
@@ -512,6 +642,10 @@ class MiniMaxH3ChainUpscaleAdapter:
                 "previous_latent": None,
             }
             state["segments"] = _load_upscale_prefix(state, start)
+            previous_latent, context_status = _load_previous_upscaled_context(
+                state, start)
+            state["previous_latent"] = previous_latent
+            state["previous_context_status"] = context_status
         else:
             state = dict(initial_state)
             manifest = state["source_manifest"]
@@ -526,6 +660,9 @@ class MiniMaxH3ChainUpscaleAdapter:
                    state["profile_config"]["backend"],
                    "saved" if state["profile_config"]["save_latent"]
                    else "not saved"))
+        context_status = str(state.get("previous_context_status") or "")
+        if context_status:
+            status += "; %s" % context_status
         return ("h3_upscale", state, manifest, status)
 
 
@@ -859,6 +996,12 @@ class MiniMaxH3ChainPass2Prepare:
                     "tooltip": "Pass-2 sigma schedule. Its first sigma is "
                                "used for NestedTensor-safe CONST re-noise."}),
             },
+            "optional": {
+                "state": (UPSCALE_STATE_TYPE, {
+                    "tooltip": "Current Upscale state. When the source scene "
+                               "uses Drift-Control AV, its previous HQ latent "
+                               "tail replaces and protects the pass-2 prefix."}),
+            },
         }
 
     RETURN_TYPES = ("LATENT", "INT", "INT", "STRING")
@@ -875,13 +1018,17 @@ class MiniMaxH3ChainPass2Prepare:
     DESCRIPTION = (
         "Adapt a video-only learned upscale into a joint MiniMax H3 pass-2 "
         "latent. Rejoins the saved audio, applies MiniMax CONST re-noise to "
-        "video only, inverse-scales for Disable Noise sampling, and installs "
-        "an audio-zero denoise mask so pass 2 cannot rewrite speech.")
+        "the open video region only, protects a Drift-Control AV prefix from "
+        "the previous HQ latent when available, inverse-scales for Disable "
+        "Noise sampling, and locks audio so pass 2 cannot rewrite speech.")
 
-    def prepare(self, upscaled_video, source_audio, model, noise, sigmas):
+    def prepare(self, upscaled_video, source_audio, model, noise, sigmas,
+                state=None):
         if chain.torch is None:
             raise RuntimeError("PyTorch is required for H3 pass-2 preparation.")
         video, width, height = _target_video_geometry(upscaled_video)
+        video, prefix_steps, continuation_route = _drift_continuation_video(
+            video, state)
         audio = _single_latent_tensor(source_audio, "Source audio latent")
         if getattr(audio, "ndim", 0) != 4 or int(audio.shape[1]) != 32:
             raise ValueError(
@@ -907,6 +1054,9 @@ class MiniMaxH3ChainPass2Prepare:
             raise ValueError(
                 "Pass-2 video noise shape %s does not match latent %s." %
                 (tuple(video_noise.shape), tuple(video.shape)))
+        if prefix_steps:
+            video_noise = video_noise.clone()
+            video_noise[:, :, :prefix_steps] = 0
         joint_noise = _packed_samples([
             video_noise, chain.torch.zeros_like(audio)])
 
@@ -945,6 +1095,8 @@ class MiniMaxH3ChainPass2Prepare:
             (output_video.shape[0], 1, output_video.shape[2],
              output_video.shape[3], output_video.shape[4]),
             device=output_video.device, dtype=chain.torch.float32)
+        if prefix_steps:
+            video_mask[:, :, :prefix_steps] = 0
         audio_mask = chain.torch.zeros(
             (output_audio.shape[0], 1, output_audio.shape[2],
              output_audio.shape[3]),
@@ -957,9 +1109,10 @@ class MiniMaxH3ChainPass2Prepare:
             sigma_start, "detach") else float(sigma_start)
         status = (
             "prepared H3 pass 2 at %dx%d: video %s, audio %s locked, "
-            "sigma_start=%.6g" % (
+            "sigma_start=%.6g; %s%s" % (
                 width, height, tuple(video.shape), tuple(audio.shape),
-                sigma_value))
+                sigma_value, continuation_route,
+                " (%d latent steps)" % prefix_steps if prefix_steps else ""))
         return result, width, height, status
 
 
@@ -976,8 +1129,9 @@ class MiniMaxH3ChainUpscaleSegmentSave:
             },
             "optional": {
                 "upscaled_latent": ("LATENT", {
-                    "tooltip": "Final HQ latent. Required only when the Adapter's "
-                               "save_latent option is enabled."}),
+                    "tooltip": "Final HQ latent. Required when save_latent is "
+                               "enabled and whenever a following Drift-Control "
+                               "scene needs its compact HQ context tail."}),
             },
         }
 
@@ -991,7 +1145,9 @@ class MiniMaxH3ChainUpscaleSegmentSave:
     OUTPUT_NODE = True
     CATEGORY = "conditioning/minimax/contex_loop/upscale"
     DESCRIPTION = ("Persist one trimmed HQ scene plus a self-contained assembly "
-                   "checkpoint; optionally retain its large HQ latent.")
+                   "checkpoint; always retain the small HQ tail needed by a "
+                   "following Drift-Control scene and optionally retain the "
+                   "complete large HQ latent.")
 
     @classmethod
     def IS_CHANGED(cls, *args, **kwargs):
@@ -1023,10 +1179,16 @@ class MiniMaxH3ChainUpscaleSegmentSave:
                     (index, width, height, int(first["width"]), int(first["height"])))
 
         save_latent = bool(state["profile_config"]["save_latent"])
+        context_steps = _next_drift_context_steps(state, index)
         if save_latent and upscaled_latent is None:
             raise ValueError(
                 "Upscale profile enables save_latent, but scene %d received no HQ latent."
                 % index)
+        if context_steps and upscaled_latent is None:
+            raise ValueError(
+                "Upscale scene %d precedes a Drift-Control AV scene and must "
+                "receive the final HQ latent so its %d-step context tail can "
+                "be resumed." % (index, context_steps))
         source_tensors = _load_source_tensors(source)
         tensors = {"upscale_marker": chain.torch.tensor([index])}
         sample_rate = int(source.get("sample_rate", 0))
@@ -1038,6 +1200,9 @@ class MiniMaxH3ChainUpscaleSegmentSave:
             latent_tensors, latent_layout = _latent_checkpoint_tensors(
                 upscaled_latent)
             tensors.update(latent_tensors)
+        if context_steps:
+            tensors["upscaled_video_context"] = _upscaled_context_tensor(
+                upscaled_latent, context_steps)
 
         paths = _profile_paths(state["run_name"], state["profile"], index)
         for key in ("segment", "checkpoint", "metadata", "prompt", "audio"):
@@ -1078,6 +1243,7 @@ class MiniMaxH3ChainUpscaleSegmentSave:
                     source.get("checkpoint_sha256") or ""),
                 "latent_layout": latent_layout,
                 "latent_saved": "true" if save_latent else "false",
+                "context_steps": str(context_steps),
                 "sample_rate": str(sample_rate),
             })
             os.replace(checkpoint_tmp, checkpoint_path)
@@ -1101,6 +1267,7 @@ class MiniMaxH3ChainUpscaleSegmentSave:
                 "sample_rate": sample_rate,
                 "latent_saved": save_latent,
                 "latent_layout": latent_layout,
+                "context_steps": context_steps,
                 "source_revision": str(source.get("revision") or ""),
                 "source_checkpoint": str(source.get("checkpoint") or ""),
                 "source_checkpoint_sha256": str(
@@ -1159,6 +1326,8 @@ class MiniMaxH3ChainUpscaleSegmentSave:
         status = ("saved HQ scene %d/%d at %dx%d; latent %s -> %s" %
                   (index, len(state["source_manifest"]["segments"]), width,
                    height, "saved" if save_latent else "omitted", segment_path))
+        if context_steps:
+            status += "; retained %d-step Drift-Control HQ tail" % context_steps
         return {
             "ui": {"text": [status],
                    "images": [chain._video_output_item(segment_path)],
@@ -1318,6 +1487,9 @@ class MiniMaxH3ChainUpscaleLoopEnd:
                 delivered_images[-context_length:]) if context_length else
                 chain._tensor_cpu_clone(delivered_images[:0]),
             "previous_latent": _cpu_latent(upscaled_latent),
+            "previous_context_status": (
+                "live previous HQ latent" if upscaled_latent is not None
+                else "previous HQ latent unavailable"),
         })
         if index < int(state["end_clip"]):
             return self._recurse(flow, next_state, dynprompt, unique_id)
