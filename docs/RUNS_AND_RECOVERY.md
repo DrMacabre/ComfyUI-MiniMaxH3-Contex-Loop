@@ -248,15 +248,18 @@ For H3 pass-2 conditioning, **Upscale Reference Conditioning** first reads the
 exact cache descriptor recorded on the selected source revision. Tagged and
 Scheduled Ref2VA create that cache automatically: native H3 reference latents
 remain in safetensors while compact Qwen presentation frames allow the saved
-compiled prompt to be tokenized again. Cache v2 additionally keeps the original
-picture masters. When the target video latent and H3 video VAE are connected,
-`match` pictures are re-encoded for the actual pass-2 canvas; `max` pictures,
-video/audio refs, and semantic anchors preserve their native geometry. Thus the
-child graph needs no reference registry or original picture/video/audio
-connections. V1 caches remain valid and scale their saved presentation picture
-as an approximate rebuild source. Revisions without a cache can use
-`text_only`; select
-`error` when the second pass must not proceed without Ref2VA conditioning.
+compiled prompt to be tokenized again. **H3 Conditioning Sync From Latents**
+then compares the original scene video latent with the actual LBH output. It
+applies the exact horizontal and vertical scale to visual `minimax_refs` and
+`minimax_keyframes`, updates reference H/W metadata, and deliberately leaves
+text, temporal positions, and audio conditioning untouched. Build sampler 2's
+new Guider from the returned conditioning rather than reusing the original
+Guider. Thus the child graph needs no reference registry or original
+picture/video/audio connections. Both cache versions retain the encoded native
+reference blocks used by sync; cache v2 additionally keeps original picture
+masters for workflows that choose target-resolution VAE re-encoding instead.
+Revisions without a cache can use `text_only`; select `error` when the second
+pass must not proceed without Ref2VA conditioning.
 
 Segment Save adopts each verified cache object into
 `output/h3_chains/<run_name>/reference_cache/` and records only that run-local

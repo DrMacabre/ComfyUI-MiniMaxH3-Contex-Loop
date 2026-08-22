@@ -86,11 +86,13 @@ video-only CONST re-noise, and masks audio out of pass 2. Install
 and place its 3D checkpoint in `models/latent_upscale_models/` before opening
 the graph.
 
-Pass-2 conditioning is rebuilt independently from the learned latent. For
-`match` picture refs, the node uses LBH's actual output canvas to re-encode the
-picture VAE latent and Qwen presentation before creating a new Guider. `max`
-pictures, video refs, audio refs, and Qwen-only semantic anchors keep their
-native geometry instead of being blindly multiplied by the upscale factor.
+Pass-2 conditioning follows the latent-sync method shared by the H3 community.
+**Upscale Reference Conditioning** restores the original scene conditioning
+from cache. **H3 Conditioning Sync From Latents** compares the source video
+latent with LBH's actual output, applies the exact X/Y scale to visual
+`minimax_refs` and `minimax_keyframes`, synchronizes each reference's H/W
+metadata, and leaves text, temporal positions, and audio latents unchanged. A
+new Guider is built from that returned conditioning for sampler 2.
 
 The included Comfy Kitchen attention override is bypassed intentionally. At
 large target canvases, Sage prequantized attention can exceed its int32 tensor-stride
@@ -102,16 +104,15 @@ sidecar, integrity record, partial manifest, and final merge remains under
 `output/h3_chains/<run>/upscaled/<profile>/`; enable latent saving only when
 the full HQ sampler latent itself is needed later. Current Tagged and Scheduled
 Ref2VA nodes save the active native VAE/audio reference blocks, compact Qwen
-presentation frames, and—starting with cache v2—the original picture masters
-needed for target-resolution `match` conditioning. Segment Save automatically
-adopts them under
+presentation frames, and—starting with cache v2—the original picture masters.
+Segment Save automatically adopts them under
 `output/h3_chains/<run>/reference_cache/` and records that run-local descriptor
 on the exact source revision. The child workflow therefore finds the matching
 scene from the source manifest alone: no Plan, registry, picture, video, or
-reference-audio wire is required. Runs created before this cache was introduced
-remain supported: they scale the saved presentation picture as a pass-2
-fallback. Runs without any cache use the node's `text_only` fallback; select
-`error` when an exact cached Ref2VA pass is mandatory.
+reference-audio wire is required. Both cache versions retain the native encoded
+reference blocks needed by latent sync. Runs without any cache use the node's
+`text_only` fallback; select `error` when an exact cached Ref2VA pass is
+mandatory.
 
 The masked-video workflow uses the same Chain Loop, checkpoint/review, resume,
 and assembly path as the generation examples. A pack-native source-target node

@@ -1,6 +1,6 @@
 {
-  "last_node_id": 25,
-  "last_link_id": 41,
+  "last_node_id": 26,
+  "last_link_id": 44,
   "nodes": [
     {
       "id": 2,
@@ -87,7 +87,7 @@
       "widgets_values": [
         "h3_lbh_3d",
         "h3_latent",
-        "{\"upscaler\":\"LBH 3D\",\"target_megapixels\":1.5,\"pass2_steps\":2,\"denoise\":0.24,\"conditioning\":\"target_rebuild\",\"audio_denoise\":0}",
+        "{\"upscaler\":\"LBH 3D\",\"target_megapixels\":1.5,\"pass2_steps\":2,\"denoise\":0.24,\"conditioning\":\"latent_sync\",\"audio_denoise\":0}",
         1,
         0,
         false,
@@ -134,7 +134,8 @@
           "name": "source_video_latent",
           "type": "LATENT",
           "links": [
-            21
+            21,
+            42
           ]
         },
         {
@@ -427,8 +428,7 @@
           "name": "VAE",
           "type": "VAE",
           "links": [
-            15,
-            41
+            15
           ]
         }
       ],
@@ -477,13 +477,13 @@
         {
           "name": "target_video_latent",
           "type": "LATENT",
-          "link": 40,
+          "link": null,
           "shape": 7
         },
         {
           "name": "video_vae",
           "type": "VAE",
-          "link": 41,
+          "link": null,
           "shape": 7
         }
       ],
@@ -641,7 +641,7 @@
           "type": "*",
           "links": [
             39,
-            40
+            43
           ]
         }
       ],
@@ -664,6 +664,94 @@
         "device": "cuda",
         "precision": "fp16"
       }
+    },
+    {
+      "id": 26,
+      "type": "H3ConditioningSyncFromLatents",
+      "pos": [
+        1900,
+        500
+      ],
+      "size": [
+        500,
+        300
+      ],
+      "flags": {},
+      "order": 14,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "original_latent",
+          "type": "LATENT",
+          "link": 42
+        },
+        {
+          "name": "upscaled_latent",
+          "type": "LATENT",
+          "link": 43
+        },
+        {
+          "name": "positive",
+          "type": "CONDITIONING",
+          "link": 25
+        },
+        {
+          "name": "method",
+          "type": "COMBO",
+          "widget": {
+            "name": "method"
+          },
+          "link": null
+        },
+        {
+          "name": "negative",
+          "type": "CONDITIONING",
+          "link": null,
+          "shape": 7
+        }
+      ],
+      "outputs": [
+        {
+          "name": "positive",
+          "type": "CONDITIONING",
+          "links": [
+            44
+          ]
+        },
+        {
+          "name": "negative",
+          "type": "CONDITIONING",
+          "links": null
+        },
+        {
+          "name": "width",
+          "type": "INT",
+          "links": null
+        },
+        {
+          "name": "height",
+          "type": "INT",
+          "links": null
+        },
+        {
+          "name": "scale_x",
+          "type": "FLOAT",
+          "links": null
+        },
+        {
+          "name": "scale_y",
+          "type": "FLOAT",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "H3ConditioningSyncFromLatents"
+      },
+      "widgets_values": [
+        "bilinear"
+      ],
+      "color": "#346434",
+      "bgcolor": "rgba(24,24,27,.9)"
     },
     {
       "id": 25,
@@ -758,7 +846,7 @@
         {
           "name": "conditioning",
           "type": "CONDITIONING",
-          "link": 25
+          "link": 44
         }
       ],
       "outputs": [
@@ -1142,7 +1230,7 @@
         "Node name for S&R": "Note"
       },
       "widgets_values": [
-        "STANDALONE H3 CHECKPOINT UPSCALE\n\n1. Open Checkpoint Manager and select the right-hand tip you want to finish. A partial generated branch is valid; no ungenerated scenes are required.\n2. The selected_manifest cable is the complete parent-chain contract. No Plan, Source Timeline, source audio, external context, or reference-media wires enter the upscale loop.\n3. Choose a unique profile in Upscale Adapter. start_clip=1/end_clip=0 processes every generated scene in the selection.\n4. Set LBH target megapixels. The default is 1.5 MP with grid-32 alignment.\n5. Queue. Each HQ scene is saved before the loop advances; Merger writes under output/h3_chains/<run>/upscaled/<profile>/final/.\n\nsave_latent is OFF by default. Enable it only when you need to reopen the HQ latent later.\n\nUpscale Reference Conditioning reads the scene cache automatically. V2 caches retain original picture masters and rebuild match-sized image VAE/Qwen conditioning at LBH's actual output canvas. Existing V1 caches remain usable by scaling their saved presentation frames. Max-sized pictures, video refs, audio refs, and Qwen-only semantic anchors keep their native geometry. Older non-reference runs fall back to text-only by default; choose error when a Ref2VA cache is mandatory."
+        "STANDALONE H3 CHECKPOINT UPSCALE\n\n1. Open Checkpoint Manager and select the right-hand tip you want to finish. A partial generated branch is valid; no ungenerated scenes are required.\n2. The selected_manifest cable is the complete parent-chain contract. No Plan, Source Timeline, source audio, external context, or reference-media wires enter the upscale loop.\n3. Choose a unique profile in Upscale Adapter. start_clip=1/end_clip=0 processes every generated scene in the selection.\n4. Set LBH target megapixels. The default is 1.5 MP with grid-32 alignment.\n5. Queue. Each HQ scene is saved before the loop advances; Merger writes under output/h3_chains/<run>/upscaled/<profile>/final/.\n\nsave_latent is OFF by default. Enable it only when you need to reopen the HQ latent later.\n\nUpscale Reference Conditioning restores the scene's original Ref2VA conditioning from its automatic cache. H3 Conditioning Sync From Latents then measures LBH's real X/Y latent scale, resizes every visual minimax_refs and minimax_keyframes latent, updates reference H/W metadata, and leaves text, time, and audio conditioning untouched. Its positive output creates a fresh pass-2 Basic Guider. Older non-reference runs fall back to text-only by default; choose error when a Ref2VA cache is mandatory."
       ],
       "title": "HOW TO RUN"
     },
@@ -1167,7 +1255,7 @@
         "Node name for S&R": "Note"
       },
       "widgets_values": [
-        "REQUIRES\nhttps://github.com/LBH-123-AI/Comfyui_Minimax_h3_latent_Upscaler\nDownload minimax_h3_latent_upscaler_3d_fp16.safetensors into ComfyUI/models/latent_upscale_models/.\n\nLBH receives only the saved clean 24-channel VIDEO x0. MiniMax H3 Pass-2 AV Prepare rejoins the untouched 32-channel audio, re-noises video only, and installs an audio-zero denoise mask. Upscale Reference Conditioning independently sees the actual LBH output dimensions and rebuilds only resolution-dependent match picture refs before the new Basic Guider is created.\n\nConservative defaults: 1.5 MP, align 32, FP16, 2 pass-2 steps, denoise 0.24, simple schedule, Euler. Raise denoise only after checking identity and scene boundaries. The Comfy Kitchen attention override remains bypassed because large H3 target sequences can exceed Sage prequantized int32 stride limits; this graph uses ComfyUI's PyTorch attention path. Functional nodes intentionally retain their original display names."
+        "REQUIRES\nhttps://github.com/LBH-123-AI/Comfyui_Minimax_h3_latent_Upscaler\nDownload minimax_h3_latent_upscaler_3d_fp16.safetensors into ComfyUI/models/latent_upscale_models/.\n\nLBH receives only the saved clean 24-channel VIDEO x0. MiniMax H3 Pass-2 AV Prepare rejoins the untouched 32-channel audio, re-noises video only, and installs an audio-zero denoise mask. H3 Conditioning Sync From Latents follows the community pass-2 method: original latent + LBH latent + original conditioning -> spatially synchronized conditioning -> new Guider -> sampler 2. The default interpolation is bilinear.\n\nConservative defaults: 1.5 MP, align 32, FP16, 2 pass-2 steps, denoise 0.24, simple schedule, Euler. Raise denoise only after checking identity and scene boundaries. The Comfy Kitchen attention override remains bypassed because large H3 target sequences can exceed Sage prequantized int32 stride limits; this graph uses ComfyUI's PyTorch attention path. Functional nodes intentionally retain their original display names."
       ],
       "title": "DEPENDENCY / PASS-2 NOTES"
     }
@@ -1329,8 +1417,8 @@
       25,
       11,
       0,
-      15,
-      1,
+      26,
+      2,
       "CONDITIONING"
     ],
     [
@@ -1438,20 +1526,28 @@
       "LATENT"
     ],
     [
-      40,
-      14,
+      42,
+      4,
+      2,
+      26,
       0,
-      11,
-      3,
       "LATENT"
     ],
     [
-      41,
-      10,
+      43,
+      14,
       0,
-      11,
-      4,
-      "VAE"
+      26,
+      1,
+      "LATENT"
+    ],
+    [
+      44,
+      26,
+      0,
+      15,
+      1,
+      "CONDITIONING"
     ]
   ],
   "groups": [

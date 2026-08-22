@@ -29,6 +29,8 @@ UPSCALE_STATE_TYPE = "H3_CHAIN_UPSCALE_STATE"
 UPSCALE_SEGMENT_TYPE = "H3_CHAIN_UPSCALE_SEGMENT"
 UPSCALE_MANIFEST_TYPE = "H3_CHAIN_UPSCALE_MANIFEST"
 UPSCALE_BACKENDS = ("h3_latent", "ltx_2_5", "custom")
+CONDITIONING_SYNC_METHODS = (
+    "nearest", "nearest-exact", "bilinear", "bicubic")
 
 
 def _profile_dir(run_name: str, profile: str) -> str:
@@ -180,6 +182,91 @@ def _target_video_geometry(latent: Any) -> tuple[Any, int, int]:
             "Pass-2 video latent must be [B,24,T,H,W], got %s." %
             (tuple(getattr(video, "shape", ())),))
     return video, int(video.shape[-1]) * 16, int(video.shape[-2]) * 16
+
+
+def _sync_visual_latent(value: Any, scale_x: float, scale_y: float,
+                        method: str) -> Any:
+    """Resize one H3 visual conditioning latent without changing time."""
+    if chain.torch is None or not chain.torch.is_tensor(value):
+        raise TypeError(
+            "H3 visual conditioning must contain PyTorch tensors, got %r." %
+            type(value))
+    if value.ndim not in (4, 5):
+        raise ValueError(
+            "H3 visual conditioning latent must be 4D or 5D, got %s." %
+            (tuple(value.shape),))
+    source_height, source_width = int(value.shape[-2]), int(value.shape[-1])
+    target_height = max(2, int(round(source_height * float(scale_y))))
+    target_width = max(2, int(round(source_width * float(scale_x))))
+    # H3 patchifies visual conditioning on a 2x2 latent grid without padding.
+    target_height = (target_height + 1) // 2 * 2
+    target_width = (target_width + 1) // 2 * 2
+    if (target_height, target_width) == (source_height, source_width):
+        return value
+
+    dtype = value.dtype
+    work = value
+    if value.device.type == "cpu" and dtype in (
+            chain.torch.float16, chain.torch.bfloat16):
+        work = value.float()
+    if value.ndim == 5:
+        batch, channels, frames = work.shape[:3]
+        work = work.permute(0, 2, 1, 3, 4).reshape(
+            batch * frames, channels, source_height, source_width)
+    options = {}
+    if method in ("bilinear", "bicubic"):
+        options["align_corners"] = False
+    resized = chain.torch.nn.functional.interpolate(
+        work, size=(target_height, target_width), mode=method, **options)
+    if value.ndim == 5:
+        resized = resized.reshape(
+            batch, frames, channels, target_height, target_width
+        ).permute(0, 2, 1, 3, 4).contiguous()
+    return resized.to(dtype=dtype)
+
+
+def _sync_h3_conditioning(conditioning: Any, scale_x: float,
+                          scale_y: float, method: str) -> Any:
+    """Clone CONDITIONING and resize its H3 visual refs and keyframes."""
+    if conditioning is None:
+        return None
+    output = []
+    for entry in conditioning:
+        if not isinstance(entry, (list, tuple)) or len(entry) < 2:
+            output.append(entry)
+            continue
+        embedding, metadata = entry[0], entry[1]
+        if not isinstance(metadata, dict):
+            output.append(entry)
+            continue
+        synced = metadata.copy()
+        refs = metadata.get("minimax_refs")
+        if refs is not None:
+            synced_refs = []
+            for block in refs:
+                copied = dict(block)
+                if copied.get("kind") != "audio" and copied.get("latent") is not None:
+                    latent = _sync_visual_latent(
+                        copied["latent"], scale_x, scale_y, method)
+                    copied["latent"] = latent
+                    copied["latent_h"] = int(latent.shape[-2])
+                    copied["latent_w"] = int(latent.shape[-1])
+                    if latent.ndim == 5 and "latent_t" in copied:
+                        copied["latent_t"] = int(latent.shape[2])
+                synced_refs.append(copied)
+            synced["minimax_refs"] = synced_refs
+        keyframes = metadata.get("minimax_keyframes")
+        if keyframes is not None:
+            synced_keyframes = []
+            for keyframe in keyframes:
+                copied = dict(keyframe)
+                if copied.get("latent") is not None:
+                    copied["latent"] = _sync_visual_latent(
+                        copied["latent"], scale_x, scale_y, method)
+                synced_keyframes.append(copied)
+            synced["minimax_keyframes"] = synced_keyframes
+        output.append([embedding, synced])
+    return output
 
 
 def _sample_members(samples: Any) -> tuple[list[Any], bool]:
@@ -604,6 +691,74 @@ class MiniMaxH3ChainUpscaleReferenceConditioning:
                 " (generation fingerprint %s)" % fingerprint[:12]
                 if fingerprint else ""))
         return conditioning, prompt, False, status
+
+
+class H3ConditioningSyncFromLatents:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "original_latent": ("LATENT", {
+                    "tooltip": "Original-resolution 24-channel H3 video latent "
+                               "whose conditioning will be synchronized."}),
+                "upscaled_latent": ("LATENT", {
+                    "tooltip": "Upscaled 24-channel H3 video latent. Its exact "
+                               "X/Y scale drives the conditioning resize."}),
+                "positive": ("CONDITIONING", {
+                    "tooltip": "Original H3 conditioning containing minimax_refs "
+                               "and/or minimax_keyframes."}),
+                "method": (CONDITIONING_SYNC_METHODS, {
+                    "default": "bilinear",
+                    "tooltip": "Spatial interpolation used for visual reference "
+                               "and keyframe latents. Time and audio are unchanged."}),
+            },
+            "optional": {
+                "negative": ("CONDITIONING", {
+                    "tooltip": "Optional negative conditioning. Use the returned "
+                               "negative when rebuilding a CFG Guider."}),
+            },
+        }
+
+    RETURN_TYPES = (
+        "CONDITIONING", "CONDITIONING", "INT", "INT", "FLOAT", "FLOAT")
+    RETURN_NAMES = (
+        "positive", "negative", "width", "height", "scale_x", "scale_y")
+    OUTPUT_TOOLTIPS = (
+        "Positive conditioning with visual refs/keyframes synchronized to the "
+        "upscaled latent.",
+        "Negative conditioning synchronized by the same scale, when connected.",
+        "Upscaled video width in pixels.",
+        "Upscaled video height in pixels.",
+        "Exact horizontal latent scale.",
+        "Exact vertical latent scale.",
+    )
+    FUNCTION = "sync"
+    CATEGORY = "conditioning/minimax/contex_loop/upscale"
+    DESCRIPTION = (
+        "Synchronize H3 pass-2 conditioning from the original and upscaled "
+        "latents. Resizes minimax_refs and minimax_keyframes spatial latents, "
+        "updates reference H/W metadata, and leaves text, time, and audio "
+        "conditioning untouched. Build a new Guider from the returned output.")
+
+    def sync(self, original_latent, upscaled_latent, positive,
+             method="bilinear", negative=None):
+        original, _source_width, _source_height = _target_video_geometry(
+            original_latent)
+        upscaled, width, height = _target_video_geometry(upscaled_latent)
+        if tuple(original.shape[:3]) != tuple(upscaled.shape[:3]):
+            raise ValueError(
+                "H3 conditioning sync requires matching batch/channel/time; "
+                "original %s vs upscaled %s." %
+                (tuple(original.shape[:3]), tuple(upscaled.shape[:3])))
+        if method not in CONDITIONING_SYNC_METHODS:
+            raise ValueError("Unknown H3 conditioning sync method %r." % method)
+        scale_x = int(upscaled.shape[-1]) / float(original.shape[-1])
+        scale_y = int(upscaled.shape[-2]) / float(original.shape[-2])
+        return (
+            _sync_h3_conditioning(positive, scale_x, scale_y, method),
+            _sync_h3_conditioning(negative, scale_x, scale_y, method),
+            width, height, scale_x, scale_y,
+        )
 
 
 class MiniMaxH3ChainPass2Prepare:
@@ -1258,6 +1413,7 @@ UPSCALE_NODE_CLASS_MAPPINGS = {
     "MiniMaxH3ChainUpscaleCurrent": MiniMaxH3ChainUpscaleCurrent,
     "MiniMaxH3ChainUpscaleReferenceConditioning": (
         MiniMaxH3ChainUpscaleReferenceConditioning),
+    "H3ConditioningSyncFromLatents": H3ConditioningSyncFromLatents,
     "MiniMaxH3ChainPass2Prepare": MiniMaxH3ChainPass2Prepare,
     "MiniMaxH3ChainUpscaleSegmentSave": MiniMaxH3ChainUpscaleSegmentSave,
     "MiniMaxH3ChainUpscaleLoopEnd": MiniMaxH3ChainUpscaleLoopEnd,
@@ -1269,6 +1425,7 @@ UPSCALE_NODE_DISPLAY_NAME_MAPPINGS = {
     "MiniMaxH3ChainUpscaleCurrent": "MiniMax H3 Upscale Current Scene",
     "MiniMaxH3ChainUpscaleReferenceConditioning": (
         "MiniMax H3 Upscale Reference Conditioning"),
+    "H3ConditioningSyncFromLatents": "H3 Conditioning Sync From Latents",
     "MiniMaxH3ChainPass2Prepare": "MiniMax H3 Pass-2 AV Prepare",
     "MiniMaxH3ChainUpscaleSegmentSave": "MiniMax H3 Upscale Segment Save",
     "MiniMaxH3ChainUpscaleLoopEnd": "MiniMax H3 Upscale Loop End",

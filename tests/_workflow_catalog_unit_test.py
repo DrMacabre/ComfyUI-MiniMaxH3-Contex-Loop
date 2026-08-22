@@ -760,6 +760,7 @@ def validate_deferred_h3_upscale(path):
         "MiniMaxH3ChainUpscaleAdapter",
         "MiniMaxH3ChainUpscaleCurrent",
         "MiniMaxH3ChainUpscaleReferenceConditioning",
+        "H3ConditioningSyncFromLatents",
         "MinimaxH3LatentUpscaler3D",
         "MiniMaxH3ChainPass2Prepare",
         "BasicScheduler",
@@ -778,6 +779,7 @@ def validate_deferred_h3_upscale(path):
     adapter = node(workflow, "MiniMaxH3ChainUpscaleAdapter")
     current = node(workflow, "MiniMaxH3ChainUpscaleCurrent")
     learned = node(workflow, "MinimaxH3LatentUpscaler3D")
+    sync = node(workflow, "H3ConditioningSyncFromLatents")
     prepare = node(workflow, "MiniMaxH3ChainPass2Prepare")
     scheduler = node(workflow, "BasicScheduler")
     sampler = node(workflow, "SamplerCustomAdvanced")
@@ -796,7 +798,8 @@ def validate_deferred_h3_upscale(path):
         socket(loop_end["inputs"], "flow")["link"]]
     assert socket(current["outputs"], "source_latent")["links"] is None
     assert socket(current["outputs"], "source_video_latent")["links"] == [
-        socket(learned["inputs"], "latent")["link"]]
+        socket(learned["inputs"], "latent")["link"],
+        socket(sync["inputs"], "original_latent")["link"]]
     assert socket(current["outputs"], "source_audio_latent")["links"] == [
         socket(prepare["inputs"], "source_audio")["link"]]
     conditioner = node(
@@ -805,12 +808,13 @@ def validate_deferred_h3_upscale(path):
         conditioner["inputs"], "state")["link"]
     assert conditioner["widgets_values"] == ["text_only"]
     assert socket(conditioner["outputs"], "positive")["links"] == [
-        socket(node(workflow, "BasicGuider")["inputs"], "conditioning")["link"]]
+        socket(sync["inputs"], "positive")["link"]]
+    assert socket(conditioner["inputs"], "target_video_latent")["link"] is None
+    assert socket(conditioner["inputs"], "video_vae")["link"] is None
     assert socket(learned["outputs"], "latent")["links"] == [
         socket(prepare["inputs"], "upscaled_video")["link"],
-        socket(conditioner["inputs"], "target_video_latent")["link"]]
-    assert socket(node(workflow, "VAELoader")["outputs"], "VAE")["links"][1] == (
-        socket(conditioner["inputs"], "video_vae")["link"])
+        socket(sync["inputs"], "upscaled_latent")["link"]]
+    assert sync["widgets_values"] == ["bilinear"]
     assert scheduler["widgets_values"] == ["simple", 2, 0.24]
     assert learned["widgets_values"] == [
         "minimax_h3_latent_upscaler_3d_fp16.safetensors", "megapixels",
@@ -821,7 +825,7 @@ def validate_deferred_h3_upscale(path):
         if functional.get("type") != "Note":
             assert "title" not in functional, functional.get("type")
     guider = node(workflow, "BasicGuider")
-    assert socket(conditioner["outputs"], "positive")["links"] == [
+    assert socket(sync["outputs"], "positive")["links"] == [
         socket(guider["inputs"], "conditioning")["link"]]
     assert socket(prepare["outputs"], "latent")["links"] == [
         socket(sampler["inputs"], "latent_image")["link"]]
@@ -838,7 +842,8 @@ def validate_deferred_h3_upscale(path):
         for item in workflow["nodes"] if item.get("type") == "Note")
     assert "selected_manifest cable is the complete parent-chain contract" in notes
     assert "No Plan, Source Timeline, source audio, external context" in notes
-    assert "V2 caches retain original picture masters" in notes
+    assert "H3 Conditioning Sync From Latents" in notes
+    assert "minimax_refs and minimax_keyframes" in notes
     assert "save_latent is OFF" in notes
     assert "Comfyui_Minimax_h3_latent_Upscaler" in notes
     h3_video_vae = node(workflow, "VAELoader")

@@ -54,6 +54,7 @@ def main():
         "MiniMaxH3ChainUpscaleAdapter",
         "MiniMaxH3ChainUpscaleCurrent",
         "MiniMaxH3ChainUpscaleReferenceConditioning",
+        "H3ConditioningSyncFromLatents",
         "MiniMaxH3ChainPass2Prepare",
         "MiniMaxH3ChainUpscaleSegmentSave",
         "MiniMaxH3ChainUpscaleLoopEnd",
@@ -303,6 +304,57 @@ def main():
         max_refs = max_conditioning[0][1]["minimax_refs"]
         assert max_detail["rebuilt_images"] == 0
         assert tuple(max_refs[0]["latent"].shape[-2:]) == (2, 2)
+
+        sync_positive = [[torch.zeros((1, 1, 4)), {
+            "minimax_refs": [{
+                "kind": "image",
+                "latent_h": 2,
+                "latent_w": 3,
+                "latent": torch.arange(
+                    1 * 24 * 1 * 2 * 3, dtype=torch.float32).reshape(
+                        1, 24, 1, 2, 3),
+            }, {
+                "kind": "video_audio",
+                "latent_t": 2,
+                "latent_h": 4,
+                "latent_w": 5,
+                "latent": torch.zeros((1, 24, 2, 4, 5)),
+                "audio_latent": torch.ones((1, 32, 2, 9)),
+            }, {
+                "kind": "audio",
+                "audio_latent": torch.ones((1, 32, 2, 9)),
+            }],
+            "minimax_keyframes": [{
+                "resolved_frame_index": 0,
+                "latent": torch.zeros((1, 24, 1, 2, 2)),
+                "audio_latent": torch.ones((1, 32, 2, 9)),
+            }],
+            "unchanged": "metadata",
+        }]]
+        synced = upscale.H3ConditioningSyncFromLatents().sync(
+            {"samples": torch.zeros((1, 24, 2, 2, 2))},
+            {"samples": torch.zeros((1, 24, 2, 4, 6))},
+            sync_positive, "bilinear")
+        synced_meta = synced[0][0][1]
+        assert synced[1] is None
+        assert synced[2:] == (96, 64, 3.0, 2.0)
+        assert tuple(synced_meta["minimax_refs"][0]["latent"].shape) == (
+            1, 24, 1, 4, 10)
+        assert synced_meta["minimax_refs"][0]["latent_h"] == 4
+        assert synced_meta["minimax_refs"][0]["latent_w"] == 10
+        assert tuple(synced_meta["minimax_refs"][1]["latent"].shape) == (
+            1, 24, 2, 8, 16)
+        assert synced_meta["minimax_refs"][1]["latent_t"] == 2
+        assert tuple(synced_meta["minimax_refs"][1][
+            "audio_latent"].shape) == (1, 32, 2, 9)
+        assert "latent" not in synced_meta["minimax_refs"][2]
+        assert tuple(synced_meta["minimax_keyframes"][0][
+            "latent"].shape) == (1, 24, 1, 4, 6)
+        assert tuple(synced_meta["minimax_keyframes"][0][
+            "audio_latent"].shape) == (1, 32, 2, 9)
+        assert synced_meta["unchanged"] == "metadata"
+        assert tuple(sync_positive[0][1]["minimax_refs"][0][
+            "latent"].shape) == (1, 24, 1, 2, 3)
 
         class FakeSampling:
             @staticmethod
