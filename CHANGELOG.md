@@ -4,6 +4,13 @@ Newest first. This file keeps release history out of the onboarding README.
 
 ## Unreleased
 
+## v0.5.9 — Checkpoint branch selection repair
+
+- Fixed Checkpoint Manager branch clicks so the selected lineage is committed
+  through the hidden Comfy widget callback and immediately available to
+  `selected_manifest`. Branch headers now select their final revision, and
+  the UI distinguishes the current selection from the saved active lineage.
+
 ## v0.5.8 — Deferred upscale reference control
 
 - Added an inline **Upscale Reference + Prompt Override** on the existing

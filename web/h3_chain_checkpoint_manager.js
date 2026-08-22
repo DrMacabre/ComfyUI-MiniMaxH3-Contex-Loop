@@ -6,20 +6,21 @@ import {
     checkpointDependencyText,
     checkpointRevisionKey,
     checkpointRevisionLineage,
+    checkpointSelectionJson,
     formatCheckpointBytes,
     selectedCheckpointRevision,
-} from "./h3_checkpoint_manager_core.mjs?v=0.5.8";
+} from "./h3_checkpoint_manager_core.mjs?v=0.5.9";
 import {
     parsePlanJson,
     planToJson,
     promptValueToText,
-} from "./h3_chain_plan_core.mjs?v=0.5.8";
-import {applyCheckpointRevisionSet} from "./h3_chain_review_core.mjs?v=0.5.8";
-import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.5.8";
+} from "./h3_chain_plan_core.mjs?v=0.5.9";
+import {applyCheckpointRevisionSet} from "./h3_chain_review_core.mjs?v=0.5.9";
+import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.5.9";
 import {
     refreshRestoredPlanEditors,
     restoreConnectedPolicyInputs,
-} from "./h3_plan_restore_core.mjs?v=0.5.8";
+} from "./h3_plan_restore_core.mjs?v=0.5.9";
 
 const NODE_NAME = "MiniMaxH3ChainCheckpointManager";
 const PLAN_NAME = "MiniMaxH3ChainPlan";
@@ -175,6 +176,10 @@ function injectStyles() {
       .h3cm-branch { position:relative; z-index:1; margin-bottom:8px; padding:6px;
         border:1px solid color-mix(in srgb,var(--h3cm-border) 75%,transparent); border-radius:6px; }
       .h3cm-branch-head { justify-content:space-between; margin-bottom:5px; }
+      .h3cm-branch-head[role="button"] { cursor:pointer; border-radius:4px; }
+      .h3cm-branch-head[role="button"]:hover,.h3cm-branch-head[role="button"]:focus-visible {
+        color:var(--h3cm-accent); outline:1px solid var(--h3cm-accent); outline-offset:2px; }
+      .h3cm-branch-selected { border-color:var(--h3cm-accent) !important; }
       .h3cm-branch-active { color:var(--h3cm-accent); font-weight:700; }
       .h3cm-branch-path { position:relative; z-index:3; align-items:stretch; overflow:auto; padding-bottom:2px; }
       .h3cm-arrow { align-self:center; color:var(--h3cm-muted); }
@@ -278,18 +283,25 @@ function mount(node) {
     }
 
     function persistSelection() {
+        const previousRun = node.properties[RUN_PROPERTY];
+        const previousScene = node.properties[SCENE_PROPERTY];
+        const previousRevision = node.properties[REVISION_PROPERTY];
         node.properties[RUN_PROPERTY] = state.runName;
         node.properties[SCENE_PROPERTY] = state.scene;
         node.properties[REVISION_PROPERTY] = state.revision;
+        let changed = previousRun !== state.runName ||
+            previousScene !== state.scene ||
+            previousRevision !== state.revision;
         if (selectionWidget) {
-            const lineage = checkpointRevisionLineage(
-                state.payload, state.selected);
-            selectionWidget.value = (
-                state.runName && lineage.length
-                    ? JSON.stringify({run_name:state.runName, lineage})
-                    : ""
-            );
+            const value = checkpointSelectionJson(
+                state.payload, state.runName, state.selected);
+            if (selectionWidget.value !== value) {
+                selectionWidget.value = value;
+                selectionWidget.callback?.(value);
+                changed = true;
+            }
         }
+        if (changed) node.graph?.setDirtyCanvas?.(true, true);
     }
 
     function setBusy(value, message = "") {
@@ -351,6 +363,22 @@ function mount(node) {
         for (const branch of rows) {
             const row = element("div", "h3cm-branch");
             const header = element("div", "h3cm-branch-head");
+            const tip = branch.revisions.at(-1) ?? null;
+            const selectedTip = Boolean(tip &&
+                Number(state.selected?.scene) === Number(tip.scene) &&
+                String(state.selected?.revision) === String(tip.revision));
+            if (selectedTip) row.classList.add("h3cm-branch-selected");
+            if (tip) {
+                header.role = "button";
+                header.tabIndex = 0;
+                header.title = `Select this branch through scene ${tip.scene}`;
+                header.addEventListener("click", () => selectRevision(tip));
+                header.addEventListener("keydown", (event) => {
+                    if (event.key !== "Enter" && event.key !== " ") return;
+                    event.preventDefault();
+                    selectRevision(tip);
+                });
+            }
             const name = element("span", branch.active ? "h3cm-branch-active" : "", branch.label);
             const count = element("span", "h3cm-muted", `${branch.revisions.length} scene${branch.revisions.length === 1 ? "" : "s"}`);
             header.append(name, count);
@@ -364,6 +392,8 @@ function mount(node) {
                     revision.prompt_preview || revision.scene_id,
                     () => selectRevision(revision), "h3cm-revision",
                 );
+                const selected = state.selected?.scene === revision.scene &&
+                    state.selected?.revision === revision.revision;
                 if (sharedCount > 1) {
                     card.classList.add("h3cm-revision-shared");
                     card.dataset.sharedKey = key;
@@ -373,8 +403,8 @@ function mount(node) {
                         `shared ×${sharedCount}`,
                     ));
                 }
-                card.append(element("small", "", `${revision.active ? "active" : "inactive"}${revision.ready ? "" : " · broken"}`));
-                if (state.selected?.scene === revision.scene && state.selected?.revision === revision.revision) {
+                card.append(element("small", "", `${selected ? "selected · " : ""}${revision.active ? "saved active" : "saved inactive"}${revision.ready ? "" : " · broken"}`));
+                if (selected) {
                     card.classList.add("h3cm-revision-selected");
                 }
                 path.append(card);
