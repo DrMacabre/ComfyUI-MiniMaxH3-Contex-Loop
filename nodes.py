@@ -30,6 +30,7 @@ anchor_mode
 """
 
 import logging
+import math
 import os
 
 import comfy.utils
@@ -75,6 +76,17 @@ FRAME_PER_TOKEN = (1, 4, 4, 4, 4)
 FPS = 24  # H3's native rate; audio latents run at 40 Hz, hence FRAME_RESCALE 5/3
 FRAME_RESCALE = 5.0 / 3.0
 AUDIO_HZ = 40.0
+VISUAL_COND_NOISE_AUG_DEFAULT = 0.999
+
+
+def _validate_visual_cond_noise_aug(value):
+    """Validate ComfyUI's global H3 visual-condition augmentation value."""
+    resolved = float(value)
+    if not math.isfinite(resolved) or not 0.0 <= resolved <= 1.0:
+        raise ValueError(
+            "h3_motion_context: visual_cond_noise_aug must be a finite "
+            "number between 0 and 1, got %r." % (value,))
+    return resolved
 
 
 def _activate_inline_patches():
@@ -437,9 +449,12 @@ class MiniMaxH3MotionContext:
     def apply(self, conditioning, vae, latent, context_frames, context_length,
               encode_mode, anchor_mode, crop, audio_context_length=22,
               audio_mode="timeline", context_latent=None, audio_vae=None,
-              context_audio=None, video_context_latent=None):
+              context_audio=None, video_context_latent=None,
+              visual_cond_noise_aug=VISUAL_COND_NOISE_AUG_DEFAULT):
         guide_api = _activate_inline_patches()
         native_guides = guide_api == "native"
+        visual_cond_noise_aug = _validate_visual_cond_noise_aug(
+            visual_cond_noise_aug)
 
         video = _video_from_latent(latent)
         latent_t = int(video.shape[2])
@@ -656,6 +671,13 @@ class MiniMaxH3MotionContext:
                     retained[MC_KEY] = position
                 kept.append(retained)
             metadata["minimax_keyframes"] = kept + keyframes
+            if blocks:
+                # This is the public ComfyUI H3 payload control. Core applies
+                # one value to every visual condition row in the active
+                # payload, including pre-existing Ref2VA/keyframe rows; it
+                # currently has no per-keyframe equivalent.
+                metadata["minimax_visual_cond_noise_aug"] = (
+                    visual_cond_noise_aug)
             if not native_guides:
                 metadata["minimax_frame_count"] = frame_count
             out.append([embedding, metadata])
@@ -671,6 +693,12 @@ class MiniMaxH3MotionContext:
             # existing image/video/audio refs remain intact.
             out = node_helpers.conditioning_set_values(
                 out, {"minimax_refs": [motion_context_audio_ref]}, append=True)
+
+        if blocks:
+            _LOG.info(
+                "h3_motion_context: visual condition noise augmentation "
+                "%.3f (ComfyUI applies it to all visual condition rows in "
+                "this scene)", visual_cond_noise_aug)
 
         trim = span if anchor_mode == "head" else 0
         index_summary = ("%d..%d" % (indices[0], indices[-1])

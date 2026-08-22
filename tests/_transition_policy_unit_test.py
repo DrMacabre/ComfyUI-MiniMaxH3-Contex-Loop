@@ -273,6 +273,13 @@ assert float(noisy_39_a.max()) <= 1.0
 
 captured = {}
 
+context_optional = chain.MiniMaxH3ChainContext.INPUT_TYPES()["optional"]
+visual_aug_schema = context_optional["visual_cond_noise_aug"]
+assert visual_aug_schema[0] == "FLOAT"
+assert visual_aug_schema[1]["default"] == 0.999
+assert visual_aug_schema[1]["step"] == 0.001
+assert list(context_optional)[-1] == "visual_cond_noise_aug"
+
 
 class CapturingMotionContext:
     def apply(self, **kwargs):
@@ -296,12 +303,14 @@ try:
         conditioning="stock-conditioning",
         vae=object(),
         latent="target-latent",
+        visual_cond_noise_aug=0.995,
     )
 finally:
     chain.MiniMaxH3MotionContext = original_motion_context
 
 assert result == ("tapered-conditioning", 39, True, "target-latent", None)
 assert captured["context_length"] == 39
+assert captured["visual_cond_noise_aug"] == 0.995
 assert tuple(captured["context_frames"].shape) == (39, 19, 31, 3)
 assert not torch.equal(captured["context_frames"], source[-39:])
 assert captured["context_latent"] is original_latent

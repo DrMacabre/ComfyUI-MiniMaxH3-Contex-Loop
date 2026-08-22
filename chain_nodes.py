@@ -133,6 +133,7 @@ from .checkpoint_manager import (
 _LOG = logging.getLogger("minimax_h3_context_loop.chain")
 
 FPS = 24
+VISUAL_COND_NOISE_AUG_DEFAULT = 0.999
 PLAN_VERSION = 2
 MAX_SHOTS = 128
 MAX_SEED = 0xFFFFFFFFFFFFFFFF
@@ -11081,6 +11082,22 @@ class MiniMaxH3ChainContext:
                                "next-sigma schedule. This also selects the "
                                "external per-model patch route when Chain "
                                "Context's MODEL input is disconnected."}),
+                "visual_cond_noise_aug": ("FLOAT", {
+                    "default": VISUAL_COND_NOISE_AUG_DEFAULT,
+                    "min": 0.900,
+                    "max": 1.000,
+                    "step": 0.001,
+                    "round": 0.001,
+                    "tooltip": "Experimental Guide diagnostic. 0.999 is "
+                               "ComfyUI's current H3 default; try 0.995, "
+                               "then 0.990 to weaken the near-clean visual "
+                               "conditioning seen at early sampling steps. "
+                               "Core exposes one value per conditioning "
+                               "payload, so on continuation scenes it also "
+                               "affects character, keyframe, and motion "
+                               "references already present in that payload. "
+                               "It does not control an AV preserved prefix "
+                               "and is ignored by AV transition modes."}),
             }
         }
 
@@ -11119,7 +11136,8 @@ class MiniMaxH3ChainContext:
                    "Context.")
 
     def apply(self, state, conditioning, vae, latent, audio_vae=None,
-              model=None, drift_sigmas=None):
+              model=None, drift_sigmas=None,
+              visual_cond_noise_aug=VISUAL_COND_NOISE_AUG_DEFAULT):
         index = int(state["index"])
         plan = state["plan"]
         cfg = plan["compatibility"]
@@ -11191,6 +11209,13 @@ class MiniMaxH3ChainContext:
         previous_frames = _previous_context_frames(
             state, vae, context_length)
         if continuation_mode in MASKED_CONTINUATION_MODES:
+            if (abs(float(visual_cond_noise_aug)
+                    - VISUAL_COND_NOISE_AUG_DEFAULT) > 5e-7):
+                _LOG.warning(
+                    "H3 Chain visual_cond_noise_aug %.3f is a Guide-only "
+                    "diagnostic and is ignored by %s; AV prefix strength is "
+                    "controlled by its denoise mask.",
+                    float(visual_cond_noise_aug), continuation_mode)
             from .masked_context import apply_masked_prefix
 
             previous_latent = state.get("previous_latent")
@@ -11331,6 +11356,7 @@ class MiniMaxH3ChainContext:
             audio_vae=audio_vae,
             context_audio=previous_audio,
             video_context_latent=video_context_latent,
+            visual_cond_noise_aug=visual_cond_noise_aug,
         )
         return (out, trim, True, target_latent, model)
 

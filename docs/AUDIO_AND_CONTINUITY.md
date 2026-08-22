@@ -143,6 +143,15 @@ mode may pair either experimental Guide with another Guide context length; 22
 is the published baseline. Mixed plans must still use
 encode/anchor settings compatible with every AV-mask scene.
 
+Chain Context exposes `visual_cond_noise_aug` as a Guide-only diagnostic.
+`0.999` preserves ComfyUI's current H3 behavior; `0.995` and `0.990` add
+progressively more noise to visual condition rows and lower their pinned
+timestep. ComfyUI currently owns this as one value for the complete
+conditioning payload, so it also affects Ref2VA character, keyframe, and
+motion-reference rows in that continuation scene. AV prefixes are target
+latent rows rather than Guide rows, so the control is deliberately ignored by
+AV modes. Keep it at `0.999` outside controlled comparisons.
+
 Drift-Control AV v1 is also fixed to 39 frames. Its sigma rule, 8+4 temporal
 taper, mask quantization, audio behavior, and validated-step baseline enter the
 incoming-boundary dependency fingerprint. Changing the mode or recipe therefore
