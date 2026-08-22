@@ -309,6 +309,35 @@ assert.match(calculatePlanTiming(mixedContinuationPlan, {
     defaultDurationSeconds: 5,
 }).errors.join("\n"), /exact shared video\/audio boundary/);
 
+const fiveFrameVideoOnlyAv = calculatePlanTiming({shots: [
+    {id: "one", prompt: "Opening.", length: 90},
+    {id: "two", prompt: "Continue.", length: 90},
+]}, {
+    contextLength: 5,
+    audioContextLength: 5,
+    encodeMode: "video",
+    anchorMode: "head",
+    continuationMode: "masked_av",
+    generatedContinuity: "off",
+});
+assert.deepEqual(fiveFrameVideoOnlyAv.errors, []);
+assert.equal(fiveFrameVideoOnlyAv.shots[1].contextLength, 5);
+assert.equal(fiveFrameVideoOnlyAv.shots[1].audioContextLength, 0);
+assert.equal(
+    fiveFrameVideoOnlyAv.shots[1].preservesGeneratedAudioPrefix, false,
+);
+assert.match(calculatePlanTiming({shots: [
+    {id: "one", prompt: "Opening.", length: 90},
+    {id: "two", prompt: "Continue.", length: 90},
+]}, {
+    contextLength: 5,
+    audioContextLength: 5,
+    encodeMode: "video",
+    anchorMode: "head",
+    continuationMode: "masked_av",
+    generatedContinuity: "on",
+}).errors.join("\n"), /exact shared video\/audio boundary/);
+
 const featheredContinuationPlan = parsePlanJson(JSON.stringify({
     shots: [
         {id: "one", prompt: "Opening."},

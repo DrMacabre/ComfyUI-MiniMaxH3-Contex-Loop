@@ -96,6 +96,7 @@ export function studioSourceSecond(reference, deliveredLocalSeconds, fps = 24) {
 
 export function h3StudioGridMarkers(
     rawFrames, contextFrames = 0, continuationMode = "guide",
+    preserveAudioPrefix = true,
 ) {
     const frames = Math.trunc(Number(rawFrames));
     const context = Math.trunc(Number(contextFrames));
@@ -120,16 +121,22 @@ export function h3StudioGridMarkers(
     if (avMode && Number.isInteger(context) && context > 0) {
         const latentIndex = (context - 5) / 17;
         const latentGrid = Number.isInteger(latentIndex) && latentIndex >= 0;
-        const exact = latentGrid && context % 3 === 0;
+        const audioAligned = context % 3 === 0;
+        const audioPreserved = Boolean(preserveAudioPrefix);
+        const exact = latentGrid && (!audioPreserved || audioAligned);
         const audioTicks = context * 5 / 3;
         av = {
             frames:context,
             latentGrid,
             exact,
+            audioAligned,
+            audioPreserved,
             audioTicks,
-            label:exact
-                ? `${context}f AV = ${audioTicks} audio ticks`
-                : `${context}f AV = ${audioTicks.toFixed(3)} audio ticks`,
+            label:audioPreserved
+                ? (audioAligned
+                    ? `${context}f AV = ${audioTicks} audio ticks`
+                    : `${context}f AV = ${audioTicks.toFixed(3)} audio ticks`)
+                : `${context}f video-only AV`,
         };
     }
 

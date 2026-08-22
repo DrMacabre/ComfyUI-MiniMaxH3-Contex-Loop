@@ -4960,11 +4960,24 @@ def _normalize_plan(
                     "Video Context has no sampled predecessor latent.")
         if (shot_context_length and
                 shot_continuation_mode in MASKED_CONTINUATION_MODES):
-            if shot_context_length not in AV_TRANSITION_CONTEXT_LENGTHS:
+            preserves_generated_audio_prefix = (
+                resolved_audio_policy["generated_continuity"] == "on"
+                and resolved_audio_policy.get(
+                    "source_audio_target", "off") != "locked"
+                and shot_audio_context_length > 0)
+            if (preserves_generated_audio_prefix and
+                    shot_context_length not in AV_TRANSITION_CONTEXT_LENGTHS):
                 raise ValueError(
-                    "H3 AV mask continuation requires an exact shared video/"
-                    "audio boundary: context_length must be 39, 90, 141, "
-                    "192, or 243 frames (shot %d)." % index)
+                    "H3 AV generated-audio continuity requires an exact "
+                    "shared video/audio boundary: context_length must be 39, "
+                    "90, 141, 192, or 243 frames (shot %d). Set generated "
+                    "continuity off or this scene's audio_context_length to "
+                    "0 for a video-only AV test." % index)
+            if (not preserves_generated_audio_prefix and
+                    shot_context_length < 5):
+                raise ValueError(
+                    "H3 video-only AV continuation requires at least 5 "
+                    "context frames (shot %d)." % index)
             if encode_mode != "video":
                 raise ValueError(
                     "H3 AV mask continuation requires encode_mode=video "
@@ -9071,14 +9084,20 @@ class MiniMaxH3Legacy04PolicyAdapter:
                     "default": 22,
                     "tooltip": "Legacy 0.4 global visual overlap. This is "
                                "paired with continuation_mode and translated "
-                               "into the one-wire 0.5 policy."}),
+                               "into the one-wire 0.5 policy. Basic AV modes "
+                               "may use 5+ frames for a video-only diagnostic "
+                               "when generated audio continuity is off; AV "
+                               "audio carry and Drift-Control remain 39+ "
+                               "aligned recipes."}),
                 "audio_context_length": ("INT", {
                     "default": 22, "min": 0, "max": 240,
                     "tooltip": "Legacy 0.4 generated-audio overlap in "
                                "24-fps video-frame units. Guide can use this "
                                "independently of visual context. AV treats "
                                "zero as disabled and any positive value as "
-                               "enabled for the exact shared video boundary."}),
+                               "enabled. Off-grid basic AV is accepted only "
+                               "when generated audio continuity is off (or "
+                               "this value is zero)."}),
             },
             "optional": {
                 "chain_policy": (CHAIN_POLICY_TYPE, {
@@ -9214,7 +9233,11 @@ class MiniMaxH3ChainPlan:
                                "continue motion. Use 22 for guide mode and 39 "
                                "for masked_av, tapered_av, feathered_av, or "
                                "audio_feathered_av/Drift AV so the AV "
-                               "clocks meet exactly. "
+                               "clocks meet exactly. For diagnostics, basic "
+                               "masked/audio-feathered AV may use a 5+ frame "
+                               "video-only overlap when Generated continuity "
+                               "is off (or scene audio context is 0); Detail "
+                               "and Drift AV remain fixed at 39. "
                                "A scene's Advanced selector can override this; "
                                "blank inherits it and 0 starts a visually new scene. "
                                "Audio context is controlled separately. With head "

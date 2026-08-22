@@ -33,6 +33,7 @@ import {
 } from "./h3_policy_core.mjs?v=0.5.5";
 import {
     resolveAudioContextLength,
+    resolveAudioPolicy,
     resolveTransitionPolicy,
 } from "./h3_socket_presentation_core.mjs?v=0.5.5";
 
@@ -478,6 +479,7 @@ function mountEditor(node) {
 
     function currentSettings() {
         const transition = resolveTransitionPolicy(node);
+        const audio = resolveAudioPolicy(node);
         return {
             contextLength: transition.known
                 ? transition.contextLength
@@ -489,6 +491,10 @@ function mountEditor(node) {
             continuationMode: transition.known
                 ? transition.continuationMode
                 : widgetValue(node, "continuation_mode", "guide"),
+            generatedContinuity: audio.known
+                ? audio.generatedContinuity : "on",
+            sourceAudioTarget: audio.known
+                ? audio.sourceAudioTarget ?? "off" : "off",
             transitionPreset: transition.known ? transition.preset : "custom",
             defaultDurationSeconds: widgetValue(node, "default_duration_seconds", 15),
             defaultSteps: widgetValue(node, "default_steps", 20),

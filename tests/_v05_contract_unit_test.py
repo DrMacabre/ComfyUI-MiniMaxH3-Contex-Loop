@@ -241,12 +241,29 @@ def main():
         continuation_mode="feathered_av_rgb", context_length=39)
     assert migrated_expert["continuation_mode"] == "feathered_av"
     assert migrated_expert["context_length"] == 39
+    video_only_five = contracts.transition_policy(
+        "soft_av", expert_override=True,
+        continuation_mode="audio_feathered_av", context_length=5)
+    assert video_only_five["context_length"] == 5
+    source_audio_policy = contracts.audio_policy("source", "on", "off")
+    video_only_policy = contracts.compose_chain_policy(
+        source_audio_policy, video_only_five, audio_context_length=5)
+    assert video_only_policy["transition_policy"]["context_length"] == 5
+    try:
+        contracts.compose_chain_policy(
+            contracts.audio_policy("generated", "off", "on"),
+            video_only_five, audio_context_length=5)
+    except ValueError as exc:
+        assert "exact shared" in str(exc)
+    else:
+        raise AssertionError(
+            "five-frame AV accepted generated predecessor audio carry")
     try:
         contracts.transition_policy(
             "guide", expert_override=True,
             continuation_mode="masked_av", context_length=1)
     except ValueError as exc:
-        assert "exact shared" in str(exc)
+        assert "at least 5" in str(exc)
     else:
         raise AssertionError("one-frame AV transition was accepted")
     try:
@@ -254,7 +271,7 @@ def main():
             "guide", expert_override=True,
             continuation_mode="audio_feathered_av", context_length=1)
     except ValueError as exc:
-        assert "exact shared" in str(exc)
+        assert "at least 5" in str(exc)
     else:
         raise AssertionError("one-frame audio-feather AV transition was accepted")
     try:

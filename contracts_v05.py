@@ -38,6 +38,9 @@ TRANSITION_CONTEXT_LENGTHS = (
     141, 158, 175, 192, 209, 226, 243,
 )
 AV_TRANSITION_CONTEXT_LENGTHS = (39, 90, 141, 192, 243)
+VIDEO_ONLY_AV_TRANSITION_CONTEXT_LENGTHS = tuple(
+    value for value in TRANSITION_CONTEXT_LENGTHS if value >= 5
+)
 
 # Experimental one-shot latent-context recipe adapted from beijinren's
 # ComfyUI-H3-Context-Noise. Keep every generation-significant value in the
@@ -304,6 +307,22 @@ def compose_chain_policy(
     if resolved_audio_context < 0 or resolved_audio_context > 240:
         raise ValueError(
             "H3 Chain Policy audio context must be between 0 and 240 frames.")
+    mode = str(resolved_transition["continuation_mode"])
+    context = int(resolved_transition["context_length"])
+    carries_generated_audio = (
+        resolved_audio["generated_continuity"] == "on"
+        and resolved_audio.get("source_audio_target", "off") != "locked"
+        and resolved_audio_context > 0
+    )
+    if (mode in (
+            "masked_av", "feathered_av", "audio_feathered_av"
+        ) and context > 0 and carries_generated_audio
+            and context not in AV_TRANSITION_CONTEXT_LENGTHS):
+        raise ValueError(
+            "H3 AV generated-audio continuity requires an exact shared "
+            "video/audio boundary: 39, 90, 141, 192, or 243 context "
+            "frames. Set generated continuity off (or audio context to 0) "
+            "to test a video-only AV window from 5 frames.")
     return {
         "version": CHAIN_POLICY_VERSION,
         "audio_policy": resolved_audio,
@@ -387,14 +406,14 @@ def transition_policy(
             raise ValueError(
                 "H3 Latent Guide requires at least 5 context frames.")
         if (mode in (
-                "masked_av", "tapered_av", "feathered_av",
-                "audio_feathered_av", "drift_control_av",
-                "color_stable_drift_av"
-        ) and context > 0 and context not in AV_TRANSITION_CONTEXT_LENGTHS):
+                "masked_av", "feathered_av", "audio_feathered_av"
+        ) and context > 0
+                and context not in VIDEO_ONLY_AV_TRANSITION_CONTEXT_LENGTHS):
             raise ValueError(
-                "H3 AV transition implementations require an exact shared "
-                "video/audio boundary: 39, 90, 141, 192, or 243 context "
-                "frames (or 0 to disable continuation).")
+                "H3 video-only AV transition experiments require at least "
+                "5 context frames (or 0 to disable continuation). Exact "
+                "39/90/141/192/243-frame alignment is still required when "
+                "generated predecessor audio is carried.")
         if (mode == "tapered_av" and context not in (
                 0, int(DETAIL_AV_RECIPE["context_frames"]))):
             raise ValueError(

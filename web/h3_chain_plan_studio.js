@@ -37,6 +37,7 @@ import {
 } from "./h3_policy_core.mjs?v=0.5.5";
 import {
     resolveAudioContextLength,
+    resolveAudioPolicy,
     resolveTransitionPolicy,
 } from "./h3_socket_presentation_core.mjs?v=0.5.5";
 import {
@@ -373,6 +374,7 @@ function mount(node) {
 
     function settings() {
         const transition = resolveTransitionPolicy(state.planNode ?? node);
+        const audio = resolveAudioPolicy(state.planNode ?? node);
         return {
             contextLength:transition.known
                 ? transition.contextLength
@@ -384,6 +386,10 @@ function mount(node) {
             continuationMode:transition.known
                 ? transition.continuationMode
                 : widget(state.planNode, "continuation_mode")?.value ?? "guide",
+            generatedContinuity:audio.known
+                ? audio.generatedContinuity : "on",
+            sourceAudioTarget:audio.known
+                ? audio.sourceAudioTarget ?? "off" : "off",
             transitionPreset:transition.known ? transition.preset : "custom",
             defaultDurationSeconds:widget(state.planNode, "default_duration_seconds")?.value ?? 15,
             defaultSteps:widget(state.planNode, "default_steps")?.value ?? 20,
@@ -852,6 +858,7 @@ function mount(node) {
             element("span", "h3studio-scene-label", `${row.rawFrames || "—"} raw · ${row.deliveredFrames || "—"} delivered · ${row.videoBlendFrames}f incoming blend · starts at ${formatClock(row.generationStartFrame / 24)}`));
         const grid = h3StudioGridMarkers(
             row.rawFrames, row.contextLength, row.continuationMode,
+            row.preservesGeneratedAudioPrefix,
         );
         const gridMarkers = element("span", "h3studio-grid-markers");
         const rawGrid = element(
@@ -872,8 +879,10 @@ function mount(node) {
                 grid.av.label,
             );
             avGrid.title = grid.av.exact
-                ? "The AV context ends on both H3's video latent grid and its 40 Hz audio grid."
-                : "This AV context is invalid because its duration ends between 40 Hz audio ticks. Exact aligned choices are 39, 90, 141, 192, … frames.";
+                ? (grid.av.audioPreserved
+                    ? "The AV context ends on both H3's video latent grid and its 40 Hz audio grid."
+                    : "Valid video-only AV context. Generated predecessor audio is not carried, so the 40 Hz audio grid does not constrain this test.")
+                : "This AV context is invalid because carried predecessor audio ends between 40 Hz ticks. Exact aligned choices are 39, 90, 141, 192, … frames.";
             gridMarkers.append(avGrid);
         }
         if (grid.cut) {

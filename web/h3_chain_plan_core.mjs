@@ -21,6 +21,9 @@ export const H3_CONTEXT_LENGTHS = Object.freeze([
     141, 158, 175, 192, 209, 226, 243,
 ]);
 export const AV_CONTEXT_LENGTHS = Object.freeze([39, 90, 141, 192, 243]);
+export const VIDEO_ONLY_AV_CONTEXT_LENGTHS = Object.freeze(
+    H3_CONTEXT_LENGTHS.filter((value) => value >= 5),
+);
 export const AUTO_SCENE_COLORS = Object.freeze([
     "#6ea8fe", "#ffb86b", "#63d69f", "#c493ff",
     "#ff7fa6", "#55d6e8", "#e6cb65", "#ff7878",
@@ -529,6 +532,10 @@ export function calculatePlanTiming(plan, settings = {}) {
     const encodeMode = settings.encodeMode ?? "video";
     const anchorMode = settings.anchorMode ?? "head";
     const planContinuationMode = settings.continuationMode ?? "guide";
+    const generatedContinuity = String(
+        settings.generatedContinuity ?? "on",
+    );
+    const sourceAudioTarget = String(settings.sourceAudioTarget ?? "off");
     const nodeDefaultDuration = Number(settings.defaultDurationSeconds ?? 15);
     const planDefaultDuration = Number(plan?.defaults?.duration_seconds ?? nodeDefaultDuration);
     const defaultSteps = Number(plan?.defaults?.steps ?? settings.defaultSteps ?? 20);
@@ -621,9 +628,23 @@ export function calculatePlanTiming(plan, settings = {}) {
             ].includes(
                 continuationMode,
             )) {
-                if (!AV_CONTEXT_LENGTHS.includes(sceneContext)) {
+                const preservesGeneratedAudioPrefix = (
+                    generatedContinuity === "on"
+                    && sourceAudioTarget !== "locked"
+                    && sceneAudioContext > 0
+                );
+                if ([
+                    "masked_av", "feathered_av", "audio_feathered_av",
+                ].includes(continuationMode)
+                        && !VIDEO_ONLY_AV_CONTEXT_LENGTHS.includes(sceneContext)) {
                     rowErrors.push(
-                        "AV mask continuation requires an exact shared video/audio boundary: 39, 90, 141, 192, or 243 context frames.",
+                        "Video-only AV continuation requires at least 5 context frames.",
+                    );
+                }
+                if (preservesGeneratedAudioPrefix
+                        && !AV_CONTEXT_LENGTHS.includes(sceneContext)) {
+                    rowErrors.push(
+                        "AV generated-audio continuity requires an exact shared video/audio boundary: 39, 90, 141, 192, or 243 context frames. Turn generated continuity off (or set scene audio context to 0) for a video-only AV test.",
                     );
                 }
                 if (encodeMode !== "video") {
@@ -731,7 +752,15 @@ export function calculatePlanTiming(plan, settings = {}) {
             ].includes(
                 continuationMode,
             )
-                ? sceneContext : sceneAudioContext,
+                ? ((generatedContinuity === "on"
+                    && sourceAudioTarget !== "locked"
+                    && sceneAudioContext > 0) ? sceneContext : 0)
+                : sceneAudioContext,
+            preservesGeneratedAudioPrefix: (
+                generatedContinuity === "on"
+                && sourceAudioTarget !== "locked"
+                && sceneAudioContext > 0
+            ),
             continuationMode,
             contextSpatialProxy,
             errors: rowErrors,
