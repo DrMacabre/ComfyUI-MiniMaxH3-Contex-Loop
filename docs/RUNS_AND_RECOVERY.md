@@ -6,7 +6,7 @@ Place **Review Gate** between Segment + Checkpoint and Loop End. Each scene is
 persisted before the gate waits, then the gate offers:
 
 - **Approve & continue**
-- **Retry prompt / seed**
+- **Retry scene / seed / length**
 - **Reroll seed**
 - **Approve & stop**, optionally assembling a partial video
 
@@ -25,10 +25,12 @@ the default height.
 
 When a Scene Prompt Editor or Rich Scene Prompt Editor is bound to the same
 Plan, Review Gate selects the scene under review there automatically. Editor
-changes appear in the Gate and **Retry prompt / seed** or **Reroll seed** uses
-the live Plan prompt. The Gate prompt field remains an explicit fallback: if
-you type in it, that text wins for the submitted retry and is synchronized back
-to the Plan and connected editor after the server accepts it.
+changes are used by **Retry prompt / seed** or **Reroll seed** through the live
+Plan prompt. In 0.5, Review Gate's own prompt field is disabled by default.
+Restore it under **Settings → MiniMax H3 Contex Loop → Interface → Review Gate
+→ Enable prompt editing inside Review Gate**. When enabled, text explicitly
+typed in that field wins for the submitted retry and is synchronized back to
+the Plan and connected editor after the server accepts it.
 
 During sampling, the optional floating **Cancel & reroll scene N** control
 targets only the active H3 prompt. It waits for confirmed interruption, writes a
@@ -38,6 +40,26 @@ the retry instead.
 
 Disable the floating control under **Settings → MiniMax H3 Contex Loop →
 Interface → Cancel & reroll** without affecting Review Gate.
+
+## Between-scene memory cleanup
+
+Loop End can apply a runtime-only `between_scene_cleanup` policy after the
+current scene and checkpoint are durable, immediately before it starts the next
+scene or retry:
+
+- `off` keeps ComfyUI's normal caches.
+- `unload_models` unloads model weights and empties the device allocator.
+- `fresh_scene` first asks ComfyUI's active RAM-pressure cache to evict reusable
+  execution outputs and runs Python garbage collection, then releases remaining
+  pinned model pages, unloads models, and empties the device allocator. Use it
+  for chains that switch large models between scenes; the next scene will reload
+  anything that was evicted.
+
+The policy does not enter Plan or resume hashes. It deliberately preserves the
+small recursive carry and dynamic graph result because ComfyUI has no supported
+way to reset the entire executor while that graph is still resolving. On cache
+types other than RAM pressure, `fresh_scene` still unloads models and clears
+allocators, but no executor-output eviction callback is available.
 
 ## Resume
 
@@ -55,8 +77,32 @@ predecessors. Editing scene N or later is safe; changing an earlier prompt,
 seed, timing, source waveform, Plan compatibility setting, or
 `generation_fingerprint` invalidates the dependent resume.
 
+Loop Start's `verify_resume_history` switch is enabled by default. Disable it
+only when you intentionally want scene N to consume the existing saved scene
+N−1 despite a changed Plan. The override skips Plan/history matching; it does
+not skip missing-file checks, SHA-256 artifact validation, checkpoint tensor
+validation, or metadata's own recorded-history consistency. Consequently, any
+new settings that describe the saved predecessor are not retroactively present
+in its pixels or AV latent.
+
+Plan-wide continuation mode and context length are the exceptions: they choose
+how the next scene consumes its saved predecessor. Changing either does not
+alter completed frames or their saved AV latent, so it does not invalidate the
+prefix. If the checkpoint's cached decoded tail is shorter than the newly
+requested context, the loop re-decodes its complete saved video latent and
+extracts the longer tail without regenerating the scene. Explicit per-scene
+continuation and context overrides remain part of that scene's history.
+
 Review Gate's checkpoint browser can set up this resume and preview the joined
 partial through the selected predecessor.
+
+**Manifest Load** also supports interrupted runs. It discovers the longest
+contiguous active checkpoint prefix beginning at scene 1, verifies every scene
+and artifact through that point, and emits a partial manifest when later scenes
+have not been saved. Connect that output directly to **Assemble** to recover the
+finished prefix without sampling again. A missing scene ends the prefix; an
+orphaned later checkpoint is never joined across the gap. When every planned
+scene is present, the same node emits the normal completed manifest.
 
 ### Restore an earlier scene revision
 
@@ -116,12 +162,66 @@ This first release does not bulk-delete branches. The leaf-first workflow makes
 the exact context consequences visible and avoids silently orphaning later
 checkpoints.
 
-### Deferred upscale child runs
+### Whole-chain SeedVR2 finishing
 
-After loading the complete branch you want in Checkpoint Manager, connect its
-Plan output to **MiniMax H3 Checkpoint Upscale Adapter**. The adapter verifies
-every active parent checkpoint and starts a separate recursive pass without
-changing the source run:
+SeedVR2 is best treated as a final whole-video backend, not as another
+scene-recursive H3 pass. Select the final scene of a complete branch in
+Checkpoint Manager and use this graph:
+
+```text
+Checkpoint Manager.selected_manifest
+        + original H3 video VAE
+        ↓
+Full-Chain Latent Video Adapter
+        ↓ native, file-backed VIDEO
+SeedVR2 Direct Video Upscaler
+        ↓
+core Save Video
+```
+
+**Full-Chain Latent Video Adapter** verifies and decodes the original
+safetensors video latent for every selected scene; it never reads the saved
+H.264 scene previews. It trims repeated context, applies the saved incoming
+blend schedule, and writes one lossless RGB movie before SeedVR2 starts.
+SeedVR2 therefore chunks a continuous timeline rather than restarting at H3
+scene boundaries. A chain with Existing Video Context also streams its saved
+prelude into the same movie.
+
+`decode_buffer=disk-backed` is the recommended default. MiniMax H3's VAE keeps
+its native temporal chunking but writes the decoded float scene into a
+temporary mmap. The adapter converts and encodes one frame at a time, retaining
+only the next boundary window in normal RAM, then deletes that scene buffer.
+Peak ordinary RAM is therefore bounded by latent/model overhead and the blend
+window instead of the decoded duration of the full chain. `memory` is a
+compatibility fallback that holds one decoded scene at a time; neither mode
+holds the whole production.
+
+The continuous source is content-addressed and reused at:
+
+```text
+output/h3_chains/<run_name>/upscaled/seedvr2/source/<cache_key>.mkv
+```
+
+The cache key includes the immutable checkpoint lineage, VAE implementation,
+blend schedule, prelude, and selected audio policy. Disable `reuse_cache` to
+force a fresh VAE decode. `audio_source=plan` recovers the saved final-audio
+policy and Source Timeline directly from the manifest; only legacy source runs
+without a recoverable timeline need the optional `source_audio` socket.
+
+Use the audio-preserving **SeedVR2 Direct Video Upscaler** from
+[ethanfel/ComfyUI-SeedVR2_VideoUpscaler](https://github.com/ethanfel/ComfyUI-SeedVR2_VideoUpscaler).
+It reads the adapter movie in `chunk_size` batches, returns one file-backed
+H.264 VIDEO, and embeds the source audio in that VIDEO so it can connect
+straight to core Save Video. Its separate AUDIO output remains available for
+alternate muxing graphs.
+
+### Deferred H3 upscale child runs
+
+Select the right-hand generated tip you want in Checkpoint Manager,
+then connect its **selected_manifest** output to **MiniMax H3 Checkpoint Upscale
+Adapter**. The manager verifies the immutable lineage and embeds recovery-only
+compatibility and Source Timeline metadata directly. No source Plan, Chain
+Policy, or decoded source media is retained by the recursive upscale graph:
 
 ```text
 Checkpoint Manager → Upscale Adapter → Upscale Current Scene
@@ -135,14 +235,59 @@ Segment + Checkpoint and falls back to the terminal sampler latent in older
 checkpoints. It exposes the joint H3 AV latent as well as separate video and
 audio latents:
 
-- Tr1dae/Mamad8 combined-style nodes can consume `source_latent` directly.
-- Video-only LBH-style nodes consume `source_video_latent`; recombine their
-  result with `source_audio_latent` before an H3 refinement pass when that graph
-  expects joint AV. Preserve the parent audio unless intentional audio
-  regeneration is part of the recipe.
+- Combined-style nodes can consume `source_latent` directly.
+- Video-only LBH nodes consume `source_video_latent`. **MiniMax H3 Pass-2 AV
+  Prepare** recombines their output with `source_audio_latent`, performs
+  NestedTensor-safe CONST re-noise on video only, and locks the saved audio
+  with a zero denoise mask.
 - LTX 2.5 is a decoded-video V2V path, not an H3-latent path. Decode the H3
   source latent, run the LTX refinement/upscale graph, and send its raw frame
   batch to Upscale Segment Save.
+
+For H3 pass-2 conditioning, **Upscale Reference Conditioning** first reads the
+exact cache descriptor recorded on the selected source revision. Tagged and
+Scheduled Ref2VA create that cache automatically: native H3 reference latents
+remain in safetensors while compact Qwen presentation frames allow the saved
+compiled prompt to be tokenized again. **H3 Conditioning Sync From Latents**
+then compares the original scene video latent with the actual LBH output. It
+applies the exact horizontal and vertical scale to picture `minimax_refs` and
+`minimax_keyframes`, updates reference H/W metadata, and deliberately leaves
+text, temporal positions, and audio conditioning untouched. Upscale Reference
+Conditioning's default `exclude_video_keep_audio` policy removes both the Qwen
+motion-video presentation and native motion-video latent because the pass-2
+source latent already contains the generated motion; audio paired with a video
+reference is converted to an audio-only reference. `keep_video_native` and
+`resize_video` remain available for comparison, and the sync node follows the
+selected conditioning policy automatically. Build sampler 2's new
+Guider from the returned conditioning rather than reusing the original Guider.
+Thus the child graph needs no reference registry or original picture/video/audio
+connections. Both cache versions retain the encoded native reference blocks
+used by sync; cache v2 additionally keeps original picture masters for
+workflows that choose target-resolution VAE re-encoding instead.
+
+Upscale Reference Conditioning encodes the exact saved compiled prompt by
+default. Its optional `prompt_override` is encoded instead when supplied, so a
+user can provide a short appearance/detail-only pass-2 prompt without repeating
+the source scene's motion or camera instructions. Automatic natural-language
+motion stripping is intentionally avoided because it cannot reliably separate
+action from identity, framing, or continuity clauses. The bundled LBH workflow
+therefore supplies a neutral preservation/detail override; clear that widget to
+A/B against the original compiled prompt.
+Revisions without a cache can use `text_only`; select `error` when the second
+pass must not proceed without Ref2VA conditioning.
+
+Segment Save adopts each verified cache object into
+`output/h3_chains/<run_name>/reference_cache/` and records only that run-local
+descriptor. Copying or backing up the parent run therefore preserves everything
+required to rebuild pass-2 Ref2VA conditioning.
+
+Legacy checkpoints that still point into `output/h3_reference_cache/` migrate
+without a rerender. Selecting their complete branch in Checkpoint Manager
+hard-links the verified cache into the corresponding run (or copies it when a
+hard link is unavailable) and returns a run-local descriptor. Migration never
+deletes the global object or rewrites immutable revision metadata. Later branch
+loads resolve the verified run-local equivalent first, so the old staging copy
+can be archived or removed after a successful selection and upscale check.
 
 Send the backend's decoded **raw** frame batch to both Segment Save and Loop
 End. They remove the parent scene's repeated context head exactly once, persist
@@ -164,22 +309,44 @@ output/h3_chains/<run_name>/upscaled/<profile>/
 `save_latent` defaults off. Segment Save still writes a small verified
 safetensors checkpoint containing the assembly audio, so the child run remains
 resumable and mergeable without duplicating the much larger HQ sampler latent.
-Enable it only when you want to reopen/refine the HQ latent itself. The
-transient `upscaled_latent` connection on Loop End remains usable for scene
-continuity whether or not persistence is enabled.
+When the following source scene uses Drift-Control AV, that checkpoint also
+contains only the preceding scene's 12-step HQ video tail. Pass-2 AV Prepare
+splices this tail into scene 2+'s prefix, gives it zero added noise and a zero
+denoise mask, and refines only the new video region. This compact context is
+enough for exact interruption-safe HQ continuation without enabling full
+latent saving. Older child checkpoints without the tail safely protect their
+independently upscaled source prefix and report that fallback in node status.
+Enable full latent saving only when you want to reopen/refine the HQ latent
+itself. The transient `upscaled_latent` connection on Loop End remains usable
+for scene continuity whether or not persistence is enabled.
 
 For new parent renders, connect SamplerCustomAdvanced `denoised_output` to
 Segment + Checkpoint's optional `denoised_latent` input. Existing checkpoints
 remain valid and use their terminal sampler output. Keep the parent branch
 until every selected child scene has been persisted; a completed child profile
 contains its own HQ video segments and audio needed by Upscale Merger.
+Upscale Merger reconstructs a recoverable Source Timeline from the embedded
+parent manifest. Legacy source-track runs without that descriptor still need
+their original full AUDIO connected to the merger.
 
 ## Run Manager
 
 Connect the active Plan output to **MiniMax H3 Run Manager**. It discovers runs
 under the ComfyUI host's `output/h3_chains`, including remote Docker hosts.
-Select a run and choose **Load into Plan**; after confirmation it restores
-archived prompts and Plan controls without changing graph links.
+Select a run and choose **Load selected archive into Plan**; after confirmation
+it restores archived prompts and Plan controls without changing graph links.
+
+The two names at the top are deliberately separate:
+
+- **Active Plan** is the connected Plan's current `run_name`. Generation and
+  **Save assets to active Plan** use this name.
+- **Selected archive** is only the folder highlighted in the browser. Selecting
+  it does not change the Plan. **Load selected archive into Plan** is the only
+  action that applies its archived prompts and settings.
+
+When both names match, the archive is marked **ACTIVE PLAN**. When they differ,
+the selected archive is labeled **not loaded**, so opening an old folder or
+inspecting it cannot be mistaken for switching the generation run.
 
 Restore prefers:
 
@@ -222,6 +389,7 @@ output/h3_chains/<run_name>/
 ├── checkpoints/clip_0001.<revision>.json
 ├── checkpoints/clip_0001.<revision>.safetensors
 ├── generated_audio/
+├── reference_cache/
 ├── upscaled/<profile>/
 └── final/<filename>.mp4
 ```
@@ -237,10 +405,66 @@ Keep run folders private when workflows contain credentials.
 
 ## Assembly
 
-Assemble accepts completed or partial manifests. Its filename supports date
+Assemble accepts completed or partial manifests, including an interrupted
+prefix reconstructed by Manifest Load. Its filename supports date
 tokens such as `%date:yyyy-MM-dd%`, `%year%`, `%month%`, `%day%`, `%hour%`,
 `%minute%`, and `%second%`. Existing files are never overwritten; numbered
 suffixes are added automatically.
+
+### Recovery blend schedules
+
+`blend_schedule` can override the Plan's global visual blend only during
+assembly. `plan` preserves the recorded setting. A comma-separated schedule is
+applied to scene boundaries in timeline order: `5,30` uses five frames for the
+first join and thirty for every later join because the last value repeats.
+`0` produces hard cuts. This does not change checkpoints, prompts, seeds, or
+generated frames.
+
+When the requested boundary fits inside the saved blend MP4, assembly reuses
+that artifact directly. If it requests more overlap than Segment Save retained,
+connect the original MiniMax H3 video VAE to `blend_video_vae`. Recovery then
+re-decodes the existing safetensors checkpoint into a temporary lossless RGB
+video and deletes it after assembly. Diffusion is never rerun. The final video
+still receives the one H.264 encode required by any pixel-space crossfade.
+
+Each scheduled value must not exceed that incoming scene's repeated context.
+For example, a chain whose first join has five context frames and later joins
+have thirty-nine can use `5,30`; requesting thirty at the first join is rejected.
+
+### Optional scene-one color stabilization
+
+Set Assemble's `color_stabilization` to `scene_1_anchor` to counter gradual
+exposure or saturation drift in a completed chain. Assembly measures a
+center-weighted sample of the first generated scene, then fits only a weak,
+bounded luma/saturation correction for each later scene. A correction is capped
+at six code values of luma and six percent of saturation, at half the measured
+strength.
+
+This remains experimental. On the simplified 0.5 surface, right-click Assemble
+and choose **Show advanced H3 controls** to reveal `color_stabilization` (and
+the experimental `boundary_tone_match` control) without changing their saved
+values or backend behavior.
+
+The exact join inherits the preceding scene's accepted correction. Starting
+after the retained overlap, that correction moves smoothly to the next scene's
+target over 72 frames. Consequently the option cannot introduce a new grade
+step at the boundary and does not change motion, timing, or audio. A prelude is
+not used as the reference: the first generated scene remains the anchor.
+
+This is an assembly grade, not diffusion conditioning. It does not change
+checkpoints or future continuation input. It is disabled by default. Enabling
+it uses the same single pixel-processing encode as a visual blend; on a hard-cut
+assembly it replaces the otherwise lossless stream copy with one encode.
+
+For an experimental correction that can influence later generation instead of
+only the final MP4, choose **Color-Stable Drift AV** through Advanced Policy or
+on a scene's incoming transition. It applies a bounded scene-one correction to
+the disposable copied video latent as a VAE delta, tapering from zero to full
+strength across the 39-frame context. Scene 1 remains the anchor, scene 2 is
+neutral, and scene 3 onward can receive a corrected predecessor tail. It does
+not alter the saved predecessor checkpoint or audio. Because this changes
+generation conditioning, it is recorded in the incoming-boundary dependency
+and is intentionally separate from this assembly-only option.
 
 Enable `copy_to_output` to keep the canonical final in the run folder and also
 publish an MP4 into the regular ComfyUI output tree. `output_subfolder` is

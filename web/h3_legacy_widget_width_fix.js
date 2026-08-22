@@ -2,7 +2,7 @@ import {app} from "/scripts/app.js";
 import {
     createLegacyWidgetWidthController,
     graphNodes,
-} from "./h3_legacy_widget_width_fix_core.mjs?v=0.4.20";
+} from "./h3_legacy_widget_width_fix_core.mjs?v=0.5.5";
 
 const SETTING_ID = "MiniMaxH3ContexLoop.legacyWidgetWidthFix";
 const LEGACY_FIX_NODE = "LegacyWidgetWidthFix";
@@ -24,6 +24,10 @@ const H3_NODE_TYPES = new Set([
     "MiniMaxH3ScheduledReferenceToVideo",
     "MiniMaxH3TaggedPictureReference",
     "MiniMaxH3TaggedVideoReference",
+    "MiniMaxH3TaggedMotionReference",
+    "MiniMaxH3LazyMotionAVLoader",
+    "MiniMaxH3TaggedMotionReferencePath",
+    "MiniMaxH3LazyMotionScenePreview",
     "MiniMaxH3TaggedAudioReference",
     "MiniMaxH3TaggedReferenceToVideo",
     "MiniMaxH3ChainExternalVideo",
@@ -35,6 +39,7 @@ const H3_NODE_TYPES = new Set([
     "MiniMaxH3ChainLoopEnd",
     "MiniMaxH3ChainManifestLoad",
     "MiniMaxH3ChainExportPNG",
+    "MiniMaxH3ChainLatentVideoAdapter",
     "MiniMaxH3ChainAssemble",
 ]);
 

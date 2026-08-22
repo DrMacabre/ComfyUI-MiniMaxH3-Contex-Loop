@@ -97,6 +97,69 @@ async def check():
         assert item["audio"]["filename"] == generated_audio.name
         assert item["preview_video"]["filename"] == preview.name
 
+        motion_file = pathlib.Path(temporary) / "motion.mp4"
+        motion_file.write_bytes(b"motion source")
+        descriptor = {
+            "version": chain.LAZY_MOTION_SOURCE_VERSION,
+            "kind": "lazy_motion_path",
+            "path": str(motion_file),
+            "skip_seconds": 2.0,
+            "file_sha256": "1" * 64,
+            "frame_count": 1000,
+            "audio": None,
+        }
+        references = chain._append_tagged_reference(
+            None, kind="video", tag="motion", value=descriptor,
+            content_hash="2" * 64, timeline_mode="sequential")
+        references = chain._decorate_motion_reference(
+            references, "<Subject 1>", "walk cycle", "384")
+        plan = {
+            "run_name": "studio",
+            "shots": [{
+                "index": 1, "id": "intro", "delivered_frames": 340,
+            }],
+        }
+        report = {"scenes": [{
+            "index": 1, "id": "intro", "references": [{
+                "tag": "motion", "kind": "video",
+                "semantic_role": "motion",
+                "window": {
+                    "mode": "sequential", "start_frame": 100,
+                    "end_frame": 462, "frame_count": 362,
+                },
+            }],
+        }]}
+        source_payload = chain._register_plan_studio_source_previews(
+            plan, report, references, None)
+        assert source_payload["token"]
+        source_scene = source_payload["scenes"][0]
+        assert source_scene["delivered_frames"] == 340
+        assert source_scene["references"][0]["compare_offset_frames"] == 22
+        record = chain._PLAN_STUDIO_SOURCE_PREVIEWS[
+            source_payload["token"]]["records"]["1:0"]
+        assert record["video_seek_seconds"] == 2.0 + 100 / 24
+
+        captured = []
+        original_usable = chain._usable_ffmpeg
+        original_run = chain._run_ffmpeg
+        try:
+            chain._usable_ffmpeg = lambda: "/fake/ffmpeg"
+
+            def fake_run(command, timeout_seconds=None):
+                captured.append((command, timeout_seconds))
+                pathlib.Path(command[-1]).write_bytes(b"preview mp4")
+
+            chain._run_ffmpeg = fake_run
+            cached = pathlib.Path(
+                chain._build_plan_studio_source_preview(record))
+        finally:
+            chain._usable_ffmpeg = original_usable
+            chain._run_ffmpeg = original_run
+        assert cached.read_bytes() == b"preview mp4"
+        command = captured[0][0]
+        assert "fps=24" in command[command.index("-vf") + 1]
+        assert command[command.index("-t") + 1] == "15.083333333"
+
 
 if __name__ == "__main__":
     asyncio.run(check())

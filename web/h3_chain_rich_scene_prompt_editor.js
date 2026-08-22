@@ -6,16 +6,16 @@ import {
     promptTextToLines,
     promptValueToText,
     sharedPrompt,
-} from "./h3_chain_plan_core.mjs?v=0.4.20";
+} from "./h3_chain_plan_core.mjs?v=0.5.5";
 import {
     buildPromptAssistantContext,
     makePromptAssistRequest,
-} from "./h3_prompt_assistant_core.mjs?v=0.4.20";
-import {PromptAssistantClient} from "./h3_prompt_assistant_client.mjs?v=0.4.20";
+} from "./h3_prompt_assistant_core.mjs?v=0.5.5";
+import {PromptAssistantClient} from "./h3_prompt_assistant_client.mjs?v=0.5.5";
 import {
     directOptimizerConfigurationError,
     makeDirectPromptOptimizeRequest,
-} from "./h3_prompt_optimizer_core.mjs?v=0.4.20";
+} from "./h3_prompt_optimizer_core.mjs?v=0.5.5";
 import {
     openPromptOptimizerSettings,
     promptOptimizerBackend,
@@ -23,10 +23,12 @@ import {
     promptOptimizerMcpProvider,
 } from "./h3_prompt_optimizer_settings.js";
 import {
+    promptRevisionHelp,
     promptRevisionLabel,
     promptRevisionNavigation,
-} from "./h3_prompt_history_core.mjs?v=0.4.20";
-import {availableReferenceRecords} from "./h3_reference_preview_core.mjs?v=0.4.20";
+    promptRevisionTree,
+} from "./h3_prompt_history_core.mjs?v=0.5.5";
+import {availableReferenceRecords} from "./h3_reference_preview_core.mjs?v=0.5.5";
 import {
     PromptUndoHistory,
     RICH_PROMPT_GUIDES,
@@ -36,8 +38,10 @@ import {
     richGenerationMode,
     richGuideInstruction,
     tokenizeRichPrompt,
-} from "./h3_rich_prompt_editor_core.mjs?v=0.4.20";
-import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.4.20";
+} from "./h3_rich_prompt_editor_core.mjs?v=0.5.5";
+import {createPromptCompletionController} from "./h3_prompt_completion_core.mjs?v=0.5.5";
+import {createH3PromptSchemaController} from "./h3_prompt_schema_ui.mjs?v=0.5.5";
+import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.5.5";
 
 const {publishCompanionScene, rebaseScenePrompt} = promptCompanionSync;
 function publishCompanionPrompt(...args) {
@@ -53,6 +57,7 @@ const PLAN_NAME = "MiniMaxH3ChainPlan";
 const ACTIVE_PROPERTY = "h3_rich_prompt_active_scene";
 const FONT_PROPERTY = "h3_rich_prompt_font_size";
 const GUIDE_PROPERTY = "h3_rich_prompt_guide";
+const PRESENTATION_PROPERTY = "h3_rich_prompt_rich_text";
 const DEFAULT_FONT = 17;
 const MIN_FONT = 12;
 const MAX_FONT = 32;
@@ -64,6 +69,9 @@ const ICONS = Object.freeze({
     subject: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M5 21c.8-4.2 3.1-6.3 7-6.3s6.2 2.1 7 6.3"/></svg>',
     dialogue: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h14v11H9l-4 3z"/><path d="M8 9h8M8 12h6"/></svg>',
     reference: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.1.1l2-2a5 5 0 0 0-7.1-7.1l-1.1 1.1"/><path d="M14 11a5 5 0 0 0-7.1-.1l-2 2A5 5 0 0 0 12 20l1.1-1.1"/></svg>',
+    section: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h14M5 12h14M5 19h14"/></svg>',
+    flow: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h11M12 4l3 3-3 3M20 17H9M12 14l-3 3 3 3"/></svg>',
+    speaker: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10v4h4l5 4V6L8 10z"/><path d="M16 9c1.5 1.5 1.5 4.5 0 6"/></svg>',
     sparkle: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 2 1.4 5.1L18 9l-4.6 1.9L12 16l-1.4-5.1L6 9l4.6-1.9zM19 15l.7 2.3L22 18l-2.3.7L19 21l-.7-2.3L16 18l2.3-.7z"/></svg>',
     stop: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>',
 });
@@ -85,6 +93,9 @@ function injectStyles() {
         --h3rp-token-audio:color-mix(in srgb,var(--h3rp-text) 42%,#d47700);
         --h3rp-token-subject:color-mix(in srgb,var(--h3rp-text) 42%,#26934a);
         --h3rp-token-dialogue:color-mix(in srgb,var(--h3rp-text) 42%,#cf3976);
+        --h3rp-token-section:color-mix(in srgb,var(--h3rp-text) 38%,#5f87ff);
+        --h3rp-token-flow:color-mix(in srgb,var(--h3rp-text) 42%,#00a99d);
+        --h3rp-token-speaker:color-mix(in srgb,var(--h3rp-text) 42%,#d268b7);
         --h3rp-token-danger:color-mix(in srgb,var(--h3rp-text) 42%,#d44747);
         --h3rp-font-size:17px; box-sizing:border-box; width:100%; height:100%;
         min-height:560px; display:flex; flex-direction:column; gap:8px; overflow:hidden; padding:10px;
@@ -125,7 +136,13 @@ function injectStyles() {
       .h3rp-token-audio { color:var(--h3rp-token-audio); }
       .h3rp-token-subject { color:var(--h3rp-token-subject); }
       .h3rp-token-dialogue { color:var(--h3rp-token-dialogue); }
+      .h3rp-token-section { display:inline; margin:0; padding:0; border:0; border-radius:0;
+        color:var(--h3rp-token-section); background:none; font-weight:650; cursor:text; user-select:text; }
+      .h3rp-token-flow { color:var(--h3rp-token-flow); }
+      .h3rp-token-speaker { color:var(--h3rp-token-speaker); }
       .h3rp-token-unknown,.h3rp-token-inactive { color:var(--h3rp-token-danger); border-style:dashed; }
+      .h3rp-presentation-active { border-color:var(--h3rp-accent) !important;
+        color:var(--h3rp-accent) !important; }
       .h3rp-token-thumb { width:18px; height:18px; flex:0 0 18px; object-fit:cover; border-radius:3px;
         background:rgba(255,255,255,.09); }
       .h3rp-token-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -154,6 +171,31 @@ function injectStyles() {
       .h3rp-history-nav button { min-width:25px; min-height:22px; padding:1px 5px; border:0; border-radius:999px; background:transparent; }
       .h3rp-history-count { min-width:43px; text-align:center; color:var(--h3rp-text); font-variant-numeric:tabular-nums; }
       .h3rp-history-meta { max-width:240px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:11px; }
+      .h3rp-history-tree { position:relative; flex:0 0 auto; }
+      .h3rp-history-tree > summary { list-style:none; cursor:pointer; padding:3px 7px;
+        border:1px solid var(--h3rp-border); border-radius:999px; background:var(--comfy-input-bg,#11141a);
+        color:var(--h3rp-text); user-select:none; }
+      .h3rp-history-tree > summary::-webkit-details-marker { display:none; }
+      .h3rp-history-tree[open] > summary { border-color:var(--h3rp-accent); }
+      .h3rp-history-tree-panel { position:absolute; z-index:20; bottom:calc(100% + 7px); left:50%;
+        transform:translateX(-50%); width:min(440px,calc(100vw - 30px)); max-height:310px; overflow:auto;
+        padding:7px; border:1px solid var(--h3rp-border); border-radius:8px; background:var(--h3rp-bg);
+        box-shadow:0 14px 36px rgba(0,0,0,.48); }
+      .h3rp-history-tree-row { display:flex; align-items:center; gap:4px; min-width:0; margin:2px 0; border-radius:5px; }
+      .h3rp-history-tree-row.h3rp-history-active { background:rgba(142,181,255,.12); }
+      .h3rp-history-tree-row.h3rp-history-archived { opacity:.58; }
+      .h3rp-history-tree-select { flex:1 1 auto; min-width:0; justify-content:flex-start !important;
+        min-height:26px !important; padding:3px 6px !important; border-color:transparent !important;
+        background:transparent !important; text-align:left; }
+      .h3rp-history-branch { flex:0 0 auto; color:var(--h3rp-muted); }
+      .h3rp-history-tree-label { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+        color:var(--h3rp-text); }
+      .h3rp-history-tree-badge { flex:0 0 auto; color:var(--h3rp-muted); font-size:10px; }
+      .h3rp-history-tree-action { min-width:25px !important; min-height:25px !important; padding:2px 5px !important; }
+      .h3rp-history-tree-tools { display:flex; justify-content:space-between; align-items:center; gap:8px;
+        margin-top:6px; padding-top:6px; border-top:1px solid var(--h3rp-border);
+        color:var(--h3rp-muted); font-size:10px; }
+      .h3rp-history-tree-tools button { min-height:24px; padding:2px 6px; }
       .h3rp-error { padding:12px; border:1px solid #a76565; border-radius:7px; color:#ffb3b3; background:#351f24; white-space:pre-wrap; }
       .h3rp-popover { position:fixed; z-index:100000; width:min(360px,calc(100vw - 24px)); padding:9px;
         border:1px solid #60718c; border-radius:9px; background:#171a20; color:#eef2f8;
@@ -417,6 +459,45 @@ function restoreCaret(editor, requested) {
     selection?.addRange(range);
 }
 
+function restoreTextSelection(editor, requestedStart, requestedEnd) {
+    const start = Math.max(0, Number(requestedStart) || 0);
+    const end = Math.max(start, Number(requestedEnd) || start);
+    let consumed = 0;
+    let startPoint = null;
+    let endPoint = null;
+    function visit(node) {
+        if (startPoint && endPoint) return;
+        if (node.nodeType === Node.TEXT_NODE) {
+            const length = node.textContent?.length ?? 0;
+            if (!startPoint && start >= consumed && start <= consumed + length) {
+                startPoint = [node, start - consumed];
+            }
+            if (!endPoint && end >= consumed && end <= consumed + length) {
+                endPoint = [node, end - consumed];
+            }
+            consumed += length;
+            return;
+        }
+        if (node.nodeType !== Node.ELEMENT_NODE) return;
+        if (node.classList?.contains("h3rp-token")) {
+            consumed += String(node.dataset.token ?? "").length;
+            return;
+        }
+        for (const child of node.childNodes) visit(child);
+    }
+    visit(editor);
+    if (!startPoint || !endPoint) {
+        restoreCaret(editor, end);
+        return;
+    }
+    const range = document.createRange();
+    range.setStart(...startPoint);
+    range.setEnd(...endPoint);
+    const selection = globalThis.getSelection?.();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+}
+
 function insertPlainText(editor, text) {
     editor.focus();
     const selection = globalThis.getSelection?.();
@@ -467,9 +548,12 @@ function mount(node) {
         active:Math.max(0, Number(node.properties[ACTIVE_PROPERTY]) || 0),
         fontSize:clamp(node.properties[FONT_PROPERTY], MIN_FONT, MAX_FONT, DEFAULT_FONT),
         guide:normalizeRichGuide(node.properties[GUIDE_PROPERTY]),
+        decorated:node.properties[PRESENTATION_PROPERTY] !== false,
         records:[], referenceMode:null, editor:null, refs:null, status:null, optimizerStatus:null,
+        completion:null, schema:null,
         history:{sceneKey:"", data:null, revisionId:null, host:null, loadToken:0, loadPromise:null,
-            saveTimer:null, pendingDraft:null, savePromise:null, error:""},
+            saveTimer:null, pendingDraft:null, savePromise:null, error:"", treeOpen:false,
+            showArchived:false},
         optimizer:{client:null, preparing:false, requestId:null, meta:null, origins:new Map(), providers:null,
             abortController:null, activeBackend:null, error:"", message:"", pendingResult:null},
         undoByScene:new Map(), promptUndo:null,
@@ -486,6 +570,7 @@ function mount(node) {
         node.properties[ACTIVE_PROPERTY] = state.active;
         node.properties[FONT_PROPERTY] = state.fontSize;
         node.properties[GUIDE_PROPERTY] = state.guide;
+        node.properties[PRESENTATION_PROPERTY] = state.decorated;
         dirty();
     }
 
@@ -584,15 +669,118 @@ function mount(node) {
         }
         const navigation = promptRevisionNavigation(history.data, history.revisionId);
         const controls = element("span", "h3rp-history-nav");
-        const previous = button("‹", "Previous prompt version", () => navigation.previous && void selectHistoryRevision(navigation.previous.id));
-        const count = element("span", "h3rp-history-count", `${navigation.position} / ${navigation.total}`);
-        const next = button("›", "Next prompt version", () => navigation.next && void selectHistoryRevision(navigation.next.id));
+        const previous = button("‹", "Activate previous prompt version in the Plan", () => navigation.previous && void selectHistoryRevision(navigation.previous.id));
+        const count = element("span", "h3rp-history-count", `Active ${navigation.position} / ${navigation.total}`);
+        const next = button("›", "Activate next prompt version in the Plan", () => navigation.next && void selectHistoryRevision(navigation.next.id));
         previous.disabled = !navigation.previous;
         next.disabled = !navigation.next;
         controls.append(previous, count, next);
+        const treeDetails = renderHistoryTree();
         const metadata = element("span", "h3rp-history-meta", promptRevisionLabel(navigation));
-        metadata.title = metadata.textContent;
-        history.host.append(controls, metadata);
+        metadata.title = promptRevisionHelp(navigation);
+        history.host.append(controls, treeDetails, metadata);
+    }
+
+    function renderHistoryTree() {
+        const history = state.history;
+        const details = element("details", "h3rp-history-tree");
+        details.open = history.treeOpen;
+        const tree = promptRevisionTree(history.data, {includeArchived:history.showArchived});
+        const summary = element("summary", "", `History (${tree.rows.length})`);
+        summary.title = "Show prompt ancestry, labels, and revision actions";
+        const panel = element("div", "h3rp-history-tree-panel");
+        for (const row of tree.rows) {
+            const rowHost = element("div",
+                `h3rp-history-tree-row${row.isActive ? " h3rp-history-active" : ""}${row.isArchived ? " h3rp-history-archived" : ""}`);
+            rowHost.style.paddingLeft = `${row.depth * 15}px`;
+            const select = button("", `Activate ${row.displayLabel} in the Plan`, () => {
+                if (!row.isActive) void selectHistoryRevision(row.revision.id);
+            });
+            select.className = "h3rp-history-tree-select";
+            select.disabled = row.isActive;
+            select.append(
+                element("span", "h3rp-history-branch", row.depth ? "↳" : "●"),
+                element("span", "h3rp-history-tree-label", row.displayLabel),
+                element("span", "h3rp-history-tree-badge",
+                    row.isArchived ? "Archived"
+                        : row.isActive ? "Active"
+                            : row.isExecuted ? "Executed" : "Draft"),
+            );
+            const rename = button("Label", `Label ${row.displayLabel}`, () => {
+                const label = window.prompt(
+                    "Short label for this prompt revision (leave blank to clear):",
+                    String(row.revision.label ?? ""),
+                );
+                if (label != null) void mutateHistoryRevision("label", row.revision.id, {label});
+            });
+            rename.className = "h3rp-history-tree-action";
+            rowHost.append(select, rename);
+            if (row.canRestore) {
+                const restore = button("Restore", `Restore ${row.displayLabel} to visible history`, () => {
+                    void mutateHistoryRevision("archive", row.revision.id, {archived:false});
+                });
+                restore.className = "h3rp-history-tree-action";
+                rowHost.append(restore);
+            } else if (row.canArchive) {
+                const archive = button("Archive", `Archive ${row.displayLabel}`, () => {
+                    void mutateHistoryRevision("archive", row.revision.id, {archived:true});
+                });
+                archive.className = "h3rp-history-tree-action";
+                rowHost.append(archive);
+            }
+            if (row.canDelete) {
+                const remove = button("Delete", `Delete unexecuted leaf ${row.displayLabel}`, () => {
+                    if (window.confirm(`Delete ${row.displayLabel}? This cannot be undone.`)) {
+                        void mutateHistoryRevision("delete", row.revision.id);
+                    }
+                });
+                remove.className = "h3rp-history-tree-action";
+                rowHost.append(remove);
+            }
+            panel.append(rowHost);
+        }
+        if (!tree.rows.length) panel.append(element("div", "h3rp-history-tree-tools", "No visible revisions"));
+        const tools = element("div", "h3rp-history-tree-tools");
+        tools.append(element("span", "", "↳ shows parent → child progression"));
+        if (tree.archivedCount) {
+            tools.append(button(
+                history.showArchived ? "Hide archived" : `Show archived (${tree.archivedCount})`,
+                "Toggle archived prompt revisions",
+                () => {
+                    history.showArchived = !history.showArchived;
+                    history.treeOpen = true;
+                    renderHistory();
+                },
+            ));
+        }
+        panel.append(tools);
+        details.append(summary, panel);
+        details.addEventListener("toggle", () => { history.treeOpen = details.open; });
+        return details;
+    }
+
+    async function mutateHistoryRevision(action, revisionId, fields = {}) {
+        await flushHistoryDraft();
+        const history = state.history;
+        const shot = state.plan?.shots?.[state.active];
+        if (!shot) return;
+        const shotId = String(shot.id || `clip_${String(state.active + 1).padStart(4, "0")}`);
+        const runName = planRunName();
+        const key = historySceneKey(runName, shotId);
+        try {
+            const payload = await historyRequest({}, {
+                action, run_name:runName, scene_id:shotId, revision:revisionId, ...fields,
+            });
+            if (history.sceneKey !== key) return;
+            history.data = payload.history;
+            history.revisionId = payload.history?.active_revision ?? history.revisionId;
+            history.error = "";
+            renderHistory();
+        } catch (error) {
+            if (history.sceneKey !== key) return;
+            history.error = error?.message || String(error);
+            renderHistory();
+        }
     }
 
     async function loadHistory(shotId, prompt, synchronize = true) {
@@ -753,6 +941,11 @@ function mount(node) {
         token.dataset.token = part.text;
         if (part.unresolved) token.classList.add("h3rp-token-unknown");
         if (part.record && !part.record.active) token.classList.add("h3rp-token-inactive");
+        if (part.type === "section") {
+            token.append(element("span", "h3rp-token-label", part.text));
+            token.title = `H3 section · ${part.section}`;
+            return token;
+        }
         const mediaKind = kind === "picture" ? "image" : kind;
         const media = part.record?.source ? findMediaPreview(part.record.source, mediaKind) : null;
         if (kind === "picture" && media?.url) {
@@ -775,23 +968,50 @@ function mount(node) {
         return token;
     }
 
-    function renderEditorText(text, caret = null) {
+    function renderEditorText(text, caret = null, editableSelection = null) {
         if (!state.editor) return;
         const source = String(text ?? "");
+        if (!state.decorated) {
+            state.editor.replaceChildren(document.createTextNode(source));
+            if (editableSelection?.selectionStart != null
+                    && editableSelection?.selectionEnd != null) {
+                restoreTextSelection(
+                    state.editor,
+                    editableSelection.selectionStart,
+                    editableSelection.selectionEnd,
+                );
+            } else if (caret != null) restoreCaret(state.editor, caret);
+            return;
+        }
         const parts = tokenizeRichPrompt(source, state.records);
         const fragment = document.createDocumentFragment();
+        let sourceOffset = 0;
         for (let index = 0; index < parts.length; index += 1) {
             const part = parts[index];
+            const partStart = sourceOffset;
+            const partEnd = partStart + part.text.length;
+            sourceOffset = partEnd;
             // Leave an unfinished unknown @word as normal text while the user
             // is still typing it; it becomes a red unresolved chip on blur or
             // another explicit decoration pass.
             const unfinished = part.type === "reference" && part.unresolved
                 && part.text.startsWith("@") && index === parts.length - 1
                 && document.activeElement === state.editor;
-            fragment.append(unfinished ? document.createTextNode(part.text) : makeToken(part));
+            const editingSemanticTime = part.type === "reference" && part.semantic
+                && editableSelection?.selectionStart >= partStart
+                && editableSelection?.selectionEnd <= partEnd;
+            fragment.append(unfinished || editingSemanticTime
+                ? document.createTextNode(part.text) : makeToken(part));
         }
         state.editor.replaceChildren(fragment);
-        if (caret != null) restoreCaret(state.editor, caret);
+        if (editableSelection?.selectionStart != null
+                && editableSelection?.selectionEnd != null) {
+            restoreTextSelection(
+                state.editor,
+                editableSelection.selectionStart,
+                editableSelection.selectionEnd,
+            );
+        } else if (caret != null) restoreCaret(state.editor, caret);
     }
 
     function saveEditorInput(event) {
@@ -841,7 +1061,7 @@ function mount(node) {
         }
         tray.append(element("div", "h3rp-ref-help",
             state.referenceMode === "tagged"
-                ? "Click any registered @tag to insert and activate that reference for this scene. Hover for a media preview; audio never autoplays."
+                ? "Click a registered @tag for a native reference. For a picture, type #tag[2.50s] for a Qwen-only semantic checkpoint, or a Picture storyboard cue when that mode is selected on Tagged Ref2VA. Hover for a media preview; audio never autoplays."
                 : `Scene ${state.active + 1}: click an active reference to insert it. Hover for image, video, or audio preview. Audio never autoplays.`));
         for (const record of state.records) {
             const insertable = record.active || state.referenceMode === "tagged";
@@ -895,6 +1115,7 @@ function mount(node) {
 
     function refreshOptimizerUi() {
         const busy = optimizerBusy();
+        if (busy) state.completion?.hide();
         if (state.editor) state.editor.contentEditable = busy ? "false" : "true";
         for (const control of root.querySelectorAll("[data-h3rp-lock]")) control.disabled = busy;
         const optimize = root.querySelector(".h3rp-optimize");
@@ -1189,6 +1410,9 @@ function mount(node) {
     }
 
     function showFailure(message) {
+        state.completion?.destroy();
+        state.completion = null;
+        state.schema = null;
         state.editor = null;
         state.history.host = null;
         root.replaceChildren(
@@ -1213,6 +1437,9 @@ function mount(node) {
 
     function render() {
         hidePopover();
+        state.completion?.destroy();
+        state.completion = null;
+        state.schema = null;
         if (!state.plan?.shots?.length) return showFailure("The connected Plan has no scenes.");
         state.active = Math.max(0, Math.min(state.active, state.plan.shots.length - 1));
         root.style.setProperty("--h3rp-font-size", `${state.fontSize}px`);
@@ -1267,6 +1494,7 @@ function mount(node) {
 
         const toolbar = element("div", "h3rp-toolbar");
         const refsButton = button("References", "Show connected references, miniatures, and media previews", () => {
+            state.completion?.hide();
             renderReferenceTray();
             state.refs.classList.toggle("h3rp-open");
         }, "reference");
@@ -1277,6 +1505,22 @@ function mount(node) {
             insertDecoratedText(`<d>${selected}</d>`);
         }, "dialogue");
         dialogue.dataset.h3rpLock = "";
+        const presentation = button(
+            state.decorated ? "Rich text" : "Plain text",
+            state.decorated
+                ? "Show the same prompt as plain text"
+                : "Color H3 sections, references, speakers, flow markers, and dialogue tags",
+            () => {
+                const text = editorPlainText(state.editor);
+                const caret = selectionTextOffset(state.editor);
+                state.decorated = !state.decorated;
+                persistView();
+                renderEditorText(text, caret);
+                state.editor.focus();
+            },
+        );
+        presentation.classList.toggle("h3rp-presentation-active", state.decorated);
+        presentation.dataset.h3rpLock = "";
         const guide = element("select", "h3rp-guide");
         guide.title = "Prompt Guide used by one-click optimization";
         guide.dataset.h3rpLock = "";
@@ -1297,7 +1541,10 @@ function mount(node) {
         applyPending.hidden = true;
         const optimizerStatus = element("span", "h3rp-status");
         state.optimizerStatus = optimizerStatus;
-        toolbar.replaceChildren(refsButton, dialogue, guide, optimize, stop, applyPending, optimizerStatus);
+        toolbar.replaceChildren(
+            refsButton, dialogue, presentation, guide,
+            optimize, stop, applyPending, optimizerStatus,
+        );
 
         const refs = element("div", "h3rp-ref-tray");
         state.refs = refs;
@@ -1315,7 +1562,11 @@ function mount(node) {
         );
         state.promptUndo = promptUndoForScene(shotId, initialPrompt);
         renderEditorText(initialPrompt);
-        editor.addEventListener("input", saveEditorInput);
+        editor.addEventListener("input", (event) => {
+            saveEditorInput(event);
+            state.completion?.refresh();
+            state.schema?.refresh();
+        });
         editor.addEventListener("beforeinput", (event) => {
             if (event.inputType === "insertParagraph" || event.inputType === "insertLineBreak") {
                 event.preventDefault(); insertPlainText(editor, "\n");
@@ -1334,30 +1585,82 @@ function mount(node) {
             shot.prompt = promptTextToLines(text);
             writePlan(direction === "undo" ? "Undo saved to Plan" : "Redo saved to Plan");
             scheduleHistoryDraft(shotId, text);
+            state.schema?.refresh();
             editor.focus();
             return true;
         };
         editor.addEventListener("keydown", (event) => {
+            if (state.completion?.handleKeydown(event)) return;
             const undoDirection = promptUndoDirection(event);
             if (undoDirection) {
                 event.preventDefault();
                 applyPromptUndo(undoDirection);
             } else if (event.altKey && event.key === "ArrowLeft") event.preventDefault(), navigate(-1);
             else if (event.altKey && event.key === "ArrowRight") event.preventDefault(), navigate(1);
-            else if (!event.ctrlKey && !event.metaKey && !event.altKey && event.key === "@"
-                    && state.records.some((record) => record.active)) {
-                // The palette inserts the complete token. Do not leave the
-                // trigger '@' behind or selecting @hero would produce @@hero.
-                event.preventDefault();
-                renderReferenceTray();
-                refs.classList.add("h3rp-open");
-            } else if (event.key === "Escape") refs.classList.remove("h3rp-open");
+            else if (event.key === "Escape") refs.classList.remove("h3rp-open");
         });
         editor.addEventListener("blur", () => {
             const text = editorPlainText(editor);
             renderEditorText(text);
         });
         editorShell.append(editor);
+
+        const replacePromptText = (result, message = "H3 edit saved to Plan") => {
+            const text = String(result.text ?? "");
+            if (state.referenceMode === "tagged") {
+                const refreshed = availableReferenceRecords(
+                    node, state.active + 1, {
+                        includeInactive:true,
+                        prompt:[sharedPrompt(state.plan).text.trim(), text.trim()]
+                            .filter(Boolean).join("\n\n"),
+                    },
+                );
+                state.records = refreshed.records;
+                state.referenceMode = refreshed.mode;
+            }
+            state.promptUndo?.record(text, {inputType:"insertReplacementText"});
+            shot.prompt = promptTextToLines(text);
+            renderEditorText(text, result.caret, result);
+            writePlan(message);
+            scheduleHistoryDraft(shotId, text);
+            state.schema?.refresh();
+            editor.focus();
+        };
+
+        state.schema = createH3PromptSchemaController({
+            node,
+            propertyPrefix:"h3_rich_scene_prompt_editor",
+            getText:() => editorPlainText(editor),
+            replaceText:replacePromptText,
+            focusAt:(caret) => {
+                const text = editorPlainText(editor);
+                const position = Math.max(0, Math.min(text.length, Number(caret) || 0));
+                renderEditorText(text, position);
+                editor.focus();
+            },
+            getRecords:() => state.records,
+            defaultDuration:Number(shot.duration_seconds)
+                || Number(shot.length) / 24 || 6,
+            defaultMode:["tagged", "scheduled", "native"].includes(state.referenceMode)
+                ? "ref2va"
+                : state.referenceMode === "native_keyframes"
+                  ? state.records.filter((record) => record.active && record.kind === "picture").length >= 2
+                    ? "fl2va" : "i2va"
+                  : "auto",
+            scopeKey:shotId,
+            markDirty:dirty,
+        });
+        if (state.schema) toolbar.prepend(state.schema.modeSelect, state.schema.toggle);
+
+        state.completion = createPromptCompletionController({
+            input:editor,
+            getText:() => editorPlainText(editor),
+            getCaret:() => selectionTextOffset(editor),
+            getRecords:() => state.records,
+            getReferenceMode:() => state.referenceMode,
+            getMode:() => state.schema?.getMode() ?? "auto",
+            replaceText:(result) => replacePromptText(result, "Completion saved to Plan"),
+        });
 
         const footer = element("div", "h3rp-footer");
         const identity = element("span", "", `Scene ${state.active + 1}/${state.plan.shots.length} · ${shotId}`);
@@ -1367,7 +1670,15 @@ function mount(node) {
         state.history.host = historyHost;
         state.status = status;
 
-        root.append(head, nav, toolbar, refs, editorShell, footer);
+        const completionHint = element(
+            "span", "h3rp-muted",
+            "Type @, #, <, or [; use ( for speakers · Ctrl/Cmd+Space for all H3 completions",
+        );
+        toolbar.append(completionHint);
+        if (state.schema) identity.append(document.createTextNode(" · "), state.schema.counts);
+        root.append(head, nav, toolbar);
+        if (state.schema) root.append(state.schema.panel);
+        root.append(refs, editorShell, footer);
         refreshOptimizerUi();
         void loadHistory(shotId, editorPlainText(editor));
     }
@@ -1450,6 +1761,8 @@ function mount(node) {
         if (state.popoverTimer != null) window.clearTimeout(state.popoverTimer);
         hidePopover();
         state.popover?.remove();
+        state.completion?.destroy();
+        state.completion = null;
         api.removeEventListener("executed", onPromptExecuted);
         delete node._h3PromptCompanionSetActiveScene;
         delete node._h3PromptCompanionSetScenePrompt;
@@ -1482,6 +1795,7 @@ function mount(node) {
                 scheduleHistoryDraft(
                     String(state.plan.shots[index].id || `clip_${String(index + 1).padStart(4, "0")}`),
                     text);
+                state.schema?.refresh();
             }
         }
         state.lastValue = String(state.planWidget?.value ?? state.lastValue);

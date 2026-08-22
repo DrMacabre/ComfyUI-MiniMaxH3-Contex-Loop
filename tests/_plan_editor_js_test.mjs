@@ -3,8 +3,10 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import {
+    AV_CONTEXT_LENGTHS,
     AUTO_SCENE_COLORS,
     CONTINUATION_MODES,
+    CONTEXT_SPATIAL_PROXY_MODES,
     H3_CONTEXT_LENGTHS,
     automaticSceneColor,
     calculatePlanTiming,
@@ -19,16 +21,70 @@ import {
     sceneAudioContextLength,
     sceneContextLength,
     sceneContinuationMode,
+    sceneVideoBlendFrames,
     setShotLengthMode,
     setSharedPrompt,
     shotLengthMode,
     sharedPrompt,
     validateH3Length,
 } from "../web/h3_chain_plan_core.mjs";
+import {
+    PRIMARY_TRANSITION_PRESETS,
+    applySceneTransitionPreset,
+    primaryTransitionOptions,
+    sceneTransitionPreset,
+    transitionPresetLabel,
+} from "../web/h3_policy_core.mjs";
+
+assert.deepEqual(PRIMARY_TRANSITION_PRESETS, [
+    "cut", "guide", "hard_av", "soft_av",
+]);
+assert.deepEqual(
+    primaryTransitionOptions().map(({name}) => name),
+    PRIMARY_TRANSITION_PRESETS,
+);
+assert.equal(sceneTransitionPreset({}, "guide", 22), "inherit");
+assert.equal(sceneTransitionPreset({
+    continuation_mode: "masked_av", context_length: 39,
+}, "guide", 22, 22), "custom");
+assert.equal(sceneTransitionPreset({
+    continuation_mode: "masked_av", context_length: 39,
+}, "guide", 22, 39), "hard_av");
+const compactBoundary = {};
+applySceneTransitionPreset(compactBoundary, "hard_av");
+assert.deepEqual(compactBoundary, {
+    continuation_mode: "masked_av", context_length: 39,
+    audio_context_length: 39,
+});
+compactBoundary.audio_context_length = 7;
+assert.equal(sceneTransitionPreset(compactBoundary), "custom");
+applySceneTransitionPreset(compactBoundary, "guide");
+assert.deepEqual(compactBoundary, {
+    continuation_mode: "guide", context_length: 22,
+    audio_context_length: 22,
+});
+applySceneTransitionPreset(compactBoundary, "inherit");
+assert.deepEqual(compactBoundary, {});
+assert.equal(transitionPresetLabel("soft_av"), "Soft AV");
+assert.equal(
+    transitionPresetLabel("color_drift_av"), "Color-Stable Drift AV",
+);
 
 assert.equal(AUTO_SCENE_COLORS.length, 12);
-assert.deepEqual(CONTINUATION_MODES, ["guide", "masked_av"]);
+assert.deepEqual(
+    CONTINUATION_MODES,
+    [
+        "guide", "tone_carry_guide", "latent_guide", "tapered_guide",
+        "masked_av", "tapered_av", "feathered_av",
+        "audio_feathered_av", "drift_control_av",
+        "color_stable_drift_av",
+    ],
+);
 assert.equal(H3_CONTEXT_LENGTHS.at(-1), 243);
+assert.deepEqual(AV_CONTEXT_LENGTHS, [39, 90, 141, 192, 243]);
+assert.deepEqual(CONTEXT_SPATIAL_PROXY_MODES, [
+    "off", "rgb_5_6", "latent_5_6",
+]);
 assert.equal(new Set(AUTO_SCENE_COLORS).size, AUTO_SCENE_COLORS.length);
 assert.equal(automaticSceneColor(0), AUTO_SCENE_COLORS[0]);
 assert.equal(automaticSceneColor(12), AUTO_SCENE_COLORS[0]);
@@ -70,8 +126,32 @@ assert.deepEqual(inheritedLengthShot, {});
 
 assert.equal(sceneContinuationMode({}, "guide"), "guide");
 assert.equal(
+    sceneContinuationMode({continuation_mode: "tapered_guide"}, "guide"),
+    "tapered_guide",
+);
+assert.equal(
     sceneContinuationMode({continuation_mode: "masked_av"}, "guide"),
     "masked_av",
+);
+assert.equal(
+    sceneContinuationMode({continuation_mode: "tapered_av"}, "guide"),
+    "tapered_av",
+);
+assert.equal(
+    sceneContinuationMode({continuation_mode: "feathered_av"}, "guide"),
+    "feathered_av",
+);
+assert.equal(
+    sceneContinuationMode({continuation_mode: "audio_feathered_av"}, "guide"),
+    "audio_feathered_av",
+);
+assert.equal(
+    sceneContinuationMode({continuation_mode: "drift_control_av"}, "guide"),
+    "drift_control_av",
+);
+assert.equal(
+    sceneContinuationMode({continuation_mode: "feathered_av_rgb"}, "guide"),
+    "feathered_av",
 );
 assert.throws(
     () => sceneContinuationMode({continuation_mode: "unknown"}, "guide"),
@@ -89,6 +169,14 @@ assert.equal(sceneAudioContextLength({audio_context_length: 33}, 22, 0), 33);
 assert.throws(
     () => sceneAudioContextLength({audio_context_length: 241}, 22, 0),
     /between 0 and 240/,
+);
+assert.equal(sceneVideoBlendFrames({}, 5, 22), 5);
+assert.equal(sceneVideoBlendFrames({}, 39, 22), 22);
+assert.equal(sceneVideoBlendFrames({video_blend_frames: 0}, 5, 22), 0);
+assert.equal(sceneVideoBlendFrames({video_blend_frames: 17}, 5, 22), 17);
+assert.throws(
+    () => sceneVideoBlendFrames({video_blend_frames: 23}, 5, 22),
+    /between 0 and its context length \(22\)/,
 );
 
 const invalidDurationShot = {duration_seconds: 999};
@@ -146,6 +234,7 @@ assert.throws(() => validateH3Length(240), /length % 17/);
 
 const timing = calculatePlanTiming(plan, {
     contextLength: 22,
+    videoBlendFrames: 5,
     encodeMode: "video",
     anchorMode: "head",
     continuationMode: "guide",
@@ -161,6 +250,27 @@ assert.deepEqual(
     timing.shots.map((shot) => shot.continuationMode),
     ["guide", "guide"],
 );
+assert.deepEqual(timing.shots.map((shot) => shot.videoBlendFrames), [5, 5]);
+
+const perSceneBlendTiming = calculatePlanTiming({shots: [
+    {id: "one", prompt: "One.", length: 124},
+    {id: "two", prompt: "Two.", length: 124, context_length: 39,
+        video_blend_frames: 5},
+    {id: "three", prompt: "Three.", length: 124, context_length: 22,
+        video_blend_frames: 0},
+]}, {
+    contextLength: 39,
+    videoBlendFrames: 30,
+    encodeMode: "video",
+    anchorMode: "head",
+    continuationMode: "guide",
+    defaultDurationSeconds: 5,
+});
+assert.deepEqual(
+    perSceneBlendTiming.shots.map((shot) => shot.videoBlendFrames),
+    [30, 5, 0],
+);
+assert.deepEqual(perSceneBlendTiming.errors, []);
 
 const mixedContinuationPlan = parsePlanJson(JSON.stringify({
     shots: [
@@ -190,7 +300,123 @@ assert.match(calculatePlanTiming(mixedContinuationPlan, {
     anchorMode: "before",
     continuationMode: "guide",
     defaultDurationSeconds: 5,
-}).errors.join("\n"), /Masked AV requires/);
+}).errors.join("\n"), /AV mask continuation requires/);
+assert.match(calculatePlanTiming(mixedContinuationPlan, {
+    contextLength: 22,
+    encodeMode: "video",
+    anchorMode: "head",
+    continuationMode: "guide",
+    defaultDurationSeconds: 5,
+}).errors.join("\n"), /exact shared video\/audio boundary/);
+
+const featheredContinuationPlan = parsePlanJson(JSON.stringify({
+    shots: [
+        {id: "one", prompt: "Opening."},
+        {id: "two", prompt: "Continue.", continuation_mode: "feathered_av"},
+    ],
+}));
+const featheredContinuationTiming = calculatePlanTiming(
+    featheredContinuationPlan,
+    {
+        contextLength: 39,
+        encodeMode: "video",
+        anchorMode: "head",
+        continuationMode: "guide",
+        defaultDurationSeconds: 5,
+    },
+);
+assert.equal(
+    featheredContinuationTiming.shots[1].continuationMode,
+    "feathered_av",
+);
+assert.equal(featheredContinuationTiming.shots[1].audioContextLength, 39);
+assert.deepEqual(featheredContinuationTiming.errors, []);
+
+const driftControlPlan = parsePlanJson(JSON.stringify({
+    shots: [
+        {id: "one", prompt: "Opening."},
+        {id: "two", prompt: "Continue.", continuation_mode: "drift_control_av"},
+    ],
+}));
+const driftControlTiming = calculatePlanTiming(driftControlPlan, {
+    contextLength: 39,
+    encodeMode: "video",
+    anchorMode: "head",
+    continuationMode: "guide",
+    defaultDurationSeconds: 5,
+});
+assert.equal(
+    driftControlTiming.shots[1].continuationMode,
+    "drift_control_av",
+);
+assert.deepEqual(driftControlTiming.errors, []);
+assert.match(calculatePlanTiming(driftControlPlan, {
+    contextLength: 90,
+    encodeMode: "video",
+    anchorMode: "head",
+    continuationMode: "guide",
+    defaultDurationSeconds: 5,
+}).errors.join("\n"), /Drift-Control AV.*require exactly 39/);
+
+const colorDriftPlan = parsePlanJson(JSON.stringify({
+    shots: [
+        {id: "one", prompt: "Opening."},
+        {id: "two", prompt: "Continue.",
+            continuation_mode: "color_stable_drift_av"},
+    ],
+}));
+const colorDriftTiming = calculatePlanTiming(colorDriftPlan, {
+    contextLength: 39,
+    encodeMode: "video",
+    anchorMode: "head",
+    continuationMode: "guide",
+    defaultDurationSeconds: 5,
+});
+assert.deepEqual(colorDriftTiming.errors, []);
+assert.equal(colorDriftTiming.shots[1].audioContextLength, 39);
+const colorDriftProxyTiming = calculatePlanTiming({shots: [
+    {id: "one", prompt: "Opening."},
+    {id: "two", prompt: "Continue.",
+        continuation_mode: "color_stable_drift_av",
+        context_spatial_proxy: "latent_5_6"},
+]}, {
+    contextLength: 39,
+    encodeMode: "video",
+    anchorMode: "head",
+    continuationMode: "guide",
+    defaultDurationSeconds: 5,
+});
+assert.deepEqual(colorDriftProxyTiming.errors, []);
+assert.match(calculatePlanTiming(colorDriftPlan, {
+    contextLength: 90,
+    encodeMode: "video",
+    anchorMode: "head",
+    continuationMode: "guide",
+    defaultDurationSeconds: 5,
+}).errors.join("\n"), /Color-Stable Drift AV currently require exactly 39/);
+
+const latentGuideTiming = calculatePlanTiming({shots: [
+    {id: "one", prompt: "Opening."},
+    {id: "two", prompt: "Continue.", continuation_mode: "latent_guide"},
+]}, {
+    contextLength: 22,
+    encodeMode: "video",
+    anchorMode: "head",
+    continuationMode: "guide",
+    defaultDurationSeconds: 5,
+});
+assert.equal(latentGuideTiming.shots[1].continuationMode, "latent_guide");
+assert.deepEqual(latentGuideTiming.errors, []);
+assert.match(calculatePlanTiming({shots: [
+    {id: "one", prompt: "Opening."},
+    {id: "two", prompt: "Continue.", continuation_mode: "latent_guide"},
+]}, {
+    contextLength: 1,
+    encodeMode: "video",
+    anchorMode: "head",
+    continuationMode: "guide",
+    defaultDurationSeconds: 5,
+}).errors.join("\n"), /Latent Guide requires/);
 
 const mixedContextTiming = calculatePlanTiming({shots: [
     {id: "one", prompt: "One.", length: 192},
@@ -226,6 +452,56 @@ assert.equal(audioOnlyTiming.shots[1].contextLength, 0);
 assert.equal(audioOnlyTiming.shots[1].audioContextLength, 33);
 assert.equal(audioOnlyTiming.shots[1].deliveredFrames, 192);
 assert.deepEqual(audioOnlyTiming.errors, []);
+
+const scheduledProxyTiming = calculatePlanTiming({shots: [
+    {id: "one", prompt: "One.", length: 90},
+    {id: "two", prompt: "Two.", length: 90},
+    {id: "three", prompt: "Three.", length: 90},
+    {id: "four", prompt: "Four.", length: 90,
+        context_spatial_proxy: "latent_5_6"},
+]}, {
+    contextLength: 39,
+    audioContextLength: 39,
+    encodeMode: "video",
+    anchorMode: "head",
+    continuationMode: "masked_av",
+});
+assert.deepEqual(scheduledProxyTiming.errors, []);
+assert.deepEqual(
+    scheduledProxyTiming.shots.map((shot) => shot.contextSpatialProxy),
+    ["off", "off", "off", "latent_5_6"],
+);
+const invalidProxyTiming = calculatePlanTiming({shots: [
+    {id: "one", prompt: "One.", length: 90},
+    {id: "two", prompt: "Two.", length: 90,
+        context_spatial_proxy: "rgb_5_6"},
+]}, {
+    contextLength: 39,
+    audioContextLength: 39,
+    encodeMode: "video",
+    anchorMode: "head",
+    continuationMode: "masked_av",
+});
+assert.match(
+    invalidProxyTiming.errors.join("\n"),
+    /Low-grid 5\/6 boundary proxy/,
+);
+
+const sceneOneProxyTiming = calculatePlanTiming({shots: [
+    {id: "one", prompt: "One.", length: 90,
+        context_spatial_proxy: "rgb_5_6"},
+    {id: "two", prompt: "Two.", length: 90},
+]}, {
+    contextLength: 5,
+    audioContextLength: 5,
+    encodeMode: "video",
+    anchorMode: "head",
+    continuationMode: "guide",
+});
+assert.match(
+    sceneOneProxyTiming.errors.join("\n"),
+    /Scene 1 cannot use a 5\/6 boundary proxy/,
+);
 
 const sharedOnlyPlan = parsePlanJson(JSON.stringify({
     prompt_prefix: "Shared identity and direction.",
@@ -304,11 +580,21 @@ assert.doesNotMatch(editorSource, /\[\["Picture", 9\], \["Video", 3\], \["Audio"
 assert.match(editorSource, /Derived seed:/);
 assert.match(editorSource, /New random/);
 assert.match(editorSource, /Use derived/);
-assert.match(editorSource, /Continuation into scene/);
+assert.match(editorSource, /Incoming transition/);
+assert.match(editorSource, /Final assembly crossfade frames/);
+assert.match(editorSource, /Advanced visual context/);
+assert.match(editorSource, /Advanced audio context/);
+assert.match(editorSource, /Advanced implementation/);
+assert.match(editorSource, /applySceneTransitionPreset/);
+assert.match(editorSource, /Boundary spatial proxy/);
+assert.match(editorSource, /Low-grid 5\/6 proxy · Guide/);
+assert.match(editorSource, /Latent 5\/6 proxy · AV/);
+assert.match(editorSource, /context_spatial_proxy/);
 assert.match(editorSource, /Guide · new shot/);
+assert.match(editorSource, /Latent Guide · direct generated latent/);
+assert.match(editorSource, /Detail Guide · color injection/);
 assert.match(editorSource, /Masked AV · same shot/);
-assert.match(editorSource, /Video context/);
-assert.match(editorSource, /Audio context/);
+assert.match(editorSource, /Feathered AV · experimental dual-stream feather/);
 assert.match(editorSource, /0 · new visual/);
 assert.match(editorSource, /grid-template-columns:repeat\(4/);
 assert.match(editorSource, /Hide advanced/);

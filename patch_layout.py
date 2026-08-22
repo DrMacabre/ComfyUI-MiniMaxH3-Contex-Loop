@@ -691,6 +691,72 @@ def native_guides_available():
     return _uses_native_guide_api(original)
 
 
+def compatibility_report():
+    """Inspect guide-layout compatibility without installing any patch.
+
+    Preflight and authoring UIs call this before model execution.  It must
+    remain read-only: no constructor replacement, self-test, or global owner
+    claim is performed here.
+    """
+    cls = getattr(mm, "PackedLayout", None)
+    init = getattr(cls, "__init__", None) if cls is not None else None
+    if init is None:
+        return {
+            "ok": False,
+            "mode": "unavailable",
+            "owner": "",
+            "message": "MiniMax H3 PackedLayout is unavailable.",
+            "action": "Install or update a ComfyUI build with MiniMax H3 support.",
+        }
+    owner = str(getattr(init, "__module__", "") or "")
+    if native_guides_available():
+        return {
+            "ok": True,
+            "mode": "native",
+            "owner": owner,
+            "message": "ComfyUI's native H3 guide API is available.",
+            "action": "",
+        }
+    who = _already_patched()
+    if who == "foreign":
+        return {
+            "ok": False,
+            "mode": "conflict",
+            "owner": owner,
+            "message": (
+                "Another extension owns MiniMax H3 PackedLayout with an "
+                "unsupported wrapper."),
+            "action": (
+                "Disable the conflicting H3 layout extension or update "
+                "ComfyUI to the native H3 guide API, then restart ComfyUI."),
+        }
+    if who == "solattn":
+        return {
+            "ok": True,
+            "mode": "legacy_solattn_compatible",
+            "owner": owner,
+            "message": (
+                "The supported CUDA SolAttn layout observer can compose with "
+                "the legacy H3 guide bridge."),
+            "action": "",
+        }
+    if who in ("same", "other"):
+        return {
+            "ok": True,
+            "mode": "legacy_active",
+            "owner": owner,
+            "message": "A compatible legacy H3 guide bridge is already active.",
+            "action": "",
+        }
+    return {
+        "ok": True,
+        "mode": "legacy_available",
+        "owner": owner,
+        "message": "The legacy H3 guide bridge can be installed at runtime.",
+        "action": "Update ComfyUI to use the native H3 guide API when practical.",
+    }
+
+
 def _already_patched():
     """Has another copy of this file already wrapped the constructor?
 

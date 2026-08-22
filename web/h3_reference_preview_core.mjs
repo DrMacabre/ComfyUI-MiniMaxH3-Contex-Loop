@@ -9,6 +9,11 @@ export const VIDEO_REF_TYPE = "MiniMaxH3ScheduledVideoReference";
 export const AUDIO_REF_TYPE = "MiniMaxH3ScheduledAudioReference";
 export const TAGGED_PICTURE_REF_TYPE = "MiniMaxH3TaggedPictureReference";
 export const TAGGED_VIDEO_REF_TYPE = "MiniMaxH3TaggedVideoReference";
+export const TAGGED_MOTION_REF_TYPE = "MiniMaxH3TaggedMotionReference";
+export const TAGGED_MOTION_PATH_REF_TYPE =
+    "MiniMaxH3TaggedMotionReferencePath";
+export const TAGGED_MOTION_TIMELINE_REF_TYPE =
+    "MiniMaxH3TaggedMotionReferenceTimeline";
 export const TAGGED_AUDIO_REF_TYPE = "MiniMaxH3TaggedAudioReference";
 
 const SCHEDULE_TYPES = new Set([
@@ -19,6 +24,9 @@ const SCHEDULE_TYPES = new Set([
 const TAGGED_TYPES = new Set([
     TAGGED_PICTURE_REF_TYPE,
     TAGGED_VIDEO_REF_TYPE,
+    TAGGED_MOTION_REF_TYPE,
+    TAGGED_MOTION_PATH_REF_TYPE,
+    TAGGED_MOTION_TIMELINE_REF_TYPE,
     TAGGED_AUDIO_REF_TYPE,
 ]);
 
@@ -221,23 +229,48 @@ export function taggedReferenceRecords(editorNode, prompt = "") {
             record.selector = "prompt tag";
             record.active = used.has(record.tag);
             pictures.push(record);
-        } else if (type === TAGGED_VIDEO_REF_TYPE) {
-            const video = baseRecord(node, "video", 1, "video");
+        } else if (type === TAGGED_VIDEO_REF_TYPE ||
+                type === TAGGED_MOTION_REF_TYPE ||
+                type === TAGGED_MOTION_PATH_REF_TYPE ||
+                type === TAGGED_MOTION_TIMELINE_REF_TYPE) {
+            const pathBacked = type === TAGGED_MOTION_PATH_REF_TYPE;
+            const timelineBacked =
+                type === TAGGED_MOTION_TIMELINE_REF_TYPE;
+            const video = baseRecord(
+                node, "video", 1,
+                timelineBacked ? "source_timeline"
+                    : pathBacked ? "video_path" : "video");
+            const nativeVideoSource = pathBacked
+                ? inputSource(node, "source_video") : null;
+            const timelineSource = timelineBacked
+                ? inputSource(node, "source_timeline") : null;
+            if (pathBacked) video.source = nativeVideoSource || node;
+            if (timelineBacked) video.source = timelineSource || node;
             video.selector = "prompt tag";
+            video.semanticRole = (
+                type === TAGGED_MOTION_REF_TYPE || pathBacked || timelineBacked)
+                ? "motion" : "video";
+            video.tagActive = used.has(video.tag);
             const audioSource = inputSource(node, "audio");
+            const embeddedAudio = (
+                pathBacked && Boolean(
+                    widgetValue(node, "use_embedded_audio", true))) || (
+                timelineBacked && String(
+                    widgetValue(node, "paired_audio", "off")) === "embedded");
             const explicit = referenceTag(widgetValue(node, "audio_tag", ""));
             const audioTag = explicit || `${video.tag}_audio`;
-            video.active = used.has(video.tag) || Boolean(
-                audioSource && used.has(audioTag));
+            video.active = video.tagActive || Boolean(
+                (audioSource || embeddedAudio) && used.has(audioTag));
             videos.push(video);
-            if (audioSource) {
+            if (audioSource || embeddedAudio) {
                 pairedAudios.push({
                     node,
                     kind: "audio",
                     tag: audioTag,
                     selector: "prompt tag",
                     active: video.active,
-                    source: audioSource,
+                    source: audioSource || nativeVideoSource
+                        || timelineSource || node,
                     label: null,
                     pairedWith: video,
                 });
@@ -255,8 +288,21 @@ export function taggedReferenceRecords(editorNode, prompt = "") {
         if (item.active) item.label = `<Picture ${++ordinal}>`;
     }
     ordinal = 0;
+    const activeMotionRecords = [];
     for (const item of videos) {
-        if (item.active) item.label = `<Video ${++ordinal}>`;
+        if (!item.active) continue;
+        item.sourceLabel = `<Video ${++ordinal}>`;
+        item.label = item.sourceLabel;
+        if (item.semanticRole === "motion" && item.tagActive) {
+            activeMotionRecords.push(item);
+        }
+    }
+    const usedSubjectNumbers = [...String(prompt ?? "").matchAll(
+        /<Subject\s+(\d+)>/gi,
+    )].map((match) => Number(match[1]));
+    let subjectOrdinal = Math.max(0, ...usedSubjectNumbers) + 1;
+    for (const item of activeMotionRecords) {
+        item.label = `<Subject ${subjectOrdinal++}>`;
     }
     ordinal = 0;
     for (const item of pairedAudios) {

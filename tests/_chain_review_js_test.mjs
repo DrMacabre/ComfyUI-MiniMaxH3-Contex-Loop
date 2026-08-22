@@ -130,6 +130,10 @@ const reviewSource = fs.readFileSync(
     new URL("../web/h3_chain_review_final.js", import.meta.url),
     "utf8",
 );
+const backendSource = fs.readFileSync(
+    new URL("../chain_nodes.py", import.meta.url),
+    "utf8",
+);
 assert.match(reviewSource, /minimax_h3_context_loop\/review/);
 assert.match(reviewSource, /minimax_h3_context_loop_review_resolved/);
 assert.match(reviewSource, /item\.name === "scene_range"/);
@@ -187,6 +191,8 @@ const submitSource = reviewSource.slice(
 assert.match(submitSource, /const submittedToken = submittedReview\.token/);
 assert.match(submitSource, /const submittedIndex = submittedReview\.clip_index/);
 assert.match(submitSource, /promptEditedInGate[\s\S]*planScenePrompt/);
+assert.match(submitSource, /reviewPromptEditorEnabled\(\)/);
+assert.match(submitSource, /planScenePrompt/);
 assert.match(submitSource, /token: submittedToken/);
 assert.match(submitSource, /scene_prompt: submittedPrompt/);
 assert.match(
@@ -210,7 +216,18 @@ const checkpointLoadSource = reviewSource.slice(
     reviewSource.indexOf("function stopCountdown", checkpointLoadStart),
 );
 assert.match(checkpointLoadSource, /include_assets: "false"/);
-assert.match(checkpointLoadSource, /restoreSavedPlanInputs\(node, runBody\.plan_inputs\)/);
+assert.match(checkpointLoadSource, /let restoredPolicyInputs = runBody\.policy_inputs/);
+assert.match(checkpointLoadSource, /restoredPolicyInputs = body\.policy_inputs/);
+assert.match(
+    checkpointLoadSource,
+    /restoreSavedPlanInputs\(\s*node, runBody\.plan_inputs, restoredPolicyInputs\)/,
+);
+assert.match(reviewSource, /planNode, policyInputs, inputs/);
+assert.match(reviewSource, /refreshRestoredPlanEditors\(planNode\)/);
+assert.match(
+    backendSource,
+    /"policy_inputs": archive_policy_inputs\(\{\s*"compatibility": compatibility/,
+);
 assert.match(checkpointLoadSource, /if \(selections\.length\)/);
 assert.ok(
     checkpointLoadSource.indexOf("restoreSavedPlanInputs")
@@ -223,6 +240,13 @@ assert.match(reviewSource, /h3r-video-grip/);
 assert.match(reviewSource, /h3_chain_review_video_height/);
 assert.match(reviewSource, /h3_chain_review_prompt_height/);
 assert.match(reviewSource, /promptResizeObserver = new ResizeObserver/);
+assert.match(reviewSource, /MiniMaxH3ContexLoop\.ReviewGate\.PromptEditor/);
+assert.match(reviewSource, /Enable prompt editing inside Review Gate/);
+assert.match(reviewSource, /defaultValue: false/);
+assert.match(reviewSource, /Prompt editing in Review Gate is disabled by default in 0\.5/);
+assert.match(reviewSource, /Scene Prompt Editor or Rich Scene Prompt Editor/);
+assert.match(reviewSource, /promptLabel\.hidden = !enabled/);
+assert.match(reviewSource, /promptNotice\.hidden = enabled/);
 assert.match(reviewSource, /_h3ReviewApplyLayout/);
 assert.match(reviewSource, /nodeType\.prototype\.onConfigure/);
 assert.match(reviewSource, /setPointerCapture/);

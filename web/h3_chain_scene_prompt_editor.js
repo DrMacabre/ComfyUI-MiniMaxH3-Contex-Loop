@@ -8,7 +8,7 @@ import {
     promptTextToLines,
     promptValueToText,
     sharedPrompt,
-} from "./h3_chain_plan_core.mjs?v=0.4.20";
+} from "./h3_chain_plan_core.mjs?v=0.5.5";
 import {
     PROMPT_ASSIST_DEFAULT_INSTRUCTIONS,
     PROMPT_ASSIST_MODES,
@@ -17,27 +17,31 @@ import {
     makePromptAssistRequest,
     promptSceneKey,
     promptSourceRevision,
-} from "./h3_prompt_assistant_core.mjs?v=0.4.20";
-import {PromptAssistantClient} from "./h3_prompt_assistant_client.mjs?v=0.4.20";
+} from "./h3_prompt_assistant_core.mjs?v=0.5.5";
+import {PromptAssistantClient} from "./h3_prompt_assistant_client.mjs?v=0.5.5";
 import {
+    promptRevisionHelp,
     promptRevisionLabel,
     promptRevisionNavigation,
-} from "./h3_prompt_history_core.mjs?v=0.4.20";
-import {availableReferenceRecords} from "./h3_reference_preview_core.mjs?v=0.4.20";
+    promptRevisionTree,
+} from "./h3_prompt_history_core.mjs?v=0.5.5";
+import {availableReferenceRecords} from "./h3_reference_preview_core.mjs?v=0.5.5";
 import {
     PromptUndoHistory,
     promptUndoDirection,
     tokenizeRichPrompt,
-} from "./h3_rich_prompt_editor_core.mjs?v=0.4.20";
-import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.4.20";
+} from "./h3_rich_prompt_editor_core.mjs?v=0.5.5";
+import {createPromptCompletionController} from "./h3_prompt_completion_core.mjs?v=0.5.5";
+import {createH3PromptSchemaController} from "./h3_prompt_schema_ui.mjs?v=0.5.5";
+import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.5.5";
 
 const {publishCompanionScene, rebaseScenePrompt} = promptCompanionSync;
 function publishCompanionPrompt(...args) {
     return promptCompanionSync.publishCompanionPrompt?.(...args) ?? 0;
 }
 
-// The compact @ reference and # dialogue authoring interactions are inspired
-// by nkxx188/ComfyUI-MiniMaxH3-Easy (MIT); see THIRD_PARTY_NOTICES.md.
+// The compact reference and dialogue authoring interactions are inspired by
+// nkxx188/ComfyUI-MiniMaxH3-Easy (MIT); see THIRD_PARTY_NOTICES.md.
 
 const NODE_NAME = "MiniMaxH3ChainScenePromptEditor";
 const PLAN_NAME = "MiniMaxH3ChainPlan";
@@ -61,6 +65,9 @@ const ICONS = Object.freeze({
     subject: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M5 21c.8-4.2 3.1-6.3 7-6.3s6.2 2.1 7 6.3"/></svg>',
     dialogue: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h14v11H9l-4 3z"/><path d="M8 9h8M8 12h6"/></svg>',
     reference: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.1.1l2-2a5 5 0 0 0-7.1-7.1l-1.1 1.1"/><path d="M14 11a5 5 0 0 0-7.1-.1l-2 2A5 5 0 0 0 12 20l1.1-1.1"/></svg>',
+    section: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h14M5 12h14M5 19h14"/></svg>',
+    flow: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h11M12 4l3 3-3 3M20 17H9M12 14l-3 3 3 3"/></svg>',
+    speaker: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10v4h4l5 4V6L8 10z"/><path d="M16 9c1.5 1.5 1.5 4.5 0 6"/></svg>',
 });
 
 function injectStyles() {
@@ -83,6 +90,9 @@ function injectStyles() {
             --h3sp-token-audio: color-mix(in srgb, var(--h3sp-text) 42%, #d47700);
             --h3sp-token-subject: color-mix(in srgb, var(--h3sp-text) 42%, #26934a);
             --h3sp-token-dialogue: color-mix(in srgb, var(--h3sp-text) 42%, #cf3976);
+            --h3sp-token-section: color-mix(in srgb, var(--h3sp-text) 38%, #5f87ff);
+            --h3sp-token-flow: color-mix(in srgb, var(--h3sp-text) 42%, #00a99d);
+            --h3sp-token-speaker: color-mix(in srgb, var(--h3sp-text) 42%, #d268b7);
             --h3sp-token-danger: color-mix(in srgb, var(--h3sp-text) 42%, #d44747);
             --h3sp-font-size: 18px;
             box-sizing:border-box; width:100%; height:100%; min-height:420px;
@@ -139,6 +149,11 @@ function injectStyles() {
         .h3sp-token-audio { color:var(--h3sp-token-audio); }
         .h3sp-token-subject { color:var(--h3sp-token-subject); }
         .h3sp-token-dialogue { color:var(--h3sp-token-dialogue); }
+        .h3sp-token-section { display:inline; margin:0; padding:0; border:0;
+            border-radius:0; color:var(--h3sp-token-section); background:none;
+            font-weight:650; cursor:text; user-select:text; }
+        .h3sp-token-flow { color:var(--h3sp-token-flow); }
+        .h3sp-token-speaker { color:var(--h3sp-token-speaker); }
         .h3sp-token-unknown, .h3sp-token-inactive { color:var(--h3sp-token-danger);
             border-style:dashed; }
         .h3sp-token-icon { width:16px; height:16px; display:inline-flex;
@@ -202,6 +217,34 @@ function injectStyles() {
         .h3sp-history-meta { min-width:0; max-width:280px; overflow:hidden;
             text-overflow:ellipsis; white-space:nowrap; font-size:11px; }
         .h3sp-history-error { color:#ffb3b3; }
+        .h3sp-history-tree { position:relative; flex:0 0 auto; }
+        .h3sp-history-tree > summary { list-style:none; cursor:pointer; padding:3px 7px;
+            border:1px solid color-mix(in srgb,var(--h3sp-border) 72%,transparent);
+            border-radius:999px; background:var(--comfy-input-bg,#11141a);
+            color:var(--h3sp-text); user-select:none; }
+        .h3sp-history-tree > summary::-webkit-details-marker { display:none; }
+        .h3sp-history-tree[open] > summary { border-color:var(--h3sp-accent); }
+        .h3sp-history-tree-panel { position:absolute; z-index:20; bottom:calc(100% + 7px);
+            left:50%; transform:translateX(-50%); width:min(440px,calc(100vw - 30px));
+            max-height:310px; overflow:auto; padding:7px; border:1px solid var(--h3sp-border);
+            border-radius:8px; background:var(--h3sp-bg); box-shadow:0 14px 36px rgba(0,0,0,.48); }
+        .h3sp-history-tree-row { display:flex; align-items:center; gap:4px; min-width:0;
+            margin:2px 0; border-radius:5px; }
+        .h3sp-history-tree-row.h3sp-history-active { background:rgba(132,170,255,.12); }
+        .h3sp-history-tree-row.h3sp-history-archived { opacity:.58; }
+        .h3sp-history-tree-select { flex:1 1 auto; min-width:0; justify-content:flex-start !important;
+            min-height:26px !important; padding:3px 6px !important; border-color:transparent !important;
+            background:transparent !important; text-align:left; }
+        .h3sp-history-branch { flex:0 0 auto; color:var(--h3sp-muted); }
+        .h3sp-history-tree-label { min-width:0; overflow:hidden; text-overflow:ellipsis;
+            white-space:nowrap; color:var(--h3sp-text); }
+        .h3sp-history-tree-badge { flex:0 0 auto; color:var(--h3sp-muted); font-size:10px; }
+        .h3sp-history-tree-action { min-width:25px !important; min-height:25px !important;
+            padding:2px 5px !important; }
+        .h3sp-history-tree-tools { display:flex; justify-content:space-between; align-items:center;
+            gap:8px; margin-top:6px; padding-top:6px; border-top:1px solid var(--h3sp-border);
+            color:var(--h3sp-muted); font-size:10px; }
+        .h3sp-history-tree-tools button { min-height:24px; padding:2px 6px; }
         .h3sp-error { padding:12px; border:1px solid #a76565; border-radius:6px;
             color:#ffb3b3; background:#351f24; white-space:pre-wrap; }
         .h3sp-assist { flex:0 0 auto; display:flex; flex-direction:column; gap:7px;
@@ -508,6 +551,45 @@ function restoreCaret(editor, requested) {
     selection?.addRange(range);
 }
 
+function restoreTextSelection(editor, requestedStart, requestedEnd) {
+    const start = Math.max(0, Number(requestedStart) || 0);
+    const end = Math.max(start, Number(requestedEnd) || start);
+    let consumed = 0;
+    let startPoint = null;
+    let endPoint = null;
+    function visit(current) {
+        if (startPoint && endPoint) return;
+        if (current.nodeType === Node.TEXT_NODE) {
+            const length = current.textContent?.length ?? 0;
+            if (!startPoint && start >= consumed && start <= consumed + length) {
+                startPoint = [current, start - consumed];
+            }
+            if (!endPoint && end >= consumed && end <= consumed + length) {
+                endPoint = [current, end - consumed];
+            }
+            consumed += length;
+            return;
+        }
+        if (current.nodeType !== Node.ELEMENT_NODE) return;
+        if (current.classList?.contains("h3sp-token")) {
+            consumed += String(current.dataset.token ?? "").length;
+            return;
+        }
+        for (const child of current.childNodes) visit(child);
+    }
+    visit(editor);
+    if (!startPoint || !endPoint) {
+        restoreCaret(editor, end);
+        return;
+    }
+    const range = document.createRange();
+    range.setStart(...startPoint);
+    range.setEnd(...endPoint);
+    const selection = globalThis.getSelection?.();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+}
+
 function insertPlainText(editor, text) {
     editor.focus();
     const selection = globalThis.getSelection?.();
@@ -585,6 +667,9 @@ function mount(node) {
         ),
         decorated: node.properties[PRESENTATION_PROPERTY] !== false,
         records: [],
+        referenceMode: null,
+        completion: null,
+        schema: null,
         promptTextarea: null,
         richEditor: null,
         popover: null,
@@ -627,6 +712,8 @@ function mount(node) {
             pendingDraft: null,
             savePromise: null,
             error: "",
+            treeOpen: false,
+            showArchived: false,
         },
         undoByScene: new Map(),
         promptUndo: null,
@@ -774,24 +861,145 @@ function mount(node) {
         }
         const navigation = promptRevisionNavigation(history.data, history.revisionId);
         const controls = element("span", "h3sp-history-nav");
-        const previous = button("‹", "Previous prompt version", () => {
+        const previous = button("‹", "Activate previous prompt version in the Plan", () => {
             if (navigation.previous) void selectHistoryRevision(navigation.previous.id);
         });
         const count = element(
             "span", "h3sp-history-count",
-            `${navigation.position} / ${navigation.total}`,
+            `Active ${navigation.position} / ${navigation.total}`,
         );
-        const next = button("›", "Next prompt version", () => {
+        const next = button("›", "Activate next prompt version in the Plan", () => {
             if (navigation.next) void selectHistoryRevision(navigation.next.id);
         });
         previous.disabled = !navigation.previous;
         next.disabled = !navigation.next;
         controls.append(previous, count, next);
+        const treeDetails = renderHistoryTree();
         const metadata = element(
             "span", "h3sp-history-meta", promptRevisionLabel(navigation),
         );
-        metadata.title = metadata.textContent;
-        host.append(controls, metadata);
+        metadata.title = promptRevisionHelp(navigation);
+        host.append(controls, treeDetails, metadata);
+    }
+
+    function renderHistoryTree() {
+        const history = state.history;
+        const details = element("details", "h3sp-history-tree");
+        details.open = history.treeOpen;
+        const tree = promptRevisionTree(history.data, {
+            includeArchived: history.showArchived,
+        });
+        const summary = element("summary", "", `History (${tree.rows.length})`);
+        summary.title = "Show prompt ancestry, labels, and revision actions";
+        const panel = element("div", "h3sp-history-tree-panel");
+        for (const row of tree.rows) {
+            const rowHost = element(
+                "div",
+                `h3sp-history-tree-row${row.isActive ? " h3sp-history-active" : ""}${row.isArchived ? " h3sp-history-archived" : ""}`,
+            );
+            rowHost.style.paddingLeft = `${row.depth * 15}px`;
+            const select = button("", `Activate ${row.displayLabel} in the Plan`, () => {
+                if (!row.isActive) void selectHistoryRevision(row.revision.id);
+            });
+            select.className = "h3sp-history-tree-select";
+            select.disabled = row.isActive;
+            select.append(
+                element("span", "h3sp-history-branch", row.depth ? "↳" : "●"),
+                element("span", "h3sp-history-tree-label", row.displayLabel),
+                element(
+                    "span", "h3sp-history-tree-badge",
+                    row.isArchived ? "Archived"
+                        : row.isActive ? "Active"
+                            : row.isExecuted ? "Executed" : "Draft",
+                ),
+            );
+            const rename = button("Label", `Label ${row.displayLabel}`, () => {
+                const label = window.prompt(
+                    "Short label for this prompt revision (leave blank to clear):",
+                    String(row.revision.label ?? ""),
+                );
+                if (label != null) void mutateHistoryRevision(
+                    "label", row.revision.id, {label});
+            });
+            rename.className = "h3sp-history-tree-action";
+            rowHost.append(select, rename);
+            if (row.canRestore) {
+                const restore = button("Restore", `Restore ${row.displayLabel} to visible history`, () => {
+                    void mutateHistoryRevision("archive", row.revision.id, {archived:false});
+                });
+                restore.className = "h3sp-history-tree-action";
+                rowHost.append(restore);
+            } else if (row.canArchive) {
+                const archive = button("Archive", `Archive ${row.displayLabel}`, () => {
+                    void mutateHistoryRevision("archive", row.revision.id, {archived:true});
+                });
+                archive.className = "h3sp-history-tree-action";
+                rowHost.append(archive);
+            }
+            if (row.canDelete) {
+                const remove = button("Delete", `Delete unexecuted leaf ${row.displayLabel}`, () => {
+                    if (window.confirm(`Delete ${row.displayLabel}? This cannot be undone.`)) {
+                        void mutateHistoryRevision("delete", row.revision.id);
+                    }
+                });
+                remove.className = "h3sp-history-tree-action";
+                rowHost.append(remove);
+            }
+            panel.append(rowHost);
+        }
+        if (!tree.rows.length) {
+            panel.append(element("div", "h3sp-history-tree-tools", "No visible revisions"));
+        }
+        const tools = element("div", "h3sp-history-tree-tools");
+        tools.append(element(
+            "span", "",
+            "↳ shows parent → child progression",
+        ));
+        if (tree.archivedCount) {
+            tools.append(button(
+                history.showArchived ? "Hide archived" : `Show archived (${tree.archivedCount})`,
+                "Toggle archived prompt revisions",
+                () => {
+                    history.showArchived = !history.showArchived;
+                    history.treeOpen = true;
+                    renderHistory();
+                },
+            ));
+        }
+        panel.append(tools);
+        details.append(summary, panel);
+        details.addEventListener("toggle", () => {
+            history.treeOpen = details.open;
+        });
+        return details;
+    }
+
+    async function mutateHistoryRevision(action, revisionId, fields = {}) {
+        await flushHistoryDraft();
+        const history = state.history;
+        const shot = state.plan?.shots?.[state.active];
+        if (!shot) return;
+        const shotId = String(shot.id || `clip_${String(state.active + 1).padStart(4, "0")}`);
+        const runName = planRunName();
+        const key = historySceneKey(runName, shotId);
+        try {
+            const payload = await historyRequest({}, {
+                action,
+                run_name: runName,
+                scene_id: shotId,
+                revision: revisionId,
+                ...fields,
+            });
+            if (history.sceneKey !== key) return;
+            history.data = payload.history;
+            history.revisionId = payload.history?.active_revision ?? history.revisionId;
+            history.error = "";
+            renderHistory();
+        } catch (error) {
+            if (history.sceneKey !== key) return;
+            history.error = error?.message || String(error);
+            renderHistory();
+        }
     }
 
     async function loadHistory(shotId, prompt, synchronize = true) {
@@ -1456,6 +1664,8 @@ function mount(node) {
     }
 
     function showFailure(message) {
+        state.completion?.destroy();
+        state.completion = null;
         assistant.host = null;
         state.promptTextarea = null;
         state.richEditor = null;
@@ -1570,6 +1780,11 @@ function mount(node) {
         token.dataset.token = part.text;
         if (part.unresolved) token.classList.add("h3sp-token-unknown");
         if (part.record && !part.record.active) token.classList.add("h3sp-token-inactive");
+        if (part.type === "section") {
+            token.append(element("span", "h3sp-token-label", part.text));
+            token.title = `H3 section · ${part.section}`;
+            return token;
+        }
         const mediaKind = kind === "picture" ? "image" : kind;
         const media = part.record?.source ? findMediaPreview(part.record.source, mediaKind) : null;
         if (kind === "picture" && media?.url) {
@@ -1593,19 +1808,34 @@ function mount(node) {
         return token;
     }
 
-    function renderRichEditorText(text, caret = null) {
+    function renderRichEditorText(text, caret = null, editableSelection = null) {
         if (!state.richEditor) return;
         const parts = tokenizeRichPrompt(String(text ?? ""), state.records);
         const fragment = document.createDocumentFragment();
+        let sourceOffset = 0;
         for (let index = 0; index < parts.length; index += 1) {
             const part = parts[index];
+            const partStart = sourceOffset;
+            const partEnd = partStart + part.text.length;
+            sourceOffset = partEnd;
             const unfinished = part.type === "reference" && part.unresolved
                 && part.text.startsWith("@") && index === parts.length - 1
                 && document.activeElement === state.richEditor;
-            fragment.append(unfinished ? document.createTextNode(part.text) : makeRichToken(part));
+            const editingSemanticTime = part.type === "reference" && part.semantic
+                && editableSelection?.selectionStart >= partStart
+                && editableSelection?.selectionEnd <= partEnd;
+            fragment.append(unfinished || editingSemanticTime
+                ? document.createTextNode(part.text) : makeRichToken(part));
         }
         state.richEditor.replaceChildren(fragment);
-        if (caret != null) restoreCaret(state.richEditor, caret);
+        if (editableSelection?.selectionStart != null
+                && editableSelection?.selectionEnd != null) {
+            restoreTextSelection(
+                state.richEditor,
+                editableSelection.selectionStart,
+                editableSelection.selectionEnd,
+            );
+        } else if (caret != null) restoreCaret(state.richEditor, caret);
     }
 
     function insertPromptText(text) {
@@ -1700,7 +1930,9 @@ function mount(node) {
         const help = mode === "tagged"
             ? "Prompt-driven references. Hover to preview; click a @tag to insert it. " +
               "Writing the tag activates that asset for this scene and compiles it " +
-              "to a compact native H3 label. Audio never autoplays."
+              "to a compact native H3 label. For a picture, type #tag[2.50s] " +
+              "to add a Qwen-only semantic checkpoint, or a Picture storyboard " +
+              "cue when that mode is selected on Tagged Ref2VA. Audio never autoplays."
             : mode === "scheduled"
             ? `Scheduled references for scene ${state.active + 1}. Hover to preview; ` +
               "click to insert the optional stable @alias. It compiles to a native label; " +
@@ -1743,6 +1975,9 @@ function mount(node) {
             return;
         }
         hidePopover();
+        state.completion?.destroy();
+        state.completion = null;
+        state.schema = null;
         state.active = Math.max(0, Math.min(state.active, state.plan.shots.length - 1));
         root.style.setProperty("--h3sp-font-size", `${state.fontSize}px`);
         assistant.host = null;
@@ -1800,11 +2035,12 @@ function mount(node) {
         state.promptTextarea = textarea;
         state.promptUndo = promptUndoForScene(shotId, textarea.value);
 
-        const {records} = availableReferenceRecords(
-            node, state.active + 1, {prompt: [
+        const referenceData = availableReferenceRecords(
+            node, state.active + 1, {includeInactive:true, prompt: [
                 sharedPrompt(state.plan).text.trim(), textarea.value.trim(),
             ].filter(Boolean).join("\n\n")});
-        state.records = records;
+        state.records = referenceData.records;
+        state.referenceMode = referenceData.mode;
         const editorShell = element("div", "h3sp-editor-shell");
         editorShell.classList.toggle("h3sp-hidden", !state.decorated);
         const richEditor = element("div", "h3sp-rich-editor");
@@ -1821,12 +2057,17 @@ function mount(node) {
 
         const tools = element("div", "h3sp-tools");
         const refs = element("div", "h3sp-refs");
-        const referenceButton = button("@ Reference", "Open connected Ref2VA references and previews (@)", () => {
-            const opening = !refs.classList.contains("h3sp-open");
-            if (opening) renderReferenceTray(refs);
-            refs.classList.toggle("h3sp-open", opening);
-        });
-        const dialogueButton = button("# Dialogue", "Wrap selection in <d> dialogue tags (#)", () => {
+        const referenceButton = button(
+            "@ Reference",
+            "Browse connected Ref2VA media; typing @ opens inline autocomplete",
+            () => {
+                state.completion?.hide();
+                const opening = !refs.classList.contains("h3sp-open");
+                if (opening) renderReferenceTray(refs);
+                refs.classList.toggle("h3sp-open", opening);
+            },
+        );
+        const dialogueButton = button("Dialogue", "Wrap selection in <d> dialogue tags", () => {
             insertPromptDialogue();
         });
         const presentationButton = button(
@@ -1849,7 +2090,8 @@ function mount(node) {
             referenceButton,
             dialogueButton,
             presentationButton,
-            element("span", "h3sp-hint", "Alt+←/→ scenes · @ refs · # dialogue"),
+            element("span", "h3sp-hint",
+                "Alt+←/→ scenes · type @ # < [ ( · Ctrl/Cmd+Space for all"),
         );
         const footer = element("div", "h3sp-footer");
         const identity = element(
@@ -1878,6 +2120,7 @@ function mount(node) {
             if (target === textarea) textarea.setSelectionRange(text.length, text.length);
             target.focus();
             refreshAssistant();
+            state.schema?.refresh();
             return true;
         };
         const handlePromptUndo = (event, target) => {
@@ -1897,9 +2140,13 @@ function mount(node) {
             scheduleHistoryDraft(shotId, textarea.value);
             if (document.activeElement !== richEditor) renderRichEditorText(textarea.value);
             refreshAssistant();
+            state.completion?.refresh();
+            state.schema?.refresh();
         });
         textarea.addEventListener("keydown", (event) => {
-            if (handlePromptUndo(event, textarea)) {
+            if (state.completion?.handleKeydown(event)) {
+                return;
+            } else if (handlePromptUndo(event, textarea)) {
                 return;
             } else if (event.altKey && event.key === "ArrowLeft") {
                 event.preventDefault();
@@ -1907,14 +2154,6 @@ function mount(node) {
             } else if (event.altKey && event.key === "ArrowRight") {
                 event.preventDefault();
                 navigate(1);
-            } else if (!event.ctrlKey && !event.metaKey && !event.altKey && event.key === "@") {
-                event.preventDefault();
-                renderReferenceTray(refs);
-                refs.classList.add("h3sp-open");
-                refs.querySelector(".h3sp-ref-chip, button")?.focus();
-            } else if (!event.ctrlKey && !event.metaKey && !event.altKey && event.key === "#") {
-                event.preventDefault();
-                insertPromptDialogue();
             }
         });
 
@@ -1940,7 +2179,9 @@ function mount(node) {
         richEditor.addEventListener("copy", (event) => copyEditorSelection(richEditor, event));
         richEditor.addEventListener("cut", (event) => copyEditorSelection(richEditor, event, true));
         richEditor.addEventListener("keydown", (event) => {
-            if (handlePromptUndo(event, richEditor)) {
+            if (state.completion?.handleKeydown(event)) {
+                return;
+            } else if (handlePromptUndo(event, richEditor)) {
                 return;
             } else if (event.altKey && event.key === "ArrowLeft") {
                 event.preventDefault();
@@ -1948,13 +2189,6 @@ function mount(node) {
             } else if (event.altKey && event.key === "ArrowRight") {
                 event.preventDefault();
                 navigate(1);
-            } else if (!event.ctrlKey && !event.metaKey && !event.altKey && event.key === "@") {
-                event.preventDefault();
-                renderReferenceTray(refs);
-                refs.classList.add("h3sp-open");
-            } else if (!event.ctrlKey && !event.metaKey && !event.altKey && event.key === "#") {
-                event.preventDefault();
-                insertPromptDialogue();
             } else if (event.key === "Escape") {
                 refs.classList.remove("h3sp-open");
             }
@@ -1963,7 +2197,90 @@ function mount(node) {
             renderRichEditorText(editorPlainText(richEditor));
         });
 
-        root.append(head, nav, tools, refs, textarea, editorShell);
+        const replacePromptText = (result, message = "H3 edit saved to Plan") => {
+            const text = String(result.text ?? "");
+            const refreshed = availableReferenceRecords(
+                node, state.active + 1, {
+                    includeInactive:true,
+                    prompt:[sharedPrompt(state.plan).text.trim(), text.trim()]
+                        .filter(Boolean).join("\n\n"),
+                },
+            );
+            state.records = refreshed.records;
+            state.referenceMode = refreshed.mode;
+            textarea.value = text;
+            if (state.decorated) {
+                state.richInputType = "insertReplacementText";
+                try {
+                    textarea.dispatchEvent(new Event("input", {bubbles:true}));
+                } finally {
+                    state.richInputType = "";
+                }
+                renderRichEditorText(text, result.caret, result);
+                richEditor.focus();
+            } else {
+                textarea.setSelectionRange(
+                    result.selectionStart ?? result.caret,
+                    result.selectionEnd ?? result.caret,
+                );
+                textarea.dispatchEvent(new InputEvent("input", {
+                    bubbles:true,
+                    inputType:"insertReplacementText",
+                }));
+                textarea.focus();
+            }
+            status.textContent = message;
+        };
+
+        state.schema = createH3PromptSchemaController({
+            node,
+            propertyPrefix:"h3_scene_prompt_editor",
+            getText:() => state.decorated
+                ? editorPlainText(richEditor) : textarea.value,
+            replaceText:replacePromptText,
+            focusAt:(caret) => {
+                const position = Math.max(0, Math.min(textarea.value.length, Number(caret) || 0));
+                if (state.decorated) {
+                    renderRichEditorText(textarea.value, position);
+                    richEditor.focus();
+                } else {
+                    textarea.focus();
+                    textarea.setSelectionRange(position, position);
+                }
+            },
+            getRecords:() => state.records,
+            defaultDuration:Number(shot.duration_seconds)
+                || Number(shot.length) / 24 || 6,
+            defaultMode:["tagged", "scheduled", "native"].includes(state.referenceMode)
+                ? "ref2va"
+                : state.referenceMode === "native_keyframes"
+                  ? state.records.filter((record) => record.active && record.kind === "picture").length >= 2
+                    ? "fl2va" : "i2va"
+                  : "auto",
+            scopeKey:shotId,
+            markDirty:dirty,
+        });
+        if (state.schema) {
+            tools.prepend(state.schema.modeSelect, state.schema.toggle);
+            identity.append(document.createTextNode(" · "), state.schema.counts);
+        }
+
+        const activeInput = state.decorated ? richEditor : textarea;
+        state.completion = createPromptCompletionController({
+            input:activeInput,
+            getText:() => state.decorated
+                ? editorPlainText(richEditor) : textarea.value,
+            getCaret:() => state.decorated
+                ? selectionTextOffset(richEditor) : textarea.selectionStart,
+            getRecords:() => state.records,
+            getReferenceMode:() => state.referenceMode,
+            getMode:() => state.schema?.getMode() ?? "auto",
+            replaceText:(result) => replacePromptText(result, "Completion saved to Plan"),
+        });
+
+        root.append(head, nav, tools);
+        if (state.schema) root.append(state.schema.panel);
+        root.append(refs, textarea, editorShell);
         if (PROMPT_ASSISTANT_ENABLED) {
             const assistantHost = element("div", "h3sp-assist");
             assistant.host = assistantHost;
@@ -2059,6 +2376,8 @@ function mount(node) {
         if (state.popoverTimer != null) window.clearTimeout(state.popoverTimer);
         hidePopover();
         state.popover?.remove();
+        state.completion?.destroy();
+        state.completion = null;
         api.removeEventListener("executed", onPromptExecuted);
         delete node._h3PromptCompanionSetActiveScene;
         delete node._h3PromptCompanionSetScenePrompt;
@@ -2104,6 +2423,7 @@ function mount(node) {
                     String(state.plan.shots[index].id || `clip_${String(index + 1).padStart(4, "0")}`),
                     text);
                 refreshAssistant();
+                state.schema?.refresh();
             }
         }
         state.lastValue = String(state.planWidget?.value ?? state.lastValue);

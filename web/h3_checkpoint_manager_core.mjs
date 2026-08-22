@@ -28,11 +28,14 @@ export function selectedCheckpointRevision(payload, scene = null, revision = "")
     }
     const sceneRevisions = Number.isInteger(wantedScene)
         ? revisions.filter((item) => Number(item.scene) === wantedScene) : [];
+    const deepest = (items) => [...items].sort((left, right) =>
+        Number(right.scene) - Number(left.scene) ||
+        String(right.created_at).localeCompare(String(left.created_at)))[0];
     return sceneRevisions.find((item) => item.active)
         ?? sceneRevisions.sort((left, right) =>
             String(right.created_at).localeCompare(String(left.created_at)))[0]
-        ?? revisions.find((item) => item.active)
-        ?? revisions[0]
+        ?? deepest(revisions.filter((item) => item.active))
+        ?? deepest(revisions)
         ?? null;
 }
 
@@ -44,6 +47,31 @@ export function checkpointBranchRows(payload) {
             revisions.get(checkpointRevisionKey(item.scene, item.revision)))
             .filter(Boolean),
     }));
+}
+
+export function checkpointRevisionLineage(payload, selected) {
+    const records = checkpointRevisionMap(payload);
+    let cursor = selected ?? null;
+    const reversed = [];
+    const seen = new Set();
+    while (cursor) {
+        const key = checkpointRevisionKey(cursor.scene, cursor.revision);
+        if (seen.has(key)) return [];
+        seen.add(key);
+        reversed.push({
+            scene: Number(cursor.scene),
+            revision: String(cursor.revision ?? "").toLowerCase(),
+        });
+        if (!cursor.parent) break;
+        cursor = records.get(checkpointRevisionKey(
+            cursor.parent.scene, cursor.parent.revision,
+        ));
+        if (!cursor) return [];
+    }
+    const lineage = reversed.reverse();
+    if (!lineage.length || lineage[0].scene !== 1) return [];
+    if (lineage.some((item, index) => item.scene !== index + 1)) return [];
+    return lineage;
 }
 
 export function checkpointDependencyText(item) {
@@ -61,7 +89,8 @@ export function checkpointDependencyText(item) {
 export function checkpointDeletionTitle(preview) {
     if (!preview) return "Select a checkpoint revision to inspect deletion safety.";
     if (preview.allowed) {
-        return `Safe leaf deletion · ${preview.owned_file_count} files · ${formatCheckpointBytes(preview.reclaimed_bytes)}`;
+        const action = preview.rollback ? "Safe active-tip rollback" : "Safe leaf deletion";
+        return `${action} · ${preview.owned_file_count} files · ${formatCheckpointBytes(preview.reclaimed_bytes)}`;
     }
     return (preview.blockers ?? []).join(" ") || "Deletion is blocked.";
 }

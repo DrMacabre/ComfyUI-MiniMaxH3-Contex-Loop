@@ -1,5 +1,9 @@
 # Third-party notices
 
+For a user-facing map from features to upstream sources and local
+implementation files, see [Feature traceability](docs/FEATURE_TRACEABILITY.md).
+This file remains the authoritative attribution, revision, and license record.
+
 ## ComfyUI-LegacyWidgetWidthFix
 
 The canvas-wide LiteGraph widget-width compatibility layer is adapted with
@@ -57,12 +61,30 @@ Adapted source files and integration:
   fallback;
 - `h3_mask_payload_compat.py` — native-first AV mask payload extraction;
 - `masked_context.py` — recursive target-prefix construction derived from the
-  MultiRef existing-video implementation.
+  MultiRef existing-video implementation, including Update 6's audio-only
+  eight-tick half-cosine handoff as a distinct continuation mode.
+- `master_audio_context.py` — exact master-audio target replacement and
+  optional protected video-prefix construction adapted from MultiRef Update 4,
+  plus Update 6's direct sampled-latent video continuation path.
+- `av_timing.py` and `nodes.py` — Update 6's exact absolute PCM-boundary and
+  small decoded-audio time-conformance approach, adapted to the recursive
+  checkpointed trim path.
+- `masked_bridge.py` — two-ended protected AV target construction adapted
+  from MultiRef Update 5's masked bridge.
 
-The referenced MultiRef revision is `4b484a3` (2026-08-14), GPL-3.0. Its v2
-mask-engine and mask-payload markers are recognized for safe migration. This
-pack uses a v4 ABI matching the final merged PR #15375 helper contract and
-replaces only recognized older wrappers whose semantics changed.
+The referenced MultiRef revision is `4b484a3` (2026-08-14), GPL-3.0.
+Its v2 mask-engine marker is recognized for safe migration. This pack uses a
+v3 model, sampler, and payload ABI for PR #15375 commit `989e7a9`, replacing
+only recognized older blend/payload wrappers whose semantics changed.
+
+The master-audio node adapts MultiRef Update 4 at merged revision `9118251`
+(2026-08-14) and its Update 5 target-audio-grid boundary correction at merged
+revision `31e6cb7` (2026-08-15). Absolute master-audio slice endpoints and
+small decoded-audio time-conformance follow Update 6 revision
+`56f7586597929c43a6373ef28f6f84f26411b223` (2026-08-17).
+
+The two-ended masked bridge adapts MultiRef Update 5 at merged revision
+`31e6cb7` (2026-08-15).
 
 ## ComfyUI MiniMax H3 per-token AV masks
 
@@ -71,8 +93,37 @@ implementation are from
 [ComfyUI PR #15375](https://github.com/Comfy-Org/ComfyUI/pull/15375), authored
 by **drozbay**. The vendored fallback is scoped to masked target-latent
 operations, prefers native equivalent behavior automatically, and is not
-activated by ordinary guide-mode chains. The fallback tracks the final merged
-helper design through upstream commit `c676536` (2026-08-18).
+activated by ordinary guide-mode chains. It tracks the post-review mask-blend
+design through upstream commit `989e7a9bb79a370d20f63674b54dead993f6f4a1`
+(2026-08-15).
+
+## MaskVidExperiments causal mask conversion
+
+The exact H3 pixel-mask conversion in `masking_ops.py` adapts the causal
+frame-group derivation, conservative max reduction, and 2×2 latent-token
+snapping from
+[MaskVidExperiments](https://github.com/drozbay/MaskVidExperiments) by
+**drozbay**. This integration specializes that general VAE-aware algorithm to
+MiniMax H3's fixed `1,4,4,4,4` frame cycle and existing joint-AV masked target;
+it does not copy the upstream crop, uncrop, or workflow nodes.
+
+The referenced revision is
+`d98cc899c1fac718acf81cde1735bf57281097cf` (2026-08-17), GPL-3.0.
+
+## ComfyUI-MiniMaxH3-PerRowMasking
+
+The public general-masking workflow and its source-media/mask-grid utilities
+adapt the earlier experimental
+[ComfyUI-MiniMaxH3-PerRowMasking](https://github.com/ethanfel/ComfyUI-MiniMaxH3-PerRowMasking)
+repository by **ethanfel**. That GPL-3.0 project established the source AV
+`17k+5` trim, exact 32×32 effective-cell preview, mask-convention controls,
+source-latent workflow, and audio-preservation UI used as the starting point.
+
+This integration uses revision `d6a7964b9fd64f65f1773f84cba3b29665128e59`
+(2026-08-07). It does not copy that project's temporary per-model forward
+wrapper. Instead, Apply Target Mask reuses this pack's newer capability-aware
+PR #15375 engine, composes existing nested masks, and exposes additional
+temporal/custom audio-mask modes under distinct node IDs for safe co-install.
 
 ## ComfyUI MiniMax H3 Add Guide
 
@@ -82,6 +133,81 @@ by **drozbay**. That contribution introduces arbitrary-position image, video,
 and audio guides plus native keyframe/reference payload merging in ComfyUI.
 This repository does not copy its node implementation; it detects the exposed
 core layout API and emits compatible guide records from Loop Context.
+
+## MiniMax H3 Chained Character Swap
+
+The opt-in `tapered_guide` continuation adapts the tapered chroma-noise context
+recipe, palette, validated default strengths, and deterministic-noise design
+from [minimax-h3-chained-character-swap](https://github.com/MacroSony/minimax-h3-chained-character-swap)
+by **MacroSony**. This integration applies the transformation in memory to an
+immutable clone of the exact recursive context tail, derives its noise seed
+from the scene seed, and generalizes the published 22-frame baseline to other
+explicit Guide lengths as an experimental option.
+
+The referenced revision is `609e74233445067afa06bd5a3428bc645d555a01`
+(2026-08-16), distributed under the MIT License:
+
+```text
+MIT License
+
+Copyright (c) 2026 MacroSony
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+## ComfyUI-H3-Context-Noise
+
+The experimental `tapered_av` / Detail AV transition adapts the latent
+Gaussian context-noise recipe, matched-latent-standard-deviation scaling,
+validated 0.45 to 0.10 two-step taper, and deterministic CPU-noise design from
+[ComfyUI-H3-Context-Noise](https://github.com/beijinren/ComfyUI-H3-Context-Noise)
+by **beijinren**. This integration applies the treatment only to an immutable,
+disposable copy of the recursive 39-frame video-latent prefix, leaves the
+audio latent and denoise masks unchanged, and fingerprints the recipe for safe
+checkpoint resume.
+
+The referenced revision is `7e5531233b42dadd19c40d86770521a36508c358`
+(2026-08-18), distributed under the MIT License:
+
+```text
+MIT License
+
+Copyright (c) 2026 beijinren
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
 
 ## ComfyUI-MiniMaxH3-Easy
 

@@ -70,7 +70,14 @@ def main():
     sys.modules["comfy"].ldm = sys.modules["comfy.ldm"]
     sys.modules["comfy.ldm"].minimax = sys.modules["comfy.ldm.minimax"]
     sys.modules["comfy.ldm.minimax"].model = mm
-    sys.modules["torch"] = make_torch()
+    torch_stub = make_torch()
+    torch_nn = types.ModuleType("torch.nn")
+    torch_functional = types.ModuleType("torch.nn.functional")
+    torch_nn.functional = torch_functional
+    torch_stub.nn = torch_nn
+    sys.modules["torch"] = torch_stub
+    sys.modules["torch.nn"] = torch_nn
+    sys.modules["torch.nn.functional"] = torch_functional
 
     cu = types.ModuleType("comfy.utils")
     cu.common_upscale = lambda s, w, h, m, c: T(
@@ -189,8 +196,49 @@ def main():
     assert delivered.a[:, 0, 0, 0].tolist() == list(range(4, 10))
     assert with_overlap.a[:, 0, 0, 0].tolist() == list(range(10))
     assert retained == 4
+    scene_state = {
+        "index": 2,
+        "plan": {
+            "shots": [{}, {"video_blend_frames": 3}],
+            "compatibility": {"video_blend_frames": 0},
+        },
+    }
+    delivered, _, with_overlap, retained = trim.trim(
+        numbered, 4, retain_overlap_frames=0, state=scene_state)
+    assert delivered.a[:, 0, 0, 0].tolist() == list(range(4, 10))
+    assert with_overlap.a[:, 0, 0, 0].tolist() == list(range(1, 10))
+    assert retained == 3
+    first_scene_state = {
+        "index": 1,
+        "plan": {
+            "shots": [{
+                "raw_frames": 6,
+                "delivered_frames": 6,
+                "video_blend_frames": 39,
+            }],
+            "compatibility": {"video_blend_frames": 39},
+        },
+    }
+    delivered, _, with_overlap, retained = trim.trim(
+        numbered[4:], 0, retain_overlap_frames=39, state=first_scene_state)
+    assert delivered.a[:, 0, 0, 0].tolist() == list(range(4, 10))
+    assert with_overlap.a[:, 0, 0, 0].tolist() == list(range(4, 10))
+    assert retained == 0
+    exact_audio = {
+        "waveform": T(np.arange(10, dtype=np.float32).reshape(1, 1, 10)),
+        "sample_rate": 24,
+    }
+    _, trimmed_audio, _, _ = trim.trim(
+        numbered, 4, exact_audio, 24.0, True)
+    assert trimmed_audio["waveform"].a.reshape(-1).tolist() == list(range(4, 10))
+    assert trimmed_audio[
+        nodes.AUDIO_WITH_OVERLAP_WAVEFORM_KEY
+    ].a.reshape(-1).tolist() == list(range(10))
+    assert trimmed_audio[nodes.AUDIO_WITH_OVERLAP_FRAMES_KEY] == 10
+    assert trimmed_audio[nodes.AUDIO_TRIM_FRAMES_KEY] == 4
     print("trim overlap: hard output unchanged; optional prefix retained and "
-          "clamped to repeated context")
+          "clamped to repeated context; full decoded audio rides privately "
+          "with the delivered AUDIO value")
 
     # a 124-frame clip: latent_t 37 (7 full 17-frame groups + 1 + 4),
     # audio grid ceil(124 * 5/3) = 207 steps, overhang exactly 1/3
@@ -226,6 +274,7 @@ def main():
             return T(np.zeros((1, 16, steps, h, w), dtype=np.float32))
 
     node = nodes.MiniMaxH3MotionContext()
+    assert list(node.INPUT_TYPES()["optional"])[-1] == "video_context_latent"
     # Simulate conditioning produced by MiniMaxH3ReferenceToVideo. Motion
     # Context must append its timeline-audio block without dropping either
     # existing Ref2VA block.
@@ -307,6 +356,62 @@ def main():
     assert idx == [0, 1, 5, 9, 13, 17, 18], idx
     assert captured["minimax_frame_count"] == frames
     assert trim == 22
+    original_context_capture = captured.copy()
+
+    # Latent Guide keeps the ordinary Guide layout but supplies its video
+    # blocks directly from the previous sampler output. The video VAE must
+    # not run, and the target latent remains a separate input to the node.
+    direct_video = np.broadcast_to(
+        np.arange(latent_t, dtype=np.float32).reshape(1, 1, latent_t, 1, 1),
+        (1, 16, latent_t, h, w),
+    ).copy()
+    direct_prev = {"samples": Nested([
+        T(direct_video), prev["samples"].parts[1],
+    ])}
+
+    class RefusingVAE:
+        def encode(self, _value):
+            raise AssertionError("Latent Guide unexpectedly called video VAE")
+
+    captured.clear()
+    direct_out, direct_trim = node.apply(
+        conditioning=[["c", {}]], vae=RefusingVAE(), latent=target,
+        context_frames=context, context_length=22, encode_mode="video",
+        anchor_mode="head", crop="disabled", audio_context_length=0,
+        audio_mode="timeline", video_context_latent=direct_prev)
+    direct_keyframes = direct_out[0][1]["minimax_keyframes"]
+    assert direct_trim == 22
+    assert len(direct_keyframes) == 7
+    assert [value[nodes.MC_KEY] for value in direct_keyframes] == idx
+    assert [float(value["latent"].a[0, 0, 0, 0, 0])
+            for value in direct_keyframes] == list(range(30, 37))
+    print("latent Guide: 22-frame phase-aligned tail reused as 7 direct "
+          "conditioning blocks without a video-VAE round trip")
+
+    class CountingVAE(VAE):
+        def __init__(self):
+            self.calls = 0
+
+        def encode(self, value):
+            self.calls += 1
+            return super().encode(value)
+
+    incompatible_prev = {"samples": Nested([
+        T(np.zeros((1, 16, latent_t, h - 1, w), dtype=np.float32)),
+        prev["samples"].parts[1],
+    ])}
+    fallback_vae = CountingVAE()
+    captured.clear()
+    fallback_out, _fallback_trim = node.apply(
+        conditioning=[["c", {}]], vae=fallback_vae, latent=target,
+        context_frames=context, context_length=22, encode_mode="video",
+        anchor_mode="head", crop="disabled", audio_context_length=0,
+        audio_mode="timeline", video_context_latent=incompatible_prev)
+    assert fallback_vae.calls == 1
+    assert len(fallback_out[0][1]["minimax_keyframes"]) == 7
+    print("RGB Guide fallback: original context-frame VAE path retained")
+    captured.clear()
+    captured.update(original_context_capture)
 
     refs = captured["minimax_refs"]
     assert refs[:3] == r2v_refs

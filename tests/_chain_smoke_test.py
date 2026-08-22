@@ -88,6 +88,68 @@ class FakeDynamicPrompt:
 def main():
     package, chain = load_package()
 
+    cleanup_input = chain.MiniMaxH3ChainLoopEnd.INPUT_TYPES()[
+        "optional"]["between_scene_cleanup"]
+    assert cleanup_input[0] == ["off", "unload_models", "fresh_scene"]
+    cleanup_calls = []
+    import comfy.memory_management as memory_management
+    import comfy.model_management as model_management
+    original_free_pins = model_management.free_pins
+    original_unload = model_management.unload_all_models
+    original_empty_cache = model_management.soft_empty_cache
+    original_cleanup_models = model_management.cleanup_models_gc
+    original_ram_release = memory_management.extra_ram_release
+    original_collect = chain.gc.collect
+    model_management.free_pins = lambda size, evict_active=False: (
+        cleanup_calls.append(("pins", size, evict_active)) or 12_345)
+    model_management.unload_all_models = lambda: cleanup_calls.append(
+        ("unload",))
+    model_management.soft_empty_cache = lambda force=False: cleanup_calls.append(
+        ("empty", force))
+    model_management.cleanup_models_gc = lambda: cleanup_calls.append(
+        ("models_gc",))
+    memory_management.extra_ram_release = (
+        lambda target, free_active=False: (
+            cleanup_calls.append(("ram", target, free_active)) or 54_321))
+    chain.gc.collect = lambda: cleanup_calls.append(("gc",)) or 7
+    try:
+        untouched = chain._release_loop_boundary_resources("off", 1)
+        assert cleanup_calls == [] and untouched["policy"] == "off"
+
+        unloaded = chain._release_loop_boundary_resources(
+            "unload_models", 1)
+        assert cleanup_calls == [("unload",), ("empty", True)]
+        assert unloaded["pinned_bytes"] == 0
+        assert unloaded["cache_bytes"] == 0
+
+        cleanup_calls.clear()
+        fresh = chain._release_loop_boundary_resources("fresh_scene", 2)
+        assert cleanup_calls == [
+            ("ram", sys.maxsize, True),
+            ("gc",),
+            ("models_gc",),
+            ("pins", sys.maxsize, True),
+            ("unload",),
+            ("empty", True),
+        ]
+        assert fresh["pinned_bytes"] == 12_345
+        assert fresh["cache_bytes"] == 54_321
+        assert fresh["collected_objects"] == 7
+        try:
+            chain._release_loop_boundary_resources("erase_everything", 2)
+        except ValueError as exc:
+            assert "between_scene_cleanup" in str(exc)
+        else:
+            raise AssertionError("unknown loop cleanup policy was accepted")
+    finally:
+        model_management.free_pins = original_free_pins
+        model_management.unload_all_models = original_unload
+        model_management.soft_empty_cache = original_empty_cache
+        model_management.cleanup_models_gc = original_cleanup_models
+        memory_management.extra_ram_release = original_ram_release
+        chain.gc.collect = original_collect
+    print("loop cleanup: cache-first eviction and model unload passed")
+
     fixed_now = datetime(2026, 8, 11, 14, 5, 9)
     assert chain._expand_filename_date(
         "render_%date:yyyy-MM-dd%_%hour%-%minute%-%second%", fixed_now
@@ -165,11 +227,17 @@ def main():
         "MiniMaxH3ChainExternalVideo",
         "MiniMaxH3ChainLoopStart",
         "MiniMaxH3ChainCurrent", "MiniMaxH3ChainContext",
+        "MiniMaxH3DriftControlModelPatch",
         "MiniMaxH3ChainSegmentSave", "MiniMaxH3ChainLoopEnd",
         "MiniMaxH3ChainManifestLoad", "MiniMaxH3ChainExportPNG",
+        "MiniMaxH3ChainLatentVideoAdapter",
         "MiniMaxH3ChainAssemble",
         "MiniMaxH3LoopTrim",
         "MiniMaxH3ContexLoopSeamProbe",
+        "MiniMaxH3ContexTrimSourceAV",
+        "MiniMaxH3ContexMaskedTarget",
+        "MiniMaxH3ContexMaskGridPreview",
+        "MiniMaxH3ContexMasterAudioMaskedAV",
     }
     assert required <= set(package.NODE_CLASS_MAPPINGS)
     upstream_ids = {
@@ -177,8 +245,17 @@ def main():
         "MiniMaxH3MotionContextTrim",
         "MiniMaxH3MotionContextSaveLatent",
         "MiniMaxH3MotionContextLoadLatent",
+        "MiniMaxH3SongMaskedAVContext",
+        "MiniMaxH3ContexSongMaskedAVContext",
     }
     assert not upstream_ids.intersection(package.NODE_CLASS_MAPPINGS)
+    retired_mask_pack_ids = {
+        "MiniMaxH3TrimSourceAV",
+        "MiniMaxH3PerRowMaskPatch",
+        "MiniMaxH3SetGenerationMask",
+        "MiniMaxH3MaskGridPreview",
+    }
+    assert not retired_mask_pack_ids.intersection(package.NODE_CLASS_MAPPINGS)
     layout_patch = sys.modules[package.__name__ + ".patch_layout"]
     payload_patch = sys.modules[package.__name__ + ".patch_payload"]
     for module in (layout_patch, payload_patch):
@@ -190,6 +267,7 @@ def main():
     assert package.WEB_DIRECTORY == "./web"
     assert (ROOT / "web" / "h3_chain_plan_editor.js").is_file()
     assert (ROOT / "web" / "h3_chain_plan_core.mjs").is_file()
+    assert (ROOT / "web" / "h3_prompt_completion_core.mjs").is_file()
     assert (ROOT / "web" / "h3_chain_cancel_reroll.js").is_file()
     assert (ROOT / "web" / "h3_chain_cancel_reroll_core.mjs").is_file()
     assert (ROOT / "web" / "h3_chain_scene_prompt_editor.js").is_file()
@@ -469,6 +547,15 @@ def main():
         assert all(str(value).strip() for value in output_tooltips), (
             "%s has an empty output tooltip" % node_name)
     print("tooltips: every public input and output is documented")
+    review_inputs = chain.MiniMaxH3ChainReview.INPUT_TYPES()
+    partial_audio_tooltip = review_inputs["required"][
+        "partial_audio_source"][1]["tooltip"]
+    legacy_source_tooltip = review_inputs["optional"][
+        "source_audio"][1]["tooltip"]
+    assert "Source Timeline audio carried in state" in partial_audio_tooltip
+    assert "none creates a silent partial" in partial_audio_tooltip
+    assert "Legacy fallback full source track" in legacy_source_tooltip
+    assert "does not affect generation" in legacy_source_tooltip
 
     readable_prompts = chain._normalize_plan(
         json.dumps({
@@ -498,7 +585,7 @@ def main():
     run_manager = package.NODE_CLASS_MAPPINGS["MiniMaxH3ChainRunManager"]()
     run_manager_result = run_manager.passthrough(
         readable_prompts, True, True, False, "[]")
-    assert run_manager_result == (readable_prompts,)
+    assert run_manager_result == (readable_prompts, None)
     opening_image = object()
     first_scene_gate = package.NODE_CLASS_MAPPINGS[
         "MiniMaxH3ChainFirstSceneImage"]()
@@ -860,6 +947,36 @@ def main():
     assert float(tagged_motion_inputs[
         "ref_video_audios.ref_video_audio_0"]["waveform"][0, 0, 0]) == 2210
     assert "origin scene 2" in tagged_motion_expanded["result"][3]
+
+    tagged_motion_role = chain.MiniMaxH3TaggedMotionReference().add(
+        sequential_video, "performance", "<Subject 1> and <Subject 2>",
+        "the source performer's pose sequence and action timing", "384", "",
+        "restart_each_scene")[0]
+    motion_role_prompt = (
+        "subject_definitions:\n"
+        "<Subject 1> is the target character.\n"
+        "<Subject 2> is the target partner.\n\n"
+        "detailed_description:\n"
+        "[Shot 1] <Subject 1> performs @performance.")
+    motion_role_compiled, motion_role_summary, motion_role_bindings = (
+        chain._compile_tagged_reference_prompt(
+            tagged_motion_role, 1, 1, motion_role_prompt))
+    assert "<Subject 3> is the reusable pose, action, and motion from " \
+           "<Video 1>" in motion_role_compiled
+    assert "<Subject 1> performs <Subject 3>." in motion_role_compiled
+    assert "without importing the source identity, wardrobe, setting, " \
+           "lighting, or composition" in motion_role_compiled
+    assert motion_role_bindings["aliases"]["performance"] == "<Subject 3>"
+    assert "@performance -> <Subject 3> motion from <Video 1>" in \
+           motion_role_summary
+    motion_role_expanded = chain.MiniMaxH3TaggedReferenceToVideo().apply(
+        "clip", "video-vae", "audio-vae", tagged_motion_role, 1, 1,
+        motion_role_prompt, 960, 544, 243, "match")
+    motion_role_inputs = next(iter(
+        motion_role_expanded["expand"].values()))["inputs"]
+    assert motion_role_inputs["ref_videos.ref_video_0"] is sequential_video
+    assert motion_role_inputs["prompt"] == motion_role_compiled
+
     no_tag_compiled, no_tag_summary, no_tag_bindings = (
         chain._compile_tagged_reference_prompt(
             tagged, 1, 4, "A scene without registered aliases; keep @S1."))
@@ -873,7 +990,8 @@ def main():
 
     # ComfyUI rounds H3's 40 Hz audio grid to the nearest step. Depending on
     # frame length, the decoded stream can land 1/3 step above or below the
-    # exact 24 fps picture duration. Match Tail must frame-lock both cases.
+    # exact 24 fps picture duration. Match Tail must frame-lock both cases by
+    # tiny time-conformance rather than inserting a silence tail.
     trim_node = package.NODE_CLASS_MAPPINGS["MiniMaxH3LoopTrim"]()
     short_images = torch.zeros((260, 1, 1, 3), dtype=torch.float32)
     short_samples = 346400  # 433 audio steps; exact 260f target is 346667
@@ -885,7 +1003,7 @@ def main():
         short_images, 0, short_audio, 24.0, True)
     assert retained == 0
     assert int(padded["waveform"].shape[-1]) == 346667
-    assert torch.count_nonzero(padded["waveform"][..., short_samples:]) == 0
+    assert torch.all(padded["waveform"] > 0.99)
     chain._validate_audio(padded, "260-frame regression", expected_frames=260)
 
     long_images = torch.zeros((124, 1, 1, 3), dtype=torch.float32)
@@ -898,6 +1016,7 @@ def main():
         long_images, 0, long_audio, 24.0, True)
     assert retained == 0
     assert int(truncated["waveform"].shape[-1]) == 165333
+    assert torch.all(truncated["waveform"] > 0.99)
     numbered = torch.arange(10, dtype=torch.float32).reshape(10, 1, 1, 1)
     delivered, _, with_overlap, retained = trim_node.trim(
         numbered, 4, retain_overlap_frames=2)
@@ -909,8 +1028,36 @@ def main():
     assert delivered[:, 0, 0, 0].tolist() == list(range(4, 10))
     assert with_overlap[:, 0, 0, 0].tolist() == list(range(10))
     assert retained == 4
+    scene_state = {
+        "index": 2,
+        "plan": {
+            "shots": [{}, {"video_blend_frames": 3}],
+            "compatibility": {"video_blend_frames": 0},
+        },
+    }
+    delivered, _, with_overlap, retained = trim_node.trim(
+        numbered, 4, retain_overlap_frames=0, state=scene_state)
+    assert delivered[:, 0, 0, 0].tolist() == list(range(4, 10))
+    assert with_overlap[:, 0, 0, 0].tolist() == list(range(1, 10))
+    assert retained == 3
+    first_scene_state = {
+        "index": 1,
+        "plan": {
+            "shots": [{
+                "raw_frames": 6,
+                "delivered_frames": 6,
+                "video_blend_frames": 39,
+            }],
+            "compatibility": {"video_blend_frames": 39},
+        },
+    }
+    delivered, _, with_overlap, retained = trim_node.trim(
+        numbered[4:], 0, retain_overlap_frames=39, state=first_scene_state)
+    assert delivered[:, 0, 0, 0].tolist() == list(range(4, 10))
+    assert with_overlap[:, 0, 0, 0].tolist() == list(range(4, 10))
+    assert retained == 0
     print("trim: AV tails frame-locked; optional visual overlap is clamped and "
-          "does not alter the hard-trim output")
+          "scene state overrides the legacy Plan-default wire")
 
     real_st_load = chain._st_load
     try:
@@ -1192,7 +1339,8 @@ def main():
                 chain.MiniMaxH3ChainLoopStart().start(
                     plan, 1, short_non_silent)
             except ValueError as exc:
-                assert "Only silent placeholder audio" in str(exc)
+                assert "source_audio_too_short" in str(exc)
+                assert "provide a longer track" in str(exc)
             else:
                 raise AssertionError("Loop Start accepted a short non-silent song")
             conditioning = [["cond", {}]]
@@ -1326,6 +1474,7 @@ def main():
                 1, 32, 32, 3)
             first_current = chain.MiniMaxH3ChainCurrent().current(
                 external_state1, extension_audio)["result"]
+            external_current_state1 = first_current[0]
             first_slice = first_current[12]["waveform"]
             first_lead_samples = round(1 / 24 * 8000)
             assert int(first_slice.shape[-1]) == round(5 / 24 * 8000)
@@ -1347,7 +1496,7 @@ def main():
             chain.MiniMaxH3MotionContext = FakeExternalMotionContext
             try:
                 external_conditioning = chain.MiniMaxH3ChainContext().apply(
-                    external_state1, conditioning, None, av_latent(),
+                    external_current_state1, conditioning, None, av_latent(),
                     audio_vae="audio-vae")
             finally:
                 chain.MiniMaxH3MotionContext = real_motion_context
@@ -1355,23 +1504,25 @@ def main():
             assert external_conditioning[3] is context_call["latent"]
             assert context_call["context_latent"] is None
             assert context_call["audio_vae"] == "audio-vae"
-            assert context_call["context_audio"] is external_state1[
+            assert context_call["context_audio"] is external_current_state1[
                 "previous_audio"]
 
             external_saver = chain.MiniMaxH3ChainSegmentSave()
             external_saver.save(
-                external_state1,
+                external_current_state1,
                 torch.zeros((4, 32, 32, 3), dtype=torch.float32),
                 av_latent())["result"][0]
             external_state2 = chain._initial_state(
                 effective_external_plan, 2)
+            external_current_state2 = chain.MiniMaxH3ChainCurrent().current(
+                external_state2, extension_audio)["result"][0]
             external_segment2 = external_saver.save(
-                external_state2,
+                external_current_state2,
                 torch.zeros((4, 32, 32, 3), dtype=torch.float32),
                 av_latent())["result"][0]
-            external_complete = dict(external_state2)
+            external_complete = dict(external_current_state2)
             external_complete["segments"] = (
-                external_state2["segments"] + [external_segment2])
+                external_current_state2["segments"] + [external_segment2])
             external_manifest = chain._manifest_from_state(external_complete)
             assert external_manifest["prelude"]["frame_count"] == 6
             loaded_external = chain.MiniMaxH3ChainManifestLoad().load(
@@ -1438,7 +1589,7 @@ def main():
                 assert "expected exactly" in str(exc)
             else:
                 raise AssertionError("Segment Save accepted mistimed audio")
-            state1 = chain._initial_state(prepared_plan, 1)
+            state1 = current[0]
             images1 = torch.zeros((5, 32, 32, 3), dtype=torch.float32)
             queued_prompt = {
                 "1700": {
@@ -1546,6 +1697,19 @@ def main():
                 "prompt"] == "first"
             print("recovery metadata: MP4, prompt sidecar, plan, API prompt, "
                   "and workflow archive exact inputs")
+
+            interrupted_manifest = chain.MiniMaxH3ChainManifestLoad().load(
+                plan, source)
+            assert interrupted_manifest[0]["format"] == (
+                "h3_chain_partial_manifest_v3")
+            assert interrupted_manifest[0]["clip_count"] == 1
+            assert interrupted_manifest[0]["planned_clip_count"] == 2
+            assert "partial manifest through clip 1/2" in (
+                interrupted_manifest[2])
+            assert pathlib.Path(
+                tempdir, "h3_chains", "smoke", "partial",
+                "through_clip_0001.manifest.json").is_file()
+            print("manifest load: interrupted run restored through scene 1")
 
             segment1_path = pathlib.Path(
                 chain._absolute_output_path(segment1["segment"]))
@@ -1826,10 +1990,21 @@ def main():
                     "segment": ["3", 0],
                 }},
             }
-            expanded = chain.MiniMaxH3ChainLoopEnd().end(
-                ["1", 0], state1, images1, av_latent(), segment1,
-                dynprompt=FakeDynamicPrompt(fake_prompt), unique_id="4")
+            cleanup_boundaries = []
+            original_boundary_cleanup = chain._release_loop_boundary_resources
+            chain._release_loop_boundary_resources = (
+                lambda policy, scene: cleanup_boundaries.append(
+                    (policy, scene)) or {"policy": policy})
+            try:
+                expanded = chain.MiniMaxH3ChainLoopEnd().end(
+                    ["1", 0], state1, images1, av_latent(), segment1,
+                    between_scene_cleanup="fresh_scene",
+                    dynprompt=FakeDynamicPrompt(fake_prompt), unique_id="4")
+            finally:
+                chain._release_loop_boundary_resources = (
+                    original_boundary_cleanup)
             assert isinstance(expanded, dict) and expanded.get("expand")
+            assert cleanup_boundaries == [("fresh_scene", 1)]
             cloned_starts = [node for node in expanded["expand"].values()
                              if node["class_type"] == "MiniMaxH3ChainLoopStart"]
             assert len(cloned_starts) == 1
@@ -1864,6 +2039,8 @@ def main():
             assert len(state2["previous_latent"]["samples"]) == 2
             print("resume: clip 2 restored clip 1 frame tail + AV latent")
 
+            state2 = chain.MiniMaxH3ChainCurrent().current(
+                state2, source)["result"][0]
             images2 = torch.zeros((4, 32, 32, 3), dtype=torch.float32)
             result2 = saver.save(
                 state2, images2, av_latent(), audio_for_frames(4))
@@ -2086,10 +2263,19 @@ def main():
                 chain._initial_state(
                     chain._plan_with_source_audio(changed_plan, source), 2)
             except ValueError as exc:
-                assert "different settings, prompts, seeds, or durations" in str(exc)
+                assert "scene_generation.prompt_hash" in str(exc)
             else:
                 raise AssertionError("resume accepted a changed predecessor")
             print("resume guard: changed predecessor rejected")
+            unsafe_state = chain._initial_state(
+                chain._plan_with_source_audio(changed_plan, source), 2,
+                verify_resume_history=False)
+            assert unsafe_state["resumed_from"] == 1
+            assert unsafe_state["resume_history_verification_disabled"]
+            assert unsafe_state["segments"][0]["prompt"] == "first"
+            print(
+                "resume override: incompatible Plan history reused the intact "
+                "saved predecessor explicitly")
 
             changed_generation_plan = chain._normalize_plan(
                 json.dumps({"shots": [
@@ -2102,7 +2288,7 @@ def main():
                 chain._initial_state(chain._plan_with_source_audio(
                     changed_generation_plan, source), 2)
             except ValueError as exc:
-                assert "different settings" in str(exc)
+                assert "global_generation.generation_fingerprint" in str(exc)
             else:
                 raise AssertionError(
                     "resume accepted a changed generation fingerprint")
@@ -2112,7 +2298,7 @@ def main():
                 chain._initial_state(
                     chain._plan_with_source_audio(plan, changed_source), 2)
             except ValueError as exc:
-                assert "different settings, prompts, seeds, or durations" in str(exc)
+                assert "scene_generation.source_reference_window" in str(exc)
             else:
                 raise AssertionError("resume accepted changed source audio")
             print("resume guard: changed source track rejected")

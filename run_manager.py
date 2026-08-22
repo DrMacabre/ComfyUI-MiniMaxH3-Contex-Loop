@@ -13,6 +13,29 @@ try:
 except ImportError:  # Standalone unit tests import this module without a package.
     from asset_store import RunAssetStore
 
+try:
+    from .contracts_v05 import (
+        AUDIO_POLICY_VERSION,
+        CONTINUATION_POLICIES,
+        TRANSITION_POLICY_VERSION,
+        TRANSITION_PRESETS,
+        audio_policy,
+        migrate_continuation_mode,
+        migrate_legacy_audio_mode,
+        transition_policy,
+    )
+except ImportError:  # Standalone unit tests import this module without a package.
+    from contracts_v05 import (
+        AUDIO_POLICY_VERSION,
+        CONTINUATION_POLICIES,
+        TRANSITION_POLICY_VERSION,
+        TRANSITION_PRESETS,
+        audio_policy,
+        migrate_continuation_mode,
+        migrate_legacy_audio_mode,
+        transition_policy,
+    )
+
 
 PLAN_NODE_TYPE = "MiniMaxH3ChainPlan"
 PLAN_WIDGET_NAMES = (
@@ -39,6 +62,7 @@ H3_CONTEXT_LENGTHS = (
     1, 5, 22, 39, 56, 73, 90, 107, 124,
     141, 158, 175, 192, 209, 226, 243,
 )
+CONTINUATION_MODES = tuple(CONTINUATION_POLICIES)
 
 
 def _safe_name(value: Any, fallback: str = "") -> str:
@@ -135,7 +159,7 @@ def _workflow_inputs(document: Any, run_name: str) -> dict[str, Any]:
             or selected[9] not in (
                 "source_track", "generated_audio", "source_plus_timeline")):
         return {}
-    if len(selected) > 16 and selected[16] not in ("guide", "masked_av"):
+    if len(selected) > 16 and selected[16] not in CONTINUATION_MODES:
         return {}
     restored = {}
     for name, value in zip(PLAN_WIDGET_NAMES, selected):
@@ -167,7 +191,7 @@ def _editor_plan(archive: dict[str, Any]) -> dict[str, Any]:
             value["steps"] = int(shot["steps"])
         if shot.get("seed") is not None:
             value["seed"] = str(shot["seed"])
-        if shot.get("continuation_mode") in ("guide", "masked_av"):
+        if shot.get("continuation_mode") in CONTINUATION_MODES:
             value["continuation_mode"] = shot["continuation_mode"]
         if (shot.get("context_length") == 0
                 or shot.get("context_length") in H3_CONTEXT_LENGTHS):
@@ -207,6 +231,81 @@ def _archive_inputs(archive: Any, run_name: str) -> dict[str, Any]:
         restored["segment_crf"] = archive["segment_crf"]
     restored.setdefault("video_blend_frames", 0)
     restored.setdefault("continuation_mode", "guide")
+    return restored
+
+
+def archive_policy_inputs(archive: Any) -> dict[str, dict[str, Any]]:
+    """Return exact widget values for connected 0.5 policy nodes.
+
+    Plan archives store resolved typed policies in compatibility metadata.  A
+    restore must project those records back onto the upstream policy widgets;
+    writing only the Plan's hidden 0.4 fallbacks has no effect while a typed
+    policy input is connected.
+    """
+    if not isinstance(archive, dict):
+        return {}
+    compatibility = archive.get("compatibility")
+    if not isinstance(compatibility, dict):
+        return {}
+
+    restored: dict[str, dict[str, Any]] = {}
+    saved_audio = compatibility.get("audio_policy")
+    try:
+        if (isinstance(saved_audio, dict) and
+                saved_audio.get("version") == AUDIO_POLICY_VERSION):
+            resolved_audio = audio_policy(
+                saved_audio.get("final_audio"),
+                saved_audio.get("source_reference"),
+                saved_audio.get("generated_continuity"),
+                saved_audio.get("source_audio_target", "off"))
+        else:
+            resolved_audio = migrate_legacy_audio_mode(
+                compatibility.get("audio_mode", "generated_audio"))
+        restored["audio_policy"] = {
+            "final_audio": resolved_audio["final_audio"],
+            "source_reference": resolved_audio["source_reference"],
+            "generated_continuity": resolved_audio["generated_continuity"],
+        }
+        if resolved_audio.get("source_audio_target") == "locked":
+            restored["audio_policy"]["source_audio_target"] = "locked"
+    except (TypeError, ValueError):
+        # A malformed optional policy must not prevent prompt/Plan recovery.
+        pass
+
+    saved_transition = compatibility.get("transition_policy")
+    try:
+        if (isinstance(saved_transition, dict) and
+                saved_transition.get("version") == TRANSITION_POLICY_VERSION and
+                saved_transition.get("preset") in TRANSITION_PRESETS):
+            resolved_transition = transition_policy(
+                saved_transition.get("preset"),
+                expert_override=bool(saved_transition.get(
+                    "expert_override", False)),
+                continuation_mode=saved_transition.get("continuation_mode"),
+                context_length=saved_transition.get("context_length"))
+        else:
+            mode = migrate_continuation_mode(
+                compatibility.get("continuation_mode", "guide"))
+            context = int(compatibility.get("context_length", 22))
+            matching = next((
+                name for name, preset in TRANSITION_PRESETS.items()
+                if preset["continuation_mode"] == mode and
+                int(preset["context_length"]) == context
+            ), None)
+            resolved_transition = transition_policy(
+                matching or "guide", expert_override=matching is None,
+                continuation_mode=mode, context_length=context)
+        restored["transition_policy"] = {
+            "preset": resolved_transition["preset"],
+            "expert_override": bool(
+                resolved_transition.get("expert_override", False)),
+            "expert_continuation_mode": resolved_transition[
+                "continuation_mode"],
+            "expert_context_length": int(
+                resolved_transition["context_length"]),
+        }
+    except (TypeError, ValueError):
+        pass
     return restored
 
 
@@ -306,12 +405,15 @@ class RunArchiveManager:
             raise ValueError("H3 run %r does not exist." % run)
 
         restored: dict[str, Any] = {}
+        policy_inputs: dict[str, dict[str, Any]] = {}
         sources = []
         warnings = []
         plan_path = os.path.join(directory, "plan.json")
         if os.path.isfile(plan_path):
             try:
-                restored.update(_archive_inputs(_read_json(plan_path), run))
+                archive = _read_json(plan_path)
+                restored.update(_archive_inputs(archive, run))
+                policy_inputs.update(archive_policy_inputs(archive))
                 if restored:
                     sources.append("plan.json")
             except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
@@ -347,6 +449,7 @@ class RunArchiveManager:
             "run_name": run,
             "scene_count": len(shots) if isinstance(shots, list) else None,
             "plan_inputs": restored,
+            "policy_inputs": policy_inputs,
             "sources": sources,
             "warnings": warnings,
         }

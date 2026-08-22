@@ -116,8 +116,24 @@ const taggedPictureB = add(makeNode(38, "MiniMaxH3TaggedPictureReference", {
     tag: "hero_look",
 }));
 const taggedVideo = add(makeNode(39, "MiniMaxH3TaggedVideoReference", {
-    tag: "motion", audio_tag: "motion_audio",
+    tag: "performance", audio_tag: "performance_audio",
 }));
+const taggedMotionVideo = add(makeNode(60, "LoadVideo", {
+    video: "motion-role.mp4",
+}));
+const taggedMotion = add(makeNode(61, "MiniMaxH3TaggedMotionReference", {
+    tag: "motion", target_subject: "<Subject 1> and <Subject 2>",
+}));
+const taggedLazyLoader = add(makeNode(63, "MiniMaxH3LazyMotionAVLoader", {
+    video_path: "/media/lazy-motion.mkv",
+}));
+const taggedLazyMotion = add(makeNode(
+    62, "MiniMaxH3TaggedMotionReferencePath", {
+        video_path: "", tag: "lazy_motion",
+        target_subject: "<Subject 1>", use_embedded_audio: true,
+        audio_tag: "lazy_motion_audio",
+    },
+));
 connect(taggedEditor, taggedRelay, "state");
 connect(taggedRelay, taggedWrapper, "prompt");
 connect(taggedImageA, taggedPictureA, "image");
@@ -126,23 +142,51 @@ connect(taggedImageB, taggedPictureB, "image");
 connect(taggedPictureB, taggedVideo, "previous");
 connect(taggedVideoFile, taggedVideo, "video");
 connect(taggedVideoAudio, taggedVideo, "audio");
-connect(taggedVideo, taggedWrapper, "references");
+connect(taggedVideo, taggedMotion, "previous");
+connect(taggedMotionVideo, taggedMotion, "video");
+connect(taggedMotion, taggedLazyMotion, "previous");
+connect(taggedLazyLoader, taggedLazyMotion, "source_video");
+connect(taggedLazyMotion, taggedWrapper, "references");
 
 assert.equal(findTaggedRef2VA(taggedEditor), taggedWrapper);
 assert.deepEqual(
     collectTaggedNodes(taggedWrapper),
-    [taggedPictureA, taggedPictureB, taggedVideo],
+    [taggedPictureA, taggedPictureB, taggedVideo, taggedMotion,
+        taggedLazyMotion],
 );
 const promptRefs = taggedReferenceRecords(
-    taggedEditor, "Use @hero_look and @motion_audio; keep @S1.").records;
+    taggedEditor,
+    "<Subject 1> and <Subject 2> use @hero_look, " +
+    "@performance_audio, @motion, and @lazy_motion.",
+).records;
 assert.deepEqual(
-    promptRefs.map(({tag, label, active}) => ({tag, label, active})),
+    promptRefs.map(({tag, label, active, sourceLabel}) => ({
+        tag, label, active, sourceLabel,
+    })),
     [
-        {tag: "hero_face", label: null, active: false},
-        {tag: "hero_look", label: "<Picture 1>", active: true},
-        {tag: "motion", label: "<Video 1>", active: true},
-        {tag: "motion_audio", label: "<Audio 1>", active: true},
+        {tag: "hero_face", label: null, active: false,
+            sourceLabel: undefined},
+        {tag: "hero_look", label: "<Picture 1>", active: true,
+            sourceLabel: undefined},
+        {tag: "performance", label: "<Video 1>", active: true,
+            sourceLabel: "<Video 1>"},
+        {tag: "motion", label: "<Subject 3>", active: true,
+            sourceLabel: "<Video 2>"},
+        {tag: "lazy_motion", label: "<Subject 4>", active: true,
+            sourceLabel: "<Video 3>"},
+        {tag: "performance_audio", label: "<Audio 1>", active: true,
+            sourceLabel: undefined},
+        {tag: "lazy_motion_audio", label: "<Audio 2>", active: true,
+            sourceLabel: undefined},
     ],
+);
+assert.equal(
+    promptRefs.find(({tag}) => tag === "lazy_motion").source,
+    taggedLazyLoader,
+);
+assert.equal(
+    promptRefs.find(({tag}) => tag === "lazy_motion_audio").source,
+    taggedLazyLoader,
 );
 assert.equal(referencePreviewRecords(
     taggedEditor, 2, {prompt: "Use @hero_look."}).mode, "tagged");
@@ -156,7 +200,66 @@ assert.deepEqual(
     availableReferenceRecords(taggedEditor, 2, {
         prompt: "Use @hero_look.", includeInactive: true,
     }).records.map(({tag}) => tag),
-    ["hero_face", "hero_look", "motion", "motion_audio"],
+    ["hero_face", "hero_look", "performance", "motion", "lazy_motion",
+        "performance_audio", "lazy_motion_audio"],
+);
+
+// The 0.5 Source Timeline motion node can be the final link in a tagged chain.
+// Discovery must traverse through it or every earlier picture reference also
+// disappears from both prompt editors.
+const timelineEditor = add(makeNode(70, "MiniMaxH3ChainScenePromptEditor"));
+const timelineRelay = add(makeNode(71, "MiniMaxH3ChainCurrent"));
+const timelineWrapper = add(makeNode(72, "MiniMaxH3TaggedReferenceToVideo"));
+const timelineCharacterImage = add(makeNode(73, "LoadImage", {
+    image: "timeline-character.png",
+}));
+const timelineKeyframeImage = add(makeNode(74, "LoadImage", {
+    image: "timeline-keyframe.png",
+}));
+const timelineCharacter = add(makeNode(
+    75, "MiniMaxH3TaggedPictureReference", {tag: "character"},
+));
+const timelineKeyframe = add(makeNode(
+    76, "MiniMaxH3TaggedPictureReference", {tag: "keyframe"},
+));
+const sourceTimeline = add(makeNode(77, "MiniMaxH3SourceTimeline", {
+    video_path: "/media/source-motion.mp4",
+}));
+const timelineMotion = add(makeNode(
+    78, "MiniMaxH3TaggedMotionReferenceTimeline", {
+        tag: "motion", paired_audio: "embedded", audio_tag: "audio_1",
+    },
+));
+connect(timelineEditor, timelineRelay, "state");
+connect(timelineRelay, timelineWrapper, "prompt");
+connect(timelineCharacterImage, timelineCharacter, "image");
+connect(timelineCharacter, timelineKeyframe, "previous");
+connect(timelineKeyframeImage, timelineKeyframe, "image");
+connect(timelineKeyframe, timelineMotion, "previous");
+connect(sourceTimeline, timelineMotion, "source_timeline");
+connect(timelineMotion, timelineWrapper, "references");
+
+assert.deepEqual(
+    collectTaggedNodes(timelineWrapper),
+    [timelineCharacter, timelineKeyframe, timelineMotion],
+);
+const timelineRecords = taggedReferenceRecords(
+    timelineEditor, "Use @character, @keyframe, @motion, and @audio_1.",
+).records;
+assert.deepEqual(
+    timelineRecords.map(({tag, label, active, source}) => ({
+        tag, label, active, source: source.id,
+    })),
+    [
+        {tag: "character", label: "<Picture 1>", active: true,
+            source: timelineCharacterImage.id},
+        {tag: "keyframe", label: "<Picture 2>", active: true,
+            source: timelineKeyframeImage.id},
+        {tag: "motion", label: "<Subject 1>", active: true,
+            source: sourceTimeline.id},
+        {tag: "audio_1", label: "<Audio 1>", active: true,
+            source: sourceTimeline.id},
+    ],
 );
 
 const coreEditor = add(makeNode(10, "MiniMaxH3ChainScenePromptEditor"));

@@ -163,13 +163,18 @@ shot value > JSON defaults > H3 Chain Plan node defaults.
 
 RECOMMENDED PLAN SETTINGS
 - width/height: multiples of 32; 960x544 is a good starting point.
-- context_length: 22
-- continuation_mode: guide
+- Transition Policy: Guide (22 frames); Latent Guide keeps Guide behavior but
+  directly reuses a generated predecessor's saved latent. Use experimental
+  Detail AV, Drift-Control AV, Hard AV, or Soft AV (39 frames) only for
+  same-shot target-latent continuation. Drift-Control AV additionally routes
+  MODEL through Chain Context and is initially validated at 20 steps.
 - encode_mode: video
 - anchor_mode: head
 - crop: disabled
-- audio_mode: source_track for music videos
-- audio_context_length: 0 in source_track; 22 for generated-audio continuity
+- Audio Policy for an exact music track: Source / source reference on /
+  generated continuity off.
+- Legacy fallback: context_length 22, continuation_mode guide, audio_mode
+  source_track.
 - segment_crf: 18–20
 
 RUN / RESUME
@@ -188,9 +193,11 @@ RUN / RESUME
 - Change generation_fingerprint whenever model, VAE, LoRA, references, CFG,
   scheduler, or another generation dependency changes.
 
-SOURCE-TRACK WIRING
-Wire the same Load Audio output to Loop Start, Current Shot and Assemble.
-The source song must cover the complete delivered video duration.
+SOURCE-TIMELINE WIRING
+Register video/audio once with Source Timeline. Connect the descriptor to
+Preflight (or Plan Studio) and Loop Start. Current Shot obtains scene slices
+from state and Assemble recovers the descriptor from the manifest. The source
+song must cover the complete delivered video duration.
 ```
 
 ## Complete JSON shape
@@ -218,7 +225,7 @@ Shot = string | {
   "seed"?: integer | digit string,
   "context_length"?: 0 | 1 | 5 | 22 | 39 | ... | 243,
   "audio_context_length"?: integer, // 0..240
-  "continuation_mode"?: "guide" | "masked_av"
+  "continuation_mode"?: "guide" | "tone_carry_guide" | "latent_guide" | "tapered_guide" | "masked_av" | "tapered_av" | "feathered_av" | "audio_feathered_av" | "drift_control_av"
 }
 ```
 
@@ -348,13 +355,18 @@ later delivered frames  = raw_frames - that scene's effective context_length
 The Trim node's optional `images_with_overlap` output can retain the requested
 number of repeated visual frames for an external stitcher. Its standard
 `images` output remains fully trimmed, and audio always removes the complete
-overlap. The built-in recursive assembly therefore keeps its existing hard-cut
-behavior unless a separate visual stitcher is connected explicitly.
+overlap from its public waveform. With `match_tail` enabled, that same AUDIO
+value privately carries the full decoded overlap directly to Segment Save.
+Generated-audio assembly lets a later masked-AV scene own that interval, so a
+Soft AV audio release is not discarded. No additional audio socket or wire is
+needed. Visual assembly remains independent and uses its configured overlap.
 
 Generated-audio assembly derives each scene's sample budget from cumulative
 delivered frame boundaries. This distributes fractional samples across the run
 instead of independently rounding every scene, preventing boundary rounding
-from accumulating into long-run A/V drift.
+from accumulating into long-run A/V drift. New masked-AV checkpoints also save
+the current scene's decoded overlap; old checkpoints without it retain the
+legacy delivered-only hard-cut fallback.
 
 For `context_length: 22`, a later scene with `length: 362` contributes 340 new
 frames, or 14.167 seconds, to the final video. The source-audio window still
@@ -480,9 +492,18 @@ ID or moving it to another position changes its derived seed.
 `continuation_mode` describes the transition from the preceding clip into this
 scene. Omit it to inherit the Plan node setting. Use `guide` when this is a new
 shot that should retain motion/appearance context while allowing a different
-camera, action, or environment. Use `masked_av` when it directly continues the
-same shot and should preserve the preceding AV prefix exactly. Scene 1 uses the
-field only when Existing Video Context supplies a predecessor.
+camera, action, or environment. Use `latent_guide` for the same behavior while
+reusing a compatible generated predecessor's sampled video latent directly;
+imported context falls back to RGB/VAE Guide. Use `masked_av` when it directly
+continues the same shot and should preserve the preceding AV prefix exactly.
+Use experimental `tapered_av` for the same 39-frame hard-mask geometry while
+conditioning on a deterministic, disposable video-only latent-noise copy; it
+does not alter carried audio or the accepted predecessor checkpoint.
+Use experimental `drift_control_av` to keep that predecessor latent clean while
+the sampler moves its disposable prefix to the next scheduler sigma on every
+evaluation. It is fixed to 39 context frames, uses an 8+4 clean-seam taper,
+and requires the H3 MODEL to pass through Chain Context's MODEL sockets.
+Scene 1 uses the field only when Existing Video Context supplies a predecessor.
 
 `context_length` overrides incoming video context for one scene. Omit it (or
 leave the visual selector blank) to inherit the Plan node setting. Set it to
@@ -508,12 +529,14 @@ advanced**; Plan Studio keeps them in the existing scene-properties row.
 | `run_name` | Filename-safe text; normalized to at most 96 characters | Give each independent render a unique name. Keep it unchanged only when resuming. |
 | `generation_fingerprint` | Any stable version string | Include model, VAE, LoRA, global-reference, CFG, sampler, and scheduler versions. Change it when any external generation dependency changes. |
 | `width`, `height` | Positive multiples of 32, UI range 32–4096 | `960 × 544` is the supplied long-form workflow setting. |
-| `continuation_mode` | `guide` or `masked_av` | Inherited default for scenes without `shots[n].continuation_mode`. `guide` suits new shots; `masked_av` writes a preserved AV prefix for same-shot continuation and requires Chain Context's latent output to feed the sampler. |
-| `context_length` | `1`, then native runs `5`, `22`, `39`, ... `243` | Use `22` for guide mode. Use `39` for masked AV so 24 fps video and 40 Hz audio meet on an exact 65-step boundary. Masked AV requires at least 5. |
+| `transition_policy` | Cut, Guide, Tone Guide, Latent Guide, Detail Guide, Detail AV, Drift-Control AV, Hard AV, Soft AV policy wire | Preferred 0.5 incoming-boundary control. |
+| `audio_policy` | Independent final/reference/continuity policy wire | Preferred 0.5 audio-intent control. |
+| `continuation_mode` | `guide`, `tone_carry_guide`, `latent_guide`, `tapered_guide`, `masked_av`, `tapered_av`, `feathered_av`, `audio_feathered_av`, or `drift_control_av` | Legacy/advanced implementation override for scenes without `shots[n].continuation_mode`. `latent_guide` needs video encode mode and at least 5 positive context frames; `tapered_guide` accepts normal Guide context lengths and 22 is its published baseline; experimental `tapered_av` and `drift_control_av` are fixed to 39 frames. Drift-Control AV also needs Chain Context's MODEL route. |
+| `context_length` | `0`, `1`, then native runs `5`, `22`, `39`, ... `243` | Legacy/advanced exact context. Guide accepts the native runs; AV requires the shared-clock subset `39`, `90`, `141`, `192`, or `243`. |
 | `encode_mode` | `video` or `frames` | Use `video`. It preserves motion inside the VAE latent and is more efficient. |
 | `anchor_mode` | `head` or `before` | Use `head`; wire `trim_frames` into MiniMax H3 Contex Loop Trim. |
 | `crop` | `disabled` or `center` | Use `disabled` when references and output already share the intended framing. |
-| `audio_mode` | `source_track`, `generated_audio`, or `source_plus_timeline` | Use `source_track` for music videos. |
+| `audio_mode` | `source_track`, `generated_audio`, or `source_plus_timeline` | Legacy 0.4 fallback when Audio Policy is unconnected. |
 | `audio_context_length` | `0`–`240` frames | In generated-audio modes, `0` follows the video context length; `22` is the tested explicit value. It is unused for video-only context in `source_track`. |
 | `default_duration_seconds` | Positive seconds, up to 149.667 s | Used only when JSON defaults and the scene both omit a length. |
 | `default_steps` | `1`–`10000` | Used only when JSON defaults and the scene both omit steps. |
@@ -596,7 +619,7 @@ are safe because they do not skip the chain's motion dependency.
 
 ### Video-reference timeline modes
 
-`sequential` is experimental in 0.4. `restart_each_scene` remains the safe,
+`sequential` remains experimental in 0.5. `restart_each_scene` remains the safe,
 backward-compatible default and preserves existing schedule fingerprints.
 
 Each Scheduled Video Ref chooses one of two source-timeline behaviors:
@@ -766,13 +789,14 @@ scene 1 delivered frames = raw_frames - scene 1's effective context_length
 Therefore a 362-frame first scene with 22 imported context frames contributes
 340 new frames. Keep Loop Trim connected with `match_tail=true`.
 
-`source_audio` has two distinct meanings in this setup:
+Legacy `source_audio` has two distinct meanings in this setup:
 
 - Existing Video Context `source_audio` is the soundtrack of the video being
   extended. Its tail seeds the first join and its full normalized duration is
   preserved when prepend is enabled.
-- Loop Start / Current Shot / Assemble `source_audio` is the soundtrack for the
-  generated extension. For scene 1 the loop constructs one raw conditioning
+- Loop Start / Current Shot / Assemble `source_audio` is the compatibility
+  soundtrack for the generated extension. In 0.5, register that media once with
+  Source Timeline instead. For scene 1 the loop constructs one raw conditioning
   window from the imported audio tail followed by this track from time zero.
 
 For `generated_audio` or `source_plus_timeline`, connect the H3 audio VAE to
@@ -799,7 +823,9 @@ changing it correctly invalidates dependent generated scenes.
 
 Recommended for a music video driven by one song.
 
-- Wire the same full `AUDIO` value to Loop Start, Current Shot, and Assemble.
+- In 0.5, set Audio Policy to Source/On/Off and connect the full track once to
+  Source Timeline. The old Loop Start/Current Shot/Assemble AUDIO fan-out
+  remains accepted for saved 0.4 workflows.
 - Current Shot slices a frame-exact raw audio window for each Ref2VA scene.
 - Motion Context carries picture context only.
 - Assemble muxes the original source track over the stitched video.
@@ -816,7 +842,8 @@ Recommended for a music video driven by one song.
 - No source track is required.
 - Chain Context carries the preceding H3 audio latent on the timeline.
 - Wire trimmed decoded audio into Segment Save.
-- Assemble concatenates the checkpointed generated audio.
+- Assemble uses cumulative frame boundaries and lets every later masked-AV
+  scene own its saved decoded overlap, preserving hard or feathered AV sound.
 - The same generated track is also preserved as WAV sidecars for later editing.
 - MiniMax H3 Contex Loop Trim must keep `match_tail` enabled for exact sample counts.
 
@@ -939,9 +966,12 @@ combined `prompt`, `prompt_hash`, `prompt_file_sha256`, `seed`, and paths to the
 recovery archives. `prompt_hash` identifies normalized prompt text, while
 `prompt_file_sha256` verifies the exact sidecar bytes. Older Windows sidecars
 that used CRLF line endings remain resumable through normalized text checking.
-The same prompt fields are also stored in the safetensors metadata. Review Gate
-retries rewrite `plan.json`, `workflow.json`, and `api_prompt.json` with the
-effective scene prompt and exact uint64 seed before saving the replacement.
+The same prompt fields are also stored in the safetensors metadata. In 0.5,
+edit the active prompt in Scene Prompt Editor or Rich Scene Prompt Editor;
+Review Gate reads that Plan prompt on Retry/Reroll. Its legacy textarea is
+available through the Interface setting. Review retries rewrite `plan.json`,
+`workflow.json`, and `api_prompt.json` with the effective scene prompt and
+exact uint64 seed before saving the replacement.
 Both segment and assembled MP4 files use ComfyUI's standard `workflow` and
 `prompt` tags, so metadata-aware ComfyUI loaders can recover the graph directly;
 assembled files additionally embed the completed `h3_manifest`.

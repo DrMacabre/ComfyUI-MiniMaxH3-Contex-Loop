@@ -1,0 +1,245 @@
+#!/usr/bin/env python3
+"""0.5 consumers share one lazy Source Timeline through the full chain."""
+
+import importlib.util
+import json
+from fractions import Fraction
+import pathlib
+import sys
+import tempfile
+import types
+
+import av
+import numpy as np
+import torch
+
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+PACKAGE = "h3_source_timeline_consumers_unit"
+
+folder_paths = types.ModuleType("folder_paths")
+folder_paths.get_output_directory = lambda: str(ROOT)
+folder_paths.get_temp_directory = lambda: str(ROOT)
+folder_paths.get_input_directory = lambda: str(ROOT)
+folder_paths.get_annotated_filepath = lambda value: str(value)
+sys.modules["folder_paths"] = folder_paths
+
+package = types.ModuleType(PACKAGE)
+package.__path__ = [str(ROOT)]
+sys.modules[PACKAGE] = package
+
+shared_nodes = types.ModuleType(PACKAGE + ".nodes")
+shared_nodes.MiniMaxH3MotionContext = object
+shared_nodes._claim_inline_patch_ownership = lambda: "test patch owner"
+shared_nodes._prepare_native_guide_conditioning = lambda value: value
+shared_nodes._resize = lambda *args: None
+shared_nodes._streams_from_latent = lambda *args: None
+sys.modules[shared_nodes.__name__] = shared_nodes
+
+spec = importlib.util.spec_from_file_location(
+    PACKAGE + ".chain_nodes", ROOT / "chain_nodes.py")
+chain = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = chain
+spec.loader.exec_module(chain)
+
+
+def write_fixture(path, frame_count=50, source_fps=25):
+    sample_rate = 48000
+    sample_count = round(frame_count / source_fps * sample_rate)
+    container = av.open(str(path), mode="w")
+    video = container.add_stream("libx264rgb", rate=source_fps)
+    video.width = video.height = 64
+    video.pix_fmt = "rgb24"
+    video.options = {"crf": "0", "preset": "ultrafast"}
+    audio = container.add_stream("pcm_f32le", rate=sample_rate)
+    audio.layout = "mono"
+    try:
+        for index in range(frame_count):
+            image = np.full((64, 64, 3), index * 4, dtype=np.uint8)
+            frame = av.VideoFrame.from_ndarray(image, format="rgb24")
+            frame.pts = index
+            frame.time_base = Fraction(1, source_fps)
+            for packet in video.encode(frame):
+                container.mux(packet)
+        for packet in video.encode():
+            container.mux(packet)
+        values = np.linspace(-0.8, 0.8, sample_count,
+                             dtype=np.float32).reshape(1, -1)
+        for start in range(0, sample_count, 2048):
+            frame = av.AudioFrame.from_ndarray(
+                values[:, start:start + 2048], format="fltp", layout="mono")
+            frame.sample_rate = sample_rate
+            frame.pts = start
+            frame.time_base = Fraction(1, sample_rate)
+            for packet in audio.encode(frame):
+                container.mux(packet)
+        for packet in audio.encode():
+            container.mux(packet)
+    finally:
+        container.close()
+
+
+def make_plan(run_name):
+    return chain._normalize_plan(
+        json.dumps({"shots": [
+            {"id": "one", "prompt": "@motion begins.", "length": 22},
+            {"id": "two", "prompt": "@motion continues.", "length": 22},
+        ]}),
+        run_name, 64, 64, 5, "video", "head", "disabled",
+        "source_track", 5, 1.0, 8, 7, 18, "model-stack", 0,
+        "guide")
+
+
+with tempfile.TemporaryDirectory() as temporary:
+    root = pathlib.Path(temporary)
+    chain._output_root = lambda: str(root)
+    path = root / "source.mkv"
+    write_fixture(path)
+    timeline = chain.MiniMaxH3SourceTimeline().build(
+        str(path), "", "auto", 0)[0]
+    plan = make_plan("timeline-consumers")
+
+    started = chain.MiniMaxH3ChainLoopStart().start(
+        plan, 1, source_timeline=timeline)
+    state = started[1]
+    prepared = state["plan"]
+    runtime = state["source_timeline"]
+    assert prepared["compatibility"]["source_timeline_fingerprint"] == (
+        timeline["fingerprints"]["timeline"])
+    assert prepared["compatibility"]["source_audio_hash"] == (
+        timeline["fingerprints"]["audio"])
+    assert "value" not in prepared["source_timeline"]["audio"]
+
+    first = chain.MiniMaxH3ChainCurrent().current(state)["result"]
+    assert tuple(first[12]["waveform"].shape) == (1, 1, 44000)
+    state["index"] = 2
+    second = chain.MiniMaxH3ChainCurrent().current(state)["result"]
+    expected = chain._source_timeline_scene_audio(runtime, 17, 39)
+    assert torch.equal(second[12]["waveform"], expected["waveform"])
+    assert "Source Timeline frame-exact" in second[13]
+    assert second[14] == 0
+
+    tagged = chain.MiniMaxH3TaggedMotionReferenceTimeline().add(
+        runtime, "motion", "<Subject 1>", "the supplied motion", "384",
+        "embedded", "", "sequential")
+    references, _fingerprint, _status, preview_source = tagged
+    entry = references["entries"][0]
+    assert chain._is_source_timeline(entry["value"])
+    assert entry["paired_audio_policy"] == "embedded"
+    scene_video, scene_audio, detail = chain._scheduled_video_reference_slice(
+        entry, state, 2, 2, 22)
+    assert tuple(scene_video.shape) == (22, 64, 64, 3)
+    assert tuple(scene_audio["waveform"].shape) == (1, 1, 44000)
+    assert "frames 17:39" in detail
+
+    masked_plan = {
+        **prepared,
+        "compatibility": {
+            **prepared["compatibility"],
+            "continuation_mode": "audio_feathered_av",
+        },
+        "shots": [dict(shot) for shot in prepared["shots"]],
+    }
+    masked_plan["shots"][1]["continuation_mode"] = "audio_feathered_av"
+    masked_video, masked_audio, masked_detail = (
+        chain._scheduled_video_reference_slice(
+            entry, {**state, "index": 2, "plan": masked_plan}, 2, 2, 22))
+    assert tuple(masked_video.shape) == (17, 64, 64, 3)
+    assert tuple(masked_audio["waveform"].shape) == (1, 1, 44000)
+    assert masked_detail == (
+        "@motion sequential delivered video frames 22:39; paired audio raw "
+        "frames 17:39 (origin scene 1)")
+
+    lazy_preview = chain.MiniMaxH3LazyMotionScenePreview().preview(
+        preview_source, 2, plan=prepared)
+    assert tuple(lazy_preview[0].shape) == (22, 64, 64, 3)
+    direct_preview = chain.MiniMaxH3SourceTimelineScenePreview().preview(
+        runtime, 2, "sequential", "384", True, prepared)
+    assert tuple(direct_preview[0].shape) == (22, 64, 64, 3)
+
+    manager_plan, manager_timeline = chain.MiniMaxH3ChainRunManager().passthrough(
+        plan, True, True, True, "[]", source_timeline=timeline)
+    assert manager_plan["source_timeline"]["fingerprints"] == (
+        timeline["fingerprints"])
+    assert chain._is_source_timeline(manager_timeline)
+    assert pathlib.Path(manager_timeline["video"]["path"]).is_file()
+    assert manager_timeline["recovery"]["video_archived"] is True
+    assert manager_timeline["audio"]["path"] == (
+        manager_timeline["video"]["path"])
+    assert (root / "h3_chains" / "timeline-consumers" /
+            "source_timeline.json").is_file()
+
+    manifest = chain._manifest_from_segments(prepared, [
+        {"index": 1, "id": "one", "delivered_frames": 22},
+        {"index": 2, "id": "two", "delivered_frames": 17},
+    ], True)
+    recovered = chain._source_timeline_from_metadata(manifest)
+    chain._validate_source_timeline_hash(
+        manifest["compatibility"], recovered, "test assemble")
+    assert manifest["source_timeline"]["fingerprints"] == (
+        timeline["fingerprints"])
+
+    segment_path = (
+        root / "h3_chains" / "timeline-consumers" / "segments" /
+        "clip_0001.mp4")
+    segment_path.parent.mkdir(parents=True, exist_ok=True)
+    segment_path.write_bytes(b"fake segment")
+    assembly_manifest = dict(manifest)
+    assembly_manifest["format"] = "h3_chain_manifest_v2"
+    assembly_manifest["segments"] = [dict(item) for item in manifest["segments"]]
+    for item in assembly_manifest["segments"]:
+        item["segment"] = chain._relative_output_path(str(segment_path))
+    original_validate_manifest = chain._validate_manifest
+    original_validate_prelude = chain._validate_prelude
+    original_metadata = chain._manifest_media_metadata
+    original_which = chain.shutil.which
+    original_ffmpeg = chain._run_ffmpeg
+    chain._validate_manifest = lambda value: value["segments"]
+    chain._validate_prelude = lambda _value: None
+    chain._manifest_media_metadata = lambda _value: {}
+    chain.shutil.which = lambda executable: (
+        "/fake/ffmpeg" if executable == "ffmpeg" else original_which(executable))
+
+    def fake_ffmpeg(command, timeout_seconds=None):
+        del timeout_seconds
+        if command[-1] == "-version":
+            return
+        pathlib.Path(command[-1]).write_bytes(b"assembled")
+
+    chain._run_ffmpeg = fake_ffmpeg
+    try:
+        assembled = chain.MiniMaxH3ChainAssemble().assemble(
+            assembly_manifest, "source", "timeline_source", 96)
+    finally:
+        chain._validate_manifest = original_validate_manifest
+        chain._validate_prelude = original_validate_prelude
+        chain._manifest_media_metadata = original_metadata
+        chain.shutil.which = original_which
+        chain._run_ffmpeg = original_ffmpeg
+        chain._FFMPEG_PROBE_CACHE.clear()
+    assert pathlib.Path(assembled["result"][0]).is_file()
+
+    tensor_audio = chain._source_timeline_source_audio(timeline)
+    deferred = chain.MiniMaxH3SourceTimeline().build(
+        str(path), "", "ignore", 0, source_audio=tensor_audio)[0]
+    deferred_plan = make_plan("timeline-materialized")
+    deferred_prepared, materialized = chain._plan_with_source_timeline(
+        deferred_plan, deferred)
+    assert materialized["audio"]["kind"] == "external_path"
+    assert pathlib.Path(materialized["audio"]["path"]).is_file()
+    assert "value" not in deferred_prepared["source_timeline"]["audio"]
+    assert chain._source_timeline_from_recovery(
+        deferred_prepared["source_timeline"])["audio"]["kind"] == (
+            "external_path")
+
+assert chain.CHAIN_NODE_CLASS_MAPPINGS[
+    "MiniMaxH3TaggedMotionReferenceTimeline"] is (
+        chain.MiniMaxH3TaggedMotionReferenceTimeline)
+assert chain.CHAIN_NODE_CLASS_MAPPINGS[
+    "MiniMaxH3SourceTimelineScenePreview"] is (
+        chain.MiniMaxH3SourceTimelineScenePreview)
+
+print(
+    "Source Timeline consumers: Run Manager, Loop Start state, Current Shot, "
+    "Tagged Motion, both previews, manifest recovery, and deferred-audio "
+    "materialization pass")

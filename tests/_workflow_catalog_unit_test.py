@@ -24,6 +24,15 @@ I2V_ASSET_SHA256 = (
 FL2V_LAST_ASSET_SHA256 = (
     "e07862c0d5160f06f015b8849dc4b7d2db0524de5ba490fd26c3dff33e196b34"
 )
+CRAB_VIDEO_SHA256 = (
+    "aacef1ac138445311eb61734f8ca92f8dc438b8d9ca3210fd8893aa5e925ee47"
+)
+CRAB_IMAGE_SHA256 = (
+    "432dc2c9b0b9d0c33ed33217247fefcbe551d240959f6eefb7c04dfc99378047"
+)
+CRAB_MASK_SHA256 = (
+    "95cf18228cd3559ad980339fe9d8fccdcef25799368719b8e044cd61c6691fe4"
+)
 
 
 def load(path):
@@ -39,6 +48,15 @@ def node(workflow, node_type):
 
 def socket(items, name):
     return next(item for item in items if item.get("name") == name)
+
+
+def link(workflow, link_id):
+    return next(item for item in workflow["links"] if item[0] == link_id)
+
+
+def origin_for_input(workflow, input_value):
+    value = link(workflow, input_value["link"])
+    return next(item for item in workflow["nodes"] if item["id"] == value[1])
 
 
 def prompt_text(value):
@@ -57,6 +75,75 @@ def comparable_plan(plan):
             "seed": shot["seed"],
         } for shot in plan["shots"]],
     }
+
+
+def validate_v05_topology(workflow):
+    """Maintained recursive examples teach the 0.5 semantic graph."""
+    plan = node(workflow, "MiniMaxH3ChainPlan")
+    policy = node(workflow, "MiniMaxH3ChainPolicy")
+    # Maintained examples must open on the compact surface. Advanced and
+    # experimental controls remain available, but only after an explicit user
+    # disclosure instead of being serialized open in the shipped graph.
+    for item in workflow["nodes"]:
+        assert not item.get("properties", {}).get(
+            "h3_show_advanced_sockets"), item.get("type")
+    plan_layout = plan.get("properties", {}).get("h3_chain_plan_layout", {})
+    assert not isinstance(plan_layout, dict) or not plan_layout.get("advanced")
+    assert not [item for item in workflow["nodes"] if item.get("type") in {
+        "MiniMaxH3AudioPolicy", "MiniMaxH3TransitionPolicy",
+        "MiniMaxH3Legacy04PolicyAdapter",
+    }]
+    legacy_audio = str(plan["widgets_values"][9])
+    expected_audio = {
+        "source_track": ["source", "on", "off"],
+        "generated_audio": ["generated", "off", "on"],
+        "source_plus_timeline": ["source", "on", "on"],
+    }[legacy_audio]
+    context = int(plan["widgets_values"][5])
+    audio_context = int(plan["widgets_values"][10])
+    mode = (str(plan["widgets_values"][16])
+            if len(plan["widgets_values"]) > 16 else "guide")
+    expected_transition = {
+        ("guide", 0): "cut",
+        ("guide", 22): "guide",
+        ("masked_av", 39): "hard_av",
+        ("audio_feathered_av", 39): "soft_av",
+    }[(mode, context)]
+    assert audio_context == context
+    assert policy["widgets_values"] == [expected_transition, *expected_audio]
+    assert origin_for_input(
+        workflow, socket(plan["inputs"], "chain_policy")) == policy
+    assert not any(item.get("name") in {"audio_policy", "transition_policy"}
+                   for item in plan["inputs"])
+
+    current = node(workflow, "MiniMaxH3ChainCurrent")
+    trim = node(workflow, "MiniMaxH3LoopTrim")
+    retain = socket(trim["inputs"], "retain_overlap_frames")
+    trim_state = socket(trim["inputs"], "state")
+    assert retain["link"] is None
+    assert origin_for_input(workflow, trim_state) == current
+    assert socket(current["outputs"], "video_blend_frames")["links"] is None
+    assert socket(plan["outputs"], "video_blend_frames")["links"] is None
+
+    start = node(workflow, "MiniMaxH3ChainLoopStart")
+    studios = [item for item in workflow["nodes"]
+               if item.get("type") == "MiniMaxH3ChainPlanStudio"]
+    preflights = [item for item in workflow["nodes"]
+                  if item.get("type") == "MiniMaxH3ChainPreflight"]
+    if studios:
+        assert not preflights
+        assert studios[0]["widgets_values"] == [1, "", True]
+        assert {item["name"] for item in studios[0]["inputs"]} >= {
+            "plan", "source_timeline", "source_audio",
+            "tagged_references", "reference_schedule",
+        }
+    else:
+        assert len(preflights) == 1
+        preflight = preflights[0]
+        assert preflight["widgets_values"] == [1, "", True]
+        assert origin_for_input(workflow, socket(start["inputs"], "plan")) == (
+            preflight)
+        assert socket(preflight["inputs"], "plan")["link"] is not None
 
 
 def validate_links(workflow):
@@ -84,6 +171,149 @@ def validate_links(workflow):
         for output in item.get("outputs") or []:
             for link_id in output.get("links") or []:
                 assert link_id in links
+
+
+def validate_no_node_overlap(workflow):
+    """Release examples keep every visible node rectangle disjoint."""
+    rectangles = []
+    for item in workflow["nodes"]:
+        position = item.get("pos")
+        size = item.get("size")
+        if not (isinstance(position, list) and isinstance(size, list)
+                and len(position) >= 2 and len(size) >= 2):
+            continue
+        rectangles.append((
+            item.get("type"), item.get("id"),
+            float(position[0]), float(position[1]),
+            float(size[0]), float(size[1]),
+        ))
+    for index, first in enumerate(rectangles):
+        _, _, ax, ay, aw, ah = first
+        for second in rectangles[index + 1:]:
+            _, _, bx, by, bw, bh = second
+            overlaps = (ax < bx + bw and bx < ax + aw
+                        and ay < by + bh and by < ay + ah)
+            assert not overlaps, (first[:2], second[:2])
+
+
+def validate_no_group_clipping(workflow):
+    """Nodes sit wholly inside or wholly outside disjoint stage groups."""
+    groups = []
+    for item in workflow.get("groups", []):
+        bounds = item.get("bounding")
+        if not (isinstance(bounds, list) and len(bounds) >= 4):
+            continue
+        groups.append((
+            item.get("title"), float(bounds[0]), float(bounds[1]),
+            float(bounds[2]), float(bounds[3]),
+        ))
+
+    for index, first in enumerate(groups):
+        _, ax, ay, aw, ah = first
+        for second in groups[index + 1:]:
+            _, bx, by, bw, bh = second
+            overlaps = (ax < bx + bw and bx < ax + aw
+                        and ay < by + bh and by < ay + ah)
+            assert not overlaps, (first[0], second[0])
+
+    for item in workflow["nodes"]:
+        position = item.get("pos")
+        size = item.get("size")
+        if not (isinstance(position, list) and isinstance(size, list)
+                and len(position) >= 2 and len(size) >= 2):
+            continue
+        nx, ny = float(position[0]), float(position[1])
+        nw, nh = float(size[0]), float(size[1])
+        for title, gx, gy, gw, gh in groups:
+            intersects = (nx < gx + gw and gx < nx + nw
+                          and ny < gy + gh and gy < ny + nh)
+            contained = (nx >= gx and ny >= gy
+                         and nx + nw <= gx + gw
+                         and ny + nh <= gy + gh)
+            assert not intersects or contained, (item.get("type"), title)
+
+
+def validate_crab_extension(path, expected_shots, tagged):
+    workflow = load(path)
+    validate_links(workflow)
+    loader = node(workflow, "VHS_LoadVideo")
+    assert loader["widgets_values"]["video"] == (
+        "soldier_crabs_bribie_island_cc0.webm")
+    assert loader["widgets_values"]["force_rate"] == 24
+    assert (loader["widgets_values"]["custom_width"],
+            loader["widgets_values"]["custom_height"]) == (960, 544)
+    external = node(workflow, "MiniMaxH3ChainExternalVideo")
+    assert socket(external["inputs"], "source_frames")["link"] is not None
+    assert socket(external["inputs"], "source_audio")["link"] is not None
+    start = node(workflow, "MiniMaxH3ChainLoopStart")
+    assert socket(start["inputs"], "external_context")["link"] == (
+        socket(external["outputs"], "external_context")["links"][0])
+    context = node(workflow, "MiniMaxH3ChainContext")
+    assert socket(context["inputs"], "audio_vae")["link"] is not None
+    sampler = node(workflow, "SamplerCustomAdvanced")
+    assert socket(context["outputs"], "latent")["links"] == [
+        socket(sampler["inputs"], "latent_image")["link"]]
+
+    plan_node = node(workflow, "MiniMaxH3ChainPlan")
+    plan = json.loads(plan_node["widgets_values"][0])
+    assert len(plan["shots"]) == expected_shots
+    assert [shot["length"] for shot in plan["shots"]] == [192] * expected_shots
+    assert plan_node["widgets_values"][3:6] == [960, 544, 39]
+    assert plan_node["widgets_values"][9:11] == ["generated_audio", 39]
+    assert plan_node["widgets_values"][15:17] == [
+        39, "audio_feathered_av"]
+    for shot in plan["shots"]:
+        prompt = prompt_text(shot["prompt"])
+        if tagged:
+            positions = [prompt.index(section) for section in (
+                "subject_definitions:", "summary:", "retention_analysis:",
+                "detailed_description:", "overall_soundscape:",
+                "non_diegetic_music:")]
+            assert positions == sorted(positions) and positions[0] == 0
+            assert "@crabs" in prompt
+        else:
+            positions = [prompt.index(section) for section in (
+                "integrated_multimodal_description:",
+                "overall_soundscape:", "non_diegetic_music:")]
+            assert positions == sorted(positions) and positions[0] == 0
+    if tagged:
+        image = node(workflow, "LoadImage")
+        assert image["widgets_values"][0] == "soldier_crabs_reference_cc0.png"
+        reference = node(workflow, "MiniMaxH3TaggedPictureReference")
+        assert reference["widgets_values"] == ["crabs"]
+        assert socket(
+            node(workflow, "MiniMaxH3TaggedReferenceToVideo")["inputs"],
+            "references")["link"] in socket(
+                reference["outputs"], "references")["links"]
+    return workflow
+
+
+def validate_crab_bridge(path):
+    workflow = load(path)
+    validate_links(workflow)
+    loaders = [item for item in workflow["nodes"]
+               if item["type"] == "VHS_LoadVideo"]
+    assert len(loaders) == 2
+    values = [item["widgets_values"] for item in loaders]
+    assert [item["video"] for item in values] == [
+        "soldier_crabs_bribie_island_cc0.webm"] * 2
+    assert [(item["skip_first_frames"], item["frame_load_cap"])
+            for item in values] == [(0, 99), (213, 100)]
+    bridge = node(workflow, "MiniMaxH3ContexMaskedAVBridge")
+    assert bridge["widgets_values"] == [24.0, 24.0, 39, "center"]
+    assert all(socket(bridge["inputs"], name)["link"] is not None for name in (
+        "latent", "vae", "audio_vae", "start_frames", "start_audio",
+        "end_frames", "end_audio"))
+    conditioner = node(workflow, "MiniMaxH3ImageToVideo")
+    assert conditioner["widgets_values"][1:4] == [960, 544, 192]
+    prompt = conditioner["widgets_values"][0]
+    assert prompt.startswith("integrated_multimodal_description:")
+    assert "overall_soundscape:" in prompt
+    assert prompt.endswith("non_diegetic_music:\nN/A")
+    sampler = node(workflow, "SamplerCustomAdvanced")
+    assert socket(bridge["outputs"], "latent")["links"] == [
+        socket(sampler["inputs"], "latent_image")["link"]]
+    return workflow
 
 
 def validate_t2v(path, editor_type, expected_blend):
@@ -150,7 +380,8 @@ def validate_t2v(path, editor_type, expected_blend):
 
     trim = node(workflow, "MiniMaxH3LoopTrim")
     saver = node(workflow, "MiniMaxH3ChainSegmentSave")
-    assert socket(trim["inputs"], "retain_overlap_frames")["link"] is not None
+    assert socket(trim["inputs"], "retain_overlap_frames")["link"] is None
+    assert socket(trim["inputs"], "state")["link"] is not None
     assert socket(trim["outputs"], "images_with_overlap")["links"]
     assert socket(saver["inputs"], "images_with_overlap")["link"] is not None
 
@@ -241,7 +472,8 @@ def validate_i2v(path, editor_type, expected_blend):
 
     trim = node(workflow, "MiniMaxH3LoopTrim")
     saver = node(workflow, "MiniMaxH3ChainSegmentSave")
-    assert socket(trim["inputs"], "retain_overlap_frames")["link"] is not None
+    assert socket(trim["inputs"], "retain_overlap_frames")["link"] is None
+    assert socket(trim["inputs"], "state")["link"] is not None
     assert socket(saver["inputs"], "images_with_overlap")["link"] is not None
     notes = "\n".join(
         str(item.get("widgets_values", [""])[0])
@@ -470,37 +702,54 @@ def validate_ref2v_source_audio(path):
     loop_start = node(workflow, "MiniMaxH3ChainLoopStart")
     manifest_load = node(workflow, "MiniMaxH3ChainManifestLoad")
     manager = node(workflow, "MiniMaxH3ChainRunManager")
+    timeline = node(workflow, "MiniMaxH3SourceTimeline")
+    studio = node(workflow, "MiniMaxH3ChainPlanStudio")
     assembles = [item for item in workflow["nodes"]
                  if item.get("type") == "MiniMaxH3ChainAssemble"]
     assert len(assembles) == 2
 
     assert audio_loader["widgets_values"][0] == "SELECT_FULL_SOURCE_TRACK.wav"
-    assert audio_ref["widgets_values"] == [
-        "audio_1", "source_timeline", True]
-    assert socket(audio_ref["inputs"], "audio")["link"] is not None
+    assert audio_ref["widgets_values"] == ["audio_1", "standalone", False]
+    assert origin_for_input(
+        workflow, socket(audio_ref["inputs"], "audio")) == current
+    assert socket(current["outputs"], "source_audio_slice")["links"] == [
+        socket(audio_ref["inputs"], "audio")["link"]]
+    assert current["widgets_values"] == [True]
     assert socket(audio_ref["inputs"], "previous")["link"] is not None
     assert socket(conditioner["inputs"], "references")["link"] == (
         socket(audio_ref["outputs"], "references")["links"][0])
     assert socket(conditioner["inputs"], "state")["link"] in (
         socket(current["outputs"], "state")["links"])
-    assert socket(plan_node["inputs"], "generation_fingerprint")["link"] == (
-        socket(audio_ref["outputs"], "reference_fingerprint")["links"][0])
+    picture_registry = origin_for_input(
+        workflow, socket(audio_ref["inputs"], "previous"))
+    assert origin_for_input(
+        workflow, socket(plan_node["inputs"], "generation_fingerprint")) == (
+            picture_registry)
 
+    assert timeline["widgets_values"] == ["", "", "ignore", 0]
+    assert origin_for_input(
+        workflow, socket(timeline["inputs"], "source_audio")) == audio_loader
+    assert socket(timeline["inputs"], "source_video")["link"] is None
+    assert origin_for_input(
+        workflow, socket(loop_start["inputs"], "source_timeline")) == timeline
+    assert origin_for_input(
+        workflow, socket(studio["inputs"], "source_timeline")) == timeline
+    assert origin_for_input(
+        workflow, socket(manifest_load["inputs"], "source_timeline")) == (
+            timeline)
     source_consumers = [loop_start, current, manifest_load, *assembles]
-    source_links = {
-        socket(item["inputs"], "source_audio")["link"]
-        for item in source_consumers
+    assert all(socket(item["inputs"], "source_audio")["link"] is None
+               for item in source_consumers)
+    assert set(socket(audio_loader["outputs"], "AUDIO")["links"]) == {
+        socket(timeline["inputs"], "source_audio")["link"],
+        socket(manager["inputs"], "asset_2")["link"],
     }
-    source_links.add(socket(audio_ref["inputs"], "audio")["link"])
-    source_links.add(socket(manager["inputs"], "asset_2")["link"])
-    assert None not in source_links
-    assert source_links == set(socket(
-        audio_loader["outputs"], "AUDIO")["links"])
     assert audio_loader["properties"]["h3_asset_binding_ids"]["0"] == (
         "ref2v-source-audio-v1")
     assert manager["properties"]["h3_asset_roles"][
         "ref2v-source-audio-v1"] == "source_track"
-    assert all("@audio_1" in prompt_text(shot["prompt"])
+    assert all("@audio_1 is the exact current-scene source-track slice"
+               in prompt_text(shot["prompt"])
                for shot in plan["shots"])
     return workflow, plan
 
@@ -536,8 +785,8 @@ def validate_sequential_motion_ref(path):
     assert socket(motion["inputs"], "previous")["link"] is not None
     assert socket(wrapper["inputs"], "references")["link"] == (
         socket(motion["outputs"], "references")["links"][0])
-    assert socket(wrapper["inputs"], "state")["link"] == (
-        socket(current["outputs"], "state")["links"][-1])
+    assert origin_for_input(
+        workflow, socket(wrapper["inputs"], "state")) == current
     assert socket(wrapper["inputs"], "clip_index")["link"] is not None
     assert socket(wrapper["inputs"], "clip_count")["link"] is not None
     assert socket(plan_node["inputs"], "generation_fingerprint")["link"] == (
@@ -573,53 +822,89 @@ def validate_sequential_motion_ref(path):
 def validate_deferred_h3_upscale(path):
     workflow = load(path)
     validate_links(workflow)
+    validate_no_node_overlap(workflow)
     node_types = {item.get("type") for item in workflow["nodes"]}
     required = {
         "MiniMaxH3ChainCheckpointManager",
         "MiniMaxH3ChainUpscaleAdapter",
         "MiniMaxH3ChainUpscaleCurrent",
-        "MiniMaxH3LatentUpscaleCombined",
-        "MiniMaxH3Pass2StaggeredScheduler",
+        "MiniMaxH3ChainUpscaleReferenceConditioning",
+        "H3ConditioningSyncFromLatents",
+        "MinimaxH3LatentUpscaler3D",
+        "MiniMaxH3ChainPass2Prepare",
+        "BasicScheduler",
         "SamplerCustomAdvanced",
         "MiniMaxH3ChainUpscaleSegmentSave",
         "MiniMaxH3ChainUpscaleLoopEnd",
         "MiniMaxH3ChainUpscaleMerge",
     }
     assert required <= node_types
+    assert "MiniMaxH3ChainPlan" not in node_types
+    assert "MiniMaxH3ChainPolicy" not in node_types
     assert "MiniMaxH3ChainLoopStart" not in node_types
     assert "MiniMaxH3ChainContext" not in node_types
 
     manager = node(workflow, "MiniMaxH3ChainCheckpointManager")
+    assert manager["size"][0] >= 1200 and manager["size"][1] >= 1000
     adapter = node(workflow, "MiniMaxH3ChainUpscaleAdapter")
     current = node(workflow, "MiniMaxH3ChainUpscaleCurrent")
-    combined = node(workflow, "MiniMaxH3LatentUpscaleCombined")
-    scheduler = node(workflow, "MiniMaxH3Pass2StaggeredScheduler")
+    learned = node(workflow, "MinimaxH3LatentUpscaler3D")
+    sync = node(workflow, "H3ConditioningSyncFromLatents")
+    prepare = node(workflow, "MiniMaxH3ChainPass2Prepare")
+    scheduler = node(workflow, "BasicScheduler")
     sampler = node(workflow, "SamplerCustomAdvanced")
     saver = node(workflow, "MiniMaxH3ChainUpscaleSegmentSave")
     loop_end = node(workflow, "MiniMaxH3ChainUpscaleLoopEnd")
     merger = node(workflow, "MiniMaxH3ChainUpscaleMerge")
 
-    assert socket(manager["outputs"], "plan")["links"] == [
-        socket(adapter["inputs"], "plan")["link"]]
-    assert adapter["widgets_values"][0:2] == ["h3_learned_2x", "h3_latent"]
+    assert manager["inputs"] == []
+    assert [item["name"] for item in manager["outputs"]] == [
+        "selected_manifest"]
+    assert socket(manager["outputs"], "selected_manifest")["links"] == [
+        socket(adapter["inputs"], "source_manifest")["link"]]
+    assert adapter["widgets_values"][0:2] == ["h3_lbh_3d", "h3_latent"]
     assert adapter["widgets_values"][3:7] == [1, 0, False, 18]
     assert socket(adapter["outputs"], "flow")["links"] == [
         socket(loop_end["inputs"], "flow")["link"]]
-    assert socket(current["outputs"], "source_latent")["links"] == [
-        socket(combined["inputs"], "samples")["link"]]
-    for output_name, input_name in (
-            ("prompt", "prompt"), ("width", "width"),
-            ("height", "height"), ("raw_frames", "length")):
-        conditioner = node(workflow, "MiniMaxH3ImageToVideo")
-        assert socket(current["outputs"], output_name)["links"] == [
-            socket(conditioner["inputs"], input_name)["link"]]
-    assert scheduler["widgets_values"] == [
-        4, 0.45, 7.0, "karras", 8, "normal"]
-    assert combined["widgets_values"][0] == "learned model"
-    assert combined["widgets_values"][2:] == [0.0, "independent", 0.0]
+    assert socket(current["outputs"], "source_latent")["links"] is None
+    assert socket(current["outputs"], "source_video_latent")["links"] == [
+        socket(learned["inputs"], "latent")["link"],
+        socket(sync["inputs"], "original_latent")["link"]]
+    assert socket(current["outputs"], "source_audio_latent")["links"] == [
+        socket(prepare["inputs"], "source_audio")["link"]]
+    conditioner = node(
+        workflow, "MiniMaxH3ChainUpscaleReferenceConditioning")
+    assert socket(conditioner["inputs"], "state")["link"] in socket(
+        current["outputs"], "state")["links"]
+    assert socket(prepare["inputs"], "state")["link"] in socket(
+        current["outputs"], "state")["links"]
+    assert conditioner["widgets_values"][:2] == [
+        "text_only", "exclude_video_keep_audio"]
+    assert conditioner["widgets_values"][2].startswith(
+        "Preserve the existing video's identity")
+    assert socket(conditioner["outputs"], "positive")["links"] == [
+        socket(sync["inputs"], "positive")["link"]]
+    assert socket(conditioner["inputs"], "target_video_latent")["link"] is None
+    assert socket(conditioner["inputs"], "video_vae")["link"] is None
+    assert socket(learned["outputs"], "latent")["links"] == [
+        socket(prepare["inputs"], "upscaled_video")["link"],
+        socket(sync["inputs"], "upscaled_latent")["link"]]
+    assert sync["widgets_values"] == [
+        "bilinear", "conditioning_policy"]
+    assert scheduler["widgets_values"] == ["simple", 2, 0.24]
+    assert learned["widgets_values"] == [
+        "minimax_h3_latent_upscaler_3d_fp16.safetensors", "megapixels",
+        1.5, 32, "cuda", "fp16"]
+    attention = node(workflow, "ModelAttentionBackend")
+    assert attention["mode"] == 4
+    for functional in workflow["nodes"]:
+        if functional.get("type") != "Note":
+            assert "title" not in functional, functional.get("type")
     guider = node(workflow, "BasicGuider")
-    assert socket(combined["outputs"], "positive")["links"] == [
+    assert socket(sync["outputs"], "positive")["links"] == [
         socket(guider["inputs"], "conditioning")["link"]]
+    assert socket(prepare["outputs"], "latent")["links"] == [
+        socket(sampler["inputs"], "latent_image")["link"]]
     assert node(workflow, "KSamplerSelect")["widgets_values"] == ["euler"]
     assert socket(sampler["outputs"], "output")["links"]
     assert socket(saver["inputs"], "images")["link"] is not None
@@ -631,9 +916,74 @@ def validate_deferred_h3_upscale(path):
     notes = "\n".join(
         str(item.get("widgets_values", [""])[0])
         for item in workflow["nodes"] if item.get("type") == "Note")
-    assert "Load selected branch" in notes
+    assert "selected_manifest cable is the complete parent-chain contract" in notes
+    assert "No Plan, Source Timeline, source audio, external context" in notes
+    assert "H3 Conditioning Sync From Latents" in notes
+    assert "picture minimax_refs and minimax_keyframes" in notes
+    assert "excludes both the Qwen motion-video presentation" in notes
+    assert "prompt override" in notes
+    assert "12-step pass-2 prefix" in notes
+    assert "small 12-step HQ context tail" in notes
     assert "save_latent is OFF" in notes
-    assert "ComfyUI-MiniMaxH3_LatentUpscaler" in notes
+    assert "Comfyui_Minimax_h3_latent_Upscaler" in notes
+    h3_video_vae = node(workflow, "VAELoader")
+    assert h3_video_vae["widgets_values"] == [
+        "MiniMaw-H3/minimax_h3_video_vae_fp16.safetensors"]
+    return workflow
+
+
+def validate_seedvr2_full_chain(path):
+    workflow = load(path)
+    validate_links(workflow)
+    validate_no_node_overlap(workflow)
+    node_types = {item.get("type") for item in workflow["nodes"]}
+    assert {
+        "MiniMaxH3ChainCheckpointManager",
+        "MiniMaxH3ChainLatentVideoAdapter",
+        "VAELoader",
+        "SeedVR2LoadDiTModel",
+        "SeedVR2LoadVAEModel",
+        "SeedVR2VideoPathUpscaler",
+        "SaveVideo",
+    } <= node_types
+    assert not {
+        "MiniMaxH3ChainPlan", "MiniMaxH3ChainLoopStart",
+        "MiniMaxH3ChainUpscaleAdapter", "SamplerCustomAdvanced",
+        "VAEDecode", "CreateVideo",
+    }.intersection(node_types)
+    manager = node(workflow, "MiniMaxH3ChainCheckpointManager")
+    adapter = node(workflow, "MiniMaxH3ChainLatentVideoAdapter")
+    path_upscaler = node(workflow, "SeedVR2VideoPathUpscaler")
+    assert manager["size"][0] >= 1200 and manager["size"][1] >= 1000
+    assert (path_upscaler["size"][0] >= 700
+            and path_upscaler["size"][1] >= 1000)
+    saver = node(workflow, "SaveVideo")
+    assert socket(manager["inputs"], "plan")["link"] is None
+    assert socket(manager["outputs"], "selected_manifest")["links"] == [
+        socket(adapter["inputs"], "manifest")["link"]]
+    assert node(workflow, "VAELoader")["widgets_values"] == [
+        "MiniMaw-H3/minimax_h3_video_vae_fp16.safetensors"]
+    assert adapter["widgets_values"] == [
+        "plan", "plan", "disk-backed", True, 256]
+    assert socket(adapter["outputs"], "video")["links"] == [
+        socket(path_upscaler["inputs"], "video")["link"]]
+    assert path_upscaler["widgets_values"][:9] == [
+        42, "fixed", 1080, 0, 5, 21, "lab", 2, False]
+    dit = node(workflow, "SeedVR2LoadDiTModel")
+    assert dit["widgets_values"] == [
+        "seedvr2_ema_7b_fp8_e4m3fn_mixed_block35_fp16.safetensors",
+        "cuda:0", 32, False, "cpu", False, "sageattn_2"]
+    assert socket(path_upscaler["outputs"], "video")["links"] == [
+        socket(saver["inputs"], "video")["link"]]
+    assert saver["widgets_values"] == [
+        "video/h3_seedvr2_%date:yyyy-MM-dd%", "auto", "auto"]
+    notes = "\n".join(
+        str(item.get("widgets_values", [""])[0])
+        for item in workflow["nodes"] if item.get("type") == "Note")
+    assert "disk-backed" in notes
+    assert "Do not select minimax_h3_audio_vae" in notes
+    assert "No Plan, Source Timeline" in notes
+    assert "SeedVR2 Addon" in notes
     return workflow
 
 
@@ -657,7 +1007,20 @@ def main():
     sequential_path = (
         EXAMPLES / "EXPERIMENTAL MiniMax H3 Ref2V - Sequential Motion.json")
     deferred_upscale_path = (
-        EXAMPLES / "MiniMax H3 Deferred Upscale - H3 Learned 2x.json")
+        EXAMPLES / "MiniMax H3 Deferred Upscale - H3 LBH 3D.json")
+    seedvr2_full_chain_path = (
+        EXAMPLES / "MiniMax H3 Deferred Upscale - SeedVR2 Full Chain.json")
+    masked_inpaint_path = (
+        EXAMPLES / "MiniMax H3 - Masked Video Inpaint.json")
+    masked_ref_inpaint_path = (
+        EXAMPLES / "MiniMax H3 Ref2V - Masked Video Inpaint.json")
+    masked_single_extension_path = (
+        EXAMPLES / "MiniMax H3 - Masked AV Extension - Single Clip.json")
+    masked_chain_extension_path = (
+        EXAMPLES /
+        "MiniMax H3 - Masked AV Extension - Chain + Reference Image.json")
+    masked_bridge_path = (
+        EXAMPLES / "MiniMax H3 - Masked AV Bridge - Two Clips.json")
     assert set(path.name for path in EXAMPLES.glob("*.json")) == {
         t2v_normal_path.name, t2v_studio_path.name,
         i2v_normal_path.name, i2v_studio_path.name,
@@ -666,10 +1029,25 @@ def main():
         ref2v_source_audio_path.name,
         sequential_path.name,
         deferred_upscale_path.name,
+        seedvr2_full_chain_path.name,
+        masked_inpaint_path.name,
+        masked_ref_inpaint_path.name,
+        masked_single_extension_path.name,
+        masked_chain_extension_path.name,
+        masked_bridge_path.name,
     }
     for path in EXAMPLES.glob("*.json"):
         workflow = load(path)
-        if path == deferred_upscale_path:
+        validate_no_node_overlap(workflow)
+        validate_no_group_clipping(workflow)
+        if path in {deferred_upscale_path, seedvr2_full_chain_path}:
+            continue
+        if path == masked_bridge_path:
+            validate_links(workflow)
+            continue
+        validate_v05_topology(workflow)
+        if path in {masked_inpaint_path, masked_ref_inpaint_path}:
+            validate_links(workflow)
             continue
         context = node(workflow, "MiniMaxH3ChainContext")
         sampler = node(workflow, "SamplerCustomAdvanced")
@@ -706,6 +1084,135 @@ def main():
     sequential, _sequential_plan = validate_sequential_motion_ref(
         sequential_path)
     deferred_upscale = validate_deferred_h3_upscale(deferred_upscale_path)
+    seedvr2_full_chain = validate_seedvr2_full_chain(
+        seedvr2_full_chain_path)
+    masked_inpaint = load(masked_inpaint_path)
+    masked_types = {item["type"] for item in masked_inpaint["nodes"]}
+    assert {
+        "MiniMaxH3ChainLoopStart",
+        "MiniMaxH3ChainLoopEnd",
+        "MiniMaxH3ContexLoopSourceAVTarget",
+        "MiniMaxH3ContexLoopMaskSlice",
+        "MiniMaxH3ContexMaskGridPreview",
+        "MiniMaxH3ContexMaskedTarget",
+    } <= masked_types
+    assert not masked_types.intersection({
+        "LTXVConcatAVLatent", "LTXVSeparateAVLatent"})
+    assert "MiniMaxH3PerRowMaskPatch" not in masked_types
+    source_loader = node(masked_inpaint, "VHS_LoadVideo")
+    assert source_loader["widgets_values"]["video"] == (
+        "soldier_crabs_bribie_island_cc0.webm")
+    assert source_loader["widgets_values"]["force_rate"] == 24
+    source_target = node(
+        masked_inpaint, "MiniMaxH3ContexLoopSourceAVTarget")
+    chain_context = node(masked_inpaint, "MiniMaxH3ChainContext")
+    conditioner = node(masked_inpaint, "MiniMaxH3ImageToVideo")
+    assert socket(source_target["inputs"], "latent")["link"] == (
+        socket(conditioner["outputs"], "LATENT")["links"][0])
+    assert socket(source_target["inputs"], "source_frames")["link"] == (
+        socket(source_loader["outputs"], "IMAGE")["links"][0])
+    assert socket(source_target["inputs"], "source_audio")["link"] == (
+        socket(source_loader["outputs"], "audio")["links"][0])
+    masked_target = node(masked_inpaint, "MiniMaxH3ContexMaskedTarget")
+    assert socket(source_target["outputs"], "source_target")["links"] == [
+        socket(chain_context["inputs"], "latent")["link"]]
+    assert socket(chain_context["outputs"], "latent")["links"] == [
+        socket(masked_target["inputs"], "target_latent")["link"]]
+    assert masked_target["widgets_values"] == [
+        "white = generate", "preserve source audio",
+        "H3 exact (causal/token max)"]
+    masked_sampler = node(masked_inpaint, "SamplerCustomAdvanced")
+    assert socket(masked_target["outputs"], "masked_target")["links"] == [
+        socket(masked_sampler["inputs"], "latent_image")["link"]]
+    mask_loader = node(masked_inpaint, "LoadImageMask")
+    assert mask_loader["widgets_values"][0] == (
+        "soldier_crabs_inpaint_mask.png")
+    mask_slice = node(masked_inpaint, "MiniMaxH3ContexLoopMaskSlice")
+    grid_preview = node(masked_inpaint, "MiniMaxH3ContexMaskGridPreview")
+    assert socket(mask_loader["outputs"], "MASK")["links"] == [
+        socket(mask_slice["inputs"], "mask")["link"]]
+    assert socket(mask_slice["outputs"], "scene_mask")["links"] == [
+        socket(grid_preview["inputs"], "mask")["link"]]
+    assert mask_slice["widgets_values"] == [24.0]
+    assert grid_preview["widgets_values"][-1] == "white = generate"
+    masked_plan_node = node(masked_inpaint, "MiniMaxH3ChainPlan")
+    masked_plan = json.loads(masked_plan_node["widgets_values"][0])
+    assert [shot["length"] for shot in masked_plan["shots"]] == [175, 175]
+    assert masked_plan_node["widgets_values"][5] == 39
+    assert masked_plan_node["widgets_values"][16] == "masked_av"
+
+    masked_ref_inpaint = load(masked_ref_inpaint_path)
+    masked_ref_types = {
+        item["type"] for item in masked_ref_inpaint["nodes"]}
+    assert {
+        "MiniMaxH3ReferenceToVideo",
+        "MiniMaxH3ContexLoopSourceAVTarget",
+        "MiniMaxH3ContexLoopMaskSlice",
+        "MiniMaxH3ContexMaskGridPreview",
+        "MiniMaxH3ContexMaskedTarget",
+    } <= masked_ref_types
+    assert not masked_ref_types.intersection({
+        "MiniMaxH3ImageToVideo", "LTXVConcatAVLatent",
+        "LTXVSeparateAVLatent", "MVEx_MaskToLatentSpace",
+        "MVEx_SubjectCrop", "MVEx_SubjectUncrop",
+    })
+    ref_model = node(masked_ref_inpaint, "UNETLoader")
+    assert ref_model["widgets_values"][0] == (
+        "MiniMax-H3/minimax_h3_ref2va_pruned_int8_convrot.safetensors")
+    ref_picture = node(masked_ref_inpaint, "LoadImage")
+    assert ref_picture["widgets_values"][0] == (
+        "soldier_crabs_reference_cc0.png")
+    ref_conditioner = node(masked_ref_inpaint, "MiniMaxH3ReferenceToVideo")
+    ref_image_input = socket(
+        ref_conditioner["inputs"], "ref_images.ref_image_0")
+    assert ref_image_input["link"] == (
+        socket(ref_picture["outputs"], "IMAGE")["links"][0])
+    assert socket(ref_conditioner["inputs"], "ref_videos.ref_video_0")[
+        "link"] is None
+    assert socket(ref_conditioner["inputs"], "audio_vae")["link"] is not None
+    ref_source_target = node(
+        masked_ref_inpaint, "MiniMaxH3ContexLoopSourceAVTarget")
+    assert socket(ref_conditioner["outputs"], "LATENT")["links"] == [
+        socket(ref_source_target["inputs"], "latent")["link"]]
+    ref_context = node(masked_ref_inpaint, "MiniMaxH3ChainContext")
+    assert socket(ref_conditioner["outputs"], "positive")["links"] == [
+        socket(ref_context["inputs"], "conditioning")["link"]]
+    assert socket(ref_source_target["outputs"], "source_target")["links"] == [
+        socket(ref_context["inputs"], "latent")["link"]]
+    ref_masked_target = node(
+        masked_ref_inpaint, "MiniMaxH3ContexMaskedTarget")
+    assert socket(ref_context["outputs"], "latent")["links"] == [
+        socket(ref_masked_target["inputs"], "target_latent")["link"]]
+    assert ref_masked_target["widgets_values"] == [
+        "white = generate", "preserve source audio",
+        "H3 exact (causal/token max)"]
+    ref_sampler = node(masked_ref_inpaint, "SamplerCustomAdvanced")
+    assert socket(ref_masked_target["outputs"], "masked_target")["links"] == [
+        socket(ref_sampler["inputs"], "latent_image")["link"]]
+    ref_plan_node = node(masked_ref_inpaint, "MiniMaxH3ChainPlan")
+    ref_plan = json.loads(ref_plan_node["widgets_values"][0])
+    assert [shot["length"] for shot in ref_plan["shots"]] == [175, 175]
+    assert ref_plan_node["widgets_values"][1:3] == [
+        "cc0_soldier_crabs_ref2v_inpaint",
+        "cc0-crab-source-av-v1+picture1-ref2v+static-mask-h3-exact-v1",
+    ]
+    for shot in ref_plan["shots"]:
+        prompt = prompt_text(shot["prompt"])
+        positions = [prompt.index(section) for section in (
+            "subject_definitions:", "summary:", "retention_analysis:",
+            "detailed_description:", "overall_soundscape:",
+            "non_diegetic_music:")]
+        assert positions == sorted(positions) and positions[0] == 0
+        assert "<Subject 1>" in prompt and "<Picture 1>" in prompt
+        assert "<Video 1>" not in prompt and "<Audio 1>" not in prompt
+        assert "source target" in prompt
+        assert "[reference generation + video editing + audio reuse]" in prompt
+        assert "Preserve" in prompt or "preserve" in prompt
+    masked_single_extension = validate_crab_extension(
+        masked_single_extension_path, 1, False)
+    masked_chain_extension = validate_crab_extension(
+        masked_chain_extension_path, 3, True)
+    masked_bridge = validate_crab_bridge(masked_bridge_path)
 
     def generation_types(workflow):
         return collections.Counter(
@@ -716,6 +1223,8 @@ def main():
                 "MiniMaxH3ChainPlanStudio",
                 "MiniMaxH3ChainRichScenePromptEditor",
                 "MiniMaxH3ChainRunManager",
+                "MiniMaxH3ChainPreflight",
+                "MiniMaxH3ChainPolicy",
             })
 
     assert generation_types(t2v_normal) == generation_types(t2v_studio)
@@ -726,9 +1235,12 @@ def main():
         for workflow in (
             t2v_normal, t2v_studio, i2v_normal, i2v_studio, fl2v_normal,
             ref2v_basic, ref2v_tagged, ref2v_studio, ref2v_source_audio,
-            sequential, deferred_upscale)
+            sequential, masked_inpaint, masked_ref_inpaint,
+            masked_single_extension,
+            masked_chain_extension, masked_bridge, deferred_upscale,
+            seedvr2_full_chain)
     }
-    assert len(uuids) == 11
+    assert len(uuids) == 17
 
     asset = EXAMPLES / "assets" / "jigen_market_garden_doom_opening.png"
     assert asset.is_file()
@@ -737,10 +1249,25 @@ def main():
     assert last_asset.is_file()
     assert hashlib.sha256(last_asset.read_bytes()).hexdigest() == (
         FL2V_LAST_ASSET_SHA256)
-
+    crab_video = (
+        EXAMPLES / "assets" / "soldier_crabs_bribie_island_cc0.webm")
+    assert crab_video.is_file()
+    assert hashlib.sha256(crab_video.read_bytes()).hexdigest() == (
+        CRAB_VIDEO_SHA256)
+    crab_image = EXAMPLES / "assets" / "soldier_crabs_reference_cc0.png"
+    assert crab_image.is_file()
+    assert hashlib.sha256(crab_image.read_bytes()).hexdigest() == (
+        CRAB_IMAGE_SHA256)
+    crab_mask = EXAMPLES / "assets" / "soldier_crabs_inpaint_mask.png"
+    assert crab_mask.is_file()
+    assert hashlib.sha256(crab_mask.read_bytes()).hexdigest() == (
+        CRAB_MASK_SHA256)
     print("H3 workflow catalog: T2VA, I2VA, indexed A-B-A FL2VA, Basic / "
-          "Tagged / Studio Tagged / source-timeline audio Ref2VA, and "
-          "experimental sequential motion Ref2VA, and deferred learned H3 2x; "
+          "Tagged / Studio Tagged / source-timeline audio Ref2VA, "
+          "experimental sequential-motion Ref2VA, masked video inpaint, "
+          "picture-conditioned masked Ref2VA inpaint, "
+          "looped masked AV extension, two-ended masked AV bridge, and "
+          "deferred LBH 3D H3 and whole-chain SeedVR2; "
           "valid links, bundled "
           "assets, timeline wiring, six-section prompts, restoration, and "
           "attribution pass")

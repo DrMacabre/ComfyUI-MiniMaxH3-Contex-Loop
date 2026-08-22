@@ -62,6 +62,18 @@ assert.deepEqual(
 );
 assert.equal(punctuated.map((item) => item.text).join(""),
     "Keep @hero. Then use @voice, without absorbing punctuation.");
+const schemaTokens = tokenizeRichPrompt(
+    "summary:\n[reference generation]\n<d>[English] (S1) Continue <scenetrans> now.<cutoff></d>",
+    records,
+).filter((item) => item.type !== "text");
+assert.deepEqual(schemaTokens.map((item) => [item.type, item.text]), [
+    ["section", "summary:"],
+    ["dialogue", "<d>"],
+    ["speaker", "(S1)"],
+    ["flow", "<scenetrans>"],
+    ["flow", "<cutoff>"],
+    ["dialogue", "</d>"],
+]);
 assert.equal(richGenerationMode("scheduled"), "Ref2VA");
 assert.equal(richGenerationMode("tagged"), "Ref2VA");
 assert.equal(richGenerationMode("native_keyframes"), "I2VA/FL2VA");
@@ -113,7 +125,21 @@ assert.match(source, /h3rp-popover audio/);
 assert.match(source, /mediaElement\.controls = true/);
 assert.match(source, /Audio never autoplays/);
 assert.match(source, /pointerdown.*preventDefault/);
-assert.match(source, /produce @@hero/);
+assert.match(source, /createPromptCompletionController/);
+assert.match(source, /createH3PromptSchemaController/);
+assert.match(source, /h3_rich_scene_prompt_editor/);
+assert.match(source, /getMode:\(\) => state\.schema/);
+assert.match(source, /h3rp-token-section/);
+assert.match(source, /h3rp-token-flow/);
+assert.match(source, /h3rp-token-speaker/);
+assert.match(source, /PRESENTATION_PROPERTY/);
+assert.match(source, /state\.decorated \? "Rich text" : "Plain text"/);
+assert.match(source, /state\.completion\?\.handleKeydown/);
+assert.match(source, /restoreTextSelection/);
+assert.match(source, /editingSemanticTime/);
+assert.match(source, /Type @, #, <, or \[/);
+assert.match(source, /Ctrl\/Cmd\+Space for all H3 completions/);
+assert.doesNotMatch(source, /event\.key === "@"/);
 assert.match(source, /RICH_PROMPT_GUIDES/);
 assert.match(source, /richGuideInstruction/);
 assert.match(source, /PromptAssistantClient/);
@@ -130,6 +156,12 @@ assert.match(source, /Optimize/);
 assert.match(source, /Apply changed result/);
 assert.match(source, /scheduleHistoryDraft/);
 assert.match(source, /flushHistoryDraft/);
+assert.match(source, /promptRevisionTree/);
+assert.match(source, /mutateHistoryRevision\(\s*"label"/);
+assert.match(source, /mutateHistoryRevision\(\s*"archive"/);
+assert.match(source, /mutateHistoryRevision\(\s*"delete"/);
+assert.match(source, /parent → child progression/);
+assert.match(source, /Delete unexecuted leaf/);
 assert.match(source, /serialize:false/);
 
 console.log("H3 Rich Scene Prompt Editor: tokens, guides, previews, optimizer, and history pass");

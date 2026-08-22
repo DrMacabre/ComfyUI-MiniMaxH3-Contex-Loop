@@ -43,13 +43,16 @@ resuming; a changed source correctly invalidates dependent checkpoints.
 Recommended first settings:
 
 ```text
-context_length       22
+Chain Policy         Guide
 encode_mode          video
 anchor_mode          head
-audio_context_length 22
 Loop Trim match_tail true
 Spectrum             off
 ```
+
+Chain Policy derives both visual and generated-audio overlap as 22 frames for
+Guide. Use the Legacy 0.4 Policy Adapter only when this imported-context workflow
+deliberately needs different visual and audio overlap lengths.
 
 ## Long visual context
 
@@ -81,7 +84,11 @@ instead of silently padding or stretching them.
 
 ## External stitchers
 
-Loop Trim's `retain_overlap_frames` output exposes part of the repeated visual
-context while leaving its normal images and audio fully trimmed. Use it when an
-external optical-flow or learned stitcher benefits from overlap. Keep it at `0`
-for the standard hard-boundary chain.
+Loop Trim's `images_with_overlap` output exposes part of the repeated visual
+context while leaving its normal images and audio fully trimmed. Connect
+**Current Shot → state** to **Loop Trim → state**. Loop Trim then resolves each
+incoming scene's optional `video_blend_frames` override, or the Plan default
+when the scene value is blank. Scene N controls the N−1→N boundary. Keep it at
+`0` for a hard boundary. The old Plan/default and Current Shot/resolved integer
+outputs remain compatibility sockets only; do not wire either one in a 0.5
+workflow.

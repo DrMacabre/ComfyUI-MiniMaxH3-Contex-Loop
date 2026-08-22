@@ -50,6 +50,18 @@ assert.equal(bindings[0].role, "picture");
 assert.equal(bindings[1].role, "audio_reference");
 assert.equal(inferAssetRole("VIDEO", "LoadVideo"), "video");
 
+const lazyMotion = loader(
+    950, "MiniMaxH3LazyMotionAVLoader", "VIDEO", "video_path",
+    "/media/lazy-motion.mkv");
+nodes.push(lazyMotion);
+graph.links[3] = {origin_id: 950, origin_slot: 0};
+const lazyBindings = collectAssetBindings({
+    graph, properties: {}, inputs: [{name: "asset_0", link: 3}],
+}, () => "lazy-motion-binding");
+assert.equal(lazyBindings[0].role, "video");
+assert.equal(lazyBindings[0].widget_name, "video_path");
+assert.equal(lazyBindings[0].original_value, "/media/lazy-motion.mkv");
+
 // A loader may expose media on more than one output. Each output needs its
 // own persistent identity so video and audio roles cannot overwrite one another.
 image.outputs.push({type: "AUDIO"});

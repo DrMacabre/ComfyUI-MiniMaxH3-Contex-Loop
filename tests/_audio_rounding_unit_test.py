@@ -66,6 +66,76 @@ def main():
         assert padded["waveform"].shape[-1] == round(8 / 24 * 8000)
         assert torch.count_nonzero(padded["waveform"][..., -1:]) == 0
 
+        # A later masked-AV scene owns its complete decoded overlap. This is
+        # the only way Soft AV's audio feather survives Loop Trim into the
+        # final generated soundtrack.
+        loads = iter([
+            {"delivered_audio": torch.ones((1, 1, 100))},
+            {
+                "delivered_audio": torch.full((1, 1, 61), 3.0),
+                "audio_with_overlap": torch.cat((
+                    torch.full((1, 1, 39), 2.0),
+                    torch.full((1, 1, 61), 3.0),
+                ), dim=-1),
+            },
+        ])
+        chain._st_load = lambda _path: next(loads)
+        owned = chain._generated_audio({
+            "compatibility": {"continuation_mode": "guide"},
+            "segments": [
+                {"index": 1, "checkpoint": "one", "sample_rate": 24,
+                 "raw_frames": 100, "delivered_frames": 100,
+                 "continuation_mode": "guide"},
+                {"index": 2, "checkpoint": "two", "sample_rate": 24,
+                 "raw_frames": 100, "delivered_frames": 61,
+                 "continuation_mode": "audio_feathered_av"},
+            ],
+        })
+        assert owned["waveform"].shape[-1] == 161
+        assert torch.equal(
+            owned["waveform"][0, 0, :61], torch.ones(61))
+        assert torch.equal(
+            owned["waveform"][0, 0, 61:100], torch.full((39,), 2.0))
+        assert torch.equal(
+            owned["waveform"][0, 0, 100:], torch.full((61,), 3.0))
+
+        # Scene 1 can itself continue an external video prelude. Carry its
+        # private raw AV audio through _generated_audio so the generated scene
+        # owns the incoming overlap at that boundary too.
+        loads = iter([{
+            "delivered_audio": torch.full((1, 1, 61), 3.0),
+            "audio_with_overlap": torch.cat((
+                torch.full((1, 1, 39), 2.0),
+                torch.full((1, 1, 61), 3.0),
+            ), dim=-1),
+        }])
+        chain._st_load = lambda _path: next(loads)
+        first_owned = chain._generated_audio({
+            "compatibility": {
+                "continuation_mode": "audio_feathered_av",
+            },
+            "segments": [
+                {"index": 1, "checkpoint": "first", "sample_rate": 24,
+                 "raw_frames": 100, "delivered_frames": 61,
+                 "continuation_mode": "audio_feathered_av"},
+            ],
+        })
+        assert first_owned[chain.AUDIO_WITH_OVERLAP_FRAMES_KEY] == 100
+        assert first_owned[chain.AUDIO_TRIM_FRAMES_KEY] == 39
+        chain._prelude_audio = lambda _record: {
+            "waveform": torch.ones((1, 1, 100)), "sample_rate": 24}
+        external_owned = chain._audio_with_prelude(
+            first_owned, 61, {"frame_count": 100})
+        assert external_owned["waveform"].shape[-1] == 161
+        assert torch.equal(
+            external_owned["waveform"][0, 0, :61], torch.ones(61))
+        assert torch.equal(
+            external_owned["waveform"][0, 0, 61:100],
+            torch.full((39,), 2.0))
+        assert torch.equal(
+            external_owned["waveform"][0, 0, 100:],
+            torch.full((61,), 3.0))
+
         chain._prelude_audio = lambda _record: {
             "waveform": torch.ones((1, 2, 1667)), "sample_rate": 8000}
         joined = chain._audio_with_prelude(

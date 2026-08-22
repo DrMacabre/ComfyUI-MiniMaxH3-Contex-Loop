@@ -4,22 +4,63 @@ Newest first. This file keeps release history out of the onboarding README.
 
 ## Unreleased — Deferred checkpoint upscaling
 
-- Added a backend-neutral recursive upscale child run: Checkpoint Manager Plan
-  passthrough → Upscale Adapter → Current Scene → H3/LTX/custom backend →
+- Ported the strict authoring layer from the standalone H3 Prompt IDE into
+  both scene prompt editors. They now share Auto/T2VA/I2VA/FL2VA/L2VA/Ref2VA
+  schema selection, ordered-section diagnostics and repair, exact keyframe
+  alignment helpers, live word/character counts, and mode-aware completion.
+  Completion and rich presentation now also understand 12 shot markers,
+  multilingual dialogue markers, stable speaker IDs, `<scenetrans>`, and
+  `<cutoff>`; the Rich Scene Prompt Editor gained the same Plain/Rich source
+  toggle as the focused editor.
+- Simplified the default 0.5 control surface without removing functionality.
+  Experimental transition recipes and source-audio grid alignment now stay
+  behind the existing **Show advanced H3 controls** action. The same disclosure
+  now covers Drift-Control wiring, Reference Video Fade tuning, boundary tone
+  matching, and scene-one color stabilization; already-linked sockets remain
+  visible for saved-workflow compatibility. Plan and Plan Studio retain their
+  click-to-open raw boundary controls, and Studio's experimental cut-window
+  diagnostic follows that disclosure.
+- Added an opt-in **Reference Video Fade** MODEL patch for native H3 Ref2VA
+  video blocks. It keeps the complete 24 fps reference at full early
+  influence, then applies a full-schedule half-cosine attention-value fade
+  without touching still refs, Qwen presentation, reference audio,
+  continuation guides, or target streams. Split samplers can share the
+  original unsplit sigma schedule, and existing SolAttn/Comfy Kitchen
+  attention overrides remain chained. This complements rather than replaces
+  Color-Stable Drift AV: one controls external native video references, while
+  the other controls the previous-scene continuation prefix.
+- Added a whole-branch SeedVR2 route: Checkpoint Manager → Full-Chain Latent
+  Video Adapter → SeedVR2 Direct. It decodes the immutable H3 video latents,
+  resolves scene overlap blends before upscaling, and exposes one continuous
+  native file-backed VIDEO instead of restarting an upscaler per scene.
+- Added a disk-backed MiniMax VAE output buffer and content-addressed source
+  cache under `upscaled/seedvr2/source/`. The decoder retains its native
+  temporal chunks while ordinary RAM holds only the boundary window; saved
+  source/generated audio is embedded automatically for the SeedVR2 pass.
+- Added the standalone whole-chain SeedVR2 workflow and the LBH 3D H3 latent
+  workflow with video-only learned upscale, locked source audio, and a
+  conservative two-step 0.24 refinement pass.
+- Added a backend-neutral recursive upscale child run: Checkpoint Manager
+  selected manifest → Upscale Adapter → Current Scene → H3/LTX/custom backend →
   Segment Save → Loop End → Merger. Each profile is isolated under the parent
   run's `upscaled/<profile>` folder with verified resume metadata.
 - Upscale Current Scene prefers an explicitly saved denoised H3 x0 and exposes
-  joint AV plus split video/audio latent routes for both combined and
-  video-only learned H3 upscaler nodes. Older terminal-latent checkpoints remain
-  supported, and decoded-video LTX 2.5 passes use the same orchestration.
+  joint AV plus split video/audio latent routes for combined and video-only
+  learned H3 upscalers. Older terminal-latent checkpoints remain supported,
+  and decoded-video LTX 2.5 passes use the same orchestration.
 - Made persistence of the large HQ latent optional and off by default. A small
   self-contained assembly/audio checkpoint is still written for reliable
   resume and final merge.
-- Added a standalone learned-H3 2x example workflow that loads a complete
-  branch through Checkpoint Manager, rebuilds scene conditioning, runs a
-  Tr1dae staggered pass-2 loop, and merges the isolated child profile.
+- Checkpoint Manager now serializes its selected immutable lineage and emits a
+  verified generated-tip manifest, including partial runs whose later planned
+  scenes do not exist yet. The standalone upscale workflow therefore needs
+  no source Plan, Chain Policy, or live Source Timeline connection.
+- Added cache-v2 pass-2 conditioning: original picture masters are retained so
+  `match` image refs and their Qwen presentation can be rebuilt at the exact
+  LBH target canvas. V1 caches remain readable; max/video/audio refs preserve
+  their native geometry instead of being blindly scaled.
 
-## v0.4.20 — Modern editable-install metadata
+## v0.5.5 — Modern editable-install metadata
 
 - Added an explicit setuptools build backend and disabled accidental discovery
   of asset and workflow folders as Python packages, so `pip install -e .`
@@ -27,13 +68,13 @@ Newest first. This file keeps release history out of the onboarding README.
 - Replaced deprecated license metadata with its SPDX form while leaving the
   repository's GPL v3 license text unchanged. Thanks to @ed45626 in PR #27.
 
-## v0.4.19 — Cleaner shared-checkpoint links
+## v0.5.4 — Cleaner shared-checkpoint links
 
 - Moved shared-revision connectors into a dedicated side gutter with thin
   solid rails and short taps to each matching card, keeping lineage marks away
   from branch names, revision text, and status labels.
 
-## v0.4.18 — Review candidate batches and checkpoint refresh
+## v0.5.3 — Review candidate batches and checkpoint refresh
 
 - Review Gate can now generate 1–20 different-seed takes for each scene,
   present them together, and continue from the exact saved video/audio
@@ -45,13 +86,34 @@ Newest first. This file keeps release history out of the onboarding README.
   workflow reload, and clarified that rejected, rerolled, and candidate takes
   remain as intentional immutable recovery revisions until explicitly deleted.
 
-## v0.4.17 — Shared checkpoint lineage visibility
+## v0.5.2 — Shared checkpoint lineage visibility
 
 - Repeated checkpoint revisions now keep the existing branch layout while
   receiving a consistent color label and a vertical connector between every
   branch line that shares the same clip.
+- Loop Trim now resolves `video_blend_frames` from Current Shot state. This
+  removes the ambiguous Plan-default versus per-scene integer wiring that could
+  discard the requested overlap and fail Segment Save only after sampling.
+  Legacy integer sockets remain compatible, while maintained 0.5 workflows and
+  the migration tool use the authoritative state route.
 
-## v0.4.16 — Checkpoint Manager
+## v0.5.1 — Checkpoint Manager and workflow clarity
+
+- Added experimental **Drift-Control AV** for recursive same-shot chains. It
+  keeps predecessor checkpoints clean, but at every sampler evaluation moves
+  the disposable 39-frame video prefix to the next scheduler sigma using the
+  sampler's existing noise field. Eight video-latent steps receive the full
+  matched ratio and the final four taper `.75/.50/.25/.00` to an exact seam.
+  Chain Context now exposes an optional MODEL passthrough so the sampler blend
+  and H3 per-row timestep labels receive the same live mask. The 20-step path
+  is the initial validated baseline; existing continuation modes are unchanged.
+
+- Corrected the scheduled Guide 5/6 spatial proxy to reproduce the observed
+  mixed-resolution chain operation: reduce the complete saved predecessor
+  video latent, VAE-decode it on the 5/6 grid, select the delivered RGB tail,
+  and only then restore it through Motion Context. The UI now calls this
+  **Low-grid 5/6 · Guide** instead of implying a simple RGB resize. Existing
+  AV latent-prefix proxy behavior is unchanged.
 
 - Added a Plan-passthrough Checkpoint Manager that browses every saved run by
   scene and inferred revision branch, previews saved video/audio, and exposes
@@ -67,32 +129,180 @@ Newest first. This file keeps release history out of the onboarding README.
   stable branch identity so future runs need less lineage inference while old
   checkpoint folders remain fully discoverable.
 
-## v0.4.15 — Light-theme prompt editor contrast
-
 - Made titles, active controls, and rich reference tags derive their semantic
   colors from the active ComfyUI foreground. Both scene prompt editors retain
   their pastel dark-theme palette while gaining readable contrast in light
   themes.
-
-## v0.4.14 — Prompt editor undo
 
 - Added shared text-level Ctrl/Cmd+Z and redo history to both dedicated scene
   prompt editors. Undo now survives rich-tag DOM decoration, plain-text paste,
   toolbar insertion, Plan synchronization, and switching between rich and
   plain presentation.
 
-## v0.4.13 — Native mask readiness gate
+- Added a maintained two-scene Ref2V masked-inpaint demo that uses the bundled
+  CC0 crab picture as replacement appearance while keeping the source movie as
+  the authoritative joint AV target. Documented its exact mask-contract
+  compatibility with Ablejones/droz's v3.1 MaskVidExperiments workflow and the
+  separate, optional roles of crop/uncrop, tracking, and mask growth.
+- Reworked the README as a task-oriented quick start and workflow chooser,
+  moving implementation detail into focused guides. Added a feature
+  traceability matrix that distinguishes original, adapted, inspired,
+  integrated, and compatibility work with upstream, code, and commit links.
+- Added exact H3 causal/token mask conversion to Apply Target Mask. Static or
+  correctly sliced tracked masks now max-reduce through the VAE's repeating
+  `1,4,4,4,4` source-frame groups and the model's 2×2 latent-token cells,
+  avoiding temporal interpolation drift and loss of thin moving regions. The
+  bundled inpaint workflow uses the exact mode; legacy trilinear conversion
+  remains selectable for controlled compatibility comparisons. Ordinary AV
+  extension remains unchanged and needs no user-supplied mask.
+- Revised experimental Detail AV to a clean-boundary v2 taper. Video-latent
+  noise now starts at 0.30 and falls through 0.225, 0.15, and 0.075 to an exact
+  zero on the boundary-adjacent step, reducing seam displacement while keeping
+  the predecessor, carried audio, denoise masks, and final overlap clean.
+- Recognized the final merged ComfyUI PR #15375 helper-based mask API and left
+  it fully native. The old-build fallback now mirrors merge-time commit
+  `c676536`, including pooled token-grid masks and ceil-quantized 8-bit mask
+  strengths, and removes obsolete pre-merge wrappers before capability checks.
+- Restored saved prompts, Plan widgets, and connected 0.5 audio/transition
+  policy nodes together when loading a run or checkpoint revision. Revision
+  recovery now uses the selected checkpoint chain's policy metadata instead of
+  silently retaining newer controls from the active workflow.
+- Disabled the legacy Review Gate prompt textarea by default and added an
+  Interface setting to restore it. While disabled, Retry and Reroll use the
+  active Plan prompt authored in Scene Prompt Editor or Rich Scene Prompt
+  Editor.
+- Added the typed Source Timeline contract so path-backed picture and audio are
+  registered once, remain lazy, and are sliced per scene without full-track
+  AUDIO fan-out.
+- Split audio intent into final soundtrack, source-reference, and generated-
+  continuity axes while preserving the exact behavior of saved 0.4 modes.
+- Added Cut, Guide, Latent Guide, Detail Guide, Hard AV, and Soft AV incoming-
+  transition policies with advanced access to the existing low-level controls.
+- Aligned Soft AV with the upstream tested recipe: an exact 39-frame picture
+  prefix plus a half-cosine audio release. The older dual-stream
+  `feathered_av` implementation remains available through Expert override for
+  compatibility, and the former Audio Feather AV preset remains as an alias.
+- AV continuation now validates the shared 24 fps picture / 40 Hz audio clock
+  before model loading. Only 39, 90, 141, 192, or 243 context frames are
+  accepted, eliminating silently rounded prefixes such as 22 or 56 frames.
+- Preserved masked-AV decoded overlap audio through Loop Trim and Segment Save
+  without adding a public socket. Generated-audio assembly now gives the
+  incoming AV scene ownership of that overlap at both generated-scene and
+  external-prelude boundaries, so Soft AV's audio feather reaches the final
+  track; older checkpoints retain delivered-only fallback behavior.
+- Updated both maintained soldier-crab extension workflows to the 0.5 Soft AV
+  policy with a full 39-frame visual seam blend, matching the tested upstream
+  extension topology while retaining recursive Plan/Run Manager operation.
+- Added opt-in Latent Guide continuation. Generated boundaries reuse the
+  phase-aligned tail of the accepted predecessor's sampled video latent as
+  persistent Guide conditioning without an RGB/VAE round trip; imported or
+  incompatible context retains the original Guide fallback.
+- Added opt-in Detail Guide continuation, adapting MacroSony's deterministic
+  tapered chroma-noise context recipe. The 22-frame preset uses 19 frames at
+  0.45 and a three-frame taper to 0.10; expert mode supports other Guide
+  lengths without modifying the accepted predecessor checkpoint.
+- Added experimental Detail AV continuation, adapting beijinren's latent
+  context-noise recipe to the recursive hard-AV path. It treats a disposable
+  copy of the 39-frame / 12-step video prefix with matched-variance Gaussian
+  noise using a boundary-clean taper, leaves audio and masks unchanged, trims
+  the complete treated overlap, and fingerprints the exact recipe for resume.
+- Added model-free Chain Preflight and shared Plan Studio validation for source
+  duration, scene windows, references, runtime compatibility, and resume
+  eligibility.
+- Added a second Plan Studio track for the exact active motion-reference
+  windows. Selected scenes are transcoded lazily to cached low-resolution
+  previews, and the player provides synchronized generated/reference wipe
+  comparison with incoming-context offsets applied automatically.
+- Replaced opaque whole-Plan resume hashes with structured scene dependencies
+  and actionable diffs. Future-scene, incoming-boundary, and assembly-only
+  changes no longer force regeneration of an accepted predecessor.
+- Simplified conditional socket presentation, clarified active Plan versus
+  selected Run Manager archive state, and made prompt-history activation
+  explicit.
+- Migrated every maintained workflow to explicit policies and preflight. The
+  source-audio demo now uses canonical Source Timeline wiring and Current
+  Shot's scene-local reference slice.
+- Added an idempotent workflow migration tool, frozen 0.4 positional fixtures,
+  and backend/frontend release validation. Existing nodes, workflow JSON,
+  manifests, and checkpoints remain supported.
+- Completed input and output tooltips across the 0.5 policy, Source Timeline,
+  prompt-driven reference, semantic-anchor, masking, and bridge nodes. The
+  integration smoke fixture now follows the real Current Shot state wire so
+  strict per-scene source-window provenance is exercised during recovery.
 
-- Fixed the masked-AV preflight after merged PR #15375 removed
-  `process_denoise_mask`. The gate now uses the capability module's runtime
-  readiness check instead of requiring that obsolete method by name.
+## v0.4.9 — Run Manager active asset target
 
-## v0.4.12 — Merged H3 mask API compatibility
+- Made the Run Manager show the connected Plan `run_name` beside Reference
+  assets so the destination of **Save/update assets** is explicit.
+- After a manual asset save, the saved-run browser now selects the actual
+  destination run instead of remaining on a previously browsed run.
+- Kept asset-only run folders selectable for inspection and opening while
+  leaving **Load into Plan** disabled until a restorable Plan archive exists.
 
-- Recognized the final helper-based API merged by ComfyUI PR #15375 and left
-  current ComfyUI fully native. The old-build fallback now mirrors merge-time
-  commit `c676536`, including pooled token-grid masks and ceil-quantized mask
-  strengths, while recognized pre-merge wrappers are upgraded safely.
+## v0.4.8 — Feathered AV continuation
+
+- Added `feathered_av` as a third continuation mode. It uses the same aligned
+  video/audio target prefix as `masked_av`, but ramps the end of that prefix
+  from preservation toward generation to soften the temporal handoff.
+- For the recommended 39-frame prefix, the first 8 video latent steps and 42
+  audio steps remain fully protected. The final 4 video steps and 23 audio
+  steps use monotonic denoise ramps; all future rows remain fully denoisable.
+- Added the mode to Plan, per-scene overrides, Plan Studio, timing validation,
+  resume provenance, and the native-first PR #15375 compatibility path.
+- Added Loop Start `verify_resume_history`, enabled by default. Disabling it
+  explicitly permits reuse of a saved predecessor after intentional Plan
+  changes while retaining file, SHA-256, tensor-shape, and internal metadata
+  integrity checks.
+- Corrected sequential Tagged Motion Ref timing under masked AV continuation.
+  Scene 2+ now excludes the repeated prefix from the unpositioned native video
+  bank and applies the identical delivered-frame window to paired audio,
+  removing the context-length motion delay without changing generic video refs.
+- Added path-backed Tagged Motion Ref for long CFR control videos. It keeps
+  compressed media on disk and decodes/resizes only the active scene, converts
+  that window to 24 fps, and extracts its exact embedded-audio time range. A
+  separate Plan-aware scene-counter preview blocks media output when no Plan is
+  connected or the tag is inactive. A native-frame start offset seeks near the
+  requested source point and shifts video and audio together without building
+  tensors for the skipped prefix. It also accepts native file-backed `VIDEO`
+  from core Load Video, allowing that loader to fan out normally to both the
+  tagged reference and Run Manager asset registration. A dedicated Lazy
+  Motion AV Loader now exposes that same disk-backed native VIDEO plus the
+  complete post-skip AUDIO track without decoding any video frames. The tagged
+  node accepts and passes through that full track, while retaining direct-path
+  audio extraction for compatibility.
+
+## v0.4.7 — General masked targets
+
+- Updated the vendored PR #15375 fallback through upstream commit `989e7a9`.
+  Arbitrary masks now retain their original per-pixel sampler blend while H3
+  pools only its internal video/audio timestep labels to the token grid. Older
+  ComfyUI builds receive a scoped per-step sampler bridge; post-PR builds keep
+  their native implementation untouched.
+- Made Plan-wide continuation mode and context length next-scene choices for
+  resume validation. Switching either after a completed scene now reuses that
+  verified predecessor instead of demanding a pointless regeneration. When a
+  longer tail was not cached, it is recovered by re-decoding the saved full
+  video latent. Explicit per-scene overrides remain generation-significant,
+  and new segment records retain their effective values for provenance.
+- Fixed master-audio encoding when H3's rounded 40 Hz target requires one
+  latent step beyond a floor-style VAE encode of the exact picture duration.
+  The node uses real timeline-audio lookahead, crops to the authoritative
+  target length, and keeps `clip_audio` at exact picture duration.
+- Added an exact master-audio target composer for timeline-driven FL2VA. It
+  VAE-encodes the current interval from music, dialogue, narration, or effects
+  into the complete H3 audio target, protects every audio row, and optionally
+  protects a native previous-video prefix while future video rows remain
+  denoisable.
+- Added public source-AV trim, 32px mask-grid preview, and arbitrary H3 masked
+  target nodes for static or tracked video inpainting.
+- Added preserve, generate, follow-video, and custom audio-mask modes. New
+  masks intersect existing nested masks, allowing spatial edits to compose
+  with the chain's protected `masked_av` prefix.
+- Adapted the complete masked-video inpaint workflow to the existing
+  native-first PR #15375 compatibility. The old per-row MODEL patch is not
+  required, and distinct public IDs allow both packs to remain installed.
+- Documented how the same mask contract extends to prepared outpaint canvases,
+  temporal repairs, and two-ended clip-bridge targets.
 
 ## v0.4.10 — Final-output publishing
 

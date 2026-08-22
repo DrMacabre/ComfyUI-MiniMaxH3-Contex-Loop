@@ -7,17 +7,33 @@ Each completed mode should contain the same two-workflow pair:
 2. **Studio** — the same generation graph and prompt plan with Plan Studio as
    the authoring interface.
 
+All maintained 0.5 Chain examples make Audio Policy and Transition Policy
+explicit.
+Normal workflows place a model-free Preflight node before Loop Start; Studio
+workflows use Plan Studio's shared preflight inputs and report. Old Plan audio
+and continuation widgets remain readable compatibility controls, not the
+recommended authoring surface.
+
 ```text
 example_workflows/
 ├── assets/
 │   ├── jigen_market_garden_doom_opening.png
-│   └── jigen_market_garden_doom_last.png
+│   ├── jigen_market_garden_doom_last.png
+│   ├── soldier_crabs_bribie_island_cc0.webm
+│   ├── soldier_crabs_inpaint_mask.png
+│   └── soldier_crabs_reference_cc0.png
 ├── EXPERIMENTAL MiniMax H3 Ref2V - Sequential Motion.json
-├── MiniMax H3 Deferred Upscale - H3 Learned 2x.json
+├── MiniMax H3 Deferred Upscale - H3 LBH 3D.json
+├── MiniMax H3 Deferred Upscale - SeedVR2 Full Chain.json
+├── MiniMax H3 - Masked AV Bridge - Two Clips.json
+├── MiniMax H3 - Masked AV Extension - Chain + Reference Image.json
+├── MiniMax H3 - Masked AV Extension - Single Clip.json
+├── MiniMax H3 - Masked Video Inpaint.json
 ├── MiniMax H3 FL2V - Normal.json
 ├── MiniMax H3 I2V - Normal.json
 ├── MiniMax H3 I2V - Studio.json
 ├── MiniMax H3 Ref2V - Basic.json
+├── MiniMax H3 Ref2V - Masked Video Inpaint.json
 ├── MiniMax H3 Ref2V - Tagged.json
 ├── MiniMax H3 Ref2V - Studio Tagged.json
 ├── MiniMax H3 Ref2V - Studio Tagged Source Audio.json
@@ -40,28 +56,157 @@ recursive Motion Context.
 
 ## Deferred H3 upscale
 
-[`MiniMax H3 Deferred Upscale - H3 Learned 2x.json`](<MiniMax H3 Deferred Upscale - H3 Learned 2x.json>)
-is a standalone second-pass workflow: it contains no first-pass generation
-loop. Use Checkpoint Manager inside it to select a completed saved branch and
-load that exact Plan, then queue the child upscale profile.
+[`MiniMax H3 Deferred Upscale - SeedVR2 Full Chain.json`](<MiniMax H3 Deferred Upscale - SeedVR2 Full Chain.json>)
+is the low-RAM whole-video route. Checkpoint Manager supplies the selected
+generated lineage, including a partial run when later planned scenes have not
+been rendered yet; Full-Chain Latent Video Adapter re-decodes the original H3 video
+latents scene by scene into a cached lossless native VIDEO, resolves all H3
+boundary blends first, and hands that single continuous file to SeedVR2 Direct.
+The default disk-backed VAE buffer prevents a decoded scene—let alone the full
+chain—from becoming a large resident IMAGE batch. SeedVR2 then uses its own
+21-frame chunks with a two-frame context overlap and sends its audio-preserving
+VIDEO directly to core Save Video. Install the
+[ethanfel SeedVR2 fork](https://github.com/ethanfel/ComfyUI-SeedVR2_VideoUpscaler)
+before opening the graph.
 
-The loop uses Tr1dae's **MiniMax H3 Latent Upscale Combined 2x**, the learned
-clean-latent path, a four-step staggered refinement schedule at denoise 0.45,
-Euler, and locked parent audio. It rebuilds T2VA text conditioning from every
-saved scene prompt and sends the returned high-resolution conditioning into a
-new Guider. Install
-[ComfyUI-MiniMaxH3_LatentUpscaler](https://github.com/Tr1dae/ComfyUI-MiniMaxH3_LatentUpscaler)
-before opening the graph. The selected model and LoRA filenames match this
-repository's maintained H3 examples and remain editable.
+[`MiniMax H3 Deferred Upscale - H3 LBH 3D.json`](<MiniMax H3 Deferred Upscale - H3 LBH 3D.json>)
+is a standalone second-pass workflow: it contains no first-pass generation
+loop or source Plan. Select the latest generated scene you want in Checkpoint
+Manager, then queue the child upscale profile. The selected lineage may be
+shorter than the saved Plan; for example, scene 1 can be upscaled while scenes
+2–4 are still ungenerated. The manager emits that verified immutable lineage
+directly; recovery-only Source Timeline metadata stays embedded in the manifest.
+
+The loop sends only the clean 24-channel video x0 through LBH's temporal
+**MiniMax H3 Latent Upscaler (3D)**. The default target is 1.5 MP on a grid-32
+canvas, followed by a conservative two-step pass at denoise 0.24 with Euler.
+The pack rejoins the untouched 32-channel audio, performs NestedTensor-safe
+video-only CONST re-noise, and masks audio out of pass 2. For Drift-Control AV
+scene 2+, it replaces the 12-step prefix with the previous HQ latent tail,
+adds no noise there, masks that prefix out of denoising, and refines only the
+new video region. Segment Save persists just this small tail for
+interruption-safe resume even when full latent saving is disabled. Install
+[Comfyui_Minimax_h3_latent_Upscaler](https://github.com/LBH-123-AI/Comfyui_Minimax_h3_latent_Upscaler)
+and place its 3D checkpoint in `models/latent_upscale_models/` before opening
+the graph.
+
+Pass-2 conditioning follows the latent-sync method shared by the H3 community.
+**Upscale Reference Conditioning** restores the original scene conditioning
+from cache. **H3 Conditioning Sync From Latents** compares the source video
+latent with LBH's actual output, applies the exact X/Y scale to picture
+`minimax_refs` and `minimax_keyframes`, synchronizes each reference's H/W
+metadata, and leaves text, temporal positions, and audio latents unchanged.
+Upscale Reference Conditioning's default `exclude_video_keep_audio` policy
+removes both the Qwen motion-video presentation and native motion-video latent—the
+source latent already supplies motion—while retaining paired reference audio.
+Use `keep_video_native` or `resize_video` only for controlled comparisons; the
+sync node follows that policy automatically. A new Guider is built from the
+returned conditioning for sampler 2. Leave the conditioner's prompt override
+blank to reuse the exact compiled scene prompt, or provide an
+appearance/detail-only prompt to avoid repeating motion/camera instructions
+during pass 2. The bundled workflow supplies a neutral preservation/detail
+override by default; clear it to compare against the original compiled prompt.
+
+The included Comfy Kitchen attention override is bypassed intentionally. At
+large target canvases, Sage prequantized attention can exceed its int32 tensor-stride
+range even with ample VRAM; the graph therefore keeps ComfyUI's PyTorch
+attention backend.
 
 `save_latent` is off by default. Every delivered HQ scene, prompt, audio
 sidecar, integrity record, partial manifest, and final merge remains under
 `output/h3_chains/<run>/upscaled/<profile>/`; enable latent saving only when
-the full HQ sampler latent itself is needed later. Source-track runs also need
-their original full AUDIO connected to the adapter/merger. Reference-heavy
-Ref2VA second passes may need their original reference conditioning added to
-the backend body; the supplied standalone graph intentionally reconstructs
-T2VA text conditioning only.
+the full HQ sampler latent itself is needed later. Current Tagged and Scheduled
+Ref2VA nodes save the active native VAE/audio reference blocks, compact Qwen
+presentation frames, and—starting with cache v2—the original picture masters.
+Segment Save automatically adopts them under
+`output/h3_chains/<run>/reference_cache/` and records that run-local descriptor
+on the exact source revision. The child workflow therefore finds the matching
+scene from the source manifest alone: no Plan, registry, picture, video, or
+reference-audio wire is required. Both cache versions retain the native encoded
+reference blocks needed by latent sync. Runs without any cache use the node's
+`text_only` fallback; select `error` when an exact cached Ref2VA pass is
+mandatory.
+
+The masked-video workflow uses the same Chain Loop, checkpoint/review, resume,
+and assembly path as the generation examples. A pack-native source-target node
+selects the current loop interval and uses the stock H3 joint target as the
+authoritative AV grid before applying an arbitrary per-row inpaint mask.
+
+## Masked AV extension and bridge
+
+The AV examples share the bundled modern
+[CC0 soldier-crab footage](assets/README.md#soldier_crabs_bribie_island_cc0webm).
+They use original natural-history prompts and do not contain or imitate the
+copyrighted *Crab Rave* soundtrack, music video, choreography, or branding.
+Copy the WebM to `ComfyUI/input/`; the chained Ref2VA example additionally
+needs `soldier_crabs_reference_cc0.png`.
+
+- [`MiniMax H3 - Masked AV Extension - Single Clip.json`](<MiniMax H3 - Masked AV Extension - Single Clip.json>)
+  uses the normal recursive Chain Loop with a one-scene Plan. Existing Video
+  Context preserves the source tail as scene 1's 39-frame/65-audio-step target
+  prefix, and Assemble prepends the complete normalized source once.
+- [`MiniMax H3 - Masked AV Extension - Chain + Reference Image.json`](<MiniMax H3 - Masked AV Extension - Chain + Reference Image.json>)
+  runs three sequential Ref2VA extensions through the same loop. The protected
+  AV prefix is authoritative for pose, motion, camera, lighting, and timing;
+  the tagged `@crabs` image only stabilizes species appearance.
+- [`MiniMax H3 - Masked AV Bridge - Two Clips.json`](<MiniMax H3 - Masked AV Bridge - Two Clips.json>)
+  splits the 313-frame 24-fps source into frames 0–98 and 213–312. The
+  192-frame bridge protects 39 frames at each endpoint and generates the exact
+  114-frame gap before the graph reassembles the original 313-frame timeline.
+
+The extension pair deliberately uses this pack's loop, checkpoints, review
+gate, recovery, and disk-backed assembly. The bridge is a single two-ended
+masked target and therefore uses the dedicated **Masking · Two-Clip AV Bridge**
+node with an ordinary ComfyUI sampler rather than pretending it is recursive.
+
+## Masked video inpaint
+
+[`MiniMax H3 - Masked Video Inpaint.json`](<MiniMax H3 - Masked Video Inpaint.json>)
+adapts the earlier standalone PerRowMasking experiment to this pack's
+native-first H3 mask runtime and full Chain Loop. It contains no MODEL patch
+or LTX AV concat/separate node.
+
+[`MiniMax H3 Ref2V - Masked Video Inpaint.json`](<MiniMax H3 Ref2V - Masked Video Inpaint.json>)
+uses the identical source-target, mask, loop, review, and assembly graph with
+the Ref2VA base model and a single global `<Picture 1>`. The picture defines
+the regenerated crab appearance; the source movie remains the real masked AV
+target and is deliberately not connected again as `ref_video_0`.
+
+1. Copy the bundled source video and mask to `ComfyUI/input/`. Also copy the
+   bundled reference PNG for the Ref2V variant.
+2. Keep the bundled one-frame mask for a fixed region, or replace it with a
+   tracked MASK batch covering the complete source timeline.
+3. Verify the effective 32×32 H3 cells in Grid Preview.
+4. Edit the scene prompt or Plan, then run the loop normally.
+
+Apply Target Mask uses **H3 exact (causal/token max)** in this workflow. It
+reduces tracked masks through H3's real causal frame groups and 2×2 latent
+tokens rather than interpolating across time. The legacy trilinear choice is
+kept only for controlled comparisons with older renders.
+
+The two-scene demo edits 311 frames from the 313-frame source. Each generation
+is 175 frames; scene 2 repeats and protects a 39-frame edited prefix, so it
+delivers 136 new frames. The workflow preserves source audio. **Loop Mask
+Slice** broadcasts its static example mask, but when supplied a tracked batch
+it selects frames 0..174 and 136..310 for the two scenes. **Loop Source AV
+Target** selects the same source intervals and copies the video/audio encodes
+into the exact stock H3 target shapes. This avoids the one-token temporal
+mismatch possible when independently encoded streams are combined by a generic
+LTX AV node. Chain Context preserves the preceding edited overlap before Apply
+Target Mask intersects the spatial mask; Loop Save, review, resume, and
+Assemble remain active.
+
+Apply Target Mask intersects any existing nested AV mask, which allows this
+manual spatial path to compose with a chain `masked_av` prefix. See
+[Masked editing](../docs/MASKED_EDITING.md) for audio modes and preparation of
+outpaint or two-clip bridge targets.
+
+The Ref2V variant is the maintained compatibility demonstration for
+Ablejones/droz's `droz_MiniMaxH3_LatentMaskInpainting_wReference_v3.1`
+workflow. Its H3 mask conversion corresponds to `auto + max + max` with zero
+additional grow. Ablejones' Subject Crop/Uncrop, SAM3 tracking, and optional
+mask growth remain external preparation/compositing tools; they are not
+required for the latent mask to execute correctly.
 
 ## T2V
 
@@ -85,7 +230,9 @@ Each requested ten-second scene normalizes to 243 raw H3 frames. The second
 scene reproduces and removes 22 context frames, so the assembled delivery is
 464 frames, or 19.333 seconds at 24 fps. Normal demonstrates a hard trimmed
 boundary (`video_blend_frames = 0`); Studio demonstrates a five-frame visual
-blend. Audio remains frame-locked and is not crossfaded.
+blend. These are Plan defaults; each scene can override the blend entering that
+scene in its advanced settings. Audio remains frame-locked and is not
+crossfaded.
 
 ### Prompt source
 
@@ -194,14 +341,18 @@ the sampler on the unprepared conditioner latent.
   fallbacks by default and restores each saved run's Plan plus the matching
   loader selections.
 - [`MiniMax H3 Ref2V - Studio Tagged Source Audio.json`](<MiniMax H3 Ref2V - Studio Tagged Source Audio.json>)
-  derives from Studio Tagged and adds a full-track Load Audio fan-out to Loop
-  Start, Current Shot, final/recovery assembly, Run Manager, and Tagged Audio
-  Ref. The audio node uses `@audio_1`, `source_timeline`, and enabled
-  `align_audio_reference`; Tagged Ref2VA receives Current Shot state and the
-  final audio-reference fingerprint returns to Plan without a graph cycle.
+  derives from Studio Tagged and registers Load Audio once with Source
+  Timeline. The descriptor feeds Plan Studio preflight, Loop Start, recovery,
+  and assembly through saved state. Current Shot's scene-local slice feeds the
+  `@audio_1` Tagged Audio Ref with `align_audio_reference` enabled; its
+  downstream fingerprint is deliberately not returned to Plan, avoiding a
+  cycle while structured dependencies retain exact PCM provenance.
 - [`EXPERIMENTAL MiniMax H3 Ref2V - Sequential Motion.json`](<EXPERIMENTAL MiniMax H3 Ref2V - Sequential Motion.json>)
   adds one long video with embedded audio as `@motion` + `@motion_audio` and
-  sets its Tagged Video timeline to `sequential`. Current Shot `state` is mandatory:
+  predates the dedicated Tagged Motion Ref. For new motion-transfer workflows,
+  replace its generic Tagged Video node with Tagged Motion Ref so `@motion`
+  compiles as a reusable action Subject instead of the whole `<Video N>`.
+  Its timeline remains `sequential`. Current Shot `state` is mandatory:
   scene 1 receives source frames `0:243` and scene 2 receives `221:464`, so the
   source repeats the same 22-frame interval as Motion Context instead of
   replaying frame zero. The included Patch Priority pass-through is inert on
@@ -209,8 +360,9 @@ the sampler on the unprepared conditioner latent.
   path when this experimental workflow is opened on an older build.
 
 The tagged wrapper activates only registered aliases found in the resolved
-prompt and compiles them to native H3 labels. It does not insert subject
-definitions or other prompt text. Every scene therefore
+prompt and compiles them to native H3 labels. Generic reference nodes do not
+insert subject definitions; Tagged Motion Ref deliberately inserts its one
+compiler-owned action Subject definition. Every scene therefore
 contains the complete user-editable Ref2VA structure in this order:
 `subject_definitions`, `summary`, `retention_analysis`,
 `detailed_description`, `overall_soundscape`, and `non_diegetic_music`.
@@ -231,5 +383,5 @@ prompt-driven wrapper slices it. The Plan uses `generated_audio`; paired
 
 [`Archive/`](Archive/) contains the previous mixed catalog unchanged for
 compatibility, research, and migration. These workflows are not deleted, but
-they are not the recommended type-based starting points for the 0.4 examples.
+they are not the recommended type-based starting points for the 0.5 examples.
 The archived catalog explains their historical purpose and extra dependencies.

@@ -1,8 +1,8 @@
 {
   "id": "46a25be1-4bfd-4bb5-aa7b-4d4ca322f3c2",
   "revision": 0,
-  "last_node_id": 1948,
-  "last_link_id": 93,
+  "last_node_id": 1952,
+  "last_link_id": 98,
   "nodes": [
     {
       "id": 1,
@@ -28,7 +28,7 @@
           ]
         }
       ],
-      "title": "H3 MODEL — REQUIRED",
+      "title": "Load Diffusion Model — H3 MODEL — REQUIRED",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -63,7 +63,7 @@
           ]
         }
       ],
-      "title": "H3 TEXT ENCODER",
+      "title": "Load CLIP — H3 TEXT ENCODER",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -99,7 +99,7 @@
           ]
         }
       ],
-      "title": "Sampler algorithm",
+      "title": "KSamplerSelect — Sampler algorithm",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -133,7 +133,7 @@
           ]
         }
       ],
-      "title": "H3 Video VAE",
+      "title": "Load VAE — H3 Video VAE",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -167,7 +167,7 @@
           ]
         }
       ],
-      "title": "H3 Audio VAE",
+      "title": "Load VAE — H3 Audio VAE",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -181,7 +181,7 @@
       "id": 1906,
       "type": "Note",
       "pos": [
-        -3008,
+        -3936,
         -1088
       ],
       "size": [
@@ -193,7 +193,7 @@
       "mode": 0,
       "inputs": [],
       "outputs": [],
-      "title": "FL2VA / L2VA PROMPT FORMAT",
+      "title": "Note — FL2VA / L2VA PROMPT FORMAT",
       "properties": {},
       "widgets_values": [
         "FL2VA / L2VA PROMPT FORMAT\n\nSCENE 1 — A TO B\nFrame Gate supplies opening Frame A and the index switch supplies target Frame B. Start with the two-picture FL2VA alignment sentence: Picture 1 at 0.00 seconds and Picture 2 at 15.08 seconds. Describe the observable continuous path between them.\n\nSCENE 2 — CONTEXT TO A\nFrame Gate omits the opening image, H3 Motion Context supplies the incoming state at B, and the index switch supplies Frame A as the only explicit image. The core node therefore labels that final target <Picture 1>; use the one-picture L2VA alignment sentence at 15.08 seconds.\n\nThe switch wraps automatically: scene 1 selects frame_1 (B), scene 2 selects frame_2 (A), scene 3 would select B again."
@@ -379,7 +379,8 @@
             41,
             46,
             82,
-            86
+            86,
+            97
           ]
         },
         {
@@ -460,9 +461,14 @@
           "name": "status",
           "type": "STRING",
           "links": null
+        },
+        {
+          "name": "video_blend_frames",
+          "type": "INT",
+          "links": null
         }
       ],
-      "title": "CURRENT FL2V SCENE — PROMPT / SEED / TIMING",
+      "title": "MiniMax H3 Contex Loop Current Shot — CURRENT FL2V SCENE — PROMPT / SEED / TIMING",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -509,7 +515,7 @@
           "links": null
         }
       ],
-      "title": "RECOVERY: ASSEMBLE WITHOUT RENDERING",
+      "title": "MiniMax H3 Contex Loop Assemble — RECOVERY: ASSEMBLE WITHOUT RENDERING",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -592,7 +598,7 @@
           ]
         }
       ],
-      "title": "Per-shot noise seed",
+      "title": "RandomNoise — Per-shot noise seed",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -689,7 +695,7 @@
           ]
         }
       ],
-      "title": "CORE FL2VA — FIRST A ONCE + INDEXED LAST TARGET",
+      "title": "MiniMax H3 Image to Video — CORE FL2VA — FIRST A ONCE + INDEXED LAST TARGET",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -774,7 +780,7 @@
           ]
         }
       ],
-      "title": "AUTO CONTEXT — clip 1 bypass / continuation",
+      "title": "MiniMax H3 Contex Loop Context — AUTO CONTEXT — clip 1 bypass / continuation",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -931,7 +937,7 @@
           ]
         }
       ],
-      "title": "Loop guider",
+      "title": "Basic Guider — Loop guider",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -977,7 +983,7 @@
           ]
         }
       ],
-      "title": "Per-shot scheduler steps",
+      "title": "BasicScheduler — Per-shot scheduler steps",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -1047,7 +1053,7 @@
           "links": null
         }
       ],
-      "title": "H3 sampler — SINGLE LOOP BODY",
+      "title": "SamplerCustomAdvanced — H3 sampler — SINGLE LOOP BODY",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -1090,7 +1096,7 @@
           ]
         }
       ],
-      "title": "Decode current clip frames",
+      "title": "VAE Decode — Decode current clip frames",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -1133,7 +1139,7 @@
           ]
         }
       ],
-      "title": "Decode current clip audio",
+      "title": "VAE Decode Audio — Decode current clip audio",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -1182,7 +1188,13 @@
           "widget": {
             "name": "retain_overlap_frames"
           },
-          "link": 80
+          "link": null
+        },
+        {
+          "name": "state",
+          "type": "H3_CHAIN_STATE",
+          "link": 97,
+          "shape": 7
         }
       ],
       "outputs": [
@@ -1215,7 +1227,7 @@
           "links": null
         }
       ],
-      "title": "TRIM 22 CONTEXT FRAMES / RETAIN 5 FOR BLEND",
+      "title": "MiniMax H3 Contex Loop Trim — TRIM CONTEXT / AUTO-RESOLVE SCENE BLEND",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -1288,7 +1300,7 @@
           "links": null
         }
       ],
-      "title": "SAVE DELIVERED + BLEND-READY SEGMENTS",
+      "title": "MiniMax H3 Contex Loop Segment + Checkpoint — SAVE DELIVERED + BLEND-READY SEGMENTS",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -1333,7 +1345,7 @@
           "links": null
         }
       ],
-      "title": "FINAL ASSEMBLY — 5-FRAME VISUAL BLEND",
+      "title": "MiniMax H3 Contex Loop Assemble — FINAL ASSEMBLY — 5-FRAME VISUAL BLEND",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -1378,7 +1390,7 @@
           ]
         }
       ],
-      "title": "COMFY KITCHEN ATTENTION",
+      "title": "ModelAttentionBackend — COMFY KITCHEN ATTENTION",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.31.0",
@@ -1418,7 +1430,7 @@
           ]
         }
       ],
-      "title": "LIGHTX2V TURBO — 8 STEP V1.0",
+      "title": "Load LoRA — LIGHTX2V TURBO — 8 STEP V1.0",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -1494,7 +1506,7 @@
           "links": null
         }
       ],
-      "title": "LOOP END — ADVANCE T2V SCENE",
+      "title": "MiniMax H3 Contex Loop End — LOOP END — ADVANCE T2V SCENE",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -1510,7 +1522,7 @@
       "type": "Note",
       "pos": [
         1568,
-        544
+        1312
       ],
       "size": [
         896,
@@ -1521,7 +1533,7 @@
       "mode": 0,
       "inputs": [],
       "outputs": [],
-      "title": "FL2V NORMAL — HOW TO USE",
+      "title": "Note — FL2V NORMAL — HOW TO USE",
       "properties": {
         "Node name for S&R": "Note"
       },
@@ -1536,7 +1548,7 @@
       "type": "MiniMaxH3ChainPlan",
       "pos": [
         -672,
-        544
+        1344
       ],
       "size": [
         1024,
@@ -1551,6 +1563,12 @@
           "shape": 7,
           "type": "STRING",
           "link": null
+        },
+        {
+          "name": "chain_policy",
+          "type": "H3_CHAIN_POLICY",
+          "link": 98,
+          "shape": 7
         }
       ],
       "outputs": [
@@ -1584,12 +1602,10 @@
         {
           "name": "video_blend_frames",
           "type": "INT",
-          "links": [
-            80
-          ]
+          "links": null
         }
       ],
-      "title": "FL2V LOOP PLAN — NORMAL EDITOR",
+      "title": "MiniMax H3 Contex Loop Plan — FL2V LOOP PLAN — NORMAL EDITOR",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -1679,7 +1695,7 @@
           "links": null
         }
       ],
-      "title": "RECOVERY: LOAD ALL SAVED CLIPS",
+      "title": "MiniMax H3 Contex Loop Load Manifest — RECOVERY: LOAD ALL SAVED CLIPS",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -1706,7 +1722,7 @@
       "mode": 0,
       "inputs": [],
       "outputs": [],
-      "title": "RECOVERY / ASSEMBLE LATER",
+      "title": "Note — RECOVERY / ASSEMBLE LATER",
       "properties": {
         "Node name for S&R": "Note"
       },
@@ -1745,7 +1761,7 @@
           "links": null
         }
       ],
-      "title": "FRAME B — SCENE 1 TARGET",
+      "title": "Load Image — FRAME B — SCENE 1 TARGET",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.31.0",
@@ -1777,7 +1793,7 @@
         {
           "name": "plan",
           "type": "H3_CHAIN_PLAN",
-          "link": 75
+          "link": 96
         },
         {
           "name": "source_audio",
@@ -1813,7 +1829,7 @@
           "links": null
         }
       ],
-      "title": "LOOP START / RESUME",
+      "title": "MiniMax H3 Contex Loop Start — LOOP START / RESUME",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -1917,7 +1933,7 @@
           "links": null
         }
       ],
-      "title": "LAST-FRAME INDEX — SCENE 1→B / SCENE 2→A",
+      "title": "MiniMax H3 Frame Index Switch — LAST-FRAME INDEX — SCENE 1→B / SCENE 2→A",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.4.0",
@@ -1986,7 +2002,7 @@
           ]
         }
       ],
-      "title": "FRAME GATE — FRAME A ONCE / SELECTED END TARGET",
+      "title": "MiniMax H3 Frame Gate — FRAME GATE — FRAME A ONCE / SELECTED END TARGET",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.12",
@@ -2047,7 +2063,7 @@
           "links": null
         }
       ],
-      "title": "REVIEW GATE — APPROVE / EDIT+RETRY / REROLL / STOP",
+      "title": "MiniMax H3 Contex Loop Review Gate — REVIEW GATE — APPROVE / EDIT+RETRY / REROLL / STOP",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -2097,7 +2113,7 @@
           "links": null
         }
       ],
-      "title": "FRAME A — LOOP OPENING / SCENE 2 TARGET",
+      "title": "Load Image — FRAME A — LOOP OPENING / SCENE 2 TARGET",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.31.0",
@@ -2127,7 +2143,7 @@
       "mode": 0,
       "inputs": [],
       "outputs": [],
-      "title": "PROMPT + IMAGE SOURCE / ATTRIBUTION",
+      "title": "Note — PROMPT + IMAGE SOURCE / ATTRIBUTION",
       "properties": {
         "Node name for S&R": "Note"
       },
@@ -2142,7 +2158,7 @@
       "type": "MiniMaxH3ChainScenePromptEditor",
       "pos": [
         416,
-        544
+        1344
       ],
       "size": [
         1120,
@@ -2168,7 +2184,7 @@
           ]
         }
       ],
-      "title": "SCENE PROMPT EDITOR — STANDARD AUTHORING",
+      "title": "MiniMax H3 Scene Prompt Editor — SCENE PROMPT EDITOR — STANDARD AUTHORING",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -2181,6 +2197,130 @@
       "widgets_values": [],
       "color": "#1f1f48",
       "bgcolor": "rgba(24,24,27,.9)"
+    },
+    {
+      "id": 1951,
+      "type": "MiniMaxH3ChainPreflight",
+      "pos": [
+        -1024,
+        256
+      ],
+      "size": [
+        384,
+        260
+      ],
+      "flags": {},
+      "order": 44,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "plan",
+          "type": "H3_CHAIN_PLAN",
+          "link": 75
+        },
+        {
+          "name": "source_timeline",
+          "shape": 7,
+          "type": "H3_SOURCE_TIMELINE",
+          "link": null
+        },
+        {
+          "name": "source_audio",
+          "shape": 7,
+          "type": "AUDIO",
+          "link": null
+        },
+        {
+          "name": "tagged_references",
+          "shape": 7,
+          "type": "H3_TAGGED_REFERENCES",
+          "link": null
+        },
+        {
+          "name": "reference_schedule",
+          "shape": 7,
+          "type": "H3_REFERENCE_SCHEDULE",
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "name": "plan",
+          "type": "H3_CHAIN_PLAN",
+          "links": [
+            96
+          ]
+        },
+        {
+          "name": "preflight",
+          "type": "H3_PREFLIGHT",
+          "links": null
+        },
+        {
+          "name": "ready",
+          "type": "BOOLEAN",
+          "links": null
+        },
+        {
+          "name": "status",
+          "type": "STRING",
+          "links": null
+        },
+        {
+          "name": "report_json",
+          "type": "STRING",
+          "links": null
+        }
+      ],
+      "title": "MiniMax H3 Chain Preflight — 0.5 PREFLIGHT — BLOCKS BEFORE MODELS",
+      "properties": {
+        "Node name for S&R": "MiniMaxH3ChainPreflight"
+      },
+      "widgets_values": [
+        1,
+        "",
+        true
+      ]
+    },
+    {
+      "id": 1952,
+      "type": "MiniMaxH3ChainPolicy",
+      "pos": [
+        -1092,
+        1504
+      ],
+      "size": [
+        340,
+        190
+      ],
+      "flags": {},
+      "order": 45,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "chain_policy",
+          "type": "H3_CHAIN_POLICY",
+          "links": [
+            98
+          ]
+        },
+        {
+          "name": "status",
+          "type": "STRING",
+          "links": null
+        }
+      ],
+      "title": "MiniMax H3 Chain Policy — 0.5 CHAIN POLICY",
+      "properties": {
+        "Node name for S&R": "MiniMaxH3ChainPolicy"
+      },
+      "widgets_values": [
+        "guide",
+        "generated",
+        "off",
+        "on"
+      ]
     }
   ],
   "links": [
@@ -2580,7 +2720,7 @@
       75,
       1930,
       0,
-      1701,
+      1951,
       0,
       "H3_CHAIN_PLAN"
     ],
@@ -2591,14 +2731,6 @@
       1707,
       0,
       "H3_CHAIN_PLAN"
-    ],
-    [
-      80,
-      1700,
-      5,
-      132,
-      3,
-      "INT"
     ],
     [
       81,
@@ -2703,6 +2835,30 @@
       110,
       3,
       "IMAGE"
+    ],
+    [
+      96,
+      1951,
+      0,
+      1701,
+      0,
+      "H3_CHAIN_PLAN"
+    ],
+    [
+      97,
+      1702,
+      0,
+      132,
+      4,
+      "H3_CHAIN_STATE"
+    ],
+    [
+      98,
+      1952,
+      0,
+      1700,
+      1,
+      "H3_CHAIN_POLICY"
     ]
   ],
   "groups": [
@@ -2711,9 +2867,9 @@
       "title": "H3 MODEL STACK",
       "bounding": [
         -2112,
-        -1024,
+        -1536,
         2200,
-        650
+        1162
       ],
       "color": "#3f789e",
       "flags": {}
@@ -2725,7 +2881,7 @@
         -1600,
         -352,
         6624,
-        800
+        1568
       ],
       "color": "#744c8c",
       "flags": {}
@@ -2758,12 +2914,24 @@
       "id": 6,
       "title": "FL2V — PLAN + STANDARD PROMPT EDITOR",
       "bounding": [
-        -704,
-        480,
-        3216,
-        1280
+        -1152,
+        1280,
+        3664,
+        1728
       ],
       "color": "#3f789e",
+      "flags": {}
+    },
+    {
+      "id": 7,
+      "title": "WORKFLOW GUIDE",
+      "bounding": [
+        -4000,
+        -1152,
+        864,
+        1280
+      ],
+      "color": "#2f596b",
       "flags": {}
     }
   ],

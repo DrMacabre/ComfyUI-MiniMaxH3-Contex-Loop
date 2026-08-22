@@ -31,8 +31,35 @@ textarea. It edits the selected scene's real `shots[n].prompt`; there is no
 second prompt copy.
 
 - Arrow buttons or `Alt+Left/Right` change scenes.
-- `@` opens Picture/Video/Audio references.
-- `#` opens dialogue helpers.
+- Typing `@` offers the connected Picture/Video/Audio aliases. In Tagged mode,
+  inserting an inactive alias activates it; scheduled references remain limited
+  to the selected scene.
+- Typing `#` offers valid Tagged Picture semantic/storyboard anchors only.
+- Typing `<` offers H3 subjects, dialogue tags, and available native reference
+  labels, plus `<scenetrans>` and `<cutoff>` dialogue-flow markers. Typing
+  `[` filters 12 shot markers, multilingual dialogue markers, and canonical
+  summary-intent combinations; for example, `[re` lists the supported
+  reference-generation combinations. Typing `(S` offers stable speaker IDs.
+- Typing the start of an H3 section name at the beginning of a line completes
+  `subject_definitions:`, `integrated_multimodal_description:`, and the other
+  standard sections. `Ctrl+Space` (`Cmd+Space` on macOS) opens the full H3
+  completion catalog. Use arrows to select and `Enter` or `Tab` to insert.
+- **@ Reference** remains available for browsing connected media previews.
+- **Dialogue** wraps a selection in `<d>` tags.
+- Choose **Auto schema**, T2VA, I2VA, FL2VA, L2VA, or Ref2VA, then open
+  **Sections** to inspect the exact required order, jump to a category, insert
+  a missing category, or normalize the mode's keyframe-alignment line.
+  Diagnostics cover section spelling/order, shot numbering and timestamps,
+  Ref2VA task directives and definitions, dialogue/language/flow balance, and
+  connected native references. FL2VA/L2VA expose duration and final-shot
+  controls for their exact alignment sentence.
+- Live word/character counts stay in the footer. Both dedicated editors can
+  switch between the ordinary prompt source and rich H3 token presentation;
+  this changes presentation only, never Plan text.
+- `#picture[2.50s]` adds a scene-local Qwen semantic checkpoint when the
+  picture is registered through Tagged Ref2VA. With Tagged Ref2VA set to
+  `picture_storyboard`, it instead becomes a separate Qwen-only Picture plus
+  an approximate scene-relative timing instruction.
 - `A−` and `A+` change persistent type size.
 - The node may sit inline before Loop Start or on an editor-only branch.
 
@@ -41,12 +68,22 @@ Image to Video nodes without introducing an execution socket or graph cycle.
 Hovering a loader-backed reference previews its image, video, or audio; computed
 tensors remain usable even when no browser-playable source file can be found.
 
+The schema inspector and completion catalog are shared by the focused Scene
+Prompt Editor and the optimizer-enabled Rich Scene Prompt Editor. They are
+backported from the standalone
+[H3 Prompt IDE](https://github.com/ethanfel/ComfyUI-H3-Prompt-IDE), while these
+nodes retain Motion Context Plan synchronization, revisions, `@tags`,
+semantic anchors, and optimizer integration.
+
 ## Prompt revisions
 
-The compact `‹ current / total ›` selector below the editor navigates prompt
-history. Typing updates one draft rather than creating a revision per keystroke.
-When Current Shot executes, that exact prompt becomes immutable; editing it
-creates a child revision.
+The compact `‹ Active current / total ›` selector below the editor activates a
+prompt version in the Plan; it is not a read-only history browser. Each version
+is labeled **Active draft**, **Active executed**, **Draft history**, or
+**Executed history**. Typing updates one active draft rather than creating a
+revision per keystroke. When Current Shot executes, that exact prompt becomes
+immutable; typing from it creates a child draft. Activating an older version
+explicitly replaces the selected scene prompt in the Plan.
 
 History is stored outside Plan JSON and loaded only for the selected scene:
 

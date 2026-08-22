@@ -4,8 +4,12 @@ import {
     parsePlanJson,
     planToJson,
     promptValueToText,
-} from "./h3_chain_plan_core.mjs?v=0.4.20";
-import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.4.20";
+} from "./h3_chain_plan_core.mjs?v=0.5.5";
+import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.5.5";
+import {
+    refreshRestoredPlanEditors,
+    restoreConnectedPolicyInputs,
+} from "./h3_plan_restore_core.mjs?v=0.5.5";
 import {
     applyCheckpointRevisionSet,
     applyReviewEdit,
@@ -17,10 +21,11 @@ import {
     reviewLocalDeadline,
     reviewPlanScenePrompt,
     reviewSeed,
-} from "./h3_chain_review_core.mjs?v=0.4.20";
+} from "./h3_chain_review_core.mjs?v=0.5.5";
 
 const NODE_NAME = "MiniMaxH3ChainReview";
 const PLAN_NAME = "MiniMaxH3ChainPlan";
+const PROMPT_EDITOR_SETTING = "MiniMaxH3ContexLoop.ReviewGate.PromptEditor";
 const VIDEO_HEIGHT_PROPERTY = "h3_chain_review_video_height";
 const PROMPT_HEIGHT_PROPERTY = "h3_chain_review_prompt_height";
 const DEFAULT_VIDEO_HEIGHT = 300;
@@ -31,6 +36,10 @@ const mountedReviewNodes = new Set();
 let notificationAudioContext = null;
 let pendingFetchPromise = null;
 let pendingPollTimer = null;
+
+function reviewPromptEditorEnabled() {
+    return app.ui?.settings?.getSettingValue?.(PROMPT_EDITOR_SETTING) === true;
+}
 
 // A browser can briefly retain the preceding companion module after updating
 // a custom node. Namespace access keeps Review Gate mountable in that state;
@@ -91,6 +100,7 @@ function injectStyles() {
             min-height:500px; padding:9px; overflow:auto; border:1px solid #56637e;
             border-radius:8px; background:#181a20; color:#e8eaf0; font:12px/1.35 system-ui,sans-serif; }
         .h3r-root * { box-sizing:border-box; }
+        .h3r-root [hidden] { display:none !important; }
         .h3r-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
         .h3r-title { font-weight:750; color:#a9c2ff; }
         .h3r-badge { color:#d5d9e3; opacity:.75; }
@@ -109,6 +119,8 @@ function injectStyles() {
         .h3r-label { display:flex; flex-direction:column; gap:4px; color:#aeb5c5; }
         .h3r-prompt { width:100%; min-height:120px; resize:vertical; padding:7px;
             border:1px solid #56637e; border-radius:5px; background:#101218; color:#eef1f7; }
+        .h3r-prompt-notice { padding:8px 9px; border:1px solid #56637e;
+            border-radius:6px; background:#202431; color:#cbd3e5; white-space:pre-wrap; }
         .h3r-row { display:flex; align-items:flex-end; gap:7px; }
         .h3r-field { display:flex; flex-direction:column; gap:4px; min-width:0;
             color:#aeb5c5; }
@@ -298,7 +310,7 @@ function updatePlanFromCheckpointRevisions(reviewNode, revisions) {
     return true;
 }
 
-function restoreSavedPlanInputs(reviewNode, inputs) {
+function restoreSavedPlanInputs(reviewNode, inputs, policyInputs = {}) {
     const planNode = upstreamPlanNode(reviewNode);
     if (!planNode || !inputs || typeof inputs !== "object") {
         throw new Error("The saved run has no Plan inputs to restore.");
@@ -328,8 +340,9 @@ function restoreSavedPlanInputs(reviewNode, inputs) {
     }
     const planWidget = widgetByName(planNode, "plan_json");
     const plan = parsePlanJson(String(planWidget?.value ?? ""));
-    planNode._h3ChainEditorRefresh?.();
-    planNode.graph?.setDirtyCanvas?.(true, true);
+    const policies = restoreConnectedPolicyInputs(
+        planNode, policyInputs, inputs);
+    refreshRestoredPlanEditors(planNode);
     app.graph?.setDirtyCanvas?.(true, true);
     for (const [sceneIndex, shot] of plan.shots.entries()) {
         publishCompanionPrompt(
@@ -339,7 +352,7 @@ function restoreSavedPlanInputs(reviewNode, inputs) {
             promptValueToText(shot.prompt),
         );
     }
-    return {sceneCount: plan.shots.length, unavailable};
+    return {sceneCount: plan.shots.length, unavailable, policies};
 }
 
 function formatBytes(value) {
@@ -598,6 +611,19 @@ function mount(node) {
     let promptEditedInGate = false;
     prompt.addEventListener("input", () => { promptEditedInGate = true; });
 
+    const promptNotice = document.createElement("div");
+    promptNotice.className = "h3r-prompt-notice";
+    promptNotice.textContent = "Prompt editing in Review Gate is disabled by default in 0.5. Use Scene Prompt Editor or Rich Scene Prompt Editor, then Retry or Reroll here.\n\nTo restore the old field: ComfyUI Settings → MiniMax H3 Contex Loop → Interface → Review Gate.";
+
+    function refreshPromptEditorSetting() {
+        const enabled = reviewPromptEditorEnabled();
+        promptLabel.hidden = !enabled;
+        prompt.disabled = !enabled;
+        promptNotice.hidden = enabled;
+    }
+    node._h3ReviewRefreshPromptSetting = refreshPromptEditorSetting;
+    refreshPromptEditorSetting();
+
     let promptResizeObserver = null;
     function applySavedLayout() {
         node.properties ??= {};
@@ -680,8 +706,8 @@ function mount(node) {
         button.type = "button";
         button.title = {
             approve: "Accept this saved scene and continue the loop with the next scene.",
-            retry: "Reject this attempt and regenerate the same scene using the edited prompt, seed, and duration.",
-            reroll: "Reject this attempt, assign a new random seed, and regenerate the same scene using the edited prompt and duration.",
+            retry: "Reject this attempt and regenerate the same scene using the active Plan prompt, seed, and duration.",
+            reroll: "Reject this attempt, assign a new random seed, and regenerate the same scene using the active Plan prompt and duration.",
             stop: "Accept this scene but stop before the next one. Optionally assemble a partial joined MP4 and arm the next scene for resume.",
         }[action] ?? "Submit this review decision.";
         // Keep actions clickable while waiting. If a websocket event or node-id
@@ -699,7 +725,7 @@ function mount(node) {
     }
     const approveButton = actionButton(
         "Approve & continue", "h3r-approve", "approve");
-    actionButton("Retry prompt / seed / length", "h3r-retry", "retry");
+    actionButton("Retry scene / seed / length", "h3r-retry", "retry");
     actionButton("Reroll seed", "h3r-retry", "reroll");
     actionButton("Approve & stop", "h3r-stop", "stop");
 
@@ -745,8 +771,10 @@ function mount(node) {
     resumeRow.append(resumeSelect, refreshResume, loadResume);
     resume.append(resumeTitle, resumeRow, resumeStatus, revisionsPanel);
 
-    root.append(head, videoPanel, prefix, promptLabel, seedRow, candidateRow,
-        actions, status, resume);
+    root.append(
+        head, videoPanel, prefix, promptNotice, promptLabel,
+        seedRow, candidateRow, actions, status, resume,
+    );
 
     let current = null;
     let countdownTimer = null;
@@ -1021,6 +1049,7 @@ function mount(node) {
             if (!runResponse.ok) throw new Error(
                 runBody.error || `HTTP ${runResponse.status}`,
             );
+            let restoredPolicyInputs = runBody.policy_inputs;
             if (selections.length) {
                 const response = await api.fetchApi(
                     "/minimax_h3_context_loop/checkpoint-revisions/restore", {
@@ -1041,8 +1070,11 @@ function mount(node) {
                     body.error || `HTTP ${response.status}`,
                 );
                 restored = body.restored ?? [];
+                restoredPolicyInputs = body.policy_inputs
+                    ?? restoredPolicyInputs;
             }
-            const savedPlan = restoreSavedPlanInputs(node, runBody.plan_inputs);
+            const savedPlan = restoreSavedPlanInputs(
+                node, runBody.plan_inputs, restoredPolicyInputs);
             if (savedPlan.sceneCount < resumeScene) {
                 throw new Error(
                     `The saved Plan has ${savedPlan.sceneCount} scenes and cannot resume scene ${resumeScene}.`,
@@ -1075,8 +1107,11 @@ function mount(node) {
             }
             const unavailable = savedPlan.unavailable.length
                 ? ` Current Plan has no ${savedPlan.unavailable.join(", ")} control. ` : " ";
+            const unavailablePolicies = savedPlan.policies.unavailable.length
+                ? ` Could not restore ${savedPlan.policies.unavailable.join(", ")}. ` : "";
             const finalStatus = `Restored the saved ${savedPlan.sceneCount}-scene Plan and ${restored.length} checkpoint scene${restored.length === 1 ? "" : "s"}.` +
-                unavailable + `Checkpoint ${resumeScene - 1} loaded for preview. Loop Start is armed for scene ${resumeScene}; queue the workflow to validate and resume.`;
+                unavailable + unavailablePolicies +
+                `Checkpoint ${resumeScene - 1} loaded for preview. Loop Start is armed for scene ${resumeScene}; queue the workflow to validate and resume.`;
             if (changed) await refreshResumeOptions();
             resumeStatus.textContent = finalStatus;
         } catch (error) {
@@ -1132,9 +1167,11 @@ function mount(node) {
             const submittedToken = submittedReview.token;
             const submittedIndex = submittedReview.clip_index;
             const submittedCandidate = selectedCandidate();
-            const submittedPrompt = promptEditedInGate
+            const submittedPrompt = reviewPromptEditorEnabled() && promptEditedInGate
                 ? prompt.value
-                : (planScenePrompt(node, submittedReview) ?? prompt.value);
+                : (planScenePrompt(node, submittedReview)
+                    ?? submittedReview.scene_prompt
+                    ?? prompt.value);
             const normalizedSeed = action === "retry" ? reviewSeed(seed.value) : seed.value;
             const normalizedDuration = action === "retry" || action === "reroll"
                 ? reviewDuration(duration.value) : null;
@@ -1333,6 +1370,21 @@ document.addEventListener("visibilitychange", () => {
 
 app.registerExtension({
     name: "minimax_h3_context_loop.chain_review",
+    init() {
+        app.ui?.settings?.addSetting?.({
+            id: PROMPT_EDITOR_SETTING,
+            category: ["MiniMax H3 Contex Loop", "Interface", "Review Gate"],
+            name: "Enable prompt editing inside Review Gate",
+            tooltip: "Disabled by default in 0.5. Keep prompt authoring in Scene Prompt Editor or Rich Scene Prompt Editor. Enable this only to restore the legacy Review Gate textarea.",
+            type: "boolean",
+            defaultValue: false,
+            onChange() {
+                for (const node of mountedReviewNodes) {
+                    node._h3ReviewRefreshPromptSetting?.();
+                }
+            },
+        });
+    },
     async beforeRegisterNodeDef(nodeType, nodeData) {
         if (nodeData.name !== NODE_NAME) return;
         const created = nodeType.prototype.onNodeCreated;

@@ -14,6 +14,7 @@ typed MiniMax chain state rather than arbitrary carry sockets.
 from __future__ import annotations
 
 import asyncio
+import gc
 import hashlib
 import json
 import logging
@@ -24,6 +25,7 @@ import secrets
 import shutil
 import subprocess
 import sys
+import threading
 import time
 import uuid
 import wave
@@ -84,8 +86,43 @@ from .nodes import (
 )
 from .prompt_history import PromptHistoryStore
 from .prompt_optimizer import optimize_prompt_payload
-from .run_manager import RunArchiveManager
+from .run_manager import RunArchiveManager, archive_policy_inputs
 from .asset_store import MAX_ASSET_BINDINGS, RunAssetStore
+from .av_timing import (
+    AUDIO_TRIM_FRAMES_KEY,
+    AUDIO_WITH_OVERLAP_FRAMES_KEY,
+    AUDIO_WITH_OVERLAP_WAVEFORM_KEY,
+    sample_boundary_from_frames,
+)
+from .contracts_v05 import (
+    ADVANCED_TRANSITION_PRESETS,
+    AV_TRANSITION_CONTEXT_LENGTHS,
+    AUDIO_POLICY_VERSION,
+    CHAIN_POLICY_VERSION,
+    CONTEXT_SPATIAL_PROXY_MODES,
+    CONTEXT_SPATIAL_PROXY_RECIPE,
+    CONTINUATION_POLICIES,
+    DETAIL_AV_RECIPE,
+    DRIFT_CONTROL_AV_RECIPE,
+    LATENT_COLOR_CARRY_RECIPE,
+    DEPENDENCY_SCOPES,
+    FINAL_AUDIO_POLICIES,
+    GENERATED_CONTINUITY_POLICIES,
+    PRIMARY_TRANSITION_PRESETS,
+    PREFLIGHT_VERSION,
+    SCENE_DEPENDENCY_VERSION,
+    SOURCE_REFERENCE_POLICIES,
+    SOURCE_TIMELINE_VERSION,
+    TRANSITION_CONTEXT_LENGTHS,
+    TRANSITION_POLICY_VERSION,
+    audio_policy as _contract_audio_policy,
+    chain_policy as _contract_chain_policy,
+    compose_chain_policy as _contract_compose_chain_policy,
+    migrate_continuation_mode,
+    migrate_legacy_audio_mode,
+    paired_audio_policy as _contract_paired_audio_policy,
+    transition_policy as _contract_transition_policy,
+)
 from .checkpoint_manager import (
     CheckpointDeleteBlocked,
     CheckpointGraphManager,
@@ -101,13 +138,56 @@ MAX_SHOTS = 128
 MAX_SEED = 0xFFFFFFFFFFFFFFFF
 MAX_REVIEW_CANDIDATES = 20
 MAX_H3_FRAMES = 3592  # largest 17k+5 value accepted by H3's 3600-frame socket
+BOUNDARY_TONE_MATCH_MODES = ("off", "auto")
+BOUNDARY_TONE_MATCH_CONTEXT_FRAMES = 8
+BOUNDARY_TONE_MATCH_SEARCH_FRAMES = 4
+BOUNDARY_TONE_MATCH_MIN_JUMP = 1.25
+BOUNDARY_TONE_MATCH_MAX_SHIFT = 6.0
+ASSEMBLY_COLOR_STABILIZATION_MODES = ("off", "scene_1_anchor")
+ASSEMBLY_COLOR_STABILIZATION_RAMP_FRAMES = 72
+ASSEMBLY_COLOR_STABILIZATION_STRENGTH = 0.5
+ASSEMBLY_COLOR_STABILIZATION_MAX_LUMA_SHIFT = 6.0
+ASSEMBLY_COLOR_STABILIZATION_MAX_SATURATION_CHANGE = 0.06
+MASKED_AUDIO_CONTRACT = "raw_source_window_v2"
+PLAN_STUDIO_PREVIEW_TTL_SECONDS = 6 * 60 * 60
+PLAN_STUDIO_PREVIEW_MAX_SESSIONS = 32
+PLAN_STUDIO_PREVIEW_MAX_HEIGHT = 480
+_PLAN_STUDIO_SOURCE_PREVIEWS: dict[str, dict[str, Any]] = {}
+_PLAN_STUDIO_PREVIEW_BUILD_LOCK = threading.Lock()
 H3_CONTEXT_LENGTHS = (
     1, 5, 22, 39, 56, 73, 90, 107, 124,
     141, 158, 175, 192, 209, 226, 243,
 )
 AUDIO_MODES = ("source_track", "generated_audio", "source_plus_timeline")
-CONTINUATION_MODES = ("guide", "masked_av")
+CONTINUATION_MODES = (
+    "guide", "tone_carry_guide", "latent_guide", "tapered_guide",
+    "masked_av", "tapered_av", "feathered_av", "audio_feathered_av",
+    "drift_control_av", "color_stable_drift_av")
+LOOP_MEMORY_POLICIES = ("off", "unload_models", "fresh_scene")
+GUIDE_CONTINUATION_MODES = frozenset((
+    "guide", "tone_carry_guide", "latent_guide", "tapered_guide"))
+MASKED_CONTINUATION_MODES = frozenset((
+    "masked_av", "tapered_av", "feathered_av", "audio_feathered_av",
+    "drift_control_av", "color_stable_drift_av"))
+DISPOSABLE_PREFIX_CONTINUATION_MODES = frozenset((
+    "tapered_av", "drift_control_av", "color_stable_drift_av"))
+DRIFT_CONTROL_CONTINUATION_MODES = frozenset((
+    "drift_control_av", "color_stable_drift_av"))
+LATENT_COLOR_CARRY_CONTINUATION_MODES = frozenset((
+    "color_stable_drift_av",))
+RGB_PROXY_GUIDE_MODES = frozenset((
+    "guide", "tone_carry_guide", "tapered_guide"))
 REFERENCE_AUDIO_TIMELINE_MODES = ("standalone", "source_timeline")
+MOTION_REFERENCE_SHORT_EDGES = ("384", "512", "768", "source")
+
+# These Plan-wide controls describe how the next scene consumes an immutable
+# predecessor. Their effective values are still recorded on generated scenes,
+# but changing them must not by itself rewrite the predecessor's identity.
+_NEXT_SCENE_COMPATIBILITY_KEYS = frozenset((
+    "continuation_mode",
+    "context_length",
+    "context_storage_length",
+))
 
 PLAN_TYPE = "H3_CHAIN_PLAN"
 STATE_TYPE = "H3_CHAIN_STATE"
@@ -117,7 +197,16 @@ MANIFEST_TYPE = "H3_CHAIN_MANIFEST"
 EXTERNAL_CONTEXT_TYPE = "H3_CHAIN_EXTERNAL_CONTEXT"
 REFERENCE_SCHEDULE_TYPE = "H3_REFERENCE_SCHEDULE"
 TAGGED_REFERENCE_TYPE = "H3_TAGGED_REFERENCES"
+SEMANTIC_PRESENTATION_TYPE = "H3_SEMANTIC_PRESENTATION"
+LAZY_MOTION_SOURCE_TYPE = "H3_LAZY_MOTION_SOURCE"
+SOURCE_TIMELINE_TYPE = "H3_SOURCE_TIMELINE"
+AUDIO_POLICY_TYPE = "H3_AUDIO_POLICY"
+TRANSITION_POLICY_TYPE = "H3_TRANSITION_POLICY"
+CHAIN_POLICY_TYPE = "H3_CHAIN_POLICY"
+PREFLIGHT_TYPE = "H3_PREFLIGHT_REPORT"
 REFERENCE_SCHEDULE_VERSION = 1
+LAZY_MOTION_SOURCE_VERSION = 3
+SEMANTIC_PRESENTATION_VERSION = 1
 
 _PENDING_REVIEWS: dict[str, dict[str, Any]] = {}
 _PENDING_FINAL_REVIEW_PREVIEWS: dict[
@@ -133,6 +222,184 @@ def _canonical_json(value: Any) -> str:
 
 def _fingerprint(value: Any) -> str:
     return hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
+
+
+def _validate_audio_policy(value: Any) -> dict[str, str]:
+    if not isinstance(value, dict):
+        raise ValueError(
+            "H3 Audio Policy must come from MiniMax H3 Audio Policy.")
+    if value.get("version") != AUDIO_POLICY_VERSION:
+        raise ValueError(
+            "H3 Audio Policy version is missing or obsolete.")
+    return _contract_audio_policy(
+        value.get("final_audio"), value.get("source_reference"),
+        value.get("generated_continuity"),
+        value.get("source_audio_target", "off"))
+
+
+def _resolved_audio_policy(value: Any) -> dict[str, str]:
+    """Resolve an explicit 0.5 policy or faithfully migrate a 0.4 mode."""
+    compatibility = (
+        value.get("compatibility")
+        if isinstance(value, dict) and isinstance(
+            value.get("compatibility"), dict)
+        else value)
+    if not isinstance(compatibility, dict):
+        raise ValueError("H3 audio policy requires Plan compatibility data.")
+    explicit = compatibility.get("audio_policy")
+    if explicit is not None:
+        return _validate_audio_policy(explicit)
+    return migrate_legacy_audio_mode(compatibility.get("audio_mode"))
+
+
+def _legacy_audio_mode_for_policy(policy: Any) -> str:
+    resolved = _validate_audio_policy(policy)
+    for mode in AUDIO_MODES:
+        if migrate_legacy_audio_mode(mode) == resolved:
+            return mode
+    return "custom"
+
+
+def _audio_policy_summary(value: Any) -> str:
+    policy = _resolved_audio_policy(value)
+    summary = "final=%s/ref=%s/carry=%s" % (
+        policy["final_audio"], policy["source_reference"],
+        policy["generated_continuity"])
+    if policy.get("source_audio_target") == "locked":
+        summary += "/target=locked"
+    return summary
+
+
+def _audio_policy_locks_source_audio(value: Any) -> bool:
+    return _resolved_audio_policy(value).get(
+        "source_audio_target", "off") == "locked"
+
+
+def _audio_policy_requires_source(value: Any) -> bool:
+    policy = _resolved_audio_policy(value)
+    return (policy["final_audio"] == "source" or
+            policy["source_reference"] == "on" or
+            policy.get("source_audio_target") == "locked")
+
+
+def _audio_policy_uses_source_reference(value: Any) -> bool:
+    return _resolved_audio_policy(value)["source_reference"] == "on"
+
+
+def _audio_policy_uses_generated_continuity(value: Any) -> bool:
+    return _resolved_audio_policy(value)["generated_continuity"] == "on"
+
+
+def _audio_policy_final(value: Any) -> str:
+    return _resolved_audio_policy(value)["final_audio"]
+
+
+def _paired_audio_policy(value: Any) -> str:
+    return _contract_paired_audio_policy(value)
+
+
+def _validate_chain_policy(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError(
+            "H3 Chain Policy must come from MiniMax H3 Chain Policy, "
+            "Advanced Policy, or the Legacy 0.4 Policy Adapter.")
+    if value.get("version") != CHAIN_POLICY_VERSION:
+        raise ValueError("H3 Chain Policy version is missing or obsolete.")
+    return _contract_compose_chain_policy(
+        value.get("audio_policy"), value.get("transition_policy"),
+        audio_context_length=value.get("audio_context_length", 22))
+
+
+def _validate_transition_policy(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError(
+            "H3 Transition Policy must come from MiniMax H3 Transition Policy.")
+    if value.get("version") != TRANSITION_POLICY_VERSION:
+        raise ValueError(
+            "H3 Transition Policy version is missing or obsolete.")
+    return _contract_transition_policy(
+        value.get("preset"),
+        expert_override=bool(value.get("expert_override", False)),
+        continuation_mode=value.get("continuation_mode"),
+        context_length=value.get("context_length"))
+
+
+def _resolved_transition_policy(value: Any) -> dict[str, Any]:
+    compatibility = (
+        value.get("compatibility")
+        if isinstance(value, dict) and isinstance(
+            value.get("compatibility"), dict)
+        else value)
+    if not isinstance(compatibility, dict):
+        raise ValueError(
+            "H3 transition policy requires Plan compatibility data.")
+    explicit = compatibility.get("transition_policy")
+    if explicit is not None:
+        return _validate_transition_policy(explicit)
+    mode = migrate_continuation_mode(
+        compatibility.get("continuation_mode", "guide"))
+    context = int(compatibility.get("context_length", 0))
+    preset = "legacy"
+    for candidate in (
+            "cut", "guide", "tone_guide", "latent_guide", "detail_guide",
+            "detail_av", "drift_av", "color_drift_av", "hard_av", "soft_av",
+            "audio_feather_av"):
+        resolved = _contract_transition_policy(candidate)
+        if (resolved["continuation_mode"] == mode and
+                int(resolved["context_length"]) == context):
+            preset = candidate
+            break
+    return {
+        "version": TRANSITION_POLICY_VERSION,
+        "preset": preset,
+        "continuation_mode": mode,
+        "context_length": context,
+        "expert_override": False,
+    }
+
+
+def _transition_policy_summary(value: Any) -> str:
+    policy = _resolved_transition_policy(value)
+    return "%s/%s/%df" % (
+        policy["preset"], policy["continuation_mode"],
+        int(policy["context_length"]))
+
+
+def _transition_policy_display(value: Any) -> str:
+    """Return the human-facing preset -> implementation mapping."""
+    policy = _resolved_transition_policy(value)
+    preset_labels = {
+        "cut": "Cut",
+        "guide": "Guide",
+        "tone_guide": "Tone Carry Guide",
+        "latent_guide": "Latent Guide",
+        "detail_guide": "Detail Guide",
+        "detail_av": "Detail AV",
+        "drift_av": "Drift-Control AV",
+        "color_drift_av": "Color-Stable Drift AV",
+        "hard_av": "Hard AV",
+        "soft_av": "Soft AV",
+        "audio_feather_av": "Audio Feather AV (legacy alias)",
+        "legacy": "Legacy",
+    }
+    implementation_labels = {
+        "guide": "Guide",
+        "tone_carry_guide": "Tone Carry Guide",
+        "latent_guide": "Latent Guide",
+        "tapered_guide": "Tapered Guide",
+        "masked_av": "Masked AV",
+        "tapered_av": "Tapered AV",
+        "feathered_av": "Feathered AV",
+        "audio_feathered_av": "Audio-Feathered AV",
+        "drift_control_av": "Drift-Control AV",
+        "color_stable_drift_av": "Color-Stable Drift AV",
+    }
+    preset = str(policy["preset"])
+    implementation = str(policy["continuation_mode"])
+    return "%s -> %s + %d frames" % (
+        preset_labels.get(preset, preset),
+        implementation_labels.get(implementation, implementation),
+        int(policy["context_length"]))
 
 
 def _safe_name(value: str, fallback: str = "chain") -> str:
@@ -302,11 +569,44 @@ def _parse_scene_range(value: Any, total: int,
 _REFERENCE_TAG_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,63}")
 _REFERENCE_ALIAS_RE = re.compile(
     r"(?<![A-Za-z0-9_])@([A-Za-z][A-Za-z0-9_-]{0,63})")
+_SEMANTIC_ANCHOR_RE = re.compile(
+    r"(?<![A-Za-z0-9_])#([A-Za-z][A-Za-z0-9_-]{0,63})"
+    r"\[([0-9]+(?:\.[0-9]+)?)s?\]",
+    flags=re.IGNORECASE)
 REFERENCE_COMPLIANCE_MODES = ("strict", "soft", "disabled")
 REFERENCE_VIDEO_TIMELINE_MODES = (
     "restart_each_scene",
     "sequential",
 )
+SEMANTIC_ANCHOR_MODES = ("timestamped_video", "picture_storyboard")
+SEMANTIC_ANCHOR_SIZES = ("384", "512", "768", "1024", "1280", "source")
+
+
+def _semantic_anchor_specs(text: Any) -> list[dict[str, Any]]:
+    return [
+        {
+            "tag": match.group(1),
+            "timestamp_seconds": float(Fraction(match.group(2))),
+        }
+        for match in _SEMANTIC_ANCHOR_RE.finditer(str(text or ""))
+    ]
+
+
+def _semantic_anchor_mode(value: Any) -> str:
+    mode = str(value or "timestamped_video").strip().lower()
+    if mode not in SEMANTIC_ANCHOR_MODES:
+        raise ValueError(
+            "Semantic anchor mode must be timestamped_video or "
+            "picture_storyboard; got %r." % value)
+    return mode
+
+
+def _prompt_reference_tags(text: Any) -> set[str]:
+    source = str(text or "")
+    return (
+        set(_REFERENCE_ALIAS_RE.findall(source)) |
+        {item["tag"] for item in _semantic_anchor_specs(source)}
+    )
 
 
 def _reference_compliance_mode(value: Any) -> str:
@@ -409,6 +709,241 @@ def _normalize_reference_tag(value: Any, label: str) -> str:
     return tag
 
 
+def _resolved_media_path(value: Any, label: str) -> str:
+    path = os.path.realpath(os.path.abspath(os.path.expanduser(
+        str(value or "").strip())))
+    if not str(value or "").strip():
+        raise ValueError("%s cannot be blank." % label)
+    if not os.path.isfile(path):
+        raise ValueError("%s does not exist or is not a file: %s" %
+                         (label, path))
+    return path
+
+
+def _lazy_motion_media_path(
+        video_path: Any, source_video: Any = None) -> tuple[str, str]:
+    if source_video is not None:
+        get_stream_source = getattr(source_video, "get_stream_source", None)
+        if not callable(get_stream_source):
+            raise ValueError(
+                "Lazy motion source_video must be a native ComfyUI VIDEO "
+                "from a file-backed loader.")
+        try:
+            stream_source = get_stream_source()
+        except Exception as exc:
+            raise ValueError(
+                "Lazy motion source_video could not expose its file source: "
+                "%s" % exc) from exc
+        if not isinstance(stream_source, (str, os.PathLike)):
+            raise ValueError(
+                "Lazy motion source_video is memory-backed. Connect core "
+                "Load Video or provide video_path so scene decoding can "
+                "remain disk-backed.")
+        get_trim = getattr(source_video, "get_active_trim_window", None)
+        if callable(get_trim):
+            try:
+                trim_start, trim_duration = get_trim()
+            except Exception as exc:
+                raise ValueError(
+                    "Lazy motion source_video trim could not be inspected: "
+                    "%s" % exc) from exc
+            if (abs(float(trim_start)) > 1e-9 or
+                    abs(float(trim_duration)) > 1e-9):
+                raise ValueError(
+                    "Lazy motion source_video must be untrimmed. Use "
+                    "skip_first_frames on Tagged Motion Ref for an exact, "
+                    "fingerprinted timeline offset.")
+        return (_resolved_media_path(
+            os.fspath(stream_source), "Lazy motion native VIDEO source"),
+            "native VIDEO loader")
+    return (_resolved_media_path(
+        video_path, "Motion-reference video path"), "direct path")
+
+
+def _stream_start_seconds(stream: Any) -> float:
+    if stream.start_time is None or stream.time_base is None:
+        return 0.0
+    return float(stream.start_time * stream.time_base)
+
+
+def _stream_duration_seconds(
+        stream: Any, container: Any, fallback_frame_count: int,
+        fallback_fps: float) -> float:
+    """Prefer media timestamps over a container's advisory frame count."""
+    if stream.duration is not None and stream.time_base is not None:
+        duration = float(stream.duration * stream.time_base)
+        if math.isfinite(duration) and duration > 0.0:
+            return duration
+    if container.duration is not None:
+        duration = float(container.duration) / float(av.time_base)
+        if math.isfinite(duration) and duration > 0.0:
+            return duration
+    if int(fallback_frame_count) > 0 and float(fallback_fps) > 0.0:
+        return int(fallback_frame_count) / float(fallback_fps)
+    return 0.0
+
+
+def _probe_lazy_motion_path(
+        path: str, use_embedded_audio: bool) -> dict[str, Any]:
+    if av is None:
+        raise RuntimeError("Lazy H3 motion references require PyAV.")
+    resolved = _resolved_media_path(path, "Motion-reference video path")
+    try:
+        with av.open(resolved, mode="r") as container:
+            videos = list(container.streams.video)
+            if len(videos) != 1:
+                raise ValueError(
+                    "Lazy motion reference %s contains %d video streams; "
+                    "exactly one is required." % (resolved, len(videos)))
+            video = videos[0]
+            rate = video.average_rate or video.base_rate or video.guessed_rate
+            if rate is None or not math.isfinite(float(rate)):
+                raise ValueError(
+                    "Lazy motion reference has no usable frame rate.")
+            source_rate = Fraction(rate)
+            source_fps = float(source_rate)
+            if source_fps <= 0.0:
+                raise ValueError(
+                    "Lazy motion reference has an invalid frame rate %.6g."
+                    % source_fps)
+            width = int(video.codec_context.width or 0)
+            height = int(video.codec_context.height or 0)
+            if width < 1 or height < 1:
+                raise ValueError(
+                    "Lazy motion reference has invalid video dimensions.")
+            source_frame_count = int(video.frames or 0)
+            duration_seconds = _stream_duration_seconds(
+                video, container, source_frame_count, source_fps)
+            frame_count = (int(math.ceil(
+                duration_seconds * FPS - 1e-9))
+                if duration_seconds > 0.0 else 0)
+
+            audios = list(container.streams.audio)
+            audio_info = None
+            if bool(use_embedded_audio):
+                if len(audios) != 1:
+                    raise ValueError(
+                        "Lazy motion reference requested embedded audio, but "
+                        "%s contains %d audio streams; exactly one is "
+                        "required." % (resolved, len(audios)))
+                audio = audios[0]
+                sample_rate = int(
+                    audio.codec_context.sample_rate or audio.rate or 0)
+                channels = len(audio.codec_context.layout.channels)
+                if sample_rate < 1 or channels not in (1, 2):
+                    raise ValueError(
+                        "Lazy motion-reference audio must be mono or stereo "
+                        "with a valid sample rate.")
+                audio_info = {
+                    "sample_rate": sample_rate,
+                    "channels": channels,
+                    "start_seconds": _stream_start_seconds(audio),
+                }
+            return {
+                "version": LAZY_MOTION_SOURCE_VERSION,
+                "kind": "lazy_motion_path",
+                "path": resolved,
+                "fps": FPS,
+                "source_fps": source_fps,
+                "source_rate_numerator": int(source_rate.numerator),
+                "source_rate_denominator": int(source_rate.denominator),
+                "width": width,
+                "height": height,
+                "frame_count": frame_count,
+                "source_frame_count": source_frame_count,
+                "duration_seconds": duration_seconds,
+                "video_start_seconds": _stream_start_seconds(video),
+                "audio": audio_info,
+            }
+    except ValueError:
+        raise
+    except Exception as exc:
+        raise ValueError(
+            "Could not inspect lazy motion-reference video %s: %s" %
+            (resolved, exc)) from exc
+
+
+def _probe_audio_path(
+        path: str, label: str = "Source Timeline audio path",
+        required: bool = True) -> dict[str, Any] | None:
+    """Inspect one path-backed audio stream without decoding its samples."""
+    if av is None:
+        raise RuntimeError("H3 Source Timeline audio paths require PyAV.")
+    resolved = _resolved_media_path(path, label)
+    try:
+        with av.open(resolved, mode="r") as container:
+            audios = list(container.streams.audio)
+            if not audios and not bool(required):
+                return None
+            if len(audios) != 1:
+                raise ValueError(
+                    "%s contains %d audio streams; exactly one is required."
+                    % (label, len(audios)))
+            audio = audios[0]
+            sample_rate = int(
+                audio.codec_context.sample_rate or audio.rate or 0)
+            channels = len(audio.codec_context.layout.channels)
+            if sample_rate < 1 or channels not in (1, 2):
+                raise ValueError(
+                    "%s must be mono or stereo with a valid sample rate."
+                    % label)
+            duration_seconds = _stream_duration_seconds(
+                audio, container, 0, float(sample_rate))
+            return {
+                "path": resolved,
+                "stream_index": int(audio.index),
+                "sample_rate": sample_rate,
+                "channels": channels,
+                "start_seconds": _stream_start_seconds(audio),
+                "duration_seconds": duration_seconds,
+            }
+    except ValueError:
+        raise
+    except Exception as exc:
+        raise ValueError(
+            "Could not inspect %s %s: %s" % (label, resolved, exc)) from exc
+
+
+def _lazy_motion_descriptor_with_skip(
+        descriptor: dict[str, Any], skip_first_frames: Any) -> dict[str, Any]:
+    prepared = dict(descriptor)
+    skip_first_frames = int(skip_first_frames)
+    if skip_first_frames < 0:
+        raise ValueError(
+            "Lazy motion skip_first_frames cannot be negative.")
+    source_frames = int(prepared.get("source_frame_count", 0))
+    if source_frames > 0 and skip_first_frames >= source_frames:
+        raise ValueError(
+            "Lazy motion skip_first_frames %d consumes all %d source "
+            "frames." % (skip_first_frames, source_frames))
+    source_fps = float(prepared["source_fps"])
+    duration_seconds = float(prepared.get("duration_seconds", 0.0))
+    skip_seconds = skip_first_frames / source_fps
+    if duration_seconds > 0.0 and skip_seconds >= duration_seconds:
+        raise ValueError(
+            "Lazy motion skip_first_frames %d starts at or beyond the "
+            "%.3fs source duration." %
+            (skip_first_frames, duration_seconds))
+    prepared["skip_first_frames"] = skip_first_frames
+    prepared["skip_seconds"] = skip_seconds
+    if duration_seconds > 0.0:
+        prepared["frame_count"] = int(math.ceil(
+            (duration_seconds - skip_seconds) * FPS - 1e-9))
+    return prepared
+
+
+def _is_lazy_motion_descriptor(value: Any) -> bool:
+    if not isinstance(value, dict):
+        return False
+    try:
+        version = int(value.get("version", -1))
+    except (TypeError, ValueError):
+        return False
+    return (version == LAZY_MOTION_SOURCE_VERSION
+            and value.get("kind") == "lazy_motion_path"
+            and isinstance(value.get("path"), str))
+
+
 def _parse_reference_selector(
         value: Any, total: int | None = None) -> tuple[tuple[int, int], ...]:
     """Parse a disjoint, one-based scene selector and merge overlaps."""
@@ -460,7 +995,8 @@ def _reference_is_active(entry: dict[str, Any], scene: int) -> bool:
 def _reference_entry_contract(entry: dict[str, Any]) -> dict[str, Any]:
     keys = (
         "kind", "tag", "scenes", "content_hash", "audio_tag",
-        "audio_hash",
+        "audio_hash", "paired_audio_policy", "semantic_role", "motion_target",
+        "motion_description", "motion_short_edge",
     )
     contract = {key: entry[key] for key in keys if key in entry}
     # Keep old schedules bit-identical. Timeline metadata enters the resume
@@ -536,7 +1072,8 @@ def _append_scheduled_reference(
         audio_tag: Any = "", audio_hash: str = "",
         compliance_mode: str = "strict",
         timeline_mode: Any = None,
-        align_audio_reference: Any = False) -> dict[str, Any]:
+        align_audio_reference: Any = False,
+        paired_audio_policy: Any = None) -> dict[str, Any]:
     compliance = _reference_compliance_mode(compliance_mode)
     entries = _reference_schedule_entries(previous)
     try:
@@ -599,6 +1136,16 @@ def _append_scheduled_reference(
             "audio_tag": normalized_audio_tag,
             "audio_hash": str(audio_hash),
         })
+    if kind == "video" and paired_audio_policy is not None:
+        paired_policy = _paired_audio_policy(paired_audio_policy)
+        if paired_policy == "embedded" and audio is None:
+            raise ValueError(
+                "paired_audio_policy=embedded requires paired audio on the "
+                "video reference.")
+        if paired_policy == "off" and audio is not None:
+            raise ValueError(
+                "paired_audio_policy=off cannot carry paired audio.")
+        entry["paired_audio_policy"] = paired_policy
 
     existing_tags = {
         alias for existing in entries
@@ -623,7 +1170,8 @@ def _append_tagged_reference(
         content_hash: str, audio: Any = None, audio_tag: Any = "",
         audio_hash: str = "", compliance_mode: str = "strict",
         timeline_mode: Any = None,
-        align_audio_reference: Any = False) -> dict[str, Any]:
+        align_audio_reference: Any = False,
+        paired_audio_policy: Any = None) -> dict[str, Any]:
     if previous is None:
         seed = None
     else:
@@ -633,10 +1181,1018 @@ def _append_tagged_reference(
         content_hash=content_hash, audio=audio, audio_tag=audio_tag,
         audio_hash=audio_hash, compliance_mode=compliance_mode,
         timeline_mode=timeline_mode,
-        align_audio_reference=align_audio_reference)
+        align_audio_reference=align_audio_reference,
+        paired_audio_policy=paired_audio_policy)
     entries = collection["entries"]
     entries[-1]["activation"] = "prompt"
     return _make_tagged_references(entries)
+
+
+def _lazy_motion_target_size(
+        descriptor: dict[str, Any]) -> tuple[int, int]:
+    source_w = int(descriptor["width"])
+    source_h = int(descriptor["height"])
+    short_edge = str(descriptor.get("motion_short_edge") or "384")
+    if short_edge == "source" or min(source_w, source_h) <= int(short_edge):
+        return source_w, source_h
+    scale = int(short_edge) / float(min(source_w, source_h))
+    target_h = max(32, round(source_h * scale / 32) * 32)
+    target_w = max(32, round(source_w * scale / 32) * 32)
+    return target_w, target_h
+
+
+def _decode_lazy_motion_video(
+        descriptor: dict[str, Any], source_start: int,
+        source_end: int) -> Any:
+    if av is None or np is None or torch is None:
+        raise RuntimeError(
+            "Lazy H3 motion video decoding requires PyAV, NumPy, and torch.")
+    path = _resolved_media_path(
+        descriptor.get("path"), "Lazy motion-reference video path")
+    source_start = int(source_start)
+    source_end = int(source_end)
+    requested = source_end - source_start
+    if source_start < 0 or requested < 5:
+        raise ValueError(
+            "Lazy motion-reference 24 fps target window must contain at "
+            "least five frames; got %d:%d." % (source_start, source_end))
+    source_fps = float(descriptor.get("source_fps", FPS))
+    if not math.isfinite(source_fps) or source_fps <= 0.0:
+        raise ValueError(
+            "Lazy motion reference has invalid source_fps %.6g." %
+            source_fps)
+    skip_first_frames = int(descriptor.get("skip_first_frames", 0))
+    if skip_first_frames < 0:
+        raise ValueError(
+            "Lazy motion reference skip_first_frames cannot be negative.")
+    skip_seconds = skip_first_frames / source_fps
+    target_w, target_h = _lazy_motion_target_size(descriptor)
+    buffer = np.empty(
+        (requested, target_h, target_w, 3), dtype=np.uint8)
+    video_start = float(descriptor.get("video_start_seconds", 0.0))
+
+    def decode_window(allow_seek: bool) -> int | None:
+        decoded = 0
+        with av.open(path, mode="r") as container:
+            videos = list(container.streams.video)
+            if len(videos) != 1:
+                raise ValueError(
+                    "Lazy motion reference changed and now contains %d "
+                    "video streams; exactly one is required." % len(videos))
+            video = videos[0]
+            actual_rate = (
+                video.average_rate or video.base_rate or video.guessed_rate)
+            if (actual_rate is None or
+                    abs(float(actual_rate) - source_fps) > 1e-3):
+                raise ValueError(
+                    "Lazy motion reference changed frame rate after it was "
+                    "registered (expected %.6g fps, got %s)." %
+                    (source_fps, actual_rate))
+            target_start_seconds = (
+                skip_seconds + source_start / float(FPS))
+            seeking = bool(
+                allow_seek and video.time_base is not None and
+                target_start_seconds > 2.0 / source_fps)
+            if seeking:
+                seek_seconds = video_start + max(
+                    0.0, target_start_seconds - 2.0 / source_fps)
+                seek_offset = int(math.floor(
+                    seek_seconds / float(video.time_base)))
+                container.seek(
+                    seek_offset, stream=video, backward=True, any_frame=False)
+
+            previous_frame = None
+            previous_time = None
+            previous_array = None
+            target_index = source_start
+            target_tolerance = 1e-7
+
+            def frame_array(frame):
+                if (int(frame.width) != target_w or
+                        int(frame.height) != target_h):
+                    converted = frame.reformat(
+                        width=target_w, height=target_h, format="rgb24")
+                    return converted.to_ndarray()
+                return frame.to_ndarray(format="rgb24")
+
+            def emit_previous():
+                nonlocal decoded, previous_array
+                if previous_frame is None:
+                    raise ValueError(
+                        "Lazy motion reference starts after its first 24 fps "
+                        "target timestamp.")
+                if previous_array is None:
+                    previous_array = frame_array(previous_frame)
+                buffer[decoded] = previous_array
+                decoded += 1
+
+            for local_index, frame in enumerate(container.decode(video)):
+                if frame.pts is not None and frame.time_base is not None:
+                    timestamp = float(frame.pts * frame.time_base)
+                    timestamp_relative = timestamp - video_start
+                    source_position = timestamp_relative * source_fps
+                    frame_index = int(round(source_position))
+                    pts_tolerance = max(
+                        0.05,
+                        abs(float(frame.time_base)) * source_fps * 0.6)
+                    if abs(source_position - frame_index) > pts_tolerance:
+                        raise ValueError(
+                            "Lazy motion reference is not constant %.6g fps "
+                            "near decoded timestamp %.6fs (source position "
+                            "%.4f)." %
+                            (source_fps, timestamp, source_position))
+                elif seeking:
+                    # Exact global indexing is unavailable after a keyframe
+                    # seek. Reopen and decode from frame zero as a safe
+                    # fallback; RAM remains bounded even for this rare case.
+                    return None
+                else:
+                    frame_index = local_index
+                # Once CFR has been verified, use its rational global frame
+                # index rather than coarse container PTS for target selection.
+                relative_time = frame_index / source_fps
+                target_time = (
+                    skip_seconds + target_index / float(FPS))
+                while (target_index < source_end and
+                       target_time < relative_time - target_tolerance):
+                    if (previous_time is None or
+                            target_time < previous_time - target_tolerance):
+                        raise ValueError(
+                            "Lazy motion reference cannot cover 24 fps target "
+                            "frame %d after skipping %d source frames." %
+                            (target_index, skip_first_frames))
+                    emit_previous()
+                    target_index += 1
+                    target_time = (
+                        skip_seconds + target_index / float(FPS))
+                if target_index >= source_end:
+                    break
+                previous_frame = frame
+                previous_time = relative_time
+                previous_array = None
+            if target_index < source_end and previous_frame is not None:
+                display_end = previous_time + 1.0 / source_fps
+                target_time = (
+                    skip_seconds + target_index / float(FPS))
+                while (target_index < source_end and
+                       target_time < display_end - target_tolerance):
+                    emit_previous()
+                    target_index += 1
+                    target_time = (
+                        skip_seconds + target_index / float(FPS))
+        return decoded
+
+    decoded = decode_window(allow_seek=True)
+    if decoded is None:
+        decoded = decode_window(allow_seek=False)
+    if decoded != requested:
+        raise ValueError(
+            "Lazy motion reference %s yielded only %d of %d requested "
+            "frames for 24 fps target window %d:%d after skipping %d source "
+            "frames." %
+            (path, decoded, requested, source_start, source_end,
+             skip_first_frames))
+    return torch.from_numpy(buffer).to(dtype=torch.float32).div_(255.0)
+
+
+def _resampled_audio_frames(resampler: Any, frame: Any):
+    values = resampler.resample(frame)
+    if values is None:
+        return ()
+    if isinstance(values, (list, tuple)):
+        return values
+    return (values,)
+
+
+def _decode_lazy_motion_audio(
+        descriptor: dict[str, Any], source_start: int,
+        source_end: int) -> dict[str, Any] | None:
+    audio_info = descriptor.get("audio")
+    if audio_info is None:
+        return None
+    if av is None or np is None or torch is None:
+        raise RuntimeError(
+            "Lazy H3 motion audio decoding requires PyAV, NumPy, and torch.")
+    path = _resolved_media_path(
+        descriptor.get("path"), "Lazy motion-reference video path")
+    sample_rate = int(audio_info["sample_rate"])
+    channels = int(audio_info["channels"])
+    layout = "mono" if channels == 1 else "stereo"
+    video_start = float(descriptor.get("video_start_seconds", 0.0))
+    audio_start = float(audio_info.get("start_seconds", 0.0))
+    source_fps = float(descriptor.get("source_fps", FPS))
+    skip_first_frames = int(descriptor.get("skip_first_frames", 0))
+    skip_seconds = skip_first_frames / source_fps
+    start_seconds = (
+        video_start + skip_seconds + int(source_start) / float(FPS))
+    end_seconds = (
+        video_start + skip_seconds + int(source_end) / float(FPS))
+    sample_start = int(round((start_seconds - audio_start) * sample_rate))
+    sample_end = int(round((end_seconds - audio_start) * sample_rate))
+    if sample_start < 0 or sample_end <= sample_start:
+        raise ValueError(
+            "Lazy motion-reference audio cannot cover video window %d:%d "
+            "because its stream starts at %.6fs." %
+            (int(source_start), int(source_end), audio_start))
+    requested = sample_end - sample_start
+    target = np.zeros((channels, requested), dtype=np.float32)
+    coverage = np.zeros((requested,), dtype=np.bool_)
+    cursor = 0
+    cursor_initialized = False
+    with av.open(path, mode="r") as container:
+        audios = list(container.streams.audio)
+        if len(audios) != 1:
+            raise ValueError(
+                "Lazy motion reference changed and now contains %d audio "
+                "streams; exactly one is required." % len(audios))
+        audio_stream = audios[0]
+        seek_preroll = max(0.25, 2.0 / source_fps)
+        audio_seek = bool(
+            audio_stream.time_base is not None and
+            start_seconds - audio_start > seek_preroll)
+        if audio_seek:
+            seek_seconds = max(
+                audio_start, start_seconds - seek_preroll)
+            seek_offset = int(math.floor(
+                seek_seconds / float(audio_stream.time_base)))
+            container.seek(
+                seek_offset, stream=audio_stream,
+                backward=True, any_frame=False)
+        resampler = av.AudioResampler(
+            format="fltp", layout=layout, rate=sample_rate)
+
+        def consume(output_frame):
+            nonlocal cursor, cursor_initialized
+            array = output_frame.to_ndarray()
+            if array.ndim == 1:
+                array = array.reshape(1, -1)
+            if tuple(array.shape[:1]) != (channels,):
+                raise ValueError(
+                    "Lazy motion-reference audio decoded to unexpected shape "
+                    "%s." % (tuple(array.shape),))
+            count = int(array.shape[-1])
+            if not cursor_initialized:
+                if (output_frame.pts is not None and
+                        output_frame.time_base is not None):
+                    frame_seconds = float(
+                        output_frame.pts * output_frame.time_base)
+                    cursor = int(round(
+                        (frame_seconds - audio_start) * sample_rate))
+                elif audio_seek:
+                    raise ValueError(
+                        "Lazy motion-reference audio has no timestamps after "
+                        "seeking; exact skip alignment is unavailable.")
+            cursor_initialized = True
+            copy_start = max(cursor, sample_start)
+            copy_end = min(cursor + count, sample_end)
+            if copy_end > copy_start:
+                source_offset = copy_start - cursor
+                target_offset = copy_start - sample_start
+                span = copy_end - copy_start
+                target[:, target_offset:target_offset + span] = (
+                    array[:, source_offset:source_offset + span])
+                coverage[target_offset:target_offset + span] = True
+            cursor += count
+
+        stop = False
+        for frame in container.decode(audio_stream):
+            for output_frame in _resampled_audio_frames(resampler, frame):
+                consume(output_frame)
+                if cursor >= sample_end:
+                    stop = True
+                    break
+            if stop:
+                break
+        if not stop:
+            for output_frame in _resampled_audio_frames(resampler, None):
+                consume(output_frame)
+                if cursor >= sample_end:
+                    break
+    copied = int(np.count_nonzero(coverage))
+    if copied != requested:
+        first_missing = int(np.flatnonzero(~coverage)[0])
+        internal_gap = bool(np.any(coverage[first_missing:]))
+        tail_missing = requested - first_missing
+        maximum_rounding_pad = int(math.ceil(sample_rate / float(FPS)))
+        if internal_gap or tail_missing > maximum_rounding_pad:
+            raise ValueError(
+                "Lazy motion reference %s yielded only %d of %d requested "
+                "audio samples for video window %d:%d." %
+                (path, copied, requested,
+                 int(source_start), int(source_end)))
+        _LOG.info(
+            "h3_lazy_motion: tail padded %d zero audio samples while "
+            "converting %.6g fps video to a 24 fps target window",
+            tail_missing, float(descriptor.get("source_fps", FPS)))
+    return {
+        "waveform": torch.from_numpy(target).unsqueeze(0),
+        "sample_rate": sample_rate,
+    }
+
+
+def _decode_lazy_motion_source_audio(
+        descriptor: dict[str, Any]) -> dict[str, Any]:
+    """Decode the complete post-skip audio track on the 24 fps video clock."""
+    frame_count = int(descriptor.get("frame_count", 0))
+    if frame_count < 1:
+        raise ValueError(
+            "Lazy motion source audio requires a known post-skip video "
+            "duration.")
+    audio = _decode_lazy_motion_audio(descriptor, 0, frame_count)
+    if audio is None:
+        raise ValueError(
+            "Lazy motion source video contains no embedded audio stream.")
+    return audio
+
+
+def _native_video_from_path(path: str) -> Any:
+    try:
+        from comfy_api.latest import InputImpl
+    except ImportError as exc:
+        raise RuntimeError(
+            "MiniMax H3 Lazy Motion AV Loader requires ComfyUI's native "
+            "VIDEO API.") from exc
+    return InputImpl.VideoFromFile(path)
+
+
+def _is_source_timeline(value: Any) -> bool:
+    return (
+        isinstance(value, dict)
+        and value.get("version") == SOURCE_TIMELINE_VERSION
+        and value.get("kind") == "source_timeline"
+        and isinstance(value.get("extent"), dict)
+        and isinstance(value.get("audio"), dict)
+        and isinstance(value.get("fingerprints"), dict)
+    )
+
+
+def _validate_source_timeline(
+        timeline: Any, *, require_runtime: bool = False
+        ) -> dict[str, Any]:
+    if not _is_source_timeline(timeline):
+        raise ValueError(
+            "H3 Source Timeline must come from the MiniMax H3 Source "
+            "Timeline node.")
+    video = timeline.get("video")
+    if video is not None and not _is_lazy_motion_descriptor(video):
+        raise ValueError(
+            "H3 Source Timeline video descriptor is invalid or obsolete.")
+    extent = timeline["extent"]
+    frame_count = int(extent.get("frame_count", 0))
+    duration = float(extent.get("duration_seconds", 0.0))
+    if frame_count < 1 or not math.isfinite(duration) or duration <= 0.0:
+        raise ValueError("H3 Source Timeline has no usable 24 fps extent.")
+    audio = timeline["audio"]
+    audio_kind = str(audio.get("kind") or "")
+    if audio_kind not in ("none", "embedded", "external_path",
+                          "deferred_tensor"):
+        raise ValueError(
+            "H3 Source Timeline has unknown audio kind %r." % audio_kind)
+    if audio_kind in ("embedded", "external_path"):
+        if not isinstance(audio.get("path"), str):
+            raise ValueError(
+                "H3 Source Timeline path-backed audio has no path.")
+        if require_runtime:
+            _resolved_media_path(
+                audio["path"], "H3 Source Timeline audio recovery path")
+    elif audio_kind == "deferred_tensor" and require_runtime:
+        _validate_audio(
+            audio.get("value"), "H3 Source Timeline deferred audio")
+    if video is not None and require_runtime:
+        _resolved_media_path(
+            video["path"], "H3 Source Timeline video recovery path")
+    fingerprints = timeline["fingerprints"]
+    for key in ("video", "audio", "timeline"):
+        value = str(fingerprints.get(key) or "")
+        if key == "video" and video is None:
+            if value:
+                raise ValueError(
+                    "Audio-only H3 Source Timeline has a video fingerprint.")
+            continue
+        if key == "audio" and audio_kind == "none":
+            if value:
+                raise ValueError(
+                    "Silent H3 Source Timeline has an audio fingerprint.")
+            continue
+        if len(value) != 64:
+            raise ValueError(
+                "H3 Source Timeline %s fingerprint is invalid." % key)
+    return timeline
+
+
+def _source_timeline_path_hash(
+        path: str, cache: dict[str, str]) -> str:
+    resolved = os.path.realpath(path)
+    if resolved not in cache:
+        cache[resolved] = _file_sha256(resolved)
+    return cache[resolved]
+
+
+def _make_source_timeline(
+        video_path: Any = "", *, source_video: Any = None,
+        audio_path: Any = "", source_audio: Any = None,
+        embedded_audio: str = "auto", skip_first_frames: Any = 0,
+        source_route: str = "") -> dict[str, Any]:
+    """Build one intent-free, file-backed source timeline descriptor."""
+    embedded_mode = str(embedded_audio or "auto").strip().lower()
+    if embedded_mode not in ("auto", "required", "ignore"):
+        raise ValueError(
+            "Source Timeline embedded_audio must be auto, required, or "
+            "ignore.")
+    has_audio_path = bool(str(audio_path or "").strip())
+    if has_audio_path and source_audio is not None:
+        raise ValueError(
+            "Source Timeline accepts one external audio source: connect "
+            "source_audio or provide audio_path, not both.")
+    wants_video = source_video is not None or bool(str(video_path or "").strip())
+    video = None
+    route = str(source_route or "").strip()
+    if wants_video:
+        resolved_video, detected_route = _lazy_motion_media_path(
+            video_path, source_video)
+        route = route or detected_route
+        video = _lazy_motion_descriptor_with_skip(
+            _probe_lazy_motion_path(resolved_video, False),
+            skip_first_frames)
+        video["source_route"] = route
+    elif int(skip_first_frames) != 0:
+        raise ValueError(
+            "Source Timeline skip_first_frames needs a video clock.")
+
+    hashes: dict[str, str] = {}
+    if video is not None:
+        video_file_hash = _source_timeline_path_hash(video["path"], hashes)
+        video["file_sha256"] = video_file_hash
+        video_hash = _fingerprint({
+            "source_timeline": SOURCE_TIMELINE_VERSION,
+            "file_sha256": video_file_hash,
+            "video_stream": 0,
+            "source_rate": [
+                int(video["source_rate_numerator"]),
+                int(video["source_rate_denominator"]),
+            ],
+            "skip_first_frames": int(video["skip_first_frames"]),
+        })
+        origin_fps = float(video["source_fps"])
+        origin_skip = int(video["skip_first_frames"])
+        origin_seconds = float(video["skip_seconds"])
+    else:
+        video_hash = ""
+        origin_fps = float(FPS)
+        origin_skip = 0
+        origin_seconds = 0.0
+
+    audio: dict[str, Any]
+    if source_audio is not None:
+        waveform, sample_rate = _validate_audio(
+            source_audio, "H3 Source Timeline external audio")
+        channels = 1 if waveform.ndim == 1 else int(waveform.shape[-2])
+        if channels not in (1, 2):
+            raise ValueError(
+                "H3 Source Timeline external audio must be mono or stereo.")
+        content_hash = _audio_fingerprint(source_audio)
+        audio = {
+            "kind": "deferred_tensor",
+            "value": source_audio,
+            "sample_rate": sample_rate,
+            "channels": channels,
+            "duration_seconds": (
+                int(waveform.shape[-1]) / float(sample_rate)),
+            "timeline_offset_seconds": 0.0,
+            "content_sha256": content_hash,
+            "aligned_to_timeline_origin": True,
+        }
+        audio_hash = _fingerprint({
+            "source_timeline": SOURCE_TIMELINE_VERSION,
+            "kind": "deferred_tensor",
+            "content_sha256": content_hash,
+            "timeline_offset_seconds": 0.0,
+        })
+    elif has_audio_path:
+        inspected = _probe_audio_path(
+            str(audio_path), "Source Timeline external audio path", True)
+        assert inspected is not None
+        audio_file_hash = _source_timeline_path_hash(
+            inspected["path"], hashes)
+        audio = {
+            "kind": "external_path",
+            **inspected,
+            "file_sha256": audio_file_hash,
+            "timeline_offset_seconds": origin_seconds,
+            "origin_source_fps": origin_fps,
+            "origin_skip_frames": origin_skip,
+        }
+        audio_hash = _fingerprint({
+            "source_timeline": SOURCE_TIMELINE_VERSION,
+            "kind": "external_path",
+            "file_sha256": audio_file_hash,
+            "audio_stream": int(inspected["stream_index"]),
+            "timeline_offset_seconds": origin_seconds,
+        })
+    elif video is not None and embedded_mode != "ignore":
+        inspected = _probe_audio_path(
+            video["path"], "Source Timeline embedded audio",
+            embedded_mode == "required")
+        if inspected is None:
+            audio = {"kind": "none"}
+            audio_hash = ""
+        else:
+            audio_info = {
+                "sample_rate": int(inspected["sample_rate"]),
+                "channels": int(inspected["channels"]),
+                "start_seconds": float(inspected["start_seconds"]),
+            }
+            video["audio"] = audio_info
+            audio = {
+                "kind": "embedded",
+                **inspected,
+                "file_sha256": video["file_sha256"],
+                "timeline_offset_seconds": origin_seconds,
+                "origin_source_fps": origin_fps,
+                "origin_skip_frames": origin_skip,
+            }
+            audio_hash = _fingerprint({
+                "source_timeline": SOURCE_TIMELINE_VERSION,
+                "kind": "embedded",
+                "file_sha256": video["file_sha256"],
+                "audio_stream": int(inspected["stream_index"]),
+                "skip_first_frames": origin_skip,
+            })
+    else:
+        audio = {"kind": "none"}
+        audio_hash = ""
+
+    if video is not None:
+        frame_count = int(video.get("frame_count", 0))
+        duration_seconds = frame_count / float(FPS)
+    elif audio["kind"] != "none":
+        available_duration = max(
+            0.0, float(audio.get("duration_seconds", 0.0)) -
+            float(audio.get("timeline_offset_seconds", 0.0)))
+        frame_count = int(math.floor(available_duration * FPS + 1e-9))
+        duration_seconds = frame_count / float(FPS)
+    else:
+        raise ValueError(
+            "Source Timeline needs a video, an audio path, or source_audio.")
+    if frame_count < 1:
+        raise ValueError(
+            "Source Timeline media has no usable duration after its origin.")
+
+    timeline_hash = _fingerprint({
+        "version": SOURCE_TIMELINE_VERSION,
+        "video": video_hash,
+        "audio": audio_hash,
+        "origin": {
+            "source_fps": origin_fps,
+            "skip_first_frames": origin_skip,
+        },
+        "extent_frames": frame_count,
+    })
+    timeline = {
+        "version": SOURCE_TIMELINE_VERSION,
+        "kind": "source_timeline",
+        "fps": FPS,
+        "origin": {
+            "source_fps": origin_fps,
+            "skip_first_frames": origin_skip,
+            "skip_seconds": origin_seconds,
+        },
+        "extent": {
+            "frame_count": frame_count,
+            "duration_seconds": duration_seconds,
+        },
+        "video": video,
+        "audio": audio,
+        "fingerprints": {
+            "video": video_hash,
+            "audio": audio_hash,
+            "timeline": timeline_hash,
+        },
+        "recovery": {
+            "video_path": video["path"] if video is not None else "",
+            "audio_path": (
+                str(audio.get("path") or "")
+                if audio["kind"] in ("embedded", "external_path") else ""),
+            "deferred_audio_requires_materialization": (
+                audio["kind"] == "deferred_tensor"),
+        },
+    }
+    return _validate_source_timeline(timeline, require_runtime=True)
+
+
+def _source_timeline_recovery_record(timeline: Any) -> dict[str, Any]:
+    """Return a JSON-safe descriptor suitable for run/checkpoint metadata."""
+    source = _validate_source_timeline(timeline)
+    record = {
+        "version": source["version"],
+        "kind": source["kind"],
+        "fps": int(source["fps"]),
+        "origin": dict(source["origin"]),
+        "extent": dict(source["extent"]),
+        "video": dict(source["video"]) if source.get("video") else None,
+        "audio": {
+            key: value for key, value in source["audio"].items()
+            if key != "value"
+        },
+        "fingerprints": dict(source["fingerprints"]),
+        "recovery": dict(source.get("recovery") or {}),
+    }
+    if record["audio"].get("kind") == "deferred_tensor":
+        record["audio"]["requires_materialization"] = True
+    # Fail here, close to persistence, rather than writing an unusable run.
+    _canonical_json(record)
+    return record
+
+
+def _source_timeline_verify_recovery_file(
+        descriptor: dict[str, Any], label: str) -> None:
+    path = str(descriptor.get("path") or "")
+    if not path or not os.path.isfile(path):
+        return
+    expected = str(descriptor.get("file_sha256") or "")
+    if expected and _file_sha256(path) != expected:
+        raise ValueError(
+            "%s exists but its contents do not match the saved Source "
+            "Timeline fingerprint: %s" % (label, path))
+
+
+def _source_timeline_from_recovery(
+        record: Any, *, video_path: Any = "", audio_path: Any = "",
+        deferred_audio: Any = None) -> dict[str, Any]:
+    """Restore or relink a persisted timeline without changing its identity."""
+    try:
+        restored = json.loads(_canonical_json(record))
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "Saved H3 Source Timeline descriptor is not JSON-safe.") from exc
+    _validate_source_timeline(restored)
+    video = restored.get("video")
+    audio = restored["audio"]
+    if str(video_path or "").strip():
+        if video is None:
+            raise ValueError("Cannot relink video on an audio-only timeline.")
+        resolved = _resolved_media_path(
+            video_path, "H3 Source Timeline replacement video")
+        if _file_sha256(resolved) != str(video.get("file_sha256") or ""):
+            raise ValueError(
+                "Replacement video does not match the saved Source Timeline.")
+        video["path"] = resolved
+        restored["recovery"]["video_path"] = resolved
+        if audio.get("kind") == "embedded":
+            audio["path"] = resolved
+            restored["recovery"]["audio_path"] = resolved
+    if str(audio_path or "").strip():
+        if audio.get("kind") != "external_path":
+            raise ValueError(
+                "audio_path relinking is only valid for external-path audio.")
+        resolved = _resolved_media_path(
+            audio_path, "H3 Source Timeline replacement audio")
+        if _file_sha256(resolved) != str(audio.get("file_sha256") or ""):
+            raise ValueError(
+                "Replacement audio does not match the saved Source Timeline.")
+        audio["path"] = resolved
+        restored["recovery"]["audio_path"] = resolved
+    if audio.get("kind") == "deferred_tensor" and deferred_audio is not None:
+        _validate_audio(deferred_audio, "Recovered H3 Source Timeline audio")
+        expected = str(audio.get("content_sha256") or "")
+        if _audio_fingerprint(deferred_audio) != expected:
+            raise ValueError(
+                "Recovered audio tensor does not match the saved Source "
+                "Timeline fingerprint.")
+        audio["value"] = deferred_audio
+    if video is not None:
+        _source_timeline_verify_recovery_file(
+            video, "H3 Source Timeline video recovery path")
+    if audio.get("kind") == "external_path":
+        _source_timeline_verify_recovery_file(
+            audio, "H3 Source Timeline audio recovery path")
+    return _validate_source_timeline(restored)
+
+
+def _source_timeline_audio_descriptor(
+        timeline: dict[str, Any]) -> dict[str, Any] | None:
+    source = _validate_source_timeline(timeline)
+    audio = source["audio"]
+    kind = audio["kind"]
+    if kind == "none" or kind == "deferred_tensor":
+        return None
+    if kind == "embedded":
+        descriptor = dict(source["video"])
+        descriptor["audio"] = {
+            "sample_rate": int(audio["sample_rate"]),
+            "channels": int(audio["channels"]),
+            "start_seconds": float(audio["start_seconds"]),
+        }
+        return descriptor
+    return {
+        "version": LAZY_MOTION_SOURCE_VERSION,
+        "kind": "lazy_motion_path",
+        "path": audio["path"],
+        "fps": FPS,
+        "source_fps": float(audio.get("origin_source_fps", FPS)),
+        "skip_first_frames": int(audio.get("origin_skip_frames", 0)),
+        "video_start_seconds": float(audio.get("start_seconds", 0.0)),
+        "frame_count": int(source["extent"]["frame_count"]),
+        "audio": {
+            "sample_rate": int(audio["sample_rate"]),
+            "channels": int(audio["channels"]),
+            "start_seconds": float(audio.get("start_seconds", 0.0)),
+        },
+    }
+
+
+def _source_timeline_scene_video(
+        timeline: Any, source_start: int, source_end: int) -> Any:
+    source = _validate_source_timeline(timeline, require_runtime=True)
+    if source.get("video") is None:
+        return None
+    start = int(source_start)
+    end = int(source_end)
+    if start < 0 or end > int(source["extent"]["frame_count"]):
+        raise ValueError(
+            "H3 Source Timeline video window %d:%d exceeds 0:%d." %
+            (start, end, int(source["extent"]["frame_count"])))
+    return _decode_lazy_motion_video(source["video"], start, end)
+
+
+def _source_timeline_scene_audio(
+        timeline: Any, source_start: int, source_end: int) -> Any:
+    source = _validate_source_timeline(timeline, require_runtime=True)
+    start = int(source_start)
+    end = int(source_end)
+    if start < 0 or end <= start or end > int(
+            source["extent"]["frame_count"]):
+        raise ValueError(
+            "H3 Source Timeline audio window %d:%d exceeds 0:%d." %
+            (start, end, int(source["extent"]["frame_count"])))
+    audio = source["audio"]
+    if audio["kind"] == "none":
+        return None
+    if audio["kind"] == "deferred_tensor":
+        return _slice_audio(
+            audio["value"], start / float(FPS),
+            (end - start) / float(FPS))
+    descriptor = _source_timeline_audio_descriptor(source)
+    return _decode_lazy_motion_audio(descriptor, start, end)
+
+
+def _source_timeline_source_audio(timeline: Any) -> Any:
+    source = _validate_source_timeline(timeline, require_runtime=True)
+    if source["audio"]["kind"] == "none":
+        return None
+    return _source_timeline_scene_audio(
+        source, 0, int(source["extent"]["frame_count"]))
+
+
+def _source_timeline_to_lazy_motion_descriptor(
+        timeline: Any) -> dict[str, Any] | None:
+    source = _validate_source_timeline(timeline)
+    if source.get("video") is None:
+        return None
+    descriptor = dict(source["video"])
+    if source["audio"]["kind"] != "embedded":
+        descriptor["audio"] = None
+    return descriptor
+
+
+def _source_timeline_from_lazy_motion_descriptor(
+        descriptor: Any, source_audio: Any = None) -> dict[str, Any]:
+    if not _is_lazy_motion_descriptor(descriptor):
+        raise ValueError(
+            "Legacy motion source is not a valid lazy descriptor.")
+    return _make_source_timeline(
+        descriptor["path"], source_audio=source_audio,
+        embedded_audio=(
+            "required" if descriptor.get("audio") is not None else "ignore"),
+        skip_first_frames=int(descriptor.get("skip_first_frames", 0)),
+        source_route=str(descriptor.get("source_route") or "legacy adapter"))
+
+
+def _legacy_media_to_source_timeline(
+        video_path: Any = "", *, source_video: Any = None,
+        source_audio: Any = None, skip_first_frames: Any = 0,
+        use_embedded_audio: bool = True) -> dict[str, Any]:
+    return _make_source_timeline(
+        video_path, source_video=source_video, source_audio=source_audio,
+        embedded_audio="required" if use_embedded_audio else "ignore",
+        skip_first_frames=skip_first_frames, source_route="legacy adapter")
+
+
+def _source_timeline_with_motion_short_edge(
+        timeline: Any, short_edge: Any) -> dict[str, Any]:
+    """Attach a decode-only resize choice without changing media identity."""
+    source = _validate_source_timeline(timeline)
+    if source.get("video") is None:
+        raise ValueError(
+            "Tagged motion reference requires video on H3 Source Timeline.")
+    resolved = str(short_edge or "384")
+    if resolved not in MOTION_REFERENCE_SHORT_EDGES:
+        raise ValueError("Unknown motion-reference short edge %r." % short_edge)
+    prepared = dict(source)
+    prepared["video"] = dict(source["video"])
+    prepared["video"]["motion_short_edge"] = resolved
+    prepared["audio"] = dict(source["audio"])
+    prepared["fingerprints"] = dict(source["fingerprints"])
+    prepared["recovery"] = dict(source.get("recovery") or {})
+    return _validate_source_timeline(prepared)
+
+
+def _source_timeline_available_audio_frames(timeline: Any) -> int:
+    source = _validate_source_timeline(timeline)
+    audio = source["audio"]
+    if audio["kind"] == "none":
+        return 0
+    available_seconds = max(
+        0.0, float(audio.get("duration_seconds", 0.0)) -
+        float(audio.get("timeline_offset_seconds", 0.0)))
+    return int(math.floor(available_seconds * FPS + 1e-9))
+
+
+def _materialize_source_timeline_audio(
+        timeline: Any, plan: dict[str, Any]) -> dict[str, Any]:
+    """Persist a deferred AUDIO once so recursive state remains path-backed."""
+    source = _validate_source_timeline(timeline, require_runtime=True)
+    audio = source["audio"]
+    if audio["kind"] != "deferred_tensor":
+        return source
+    value = audio["value"]
+    waveform, sample_rate = _validate_audio(
+        value, "H3 Source Timeline deferred audio")
+    required_samples = int(round(
+        int(plan["total_delivered_frames"]) / float(FPS) * sample_rate))
+    materialized = value
+    silent_padding = False
+    if (_audio_policy_requires_source(plan)
+            and int(waveform.shape[-1]) < required_samples):
+        if not _audio_is_silent(waveform):
+            raise ValueError(
+                "H3 Source Timeline audio is too short: it contains %d "
+                "samples at %d Hz, but this plan requires at least %d "
+                "samples for %d delivered frames. Only silent placeholder "
+                "audio is automatically padded." %
+                (int(waveform.shape[-1]), sample_rate, required_samples,
+                 int(plan["total_delivered_frames"])))
+        materialized = _pad_audio_to_samples(
+            value, required_samples,
+            "H3 Source Timeline silent placeholder audio")
+        silent_padding = True
+    content_hash = str(audio.get("content_sha256") or
+                       _audio_fingerprint(value))
+    directory = os.path.join(_run_dir(plan), "source_timeline")
+    path = os.path.join(directory, "source_audio.%s.wav" % content_hash[:16])
+    if not os.path.isfile(path):
+        _atomic_float_wav(materialized, path)
+    inspected = _probe_audio_path(
+        path, "Materialized H3 Source Timeline audio", True)
+    assert inspected is not None
+    prepared = dict(source)
+    prepared["video"] = (dict(source["video"])
+                         if source.get("video") is not None else None)
+    prepared["audio"] = {
+        "kind": "external_path",
+        **inspected,
+        "file_sha256": _file_sha256(path),
+        "timeline_offset_seconds": 0.0,
+        "origin_source_fps": float(FPS),
+        "origin_skip_frames": 0,
+        "content_sha256": content_hash,
+        "materialized_from_tensor": True,
+    }
+    prepared["fingerprints"] = dict(source["fingerprints"])
+    prepared["recovery"] = dict(source.get("recovery") or {})
+    prepared["recovery"].update({
+        "audio_path": path,
+        "deferred_audio_requires_materialization": False,
+        "materialized_audio": True,
+    })
+    if silent_padding:
+        prepared["recovery"]["silent_padding_frames"] = int(
+            plan["total_delivered_frames"])
+        if prepared.get("video") is None:
+            prepared["extent"] = {
+                "frame_count": int(plan["total_delivered_frames"]),
+                "duration_seconds": (
+                    int(plan["total_delivered_frames"]) / float(FPS)),
+            }
+    return _validate_source_timeline(prepared, require_runtime=True)
+
+
+def _path_is_inside(directory: str, path: str) -> bool:
+    try:
+        return os.path.commonpath((
+            os.path.realpath(directory), os.path.realpath(path))) == (
+                os.path.realpath(directory))
+    except ValueError:
+        return False
+
+
+def _archive_source_timeline_path(
+        source_path: str, expected_hash: str, destination_dir: str) -> str:
+    source_path = _resolved_media_path(
+        source_path, "H3 Source Timeline archive source")
+    expected_hash = str(expected_hash or "")
+    actual_hash = _file_sha256(source_path)
+    if expected_hash and actual_hash != expected_hash:
+        raise ValueError(
+            "H3 Source Timeline media changed before Run Manager archived it.")
+    os.makedirs(destination_dir, exist_ok=True)
+    basename = _safe_name(
+        os.path.splitext(os.path.basename(source_path))[0], "source")
+    suffix = os.path.splitext(source_path)[1][:24]
+    destination = os.path.join(
+        destination_dir, "%s_%s%s" % (actual_hash, basename, suffix))
+    if os.path.isfile(destination):
+        if _file_sha256(destination) != actual_hash:
+            raise ValueError(
+                "H3 Source Timeline archive contains a corrupt existing file: "
+                "%s" % destination)
+        return destination
+    temporary = "%s.%s.tmp" % (destination, uuid.uuid4().hex)
+    try:
+        with open(source_path, "rb") as source_handle, open(
+                temporary, "xb") as target_handle:
+            shutil.copyfileobj(source_handle, target_handle, 1024 * 1024)
+        if _file_sha256(temporary) != actual_hash:
+            raise ValueError(
+                "H3 Source Timeline archive copy failed verification.")
+        os.replace(temporary, destination)
+    finally:
+        _safe_unlink(temporary)
+    return destination
+
+
+def _archive_source_timeline_media(
+        timeline: Any, plan: dict[str, Any], *, archive_audio: bool,
+        archive_video: bool) -> dict[str, Any]:
+    """Apply Run Manager archive policy without decoding lazy media."""
+    source = _validate_source_timeline(timeline, require_runtime=True)
+    prepared = dict(source)
+    prepared["video"] = (dict(source["video"])
+                         if source.get("video") is not None else None)
+    prepared["audio"] = dict(source["audio"])
+    prepared["fingerprints"] = dict(source["fingerprints"])
+    prepared["recovery"] = dict(source.get("recovery") or {})
+    run_dir = _run_dir(plan)
+    video = prepared.get("video")
+    audio = prepared["audio"]
+    if video is not None and bool(archive_video):
+        original = video["path"]
+        archived = _archive_source_timeline_path(
+            original, str(video.get("file_sha256") or ""),
+            os.path.join(run_dir, "references", "video"))
+        prepared["recovery"]["original_video_path"] = original
+        video["path"] = archived
+        prepared["recovery"]["video_path"] = archived
+        prepared["recovery"]["video_archived"] = True
+        if audio["kind"] == "embedded":
+            prepared["recovery"]["original_audio_path"] = audio["path"]
+            audio["path"] = archived
+            prepared["recovery"]["audio_path"] = archived
+            prepared["recovery"]["audio_archived_with_video"] = True
+    if audio["kind"] == "external_path" and bool(archive_audio):
+        original = audio["path"]
+        if not _path_is_inside(run_dir, original):
+            archived = _archive_source_timeline_path(
+                original, str(audio.get("file_sha256") or ""),
+                os.path.join(run_dir, "references", "audio"))
+            prepared["recovery"]["original_audio_path"] = original
+            audio["path"] = archived
+            prepared["recovery"]["audio_path"] = archived
+        prepared["recovery"]["audio_archived"] = True
+    if (audio["kind"] == "embedded" and bool(archive_audio)
+            and not bool(archive_video)):
+        prepared["recovery"]["audio_archive_requires_video"] = True
+    return _validate_source_timeline(prepared, require_runtime=True)
+
+
+def _validate_source_timeline_hash(
+        compatibility: dict[str, Any], timeline: Any, usage: str) -> None:
+    source = _validate_source_timeline(timeline, require_runtime=True)
+    expected_timeline = str(
+        compatibility.get("source_timeline_fingerprint") or "")
+    actual_timeline = str(source["fingerprints"]["timeline"])
+    if not expected_timeline or expected_timeline != actual_timeline:
+        raise ValueError(
+            "%s received a different H3 Source Timeline than Loop Start." %
+            usage)
+    if _audio_policy_requires_source(compatibility):
+        expected_audio = str(compatibility.get("source_audio_hash") or "")
+        actual_audio = str(source["fingerprints"].get("audio") or "none")
+        if not expected_audio or expected_audio != actual_audio:
+            raise ValueError(
+                "%s received different Source Timeline audio than Loop "
+                "Start." % usage)
+
+
+def _source_timeline_from_metadata(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    record = value.get("source_timeline")
+    if record is None and isinstance(value.get("plan"), dict):
+        record = value["plan"].get("source_timeline")
+    if record is None:
+        return None
+    return _source_timeline_from_recovery(record)
 
 
 def _scheduled_video_reference_slice(
@@ -648,6 +2204,26 @@ def _scheduled_video_reference_slice(
     video = entry["value"]
     audio = entry.get("audio")
     if timeline_mode == "restart_each_scene":
+        if _is_source_timeline(video):
+            source_start, source_end = 0, int(length)
+            decoded_video = _source_timeline_scene_video(
+                video, source_start, source_end)
+            decoded_audio = (
+                _source_timeline_scene_audio(
+                    video, source_start, source_end)
+                if audio is not None else None)
+            return decoded_video, decoded_audio, (
+                "@%s Source Timeline restart frames %d:%d" %
+                (entry.get("tag", "video"), source_start, source_end))
+        if _is_lazy_motion_descriptor(video):
+            source_start, source_end = 0, int(length)
+            decoded_video = _decode_lazy_motion_video(
+                video, source_start, source_end)
+            decoded_audio = _decode_lazy_motion_audio(
+                video, source_start, source_end)
+            return decoded_video, decoded_audio, (
+                "@%s lazy restart frames %d:%d" %
+                (entry.get("tag", "video"), source_start, source_end))
         return video, audio, ""
     if timeline_mode != "sequential":
         raise ValueError(
@@ -690,14 +2266,60 @@ def _scheduled_video_reference_slice(
     origin_start = int(shots[origin_scene - 1]["generation_start_frame"])
     current_start = int(current["generation_start_frame"])
     source_start = current_start - origin_start
-    source_end = source_start + int(length)
-    if source_start < 0:
+    source_length = int(length)
+    audio_source_start = source_start
+    audio_source_length = source_length
+    detail_mode = ""
+    compatibility = state["plan"].get("compatibility")
+    if not isinstance(compatibility, dict):
+        compatibility = {}
+    continuation_mode = current.get(
+        "continuation_mode", compatibility.get("continuation_mode", "guide"))
+    if (entry.get("semantic_role") == "motion"
+            and continuation_mode in MASKED_CONTINUATION_MODES):
+        # Native Ref2VA video banks carry no target-frame coordinates. A
+        # masked continuation already owns the repeated prefix, so including
+        # those reference frames makes H3 replay them once the denoisable tail
+        # begins (one context span late). Advance only the motion video on
+        # the delivered timeline. Its paired soundtrack still describes the
+        # complete raw target, including the repeated prefix, and therefore
+        # must remain on the raw generation window. Applying the delivered
+        # video window to audio shifts source-driven performance by exactly
+        # one context span on every continuation scene.
+        delivered = current.get("delivered_frames")
+        if delivered is None:
+            raise ValueError(
+                "Sequential motion reference @%s requires delivered-frame "
+                "timing from Current Shot state." % entry.get("tag", "video"))
+        preceding = shots[origin_scene - 1:int(scene) - 1]
+        if any(shot.get("delivered_frames") is None for shot in preceding):
+            raise ValueError(
+                "Sequential motion reference @%s requires delivered-frame "
+                "timing for every scene since its first activation." %
+                entry.get("tag", "video"))
+        source_start = sum(int(shot["delivered_frames"])
+                           for shot in preceding)
+        source_length = int(delivered)
+        if source_length < 1:
+            raise ValueError(
+                "Sequential motion reference @%s resolved an empty delivered "
+                "window for scene %d." %
+                (entry.get("tag", "video"), int(scene)))
+        detail_mode = " delivered"
+    source_end = source_start + source_length
+    audio_source_end = audio_source_start + audio_source_length
+    if source_start < 0 or audio_source_start < 0:
         raise ValueError(
             "Sequential scheduled video @%s resolved a negative source "
             "window for scene %d." %
             (entry.get("tag", "video"), int(scene)))
-    available = int(video.shape[0])
-    if source_end > available:
+    if _is_source_timeline(video):
+        available = int(video["extent"]["frame_count"])
+    elif _is_lazy_motion_descriptor(video):
+        available = int(video.get("frame_count", 0))
+    else:
+        available = int(video.shape[0])
+    if available > 0 and source_end > available:
         raise ValueError(
             "Sequential scheduled video @%s needs source frames %d:%d for "
             "scene %d, but the 24 fps reference contains only %d frames. "
@@ -705,14 +2327,30 @@ def _scheduled_video_reference_slice(
             "restart_each_scene." %
             (entry.get("tag", "video"), source_start, source_end,
              int(scene), available))
-    sliced_video = video[source_start:source_end]
-    sliced_audio = None
-    if audio is not None:
+    if _is_source_timeline(video):
+        sliced_video = _source_timeline_scene_video(
+            video, source_start, source_end)
+        sliced_audio = (
+            _source_timeline_scene_audio(
+                video, audio_source_start, audio_source_end)
+            if audio is not None else None)
+    elif _is_lazy_motion_descriptor(video):
+        sliced_video = _decode_lazy_motion_video(
+            video, source_start, source_end)
+        sliced_audio = _decode_lazy_motion_audio(
+            video, audio_source_start, audio_source_end)
+    else:
+        sliced_video = video[source_start:source_end]
+        sliced_audio = None
+    if (audio is not None and not _is_lazy_motion_descriptor(video)
+            and not _is_source_timeline(video)):
         waveform, sample_rate = _validate_audio(
             audio, "Sequential scheduled video @%s audio" % entry.get(
                 "tag", "video"))
-        sample_start = int(round(source_start / float(FPS) * sample_rate))
-        sample_end = int(round(source_end / float(FPS) * sample_rate))
+        sample_start = int(round(
+            audio_source_start / float(FPS) * sample_rate))
+        sample_end = int(round(
+            audio_source_end / float(FPS) * sample_rate))
         available_samples = int(waveform.shape[-1])
         if sample_end > available_samples:
             raise ValueError(
@@ -725,8 +2363,19 @@ def _scheduled_video_reference_slice(
             "waveform": waveform[..., sample_start:sample_end],
             "sample_rate": sample_rate,
         }
-    detail = "@%s sequential frames %d:%d (origin scene %d)" % (
-        entry.get("tag", "video"), source_start, source_end, origin_scene)
+    if (sliced_audio is not None
+            and (audio_source_start != source_start
+                 or audio_source_end != source_end)):
+        detail = (
+            "@%s sequential%s video frames %d:%d; paired audio raw frames "
+            "%d:%d (origin scene %d)" % (
+                entry.get("tag", "video"), detail_mode, source_start,
+                source_end, audio_source_start, audio_source_end,
+                origin_scene))
+    else:
+        detail = "@%s sequential%s frames %d:%d (origin scene %d)" % (
+            entry.get("tag", "video"), detail_mode, source_start, source_end,
+            origin_scene)
     return sliced_video, sliced_audio, detail
 
 
@@ -767,11 +2416,11 @@ def _tagged_audio_reference_value(
             "in Current Shot state." %
             (int(length), int(scene), current.get("raw_frames")))
     compatibility = plan.get("compatibility")
-    if not isinstance(compatibility, dict) or compatibility.get(
-            "audio_mode") not in ("source_track", "source_plus_timeline"):
+    if (not isinstance(compatibility, dict) or
+            not _audio_policy_uses_source_reference(compatibility)):
         raise ValueError(
-            "Tagged audio @%s source_timeline requires the Plan audio mode "
-            "source_track or source_plus_timeline." %
+            "Tagged audio @%s source_timeline requires Source reference=on "
+            "in the Plan's Audio Policy." %
             entry.get("tag", "audio"))
     expected_hash = str(compatibility.get("source_audio_hash") or "")
     entry_hash = str(entry.get("content_hash") or "")
@@ -1009,13 +2658,17 @@ def _compile_scheduled_reference_prompt(
 
 def _compile_tagged_reference_prompt(
         references: Any, scene: int, scene_count: int, prompt: Any,
-        compliance_mode: str = "strict") -> tuple[str, str, dict[str, Any]]:
-    """Activate only registered references mentioned by this scene prompt."""
+        compliance_mode: str = "strict",
+        semantic_anchor_mode: str = "timestamped_video"
+        ) -> tuple[str, str, dict[str, Any]]:
+    """Activate prompt-used native references and Qwen-only image anchors."""
     mode = _reference_compliance_mode(compliance_mode)
+    anchor_mode = _semantic_anchor_mode(semantic_anchor_mode)
     warnings: list[str] = []
     normalized_prompt = str(prompt or "").replace(
         "\r\n", "\n").replace("\r", "\n").strip()
     prompt_tags = set(_REFERENCE_ALIAS_RE.findall(normalized_prompt))
+    semantic_matches = list(_SEMANTIC_ANCHOR_RE.finditer(normalized_prompt))
     try:
         bindings = _active_reference_bindings(
             references, scene, scene_count, mode, warnings,
@@ -1031,17 +2684,160 @@ def _compile_tagged_reference_prompt(
             "presentation": [], "all_tags": set(),
         }
 
+    semantic_anchors: list[dict[str, Any]] = []
+    if mode != "disabled" and semantic_matches:
+        try:
+            tagged_entries = _tagged_reference_entries(references)
+        except (TypeError, ValueError) as exc:
+            if mode == "strict":
+                raise
+            tagged_entries = []
+            message = "Semantic anchors ignored: %s" % exc
+            warnings.append(message)
+            _LOG.warning("H3 tagged-reference warning: %s", message)
+        entries_by_tag = {
+            alias: entry for entry in tagged_entries
+            for alias in _reference_entry_tags(entry)
+        }
+        grouped: dict[str, dict[str, Any]] = {}
+        seen: set[tuple[str, Fraction]] = set()
+        for match in semantic_matches:
+            tag = match.group(1)
+            timestamp = Fraction(match.group(2))
+            entry = entries_by_tag.get(tag)
+            message = None
+            if entry is None:
+                message = "Prompt uses unknown semantic anchor #%s." % tag
+            elif entry.get("kind") != "picture":
+                message = (
+                    "Semantic anchor #%s must resolve to a Tagged Picture "
+                    "Ref, not %s." % (tag, entry.get("kind", "unknown")))
+            if message is not None:
+                if mode == "strict":
+                    raise ValueError(message)
+                if message not in warnings:
+                    warnings.append(message)
+                    _LOG.warning("H3 tagged-reference warning: %s", message)
+                continue
+            key = (tag, timestamp)
+            if key in seen:
+                continue
+            seen.add(key)
+            group = grouped.setdefault(tag, {
+                "tag": tag,
+                "entry": entry,
+                "timestamps": [],
+            })
+            group["timestamps"].append(timestamp)
+        label_kind = (
+            "Picture" if anchor_mode == "picture_storyboard" else "Video")
+        first_label_number = len(bindings[
+            "pictures" if label_kind == "Picture" else "videos"]) + 1
+        for offset, group in enumerate(grouped.values()):
+            group["timestamps"].sort()
+            group["label"] = "<%s %d>" % (
+                label_kind, first_label_number + offset)
+            semantic_anchors.append(group)
+    bindings["semantic_anchors"] = semantic_anchors
+    bindings["semantic_anchor_mode"] = anchor_mode
+
     aliases = bindings["aliases"]
+    motion_definitions: list[str] = []
+    used_subject_numbers = {
+        int(number) for number in re.findall(
+            r"<Subject\s+(\d+)>", normalized_prompt, flags=re.IGNORECASE)
+    }
+    next_subject_number = max(used_subject_numbers, default=0) + 1
+    for entry in bindings["videos"]:
+        if (entry.get("semantic_role") != "motion" or
+                entry["tag"] not in prompt_tags):
+            continue
+        subject_label = "<Subject %d>" % next_subject_number
+        next_subject_number += 1
+        video_item = next(
+            item for item in bindings["presentation"]
+            if item["entry"] is entry and item["role"] == "video")
+        video_label = video_item["label"]
+        aliases[entry["tag"]] = subject_label
+        video_item["label"] = subject_label
+        video_item["source_label"] = video_label
+        video_item["role"] = "motion"
+        description = " ".join(str(
+            entry.get("motion_description") or
+            "the supplied pose sequence, action, and motion timing"
+        ).split()).rstrip(". ")
+        target = str(entry.get("motion_target") or "").strip()
+        transfer = (
+            " Transfer %s's visible performance to %s." %
+            (subject_label, target)
+            if target else "")
+        motion_definitions.append(
+            "%s is the reusable pose, action, and motion from %s: %s.%s "
+            "Transfer only that visible performance without importing the "
+            "source identity, wardrobe, setting, lighting, or composition." %
+            (subject_label, video_label, description, transfer))
 
     def replace_registered(match: re.Match[str]) -> str:
         return aliases.get(match.group(1), match.group(0))
 
     compiled = (_REFERENCE_ALIAS_RE.sub(replace_registered, normalized_prompt)
                 if mode != "disabled" else normalized_prompt)
-    mapping_lines = [
-        "@%s -> %s" % (item["tag"], item["label"])
-        for item in bindings["presentation"]
-    ]
+    if mode != "disabled" and semantic_matches:
+        semantic_labels = {
+            item["tag"]: item["label"] for item in semantic_anchors
+        }
+
+        def replace_semantic(match: re.Match[str]) -> str:
+            return semantic_labels.get(match.group(1), match.group(0))
+
+        compiled = _SEMANTIC_ANCHOR_RE.sub(replace_semantic, compiled)
+    if semantic_anchors and anchor_mode == "picture_storyboard":
+        timing_lines = []
+        timed_anchors = sorted(
+            (timestamp, item_index, item)
+            for item_index, item in enumerate(semantic_anchors)
+            for timestamp in item["timestamps"])
+        for timestamp, _item_index, item in timed_anchors:
+            timestamp_text = ("%.3f" % float(timestamp)).rstrip(
+                "0").rstrip(".")
+            timing_lines.append(
+                "For the target video, around %s seconds into this "
+                "scene, %s is an approximate visual storyboard "
+                "reference." % (timestamp_text, item["label"]))
+        compiled = "\n".join(timing_lines) + "\n\n" + compiled
+    if motion_definitions and mode != "disabled":
+        block = "\n".join(motion_definitions)
+        subject_header = re.search(
+            r"(?im)^subject_definitions:\s*$", compiled)
+        if subject_header:
+            next_section = re.search(
+                r"(?im)^(?:summary|retention_analysis|detailed_description|"
+                r"overall_soundscape|non_diegetic_music):\s*$",
+                compiled[subject_header.end():])
+            if next_section:
+                insert_at = subject_header.end() + next_section.start()
+                compiled = (
+                    compiled[:insert_at].rstrip() + "\n" + block + "\n\n" +
+                    compiled[insert_at:].lstrip())
+            else:
+                compiled = compiled.rstrip() + "\n" + block
+        else:
+            compiled = "subject_definitions:\n%s\n\n%s" % (block, compiled)
+    mapping_lines = []
+    for item in bindings["presentation"]:
+        mapping = "@%s -> %s" % (item["tag"], item["label"])
+        if item.get("source_label"):
+            mapping += " motion from %s" % item["source_label"]
+        mapping_lines.append(mapping)
+    for item in semantic_anchors:
+        timestamps = ",".join(
+            "%gs" % float(value) for value in item["timestamps"])
+        anchor_description = (
+            "Qwen-only approximate storyboard picture"
+            if anchor_mode == "picture_storyboard"
+            else "Qwen-only semantic anchors")
+        mapping_lines.append("#%s[%s] -> %s %s" % (
+            item["tag"], timestamps, item["label"], anchor_description))
     summary = "scene %d/%d: %s" % (
         int(scene), int(scene_count),
         "; ".join(mapping_lines) if mapping_lines
@@ -1049,10 +2845,904 @@ def _compile_tagged_reference_prompt(
     if warnings:
         summary += "; warning-only: %s" % " ".join(warnings)
     elif mode == "disabled":
-        summary += "; reference policy disabled; @tags passed unchanged"
+        summary += (
+            "; reference policy disabled; @tags and #anchors passed unchanged")
     bindings["compliance_mode"] = mode
     bindings["compliance_warnings"] = warnings
     return compiled, summary, bindings
+
+
+def _h3_aligned_frame_count(length: int) -> int:
+    frame_count = max(5, int(length))
+    while frame_count % 17 != 5:
+        frame_count += 1
+    return frame_count
+
+
+def _h3_reference_canvas(width: int, height: int) -> tuple[int, int]:
+    """Match Core H3's 768-short-edge, area-capped video-ref canvas."""
+    width, height = int(width), int(height)
+    ratio = width / float(height)
+    if ratio >= 1.0:
+        nominal_width, nominal_height = 768 * ratio, 768
+    else:
+        nominal_width, nominal_height = 768, 768 / ratio
+    maximum_pixels = 768 * 1344
+    if nominal_width * nominal_height > maximum_pixels:
+        scale = math.sqrt(
+            maximum_pixels / (nominal_width * nominal_height))
+        nominal_width *= scale
+        nominal_height *= scale
+    return (
+        max(32, round(nominal_width / 32) * 32),
+        max(32, round(nominal_height / 32) * 32),
+    )
+
+
+def _h3_picture_presentation(
+        image: Any, width: int, height: int,
+        ref_image_size: str) -> Any:
+    if (torch is None or not torch.is_tensor(image) or image.ndim != 4 or
+            int(image.shape[0]) < 1 or int(image.shape[-1]) < 3):
+        raise ValueError(
+            "Semantic-anchor presentation received an invalid native picture.")
+    source_height, source_width = int(image.shape[1]), int(image.shape[2])
+    if ref_image_size == "match":
+        scale = min(
+            1.0,
+            math.sqrt(
+                (int(width) * int(height)) /
+                float(source_width * source_height)))
+    elif ref_image_size == "max":
+        scale = min(1.0, 2048.0 / min(source_width, source_height))
+    else:
+        raise ValueError(
+            "Semantic-anchor presentation ref_image_size must be match or max.")
+    target_width = max(32, round(source_width * scale / 32) * 32)
+    target_height = max(32, round(source_height * scale / 32) * 32)
+    return _resize(image[:1], target_width, target_height, "disabled")
+
+
+def _h3_semantic_anchor_image(image: Any, target: Any) -> Any:
+    if (torch is None or not torch.is_tensor(image) or image.ndim != 4 or
+            int(image.shape[0]) < 1 or int(image.shape[-1]) < 3):
+        raise ValueError(
+            "Each semantic anchor must resolve to one Tagged Picture Ref.")
+    target_text = str(target or "512").strip().lower()
+    if target_text == "source":
+        return image[:1, ..., :3]
+    try:
+        target_area_edge = int(target_text)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "Semantic anchor size must be 384, 512, 768, 1024, 1280, "
+            "or source.") from exc
+    if str(target_area_edge) not in SEMANTIC_ANCHOR_SIZES:
+        raise ValueError(
+            "Semantic anchor size must be 384, 512, 768, 1024, 1280, "
+            "or source.")
+    source_height, source_width = int(image.shape[1]), int(image.shape[2])
+    scale = math.sqrt(
+        (target_area_edge * target_area_edge) /
+        float(source_width * source_height))
+    target_width = max(32, round(source_width * scale / 32) * 32)
+    target_height = max(32, round(source_height * scale / 32) * 32)
+    return _resize(image[:1], target_width, target_height, "disabled")
+
+
+def _semantic_presentation_items(value: Any) -> tuple[list[dict[str, Any]], str]:
+    if (not isinstance(value, dict) or
+            value.get("version") != SEMANTIC_PRESENTATION_VERSION):
+        raise ValueError(
+            "Semantic anchor conditioning requires its Tagged Ref2VA payload.")
+    width, height = int(value["width"]), int(value["height"])
+    frame_count = _h3_aligned_frame_count(int(value["length"]))
+    duration = Fraction(frame_count, FPS)
+    ref_image_size = str(value.get("ref_image_size") or "match")
+    anchor_size = str(value.get("semantic_anchor_size") or "512")
+    anchor_mode = _semantic_anchor_mode(value.get("semantic_anchor_mode"))
+    items: list[dict[str, Any]] = []
+
+    for image in value.get("pictures", ()):
+        items.append({
+            "type": "image",
+            "data": _h3_picture_presentation(
+                image, width, height, ref_image_size),
+        })
+
+    for source in value.get("videos", ()):
+        if not isinstance(source, dict):
+            raise ValueError("Semantic anchor video presentation is malformed.")
+        video = source.get("video")
+        if (torch is None or not torch.is_tensor(video) or video.ndim != 4 or
+                int(video.shape[0]) < 5 or int(video.shape[-1]) < 3):
+            raise ValueError(
+                "Semantic anchor presentation received an invalid native video.")
+        source_height, source_width = int(video.shape[1]), int(video.shape[2])
+        canvas_width, canvas_height = _h3_reference_canvas(
+            source_width, source_height)
+        if source_width * source_height < canvas_width * canvas_height:
+            canvas_width = max(32, round(source_width / 32) * 32)
+            canvas_height = max(32, round(source_height / 32) * 32)
+        frames = _resize(
+            video, canvas_width, canvas_height, "disabled")[:frame_count]
+        usable = int(frames.shape[0])
+        while usable >= 5 and usable % 17 != 5:
+            usable -= 1
+        if usable < 5:
+            raise ValueError(
+                "Semantic anchor presentation native videos need at least "
+                "5 usable frames.")
+        frames = frames[:usable]
+        if bool(source.get("paired_audio")):
+            items.append({"type": "audio"})
+        sample_indices = list(range(0, usable, FPS // 2))
+        items.append({
+            "type": "video",
+            "data": frames[sample_indices],
+            "timestamps": [index / 2.0 for index in range(
+                len(sample_indices))],
+        })
+
+    for _index in range(int(value.get("standalone_audio_count", 0))):
+        items.append({"type": "audio"})
+
+    anchor_count = 0
+    for anchor in value.get("anchors", ()):
+        if not isinstance(anchor, dict):
+            raise ValueError("Semantic anchor presentation is malformed.")
+        timestamps = list(anchor.get("timestamps") or ())
+        if not timestamps:
+            raise ValueError("Semantic anchor presentation has no timestamps.")
+        exact_timestamps = [
+            timestamp if isinstance(timestamp, Fraction)
+            else Fraction(str(timestamp)) for timestamp in timestamps
+        ]
+        if any(timestamp < 0 or timestamp > duration
+               for timestamp in exact_timestamps):
+            raise ValueError(
+                "Semantic anchor #%s timestamps must stay within this "
+                "scene's %.3fs output duration." % (
+                    anchor.get("tag", "picture"), float(duration)))
+        image = _h3_semantic_anchor_image(anchor.get("image"), anchor_size)
+        if anchor_mode == "picture_storyboard":
+            items.append({"type": "image", "data": image})
+        else:
+            repeated = image.expand(
+                len(exact_timestamps) * 2, -1, -1, -1)
+            paired_timestamps = [
+                float(timestamp)
+                for timestamp in exact_timestamps
+                for _copy in range(2)
+            ]
+            items.append({
+                "type": "video",
+                "data": repeated,
+                "timestamps": paired_timestamps,
+            })
+        anchor_count += len(exact_timestamps)
+    if anchor_mode == "picture_storyboard":
+        status = "%d approximate storyboard cues across %d tagged pictures"
+    else:
+        status = "%d semantic checkpoints across %d tagged pictures"
+    return items, status % (anchor_count, len(value.get("anchors", ())))
+
+
+def _replace_conditioning_presentation(
+        positive: Any, clip: Any, prompt: str,
+        presentation: Any) -> tuple[Any, str]:
+    items, status = _semantic_presentation_items(presentation)
+    tokens = clip.tokenize(str(prompt), minimax_ref_items=items)
+    encoded = clip.encode_from_tokens_scheduled(tokens)
+    if (not isinstance(positive, list) or not isinstance(encoded, list) or
+            len(positive) != len(encoded)):
+        raise ValueError(
+            "Semantic anchor conditioning could not preserve the native "
+            "Ref2VA schedule.")
+    merged = []
+    for base, replacement in zip(positive, encoded):
+        if (not isinstance(base, (list, tuple)) or len(base) != 2 or
+                not isinstance(replacement, (list, tuple)) or
+                len(replacement) != 2):
+            raise ValueError(
+                "Semantic anchor conditioning received malformed conditioning.")
+        metadata = dict(base[1])
+        metadata.update(dict(replacement[1]))
+        merged.append([replacement[0], metadata])
+    return merged, status
+
+
+REFERENCE_CACHE_FORMAT = "h3_reference_cache_v2"
+REFERENCE_CACHE_LEGACY_FORMATS = frozenset(("h3_reference_cache_v1",))
+
+
+def _is_reference_cache_format(value: Any) -> bool:
+    return str(value or "") in (
+        {REFERENCE_CACHE_FORMAT} | REFERENCE_CACHE_LEGACY_FORMATS)
+
+
+def _reference_cache_signature(
+        fingerprint: str, scene: int, scene_count: int, prompt: str,
+        compiled_prompt: str, width: int, height: int, length: int,
+        ref_image_size: str, presentation_contract: Any = None) -> str:
+    return _fingerprint({
+        "format": REFERENCE_CACHE_FORMAT,
+        "reference_fingerprint": str(fingerprint),
+        "scene": int(scene),
+        "scene_count": int(scene_count),
+        "prompt": str(prompt),
+        "compiled_prompt": str(compiled_prompt),
+        "width": int(width),
+        "height": int(height),
+        "length": int(length),
+        "ref_image_size": str(ref_image_size),
+        "presentation": presentation_contract,
+    })
+
+
+def _reference_cache_paths(fingerprint: str, scene: int,
+                           signature: str) -> dict[str, str]:
+    safe_fingerprint = _safe_name(str(fingerprint), "references")
+    root = os.path.abspath(os.path.join(
+        _output_root(), "h3_reference_cache", safe_fingerprint))
+    output_root = os.path.abspath(_output_root())
+    if os.path.commonpath([output_root, root]) != output_root:
+        raise ValueError("H3 reference cache path escapes the output folder.")
+    stem = "scene_%04d.%s" % (int(scene), str(signature)[:24])
+    return {
+        "root": root,
+        "tensors": os.path.join(root, stem + ".safetensors"),
+        "metadata": os.path.join(root, stem + ".json"),
+    }
+
+
+def _reference_cache_presentation_contract(presentation: Any) -> Any:
+    if not isinstance(presentation, dict):
+        return None
+    return {
+        "version": presentation.get("version"),
+        "semantic_anchor_size": presentation.get("semantic_anchor_size"),
+        "semantic_anchor_mode": presentation.get("semantic_anchor_mode"),
+        "anchors": [{
+            "tag": item.get("tag"),
+            "timestamps": [str(value) for value in item.get("timestamps", ())],
+        } for item in presentation.get("anchors", ())
+            if isinstance(item, dict)],
+    }
+
+
+def _reference_cache_existing(paths: dict[str, str],
+                              signature: str) -> bool:
+    if not (os.path.isfile(paths["metadata"])
+            and os.path.isfile(paths["tensors"])):
+        return False
+    try:
+        metadata = _read_json(paths["metadata"])
+        return (
+            metadata.get("format") == REFERENCE_CACHE_FORMAT
+            and metadata.get("signature") == signature
+            and metadata.get("tensors_sha256") == _file_sha256(
+                paths["tensors"]))
+    except (OSError, ValueError, json.JSONDecodeError):
+        return False
+
+
+def _h3_encode_reference_audio(audio_vae: Any, audio: Any) -> tuple[Any, int]:
+    waveform, sample_rate = _validate_audio(
+        audio, "H3 reference-cache audio")
+    target_rate = int(getattr(audio_vae, "audio_sample_rate", 32000))
+    if sample_rate != target_rate:
+        try:
+            import torchaudio
+        except ImportError as exc:
+            raise RuntimeError(
+                "H3 reference caching needs torchaudio to resample audio.") from exc
+        waveform = torchaudio.functional.resample(
+            waveform, sample_rate, target_rate)
+    latent = audio_vae.encode(waveform[:1].movedim(1, -1))
+    return latent, int(latent.shape[-1])
+
+
+def _h3_reference_cache_payload(
+        vae: Any, audio_vae: Any, pictures: list[Any],
+        videos: list[dict[str, Any]], audios: list[Any], width: int,
+        height: int, length: int, ref_image_size: str,
+        semantic_presentation: Any = None
+        ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[Any]]:
+    """Encode the stock H3 Ref2VA payload before target-layout packing."""
+    frame_count = _h3_aligned_frame_count(length)
+    presentation_items: list[dict[str, Any]] = []
+    reference_blocks: list[dict[str, Any]] = []
+    # V2 keeps one RGB master per native picture.  The compact V1 payload was
+    # sufficient to reproduce pass 1, but a larger pass-2 ``match`` canvas
+    # needs the pre-resize picture to avoid enlarging the low-resolution Qwen
+    # presentation frame.
+    source_images: list[Any] = []
+    for image in pictures:
+        resized = _h3_picture_presentation(
+            image, width, height, ref_image_size)
+        latent = vae.encode(resized)
+        presentation_items.append({
+            "type": "image", "data": resized, "role": "native_picture"})
+        source_images.append(image[:1, ..., :3])
+        reference_blocks.append({
+            "kind": "image",
+            "latent_h": int(resized.shape[1]) // 16,
+            "latent_w": int(resized.shape[2]) // 16,
+            "latent": latent,
+        })
+    for source in videos:
+        video = source.get("video") if isinstance(source, dict) else None
+        paired_audio = source.get("audio") if isinstance(source, dict) else None
+        if (torch is None or not torch.is_tensor(video) or video.ndim != 4
+                or int(video.shape[0]) < 5 or int(video.shape[-1]) < 3):
+            raise ValueError(
+                "H3 reference cache received an invalid reference video.")
+        source_height, source_width = int(video.shape[1]), int(video.shape[2])
+        canvas_width, canvas_height = _h3_reference_canvas(
+            source_width, source_height)
+        if source_width * source_height < canvas_width * canvas_height:
+            canvas_width = max(32, round(source_width / 32) * 32)
+            canvas_height = max(32, round(source_height / 32) * 32)
+        frames = _resize(
+            video, canvas_width, canvas_height, "disabled")[:frame_count]
+        usable = int(frames.shape[0])
+        while usable >= 5 and usable % 17 != 5:
+            usable -= 1
+        if usable < 5:
+            raise ValueError(
+                "H3 reference videos need at least 5 usable frames.")
+        frames = frames[:usable]
+        latent = vae.encode(frames)
+        audio_latent, audio_ticks = (None, 0)
+        if paired_audio is not None:
+            audio_latent, audio_ticks = _h3_encode_reference_audio(
+                audio_vae, paired_audio)
+            presentation_items.append({"type": "audio", "role": "native_audio"})
+        sample_indices = list(range(0, usable, FPS // 2))
+        presentation_items.append({
+            "type": "video",
+            "data": frames[sample_indices],
+            "role": "native_video",
+            "timestamps": [index / 2.0 for index in range(
+                len(sample_indices))],
+        })
+        reference_blocks.append({
+            "kind": "video_audio" if audio_ticks else "video",
+            "latent_t": int(latent.shape[2]),
+            "latent_h": canvas_height // 16,
+            "latent_w": canvas_width // 16,
+            "ref_audio_t": audio_ticks,
+            "latent": latent,
+            "audio_latent": audio_latent,
+        })
+    for audio in audios:
+        audio_latent, audio_ticks = _h3_encode_reference_audio(
+            audio_vae, audio)
+        presentation_items.append({"type": "audio", "role": "native_audio"})
+        reference_blocks.append({
+            "kind": "audio",
+            "ref_audio_t": audio_ticks,
+            "audio_latent": audio_latent,
+        })
+    if semantic_presentation is not None:
+        presentation_items, _status = _semantic_presentation_items(
+            semantic_presentation)
+        # Native pictures are always emitted first by
+        # _semantic_presentation_items; later image/video entries may be
+        # Qwen-only semantic anchors and must keep their configured size.
+        native_pictures = len(pictures)
+        for index, item in enumerate(presentation_items):
+            item["role"] = (
+                "native_picture" if index < native_pictures
+                else "semantic_presentation")
+    return presentation_items, reference_blocks, source_images
+
+
+def _cache_reference_scene(
+        *, fingerprint: str, scene: int, scene_count: int, prompt: str,
+        compiled_prompt: str, width: int, height: int, length: int,
+        ref_image_size: str, vae: Any, audio_vae: Any,
+        pictures: list[Any], videos: list[dict[str, Any]], audios: list[Any],
+        semantic_presentation: Any = None) -> str:
+    if _st_save is None or torch is None:
+        raise RuntimeError(
+            "safetensors and torch are required for H3 reference caching.")
+    presentation_contract = _reference_cache_presentation_contract(
+        semantic_presentation)
+    signature = _reference_cache_signature(
+        fingerprint, scene, scene_count, prompt, compiled_prompt, width,
+        height, length, ref_image_size, presentation_contract)
+    paths = _reference_cache_paths(fingerprint, scene, signature)
+    if _reference_cache_existing(paths, signature):
+        return "reference cache reused %s" % signature[:12]
+    presentation, blocks, source_images = _h3_reference_cache_payload(
+        vae, audio_vae, pictures, videos, audios, width, height, length,
+        ref_image_size, semantic_presentation)
+    tensors: dict[str, Any] = {}
+    public_presentation = []
+    for index, item in enumerate(presentation):
+        record = {"type": str(item["type"])}
+        if item.get("role"):
+            record["role"] = str(item["role"])
+        if "timestamps" in item:
+            record["timestamps"] = [float(value) for value in item["timestamps"]]
+        data = item.get("data")
+        if data is not None:
+            key = "presentation_%03d" % index
+            tensors[key] = torch.clamp(
+                data.detach().cpu().float(), 0.0, 1.0).mul(255).round().to(
+                    torch.uint8).contiguous()
+            record["data_tensor"] = key
+        public_presentation.append(record)
+    public_source_images = []
+    for index, image in enumerate(source_images):
+        key = "source_image_%03d" % index
+        tensors[key] = torch.clamp(
+            image.detach().cpu().float(), 0.0, 1.0).mul(255).round().to(
+                torch.uint8).contiguous()
+        public_source_images.append({"data_tensor": key})
+    public_blocks = []
+    for index, block in enumerate(blocks):
+        record = {key: value for key, value in block.items()
+                  if key not in ("latent", "audio_latent")}
+        for field in ("latent", "audio_latent"):
+            value = block.get(field)
+            if value is None:
+                continue
+            key = "block_%03d_%s" % (index, field)
+            tensors[key] = value.detach().cpu().contiguous()
+            record[field + "_tensor"] = key
+        public_blocks.append(record)
+    os.makedirs(paths["root"], exist_ok=True)
+    temporary = "%s.%s.tmp" % (paths["tensors"], uuid.uuid4().hex)
+    try:
+        _st_save(tensors, temporary, metadata={
+            "format": REFERENCE_CACHE_FORMAT,
+            "signature": signature,
+        })
+        os.replace(temporary, paths["tensors"])
+    finally:
+        _safe_unlink(temporary)
+    metadata = {
+        "format": REFERENCE_CACHE_FORMAT,
+        "signature": signature,
+        "reference_fingerprint": str(fingerprint),
+        "scene": int(scene),
+        "scene_count": int(scene_count),
+        "prompt": str(prompt),
+        "compiled_prompt": str(compiled_prompt),
+        "width": int(width),
+        "height": int(height),
+        "length": int(length),
+        "ref_image_size": str(ref_image_size),
+        "presentation_contract": presentation_contract,
+        "presentation": public_presentation,
+        "source_images": public_source_images,
+        "reference_blocks": public_blocks,
+        "metadata": _relative_output_path(paths["metadata"]),
+        "tensors": _relative_output_path(paths["tensors"]),
+        "tensors_sha256": _file_sha256(paths["tensors"]),
+        "created_at": datetime.now(timezone.utc).isoformat(
+            timespec="seconds").replace("+00:00", "Z"),
+    }
+    _atomic_json(paths["metadata"], metadata)
+    return "reference cache saved %s" % signature[:12]
+
+
+def _reference_cache_descriptor(metadata: Any) -> dict[str, Any] | None:
+    if not isinstance(metadata, dict) or not _is_reference_cache_format(
+            metadata.get("format")):
+        return None
+    required = ("signature", "reference_fingerprint", "metadata", "tensors",
+                "tensors_sha256")
+    if not all(isinstance(metadata.get(key), str) and metadata.get(key)
+               for key in required):
+        return None
+    return {key: metadata[key] for key in (
+        "format", "signature", "reference_fingerprint", "metadata",
+        "tensors", "tensors_sha256")}
+
+
+def _run_local_reference_cache(
+        run_name: Any, scene: int, value: Any) -> dict[str, Any] | None:
+    """Return a verified run-local equivalent of one cache descriptor."""
+    descriptor = _reference_cache_descriptor(value)
+    normalized_run = _safe_name(run_name, "")
+    if descriptor is None or not normalized_run or int(scene) < 1:
+        return None
+    root = os.path.abspath(os.path.join(
+        _run_dir({"run_name": normalized_run}), "reference_cache"))
+    signature = str(descriptor["signature"])
+    stem = "scene_%04d.%s" % (int(scene), signature[:24])
+    metadata_path = os.path.join(root, stem + ".json")
+    tensors_path = os.path.join(root, stem + ".safetensors")
+    if not (os.path.isfile(metadata_path) and os.path.isfile(tensors_path)):
+        return None
+    try:
+        metadata = _read_json(metadata_path)
+        local = _reference_cache_descriptor(metadata)
+        if local is None:
+            return None
+        identity = ("format", "signature", "reference_fingerprint",
+                    "tensors_sha256")
+        if any(local[key] != descriptor[key] for key in identity):
+            return None
+        if (_absolute_output_path(local["metadata"]) != metadata_path
+                or _absolute_output_path(local["tensors"]) != tensors_path):
+            return None
+        return _load_reference_cache_descriptor(local)
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return None
+
+
+def _adopt_reference_cache_for_run(
+        plan: dict[str, Any], metadata: Any) -> dict[str, Any]:
+    """Publish a self-contained run-local view of a global cache object."""
+    descriptor = _reference_cache_descriptor(metadata)
+    if descriptor is None:
+        raise ValueError("H3 reference cache cannot be adopted: invalid metadata.")
+    scene = int(metadata.get("scene", 0))
+    if scene < 1 or scene > len(plan["shots"]):
+        raise ValueError(
+            "H3 reference cache scene %d does not belong to this run." % scene)
+    existing = _run_local_reference_cache(
+        plan["run_name"], scene, descriptor)
+    if existing is not None:
+        return existing
+    source_tensors = _absolute_output_path(descriptor["tensors"])
+    expected_hash = descriptor["tensors_sha256"]
+    if (not os.path.isfile(source_tensors)
+            or _file_sha256(source_tensors) != expected_hash):
+        raise ValueError(
+            "H3 reference cache cannot be adopted: source tensors failed "
+            "integrity checks.")
+    root = os.path.abspath(os.path.join(_run_dir(plan), "reference_cache"))
+    run_root = os.path.abspath(_run_dir(plan))
+    if os.path.commonpath([run_root, root]) != run_root:
+        raise ValueError("H3 run-local reference cache escapes the run folder.")
+    signature = str(descriptor["signature"])
+    stem = "scene_%04d.%s" % (scene, signature[:24])
+    tensors_path = os.path.join(root, stem + ".safetensors")
+    metadata_path = os.path.join(root, stem + ".json")
+    os.makedirs(root, exist_ok=True)
+    if (not os.path.isfile(tensors_path)
+            or _file_sha256(tensors_path) != expected_hash):
+        temporary = "%s.%s.tmp" % (tensors_path, uuid.uuid4().hex)
+        try:
+            try:
+                os.link(source_tensors, temporary)
+            except OSError:
+                shutil.copy2(source_tensors, temporary)
+            if _file_sha256(temporary) != expected_hash:
+                raise ValueError(
+                    "Run-local H3 reference-cache copy failed verification.")
+            os.replace(temporary, tensors_path)
+        finally:
+            _safe_unlink(temporary)
+    adopted = _json_document(metadata)
+    adopted.update({
+        "run_name": str(plan["run_name"]),
+        "metadata": _relative_output_path(metadata_path),
+        "tensors": _relative_output_path(tensors_path),
+    })
+    _atomic_json(metadata_path, adopted)
+    # Re-open through the public descriptor path so Segment Save never records
+    # a run-local pointer that cannot be loaded independently.
+    return _load_reference_cache_descriptor(
+        _reference_cache_descriptor(adopted))
+
+
+def _load_run_reference_cache_descriptor(
+        run_name: Any, scene: int, value: Any) -> dict[str, Any]:
+    """Resolve a relocated cache before falling back to its legacy path."""
+    local = _run_local_reference_cache(run_name, scene, value)
+    if local is not None:
+        return local
+    return _load_reference_cache_descriptor(value)
+
+
+def _load_reference_cache_descriptor(value: Any) -> dict[str, Any]:
+    descriptor = _json_document(value)
+    if _reference_cache_descriptor(descriptor) is None:
+        raise ValueError("H3 checkpoint reference-cache descriptor is invalid.")
+    metadata_path = _absolute_output_path(descriptor["metadata"])
+    if not os.path.isfile(metadata_path):
+        raise FileNotFoundError(
+            "H3 checkpoint reference-cache metadata is missing: %s" %
+            metadata_path)
+    metadata = _read_json(metadata_path)
+    expected = _reference_cache_descriptor(metadata)
+    if expected is None or expected != descriptor:
+        raise ValueError(
+            "H3 checkpoint reference-cache descriptor does not match disk.")
+    tensor_path = _absolute_output_path(descriptor["tensors"])
+    if (not os.path.isfile(tensor_path) or _file_sha256(tensor_path) !=
+            descriptor["tensors_sha256"]):
+        raise ValueError(
+            "H3 checkpoint reference-cache tensors failed integrity checks.")
+    return metadata
+
+
+def _find_reference_cache(
+        fingerprint: str, scene: int, scene_count: int, prompt: str,
+        width: int, height: int, length: int) -> dict[str, Any] | None:
+    if not str(fingerprint or "").strip():
+        return None
+    root = _reference_cache_paths(fingerprint, scene, "lookup")["root"]
+    if not os.path.isdir(root):
+        return None
+    candidates = []
+    prefix = "scene_%04d." % int(scene)
+    for filename in os.listdir(root):
+        if not (filename.startswith(prefix) and filename.endswith(".json")):
+            continue
+        path = os.path.join(root, filename)
+        try:
+            metadata = _read_json(path)
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+        if (not _is_reference_cache_format(metadata.get("format"))
+                or metadata.get("reference_fingerprint") != str(fingerprint)
+                or int(metadata.get("scene", -1)) != int(scene)
+                or int(metadata.get("scene_count", -1)) != int(scene_count)
+                or metadata.get("prompt") != str(prompt)
+                or int(metadata.get("width", -1)) != int(width)
+                or int(metadata.get("height", -1)) != int(height)
+                or int(metadata.get("length", -1)) != int(length)):
+            continue
+        metadata.setdefault("metadata", _relative_output_path(path))
+        candidates.append((os.path.getmtime(path), metadata))
+    if not candidates:
+        return None
+    return max(candidates, key=lambda item: item[0])[1]
+
+
+def _reference_payload_from_cache(
+        metadata: dict[str, Any]
+        ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[Any]]:
+    if _st_load is None or torch is None:
+        raise RuntimeError(
+            "safetensors and torch are required to load H3 reference cache.")
+    tensor_path = _absolute_output_path(metadata["tensors"])
+    expected = str(metadata.get("tensors_sha256") or "")
+    if (not os.path.isfile(tensor_path) or not expected
+            or _file_sha256(tensor_path) != expected):
+        raise ValueError("H3 reference cache failed its SHA-256 check.")
+    tensors = _st_load(tensor_path)
+    presentation = []
+    for record in metadata.get("presentation", ()):
+        item = {
+            "type": str(record["type"]),
+            "role": str(record.get("role") or ""),
+        }
+        if "timestamps" in record:
+            item["timestamps"] = [float(value) for value in record["timestamps"]]
+        key = record.get("data_tensor")
+        if key:
+            if key not in tensors:
+                raise ValueError(
+                    "H3 reference cache is missing presentation tensor %s." % key)
+            item["data"] = tensors[key].float().div(255.0)
+        presentation.append(item)
+    source_images = []
+    for record in metadata.get("source_images", ()):
+        key = record.get("data_tensor") if isinstance(record, dict) else None
+        if not key or key not in tensors:
+            raise ValueError(
+                "H3 reference cache is missing source image tensor %s." % key)
+        source_images.append(tensors[key].float().div(255.0))
+    blocks = []
+    for record in metadata.get("reference_blocks", ()):
+        block = {key: value for key, value in record.items()
+                 if not key.endswith("_tensor")}
+        for field in ("latent", "audio_latent"):
+            key = record.get(field + "_tensor")
+            if key:
+                if key not in tensors:
+                    raise ValueError(
+                        "H3 reference cache is missing %s tensor %s." %
+                        (field, key))
+                block[field] = tensors[key]
+            elif field == "audio_latent" and block.get("kind") == "video":
+                block[field] = None
+        blocks.append(block)
+    return presentation, blocks, source_images
+
+
+_H3_MOTION_REFERENCE_MODES = frozenset((
+    "exclude_video_keep_audio", "keep_video_native", "resize_video"))
+
+
+def _h3_motion_reference_policy(
+        presentation: list[dict[str, Any]], blocks: list[dict[str, Any]],
+        mode: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Apply one upscale motion-ref policy to Qwen items and H3 blocks."""
+    mode = str(mode)
+    if mode not in _H3_MOTION_REFERENCE_MODES:
+        raise ValueError("Unknown H3 motion reference mode %r." % mode)
+    copied_presentation = [dict(item) for item in presentation]
+    copied_blocks = [dict(block) for block in blocks]
+    if mode != "exclude_video_keep_audio":
+        return copied_presentation, copied_blocks
+
+    # Native motion presentations precede any Qwen-only semantic video
+    # anchors. Remove exactly one video item per native H3 video block.
+    native_video_count = sum(
+        block.get("kind") in ("video", "video_audio")
+        for block in copied_blocks)
+    filtered_presentation = []
+    for item in copied_presentation:
+        if native_video_count and item.get("type") == "video":
+            native_video_count -= 1
+            continue
+        filtered_presentation.append(item)
+
+    filtered_blocks = []
+    for block in copied_blocks:
+        kind = block.get("kind")
+        if kind not in ("video", "video_audio"):
+            filtered_blocks.append(block)
+            continue
+        audio = block.get("audio_latent")
+        ticks = int(block.get("ref_audio_t") or 0)
+        if kind != "video_audio" or audio is None or ticks <= 0:
+            continue
+        for key in ("latent", "latent_t", "latent_h", "latent_w"):
+            block.pop(key, None)
+        block["kind"] = "audio"
+        block["ref_audio_t"] = ticks
+        filtered_blocks.append(block)
+    return filtered_presentation, filtered_blocks
+
+
+def _conditioning_from_reference_cache_target(
+        clip: Any, vae: Any, metadata: dict[str, Any],
+        target_width: int, target_height: int,
+        prompt_override: str | None = None,
+        motion_ref_mode: str = "resize_video") -> tuple[Any, dict[str, Any]]:
+    """Rebuild cached Ref2VA conditioning for an actual pass-2 canvas.
+
+    Only native picture references using Core H3's ``match`` policy are tied
+    to generation area.  ``max`` pictures, video-reference canvases, audio,
+    and Qwen-only semantic anchors retain their original geometry.  V2 caches
+    keep the original picture master; V1 caches safely fall back to their
+    pass-1 presentation frame.
+    """
+    target_width, target_height = int(target_width), int(target_height)
+    if target_width < 32 or target_height < 32:
+        raise ValueError("Pass-2 conditioning target must be at least 32x32.")
+    if not callable(getattr(vae, "encode", None)):
+        raise ValueError(
+            "Pass-2 target conditioning requires the MiniMax H3 video VAE.")
+    presentation, blocks, source_images = _reference_payload_from_cache(
+        metadata)
+    presentation, blocks = _h3_motion_reference_policy(
+        presentation, blocks, motion_ref_mode)
+    policy = str(metadata.get("ref_image_size") or "match")
+    rebuilt = 0
+    master_rebuilds = 0
+    fallback_rebuilds = 0
+    if policy == "match":
+        image_blocks = [
+            block for block in blocks if block.get("kind") == "image"]
+        marked = [
+            index for index, item in enumerate(presentation)
+            if item.get("type") == "image"
+            and item.get("role") == "native_picture"]
+        if len(marked) < len(image_blocks):
+            # V1 did not persist roles. Native pictures were serialized before
+            # videos/audio and before any semantic-anchor presentation.
+            marked = [
+                index for index, item in enumerate(presentation)
+                if item.get("type") == "image"][:len(image_blocks)]
+        if len(marked) < len(image_blocks):
+            raise ValueError(
+                "H3 reference cache has %d native image blocks but only %d "
+                "matching Qwen pictures." % (len(image_blocks), len(marked)))
+        for index, block in enumerate(image_blocks):
+            presentation_item = presentation[marked[index]]
+            has_master = index < len(source_images)
+            master = (source_images[index] if has_master
+                      else presentation_item.get("data"))
+            if master is None:
+                raise ValueError(
+                    "H3 reference cache image %d has no reusable picture." %
+                    (index + 1))
+            if has_master:
+                resized = _h3_picture_presentation(
+                    master, target_width, target_height, "match")
+            else:
+                # V1 contains only the pass-1 presentation frame. Approximate
+                # the missing source master by scaling that frame with the
+                # output-area ratio, matching the community conditioning-sync
+                # approach while keeping H/W on Core H3's 32px grid.
+                source_width = max(1, int(metadata.get("width", 0)))
+                source_height = max(1, int(metadata.get("height", 0)))
+                area_scale = math.sqrt(
+                    (target_width * target_height) /
+                    float(source_width * source_height))
+                fallback_width = max(
+                    32, round(int(master.shape[2]) * area_scale / 32) * 32)
+                fallback_height = max(
+                    32, round(int(master.shape[1]) * area_scale / 32) * 32)
+                resized = _resize(
+                    master[:1], fallback_width, fallback_height, "disabled")
+            latent = vae.encode(resized)
+            block["latent"] = latent
+            block["latent_h"] = int(latent.shape[-2])
+            block["latent_w"] = int(latent.shape[-1])
+            presentation_item["data"] = resized
+            rebuilt += 1
+            if has_master:
+                master_rebuilds += 1
+            else:
+                fallback_rebuilds += 1
+    elif policy != "max":
+        raise ValueError(
+            "Cached H3 ref_image_size must be match or max, got %r." % policy)
+
+    prompt = (str(metadata.get("compiled_prompt") or "")
+              if prompt_override is None else str(prompt_override))
+    clip_presentation = []
+    for item in presentation:
+        public = {"type": item["type"]}
+        if "timestamps" in item:
+            public["timestamps"] = item["timestamps"]
+        if "data" in item:
+            public["data"] = item["data"]
+        clip_presentation.append(public)
+    tokens = clip.tokenize(prompt, minimax_ref_items=clip_presentation)
+    conditioning = clip.encode_from_tokens_scheduled(tokens)
+    if blocks:
+        try:
+            import node_helpers
+        except ImportError as exc:
+            raise RuntimeError(
+                "H3 reference cache conditioning requires ComfyUI node_helpers.") from exc
+        conditioning = node_helpers.conditioning_set_values(
+            conditioning, {"minimax_refs": blocks})
+    return conditioning, {
+        "policy": policy,
+        "target_width": target_width,
+        "target_height": target_height,
+        "rebuilt_images": rebuilt,
+        "master_rebuilds": master_rebuilds,
+        "fallback_rebuilds": fallback_rebuilds,
+        "preserved_blocks": len(blocks) - rebuilt,
+    }
+
+
+def _conditioning_from_reference_cache(clip: Any,
+                                       metadata: dict[str, Any],
+                                       prompt_override: str | None = None,
+                                       motion_ref_mode: str = "resize_video"
+                                       ) -> Any:
+    presentation, blocks, _source_images = _reference_payload_from_cache(
+        metadata)
+    presentation, blocks = _h3_motion_reference_policy(
+        presentation, blocks, motion_ref_mode)
+    prompt = (str(metadata.get("compiled_prompt") or "")
+              if prompt_override is None else str(prompt_override))
+    clip_presentation = []
+    for item in presentation:
+        public = {"type": item["type"]}
+        if "timestamps" in item:
+            public["timestamps"] = item["timestamps"]
+        if "data" in item:
+            public["data"] = item["data"]
+        clip_presentation.append(public)
+    tokens = clip.tokenize(prompt, minimax_ref_items=clip_presentation)
+    conditioning = clip.encode_from_tokens_scheduled(tokens)
+    if blocks:
+        try:
+            import node_helpers
+        except ImportError as exc:
+            raise RuntimeError(
+                "H3 reference cache conditioning requires ComfyUI node_helpers.") from exc
+        conditioning = node_helpers.conditioning_set_values(
+            conditioning, {"minimax_refs": blocks})
+    return conditioning
 
 
 def _derived_seed(base_seed: int, index: int, shot_id: str) -> int:
@@ -1112,13 +3802,179 @@ def _shot_audio_context_length(shot: dict[str, Any],
     return resolved
 
 
+def _shot_video_blend_frames(shot: dict[str, Any],
+                             default_blend_frames: int,
+                             video_context_length: int) -> int:
+    """Resolve the visible blend at the boundary entering one scene.
+
+    A blank scene value inherits the Plan default, capped to the scene's
+    actual video overlap. An explicit value is exact and therefore rejected
+    when it cannot fit inside that scene's context window.
+    """
+    context = max(0, int(video_context_length))
+    default = int(default_blend_frames)
+    if default < 0:
+        raise ValueError("H3 Plan video blend frames cannot be negative.")
+    value = shot.get("video_blend_frames")
+    inherited = value is None or (
+        isinstance(value, str) and not value.strip())
+    if inherited:
+        return min(default, context)
+    if isinstance(value, bool) or (
+            isinstance(value, float) and not value.is_integer()):
+        raise ValueError(
+            "H3 scene video blend frames must be a whole number between 0 "
+            "and its context length (%d)." % context)
+    try:
+        resolved = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "H3 scene video blend frames must be a whole number between 0 "
+            "and its context length (%d)." % context) from exc
+    if resolved < 0 or resolved > context:
+        raise ValueError(
+            "H3 scene video blend frames must be between 0 and its context "
+            "length (%d)." % context)
+    return resolved
+
+
+def _shot_context_spatial_proxy(shot: dict[str, Any]) -> str:
+    """Resolve one scene's optional boundary-only spatial proxy."""
+    value = shot.get("context_spatial_proxy")
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return "off"
+    resolved = str(value).strip().lower()
+    if resolved not in CONTEXT_SPATIAL_PROXY_MODES:
+        raise ValueError(
+            "H3 scene context spatial proxy must be one of %s." %
+            (CONTEXT_SPATIAL_PROXY_MODES,))
+    return resolved
+
+
+def _context_spatial_proxy_size(width: int, height: int) -> tuple[int, int]:
+    """Return the recipe's aligned 5/6 proxy canvas."""
+    alignment = int(CONTEXT_SPATIAL_PROXY_RECIPE["pixel_alignment"])
+    numerator = int(CONTEXT_SPATIAL_PROXY_RECIPE["scale_numerator"])
+    denominator = int(CONTEXT_SPATIAL_PROXY_RECIPE["scale_denominator"])
+
+    def scaled(value: int) -> int:
+        units = max(1, int(round(
+            int(value) * numerator / float(denominator * alignment))))
+        return units * alignment
+
+    return scaled(width), scaled(height)
+
+
+def _low_grid_guide_context(
+        state: dict[str, Any], vae: Any, requested: int,
+        target_width: int, target_height: int) -> tuple[Any, tuple[int, int]]:
+    """Decode the predecessor through a disposable 5/6 video-latent grid.
+
+    This mirrors the mixed-resolution chain that motivated the experiment:
+    reduce the *complete* saved predecessor latent from 48x86 to 40x72,
+    decode it natively at 1152x640, then select the delivered tail.  Motion
+    Context performs the later RGB resize to the current target canvas.  A
+    post-decode RGB resize is not equivalent because it skips the VAE's
+    nonlinear low-grid decode.
+    """
+    if torch is None:
+        raise RuntimeError("H3 low-grid Guide requires PyTorch.")
+    requested = int(requested)
+    if requested <= 0:
+        raise ValueError(
+            "H3 low-grid Guide requires a positive context length.")
+    previous_latent = state.get("previous_latent")
+    streams = (_streams_from_latent(previous_latent)
+               if previous_latent is not None else [])
+    if not streams:
+        raise ValueError(
+            "H3 low-grid Guide requires the saved sampled predecessor "
+            "latent; imported Existing Video Context is not eligible.")
+    source_video = streams[0]
+    if torch.is_tensor(source_video) and source_video.ndim == 4:
+        source_video = source_video.unsqueeze(0)
+    if (not torch.is_tensor(source_video) or source_video.ndim != 5
+            or not source_video.is_floating_point()):
+        raise ValueError(
+            "H3 low-grid Guide predecessor video latent must be floating "
+            "point [B,C,T,H,W], got %s." %
+            (tuple(getattr(source_video, "shape", ())),))
+
+    batch, channels, steps, source_latent_height, source_latent_width = (
+        int(value) for value in source_video.shape)
+    if batch != 1:
+        raise ValueError(
+            "H3 low-grid Guide supports H3 batch size 1, got %d." % batch)
+    proxy_width, proxy_height = _context_spatial_proxy_size(
+        int(target_width), int(target_height))
+    proxy_latent_width = max(1, proxy_width // 16)
+    proxy_latent_height = max(1, proxy_height // 16)
+    if ((source_latent_height, source_latent_width)
+            == (proxy_latent_height, proxy_latent_width)):
+        # Preserve an already-native 40x72 predecessor bit-for-bit. This is
+        # the exact path taken by the original mixed-resolution checkpoint.
+        reduced = source_video.detach().contiguous().clone()
+    else:
+        source = source_video.permute(0, 2, 1, 3, 4).reshape(
+            batch * steps, channels,
+            source_latent_height, source_latent_width)
+        reduced = torch.nn.functional.interpolate(
+            source.float(),
+            size=(proxy_latent_height, proxy_latent_width),
+            mode="area",
+        ).to(device=source_video.device, dtype=source_video.dtype)
+        reduced = reduced.reshape(
+            batch, steps, channels, proxy_latent_height,
+            proxy_latent_width).permute(0, 2, 1, 3, 4).contiguous()
+
+    decoded = vae.decode(reduced)
+    if not torch.is_tensor(decoded):
+        raise ValueError(
+            "H3 low-grid Guide video VAE returned %r instead of IMAGE."
+            % type(decoded))
+    if decoded.ndim == 5:
+        decoded = decoded.reshape(
+            -1, decoded.shape[-3], decoded.shape[-2], decoded.shape[-1])
+    if decoded.ndim != 4:
+        raise ValueError(
+            "H3 low-grid Guide video VAE returned image shape %s; expected "
+            "[frames,height,width,channels]." % (tuple(decoded.shape),))
+
+    segments = state.get("segments")
+    segment = segments[-1] if isinstance(segments, list) and segments else None
+    if not isinstance(segment, dict):
+        raise ValueError(
+            "H3 low-grid Guide requires predecessor segment metadata to "
+            "separate its delivered frames from its incoming overlap.")
+    raw_frames = int(segment.get("raw_frames", 0))
+    delivered_frames = int(segment.get("delivered_frames", 0))
+    trim_frames = raw_frames - delivered_frames
+    if (raw_frames <= 0 or delivered_frames <= 0 or trim_frames < 0
+            or int(decoded.shape[0]) != raw_frames):
+        raise ValueError(
+            "H3 low-grid Guide predecessor latent decoded to %d frames, but "
+            "segment metadata declares %d raw / %d delivered frames." %
+            (int(decoded.shape[0]), raw_frames, delivered_frames))
+    delivered = decoded[trim_frames:trim_frames + delivered_frames]
+    if requested > int(delivered.shape[0]):
+        raise ValueError(
+            "H3 low-grid Guide requests %d context frames, but predecessor "
+            "clip %d delivers only %d." %
+            (requested, int(segment.get("index", 0)),
+             int(delivered.shape[0])))
+    return (_tensor_cpu_clone(delivered[-requested:]),
+            (proxy_width, proxy_height))
+
+
 def _plan_context_storage_length(plan: dict[str, Any]) -> int:
     """Tail length checkpoints retain for all transitions in this plan."""
     cfg = plan["compatibility"]
     return int(cfg.get("context_storage_length", cfg["context_length"]))
 
 
-def _history_contract(plan: dict[str, Any], through_index: int) -> dict[str, Any]:
+def _legacy_history_contract(
+        plan: dict[str, Any], through_index: int) -> dict[str, Any]:
+    """Pre-mode-neutral checkpoint contract retained for resume migration."""
     shots = []
     for shot in plan["shots"][:int(through_index)]:
         contract = {
@@ -1139,6 +3995,9 @@ def _history_contract(plan: dict[str, Any], through_index: int) -> dict[str, Any
             contract["context_length"] = shot["context_length"]
         if "audio_context_length" in shot:
             contract["audio_context_length"] = shot["audio_context_length"]
+        if "context_spatial_proxy" in shot:
+            contract["context_spatial_proxy"] = shot[
+                "context_spatial_proxy"]
         shots.append(contract)
     return {
         "version": PLAN_VERSION,
@@ -1147,8 +4006,281 @@ def _history_contract(plan: dict[str, Any], through_index: int) -> dict[str, Any
     }
 
 
+def _history_contract(plan: dict[str, Any], through_index: int) -> dict[str, Any]:
+    """Contract for immutable predecessors and their reusable AV state.
+
+    Plan-level continuation mode and context length control the scene being
+    generated; they do not alter the decoded frames or sampled AV latent
+    already stored in a predecessor checkpoint. Excluding those inherited
+    defaults lets a user choose how the next scene consumes the completed
+    prefix. Explicit per-scene overrides remain in each shot's contract
+    because they are stable scene declarations rather than mutable next-run
+    defaults.
+    """
+    contract = _legacy_history_contract(plan, through_index)
+    compatibility = dict(contract["compatibility"])
+    for key in _NEXT_SCENE_COMPATIBILITY_KEYS:
+        compatibility.pop(key, None)
+    contract["compatibility"] = compatibility
+    return contract
+
+
 def _history_hash(plan: dict[str, Any], through_index: int) -> str:
     return _fingerprint(_history_contract(plan, through_index))
+
+
+def _accepted_resume_history_hash(
+        plan: dict[str, Any], through_index: int,
+        metadata: dict[str, Any]) -> str | None:
+    """Return the matching current or legacy hash for one saved predecessor.
+
+    Older checkpoints included inherited next-scene controls in their history
+    hash. Rebuild only those legacy spellings from the values recorded in
+    their metadata; every other current setting and shot field still comes
+    from the requested Plan, so prompts, seeds, timing, references, audio, and
+    model fingerprints cannot be hidden by the migration fallback.
+    """
+    recorded = str(metadata.get("history_hash") or "")
+    expected = _history_hash(plan, through_index)
+    if recorded == expected:
+        return expected
+    saved_compatibility = metadata.get("compatibility")
+    if not isinstance(saved_compatibility, dict):
+        return None
+    # v0.4's first resume-neutral revision removed continuation_mode while
+    # context_length was still hashed. Check that released intermediate
+    # spelling before the original contract that included every available
+    # global control.
+    candidate_key_sets = (
+        frozenset(("context_length", "context_storage_length")),
+        _NEXT_SCENE_COMPATIBILITY_KEYS,
+    )
+    for restored_keys in candidate_key_sets:
+        legacy_plan = dict(plan)
+        compatibility = dict(plan["compatibility"])
+        for key in _NEXT_SCENE_COMPATIBILITY_KEYS:
+            compatibility.pop(key, None)
+        for key in restored_keys:
+            if key in saved_compatibility:
+                compatibility[key] = saved_compatibility[key]
+        legacy_plan["compatibility"] = compatibility
+        candidate = _fingerprint(_legacy_history_contract(
+            legacy_plan, through_index))
+        if recorded == candidate:
+            return candidate
+    return None
+
+
+def _selected_resume_history_hash(
+        plan: dict[str, Any], through_index: int,
+        metadata: dict[str, Any], verify_history: bool = True) -> str | None:
+    """Select the current-plan match or the checkpoint's recorded history."""
+    if bool(verify_history):
+        return _accepted_resume_history_hash(plan, through_index, metadata)
+    recorded = str(metadata.get("history_hash") or "")
+    return recorded or None
+
+
+def _canonical_source_reference_dependency(
+        plan: dict[str, Any], index: int,
+        source_timeline: Any = None, source_audio: Any = None
+        ) -> dict[str, Any] | None:
+    """Hash the canonical source PCM window which affects one scene."""
+    if (not _audio_policy_uses_source_reference(plan)
+            and not _audio_policy_locks_source_audio(plan)):
+        return None
+    shot = plan["shots"][int(index) - 1]
+    external_lead = int(shot.get("external_context_frames", 0))
+    start_frame = (0 if int(index) == 1 and external_lead > 0 else
+                   max(0, int(shot["generation_start_frame"])))
+    frame_count = (int(shot["delivered_frames"])
+                   if int(index) == 1 and external_lead > 0 else
+                   int(shot["raw_frames"]))
+    end_frame = start_frame + frame_count
+    if source_timeline is not None:
+        audio = _source_timeline_scene_audio(
+            source_timeline, start_frame, end_frame)
+        route = "source_timeline"
+    else:
+        if source_audio is None:
+            return None
+        audio = _slice_audio(
+            source_audio, start_frame / float(FPS),
+            frame_count / float(FPS),
+            pad_silence=bool(plan["compatibility"].get(
+                "source_audio_silent_padding")))
+        route = "legacy_audio"
+    waveform, sample_rate = _validate_audio(
+        audio, "Scene %d source-reference dependency" % int(index))
+    return {
+        "route": route,
+        "start_frame": start_frame,
+        "end_frame": end_frame,
+        "frame_count": frame_count,
+        "sample_rate": sample_rate,
+        "sample_count": int(waveform.shape[-1]),
+        "pcm_sha256": _audio_fingerprint({
+            "waveform": waveform, "sample_rate": sample_rate}),
+    }
+
+
+def _scene_dependency_record(
+        plan: dict[str, Any], index: int,
+        source_reference: dict[str, Any] | None = None
+        ) -> dict[str, Any]:
+    """Return one JSON-safe, scoped resume dependency record."""
+    index = int(index)
+    shot = plan["shots"][index - 1]
+    compatibility = plan["compatibility"]
+    policy = _resolved_audio_policy(compatibility)
+    context = _shot_context_length(
+        shot, int(compatibility.get("context_length", 0)))
+    audio_context = _shot_audio_context_length(
+        shot, int(compatibility.get("audio_context_length", 0)), context)
+    repeated_frames = max(
+        0, int(shot["raw_frames"]) - int(shot["delivered_frames"]))
+    video_blend = min(
+        repeated_frames,
+        _shot_video_blend_frames(
+            shot, int(compatibility.get("video_blend_frames", 0)), context))
+    transition = str(shot.get(
+        "continuation_mode", compatibility.get("continuation_mode", "guide")))
+    context_spatial_proxy = _shot_context_spatial_proxy(shot)
+    external_hash = str(compatibility.get("external_context_hash") or "")
+    if index == 1 and not external_hash:
+        context = 0
+        audio_context = 0
+        transition = "initial"
+    scopes = {
+        "global_generation": {
+            "plan_version": int(plan.get("version", PLAN_VERSION)),
+            "width": int(compatibility.get("width", 0)),
+            "height": int(compatibility.get("height", 0)),
+            "encode_mode": str(compatibility.get("encode_mode", "video")),
+            "crop": str(compatibility.get("crop", "disabled")),
+            "generation_fingerprint": str(
+                compatibility.get("generation_fingerprint") or ""),
+            "source_reference": str(policy["source_reference"]),
+        },
+        "scene_generation": {
+            "id": str(shot["id"]),
+            "prompt_hash": str(shot["prompt_hash"]),
+            "seed": int(shot["seed"]),
+            "steps": int(shot["steps"]),
+            "raw_frames": int(shot["raw_frames"]),
+            "delivered_frames": int(shot["delivered_frames"]),
+            "generation_start_frame": int(shot["generation_start_frame"]),
+            "active_reference_tags": sorted(
+                _prompt_reference_tags(shot.get("prompt"))),
+            "source_reference_window": source_reference,
+        },
+        "incoming_boundary": {
+            "continuation_mode": transition,
+            "context_length": context,
+            "audio_context_length": audio_context,
+            "generated_continuity": (
+                str(policy["generated_continuity"])
+                if index > 1 or external_hash else "off"),
+            "anchor_mode": str(compatibility.get("anchor_mode", "head")),
+            "external_context_hash": (
+                external_hash
+                if index == 1 else ""),
+        },
+        "assembly_only": {
+            "final_audio": str(policy["final_audio"]),
+            "source_timeline_fingerprint": str(
+                compatibility.get("source_timeline_fingerprint") or ""),
+            "source_audio_fingerprint": str(
+                compatibility.get("source_audio_hash") or ""),
+            "segment_crf": int(
+                compatibility.get("segment_crf", plan.get("segment_crf", 18))),
+            "video_blend_frames": video_blend,
+        },
+    }
+    if _audio_policy_locks_source_audio(compatibility):
+        # Omit the disabled spelling so pre-switch scene-dependency records
+        # remain byte-for-byte compatible with unchanged 0.5 runs.
+        scopes["global_generation"]["source_audio_target"] = "locked"
+    if transition in MASKED_CONTINUATION_MODES:
+        # v2 separates a masked motion video's delivered-only bank from its
+        # paired soundtrack's full raw target window, and obeys Generated
+        # continuity when deciding whether to preserve the predecessor audio
+        # latent. Keep that generation-significant behavior explicit so a
+        # pre-fix masked scene cannot be resumed as if it used the new clocks.
+        scopes["incoming_boundary"]["masked_audio_contract"] = (
+            MASKED_AUDIO_CONTRACT)
+    if context_spatial_proxy != "off":
+        scopes["incoming_boundary"].update({
+            "context_spatial_proxy": context_spatial_proxy,
+            "context_spatial_proxy_recipe": dict(
+                CONTEXT_SPATIAL_PROXY_RECIPE),
+        })
+    if transition == "tapered_av":
+        scopes["incoming_boundary"]["detail_av_recipe"] = dict(
+            DETAIL_AV_RECIPE)
+    if transition in DRIFT_CONTROL_CONTINUATION_MODES:
+        scopes["incoming_boundary"]["drift_control_av_recipe"] = dict(
+            DRIFT_CONTROL_AV_RECIPE)
+    if transition in LATENT_COLOR_CARRY_CONTINUATION_MODES:
+        scopes["incoming_boundary"]["latent_color_carry_recipe"] = dict(
+            LATENT_COLOR_CARRY_RECIPE)
+    fingerprints = {scope: _fingerprint(scopes[scope])
+                    for scope in DEPENDENCY_SCOPES}
+    generation_hash = _fingerprint({
+        scope: fingerprints[scope]
+        for scope in DEPENDENCY_SCOPES if scope != "assembly_only"})
+    return {
+        "version": SCENE_DEPENDENCY_VERSION,
+        "scene": index,
+        "scopes": scopes,
+        "fingerprints": fingerprints,
+        "generation_hash": generation_hash,
+    }
+
+
+def _dependency_value_diffs(
+        saved: Any, current: Any, prefix: str = "") -> list[tuple[str, Any, Any]]:
+    if isinstance(saved, dict) and isinstance(current, dict):
+        diffs = []
+        for key in sorted(set(saved) | set(current)):
+            field = "%s.%s" % (prefix, key) if prefix else str(key)
+            diffs.extend(_dependency_value_diffs(
+                saved.get(key), current.get(key), field))
+        return diffs
+    if saved != current:
+        return [(prefix, saved, current)]
+    return []
+
+
+def _scene_dependency_diffs(
+        saved: Any, current: Any) -> list[dict[str, Any]]:
+    if not isinstance(saved, dict) or saved.get("version") != (
+            SCENE_DEPENDENCY_VERSION):
+        return []
+    if not isinstance(current, dict) or current.get("version") != (
+            SCENE_DEPENDENCY_VERSION):
+        raise ValueError("Current H3 scene dependency record is invalid.")
+    scene = int(current["scene"])
+    diffs = []
+    for scope in DEPENDENCY_SCOPES:
+        if scope == "assembly_only":
+            continue
+        saved_scope = saved.get("scopes", {}).get(scope, {})
+        current_scope = current.get("scopes", {}).get(scope, {})
+        for field, before, after in _dependency_value_diffs(
+                saved_scope, current_scope):
+            diffs.append({
+                "scope": scope, "scene": scene, "field": field,
+                "saved": before, "current": after,
+                "regeneration_required": True,
+            })
+    return diffs
+
+
+def _format_dependency_mismatches(diffs: list[dict[str, Any]]) -> str:
+    return "; ".join(
+        "scene %(scene)d %(scope)s.%(field)s: saved=%(saved)r, current=%(current)r"
+        % item for item in diffs)
 
 
 def _audio_fingerprint(audio: Any) -> str:
@@ -1450,17 +4582,18 @@ def _plan_with_external_context(
         (len(prepared["shots"]), stitched_frames,
          stitched_frames / float(FPS), cfg["width"], cfg["height"],
          configured, int(cfg.get("video_blend_frames", 0)),
-         cfg["audio_mode"], prepared["run_name"]))
+         _audio_policy_summary(cfg), prepared["run_name"]))
     return prepared
 
 
 def _plan_with_source_audio(plan: dict[str, Any],
                             source_audio: dict[str, Any] | None) -> dict[str, Any]:
-    mode = plan["compatibility"]["audio_mode"]
-    if mode in ("source_track", "source_plus_timeline"):
+    policy = _resolved_audio_policy(plan)
+    if _audio_policy_requires_source(plan):
         if source_audio is None:
-            raise ValueError("H3 chain audio mode %s requires source_audio on "
-                             "Loop Start." % mode)
+            raise ValueError(
+                "H3 chain Audio Policy %s requires source_audio on Loop "
+                "Start." % _audio_policy_summary({"audio_policy": policy}))
         waveform, sample_rate = _validate_audio(
             source_audio, "H3 Chain Loop Start source audio")
         required_samples = int(round(
@@ -1500,6 +4633,48 @@ def _plan_with_source_audio(plan: dict[str, Any],
             "source_audio_hash": source_hash,
         })
     return prepared
+
+
+def _plan_with_source_timeline(
+        plan: dict[str, Any], timeline: Any) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Bind one typed source timeline to a prepared chain plan."""
+    source = _materialize_source_timeline_audio(timeline, plan)
+    policy = _resolved_audio_policy(plan)
+    audio_kind = str(source["audio"]["kind"])
+    if _audio_policy_requires_source(plan) and audio_kind == "none":
+        raise ValueError(
+            "H3 chain Audio Policy %s requires audio on Source Timeline." %
+            _audio_policy_summary({"audio_policy": policy}))
+    required_frames = int(plan["total_delivered_frames"])
+    silent_padding = bool(
+        source.get("recovery", {}).get("silent_padding_frames"))
+    if (_audio_policy_requires_source(plan)
+            and _source_timeline_available_audio_frames(source) <
+            required_frames):
+        raise ValueError(
+            "H3 Source Timeline audio is too short for this plan: it covers "
+            "%d of %d required 24 fps frames." %
+            (_source_timeline_available_audio_frames(source), required_frames))
+    source_audio_hash = (
+        str(source["fingerprints"].get("audio") or "none")
+        if _audio_policy_requires_source(plan) else "none")
+    timeline_hash = str(source["fingerprints"]["timeline"])
+    prepared = dict(plan)
+    prepared["base_plan_hash"] = str(
+        plan.get("base_plan_hash") or plan["plan_hash"])
+    prepared["compatibility"] = dict(plan["compatibility"])
+    prepared["compatibility"].update({
+        "source_audio_hash": source_audio_hash,
+        "source_audio_silent_padding": silent_padding,
+        "source_timeline_fingerprint": timeline_hash,
+    })
+    prepared["source_timeline"] = _source_timeline_recovery_record(source)
+    prepared["plan_hash"] = _fingerprint({
+        "prepared_plan_hash": plan["plan_hash"],
+        "source_audio_hash": source_audio_hash,
+        "source_timeline_fingerprint": timeline_hash,
+    })
+    return prepared, source
 
 
 def _retime_review_plan(plan: dict[str, Any]) -> None:
@@ -1563,7 +4738,7 @@ def _retime_review_plan(plan: dict[str, Any]) -> None:
         (len(plan["shots"]), stitched_frames,
          stitched_frames / float(FPS), cfg["width"], cfg["height"],
          context_length, int(cfg.get("video_blend_frames", 0)),
-         cfg["audio_mode"], imported, plan["run_name"]))
+         _audio_policy_summary(cfg), imported, plan["run_name"]))
 
 
 def _plan_with_review_revision(plan: dict[str, Any], index: int,
@@ -1638,6 +4813,7 @@ def _normalize_plan(
     generation_fingerprint: str = "",
     video_blend_frames: int = 0,
     continuation_mode: str = "guide",
+    chain_policy: Any = None,
 ) -> dict[str, Any]:
     try:
         raw = json.loads(str(plan_json or ""))
@@ -1654,6 +4830,18 @@ def _normalize_plan(
     if len(raw_shots) > MAX_SHOTS:
         raise ValueError("H3 Chain Plan supports at most %d shots." % MAX_SHOTS)
 
+    resolved_chain_policy = (
+        _validate_chain_policy(chain_policy)
+        if chain_policy is not None else None)
+    if resolved_chain_policy is not None:
+        audio_policy = resolved_chain_policy["audio_policy"]
+        transition_policy = resolved_chain_policy["transition_policy"]
+        audio_context_length = int(
+            resolved_chain_policy["audio_context_length"])
+    else:
+        audio_policy = None
+        transition_policy = None
+
     width, height = int(width), int(height)
     if width < 32 or height < 32 or width % 32 or height % 32:
         raise ValueError("H3 chain width and height must be positive multiples of 32.")
@@ -1668,13 +4856,25 @@ def _normalize_plan(
         raise ValueError("Unknown H3 context encode mode %r." % encode_mode)
     if anchor_mode not in ("head", "before"):
         raise ValueError("Unknown H3 context anchor mode %r." % anchor_mode)
+    continuation_mode = migrate_continuation_mode(continuation_mode)
     if continuation_mode not in CONTINUATION_MODES:
         raise ValueError(
             "Unknown H3 continuation mode %r." % continuation_mode)
+    resolved_transition_policy = (
+        _validate_transition_policy(transition_policy)
+        if transition_policy is not None else None)
+    if resolved_transition_policy is not None:
+        context_length = int(resolved_transition_policy["context_length"])
+        continuation_mode = str(
+            resolved_transition_policy["continuation_mode"])
     if crop not in ("disabled", "center"):
         raise ValueError("Unknown H3 context crop mode %r." % crop)
     if audio_mode not in AUDIO_MODES:
         raise ValueError("Unknown H3 chain audio mode %r." % audio_mode)
+    resolved_audio_policy = (
+        _validate_audio_policy(audio_policy)
+        if audio_policy is not None
+        else migrate_legacy_audio_mode(audio_mode))
     default_steps = max(1, min(10000, int(default_steps)))
     base_seed = max(0, min(MAX_SEED, int(base_seed)))
     segment_crf = max(0, min(51, int(segment_crf)))
@@ -1717,30 +4917,87 @@ def _normalize_plan(
             shot_context_length = _shot_context_length(item, context_length)
             shot_audio_context_length = _shot_audio_context_length(
                 item, audio_context_length, shot_context_length)
+            shot_video_blend_frames = _shot_video_blend_frames(
+                item, video_blend_frames, shot_context_length)
         except ValueError as exc:
             raise ValueError("Shot %d: %s" % (index, exc)) from exc
         resolved_context_lengths.append(shot_context_length)
+        if anchor_mode != "head" and shot_video_blend_frames:
+            raise ValueError(
+                "H3 scene video blending requires anchor_mode=head because "
+                "before mode does not reproduce a leading overlap to blend "
+                "(shot %d)." % index)
 
-        shot_continuation_mode = item.get(
-            "continuation_mode", continuation_mode)
+        shot_continuation_mode = migrate_continuation_mode(item.get(
+            "continuation_mode", continuation_mode))
         if shot_continuation_mode not in CONTINUATION_MODES:
             raise ValueError(
                 "Shot %d has unknown H3 continuation mode %r." %
                 (index, shot_continuation_mode))
-        if shot_context_length and shot_continuation_mode == "masked_av":
-            if shot_context_length < 5:
+        try:
+            shot_context_spatial_proxy = _shot_context_spatial_proxy(item)
+        except ValueError as exc:
+            raise ValueError("Shot %d: %s" % (index, exc)) from exc
+        if shot_context_spatial_proxy != "off":
+            if shot_context_length <= 0:
                 raise ValueError(
-                    "H3 masked AV continuation requires context_length of at "
-                    "least 5 frames (shot %d)." % index)
+                    "Shot %d context spatial proxy requires a positive "
+                    "context_length." % index)
+            if (shot_context_spatial_proxy == "rgb_5_6" and
+                    shot_continuation_mode not in RGB_PROXY_GUIDE_MODES):
+                raise ValueError(
+                    "Shot %d low-grid 5/6 context spatial proxy requires "
+                    "Guide, Tone Carry Guide, or Detail Guide continuation."
+                    % index)
+            if (shot_context_spatial_proxy == "latent_5_6" and
+                    shot_continuation_mode not in MASKED_CONTINUATION_MODES):
+                raise ValueError(
+                    "Shot %d latent 5/6 context spatial proxy requires an "
+                    "AV continuation mode." % index)
+            if shot_context_spatial_proxy != "off" and index == 1:
+                raise ValueError(
+                    "Shot 1 cannot use a 5/6 context spatial proxy: Existing "
+                    "Video Context has no sampled predecessor latent.")
+        if (shot_context_length and
+                shot_continuation_mode in MASKED_CONTINUATION_MODES):
+            if shot_context_length not in AV_TRANSITION_CONTEXT_LENGTHS:
+                raise ValueError(
+                    "H3 AV mask continuation requires an exact shared video/"
+                    "audio boundary: context_length must be 39, 90, 141, "
+                    "192, or 243 frames (shot %d)." % index)
             if encode_mode != "video":
                 raise ValueError(
-                    "H3 masked AV continuation requires encode_mode=video "
+                    "H3 AV mask continuation requires encode_mode=video "
                     "(shot %d)." % index)
             if anchor_mode != "head":
                 raise ValueError(
-                    "H3 masked AV continuation requires anchor_mode=head "
+                    "H3 AV mask continuation requires anchor_mode=head "
                     "because it preserves a real target-latent prefix that "
                     "Loop Trim must remove (shot %d)." % index)
+            if (shot_continuation_mode == "tapered_av" and
+                    shot_context_length != int(
+                        DETAIL_AV_RECIPE["context_frames"])):
+                raise ValueError(
+                    "H3 Detail AV currently requires exactly %d context "
+                    "frames (shot %d)." %
+                    (int(DETAIL_AV_RECIPE["context_frames"]), index))
+            if (shot_continuation_mode in DRIFT_CONTROL_CONTINUATION_MODES and
+                    shot_context_length != int(
+                        DRIFT_CONTROL_AV_RECIPE["context_frames"])):
+                raise ValueError(
+                    "H3 Drift-Control AV and Color-Stable Drift AV currently "
+                    "require exactly %d context frames (shot %d)." %
+                    (int(DRIFT_CONTROL_AV_RECIPE["context_frames"]), index))
+        if (shot_context_length and
+                shot_continuation_mode == "latent_guide"):
+            if shot_context_length < 5:
+                raise ValueError(
+                    "H3 Latent Guide requires context_length of at least 5 "
+                    "frames (shot %d)." % index)
+            if encode_mode != "video":
+                raise ValueError(
+                    "H3 Latent Guide requires encode_mode=video (shot %d)." %
+                    index)
         resolved_continuation_modes.append(shot_continuation_mode)
 
         shot_id = _safe_name(item.get("id", "clip_%04d" % index),
@@ -1829,6 +5086,17 @@ def _normalize_plan(
                 isinstance(explicit_audio_context, str)
                 and not explicit_audio_context.strip()):
             shot["audio_context_length"] = shot_audio_context_length
+        explicit_video_blend = item.get("video_blend_frames")
+        if explicit_video_blend is not None and not (
+                isinstance(explicit_video_blend, str)
+                and not explicit_video_blend.strip()):
+            # Assembly-only: deliberately excluded from predecessor history,
+            # but retained in the editable scene declaration and manifest.
+            shot["video_blend_frames"] = shot_video_blend_frames
+        if shot_context_spatial_proxy != "off":
+            # Boundary-only and deliberately scene-local: absence leaves this
+            # scene and all other incoming boundaries unchanged.
+            shot["context_spatial_proxy"] = shot_context_spatial_proxy
         shots.append(shot)
         stitched_frames += delivered_frames
 
@@ -1850,7 +5118,9 @@ def _normalize_plan(
         "encode_mode": encode_mode,
         "anchor_mode": anchor_mode,
         "crop": crop,
-        "audio_mode": audio_mode,
+        "audio_mode": (
+            _legacy_audio_mode_for_policy(resolved_audio_policy)
+            if audio_policy is not None else audio_mode),
         "audio_context_length": audio_context_length,
         "segment_crf": segment_crf,
         "video_blend_frames": video_blend_frames,
@@ -1859,6 +5129,10 @@ def _normalize_plan(
         # generation dependencies part of the resume contract.
         "generation_fingerprint": str(generation_fingerprint or "").strip(),
     }
+    if audio_policy is not None:
+        compatibility["audio_policy"] = resolved_audio_policy
+    if transition_policy is not None:
+        compatibility["transition_policy"] = resolved_transition_policy
     # Preserve the exact compatibility/history hashes of every pre-feature
     # guide plan. A missing key is the stable serialized spelling of `guide`;
     # only the behavior-changing experimental mode extends the contract.
@@ -1890,10 +5164,11 @@ def _normalize_plan(
     )
     plan["summary"] = (
         "%d clips; %d delivered frames (%.3fs) at %dx%d; context=%d/%s; "
-        "blend=%d; audio=%s; run=%s" %
+        "blend=%d; audio=%s; transition=%s; run=%s" %
         (len(shots), stitched_frames, stitched_frames / float(FPS), width,
          height, context_length, continuation_summary, video_blend_frames,
-         audio_mode, plan["run_name"]))
+         _audio_policy_summary(compatibility),
+         _transition_policy_summary(compatibility), plan["run_name"]))
     return plan
 
 
@@ -2158,7 +5433,11 @@ def _effective_editor_plan(plan: dict[str, Any]) -> dict[str, Any]:
              **({"context_length": shot["context_length"]}
                 if "context_length" in shot else {}),
              **({"audio_context_length": shot["audio_context_length"]}
-                if "audio_context_length" in shot else {}))
+                if "audio_context_length" in shot else {}),
+             **({"video_blend_frames": shot["video_blend_frames"]}
+                if "video_blend_frames" in shot else {}),
+             **({"context_spatial_proxy": shot["context_spatial_proxy"]}
+                if "context_spatial_proxy" in shot else {}))
             for shot in plan["shots"]],
     }
 
@@ -2306,8 +5585,271 @@ def _prompt_fields(plan: dict[str, Any], index: int) -> dict[str, Any]:
 
 def _tensor_cpu_clone(value: Any) -> Any:
     if torch is not None and torch.is_tensor(value):
-        return value.detach().cpu().contiguous().clone()
+        # ``cpu().contiguous().clone()`` can briefly hold two new host copies
+        # when the source is on CUDA. Ask ``to`` for the owned CPU copy once;
+        # checkpoint slices are normally already contiguous after transfer.
+        result = value.detach().to(device="cpu", copy=True)
+        return result if result.is_contiguous() else result.contiguous()
     return value
+
+
+_TAPERED_GUIDE_PALETTE = (
+    (185, 115, 215),
+    (115, 195, 140),
+    (150, 148, 162),
+    (205, 150, 192),
+    (138, 182, 148),
+    (160, 120, 175),
+)
+_TAPERED_GUIDE_ALPHA = 0.30
+_TAPERED_GUIDE_ALPHA_END = 0.0
+_TAPERED_GUIDE_RAMP_FRAMES = 8
+_TAPERED_GUIDE_BLOCK_PIXELS = 16
+_TAPERED_GUIDE_LUMA = (0.2126, 0.7152, 0.0722)
+
+
+def _tapered_guide_alpha(position: int, frame_count: int) -> float:
+    """Return the tuned chroma-noise taper for one Guide frame."""
+    position = int(position)
+    frame_count = int(frame_count)
+    if frame_count < 1 or position < 0 or position >= frame_count:
+        raise ValueError("Tapered Guide position is outside its context span.")
+    ramp = min(_TAPERED_GUIDE_RAMP_FRAMES, frame_count)
+    from_end = frame_count - 1 - position
+    if from_end >= ramp:
+        return _TAPERED_GUIDE_ALPHA
+    return (_TAPERED_GUIDE_ALPHA
+            + (_TAPERED_GUIDE_ALPHA_END - _TAPERED_GUIDE_ALPHA)
+            * (ramp - from_end) / ramp)
+
+
+def _luma_preserving_chroma_target(source: Any, color: Any) -> Any:
+    """Move a block color onto source luma without clipping RGB gamut."""
+    weights = torch.tensor(
+        _TAPERED_GUIDE_LUMA, device=source.device, dtype=source.dtype)
+    source_luma = torch.sum(source * weights, dim=-1, keepdim=True)
+    color_luma = torch.sum(color * weights, dim=-1, keepdim=True)
+    chroma = color - color_luma
+
+    # A zero-luma chroma vector can leave RGB gamut when centered on a
+    # different luminance. Scale it uniformly so hue and source luminance are
+    # both retained without a clamp introducing new block-shaped edges.
+    positive = chroma > 0
+    negative = chroma < 0
+    upper = torch.where(
+        positive, (1.0 - source_luma) / torch.clamp(chroma, min=1e-8),
+        torch.full_like(chroma, float("inf")))
+    lower = torch.where(
+        negative, source_luma / torch.clamp(-chroma, min=1e-8),
+        torch.full_like(chroma, float("inf")))
+    scale = torch.minimum(upper, lower).amin(dim=-1, keepdim=True)
+    scale = torch.clamp(scale, min=0.0, max=1.0)
+    return source_luma + chroma * scale
+
+
+def _tapered_guide_context(
+        frames: Any, context_length: int, seed: int) -> Any:
+    """Build a disposable noisy tail for repair-biased Guide continuation.
+
+    The accepted predecessor tensor remains untouched. Only the exact tail
+    consumed by Motion Context is cloned and corrupted. Independent block
+    patterns on each frame make the chroma damage temporally incoherent; the
+    final eight frames taper to a completely clean join. Corruption is
+    restricted to chroma so mouth shapes, lighting, and other luma structure
+    survive in the Guide context.
+    """
+    if torch is None or not torch.is_tensor(frames):
+        raise ValueError("Tapered Guide requires a torch IMAGE tensor.")
+    if frames.ndim != 4 or int(frames.shape[-1]) < 3:
+        raise ValueError(
+            "Tapered Guide expects [frames,height,width,channels] RGB images; "
+            "received %s." % (tuple(frames.shape),))
+    if not frames.is_floating_point():
+        raise ValueError("Tapered Guide requires floating-point IMAGE values.")
+    requested = int(context_length)
+    if requested <= 0:
+        return frames
+    count = min(requested, int(frames.shape[0]))
+    if count < 1:
+        raise ValueError("Tapered Guide received an empty context tensor.")
+
+    tail = frames[-count:].detach().contiguous().clone()
+    height, width = int(tail.shape[1]), int(tail.shape[2])
+    grid_height = max(1, int(math.ceil(
+        height / float(_TAPERED_GUIDE_BLOCK_PIXELS))))
+    grid_width = max(1, int(math.ceil(
+        width / float(_TAPERED_GUIDE_BLOCK_PIXELS))))
+    generator = torch.Generator(device="cpu")
+    generator.manual_seed(int(seed) & MAX_SEED)
+    palette = torch.tensor(
+        _TAPERED_GUIDE_PALETTE, dtype=torch.float32) / 255.0
+
+    for position in range(count):
+        indices = torch.randint(
+            0, len(_TAPERED_GUIDE_PALETTE),
+            (grid_height, grid_width), generator=generator, device="cpu")
+        small = palette[indices].permute(2, 0, 1).unsqueeze(0)
+        noisy = torch.nn.functional.interpolate(
+            small, size=(height, width), mode="nearest")[0].permute(1, 2, 0)
+        noisy = noisy.to(device=tail.device, dtype=tail.dtype)
+        amount = _tapered_guide_alpha(position, count)
+        target = _luma_preserving_chroma_target(
+            tail[position, ..., :3], noisy)
+        tail[position, ..., :3] = torch.lerp(
+            tail[position, ..., :3], target, amount)
+
+    return tail
+
+
+def _state_guide_tone_carry(state: dict[str, Any]) -> dict[str, Any] | None:
+    """Return the predecessor's validated direct RGB carry curve, if any."""
+    segments = state.get("segments")
+    segment = segments[-1] if isinstance(segments, list) and segments else None
+    value = segment.get("guide_tone_carry") if isinstance(segment, dict) else None
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("H3 Guide tone-carry metadata is not a record.")
+    points = value.get("points")
+    if not isinstance(points, list) or len(points) < 3:
+        raise ValueError("H3 Guide tone-carry metadata has no usable curve.")
+    previous_x = previous_y = -1.0
+    for point in points:
+        if not isinstance(point, list) or len(point) != 2:
+            raise ValueError("H3 Guide tone-carry curve contains a bad point.")
+        x, y = float(point[0]), float(point[1])
+        if (x < 0.0 or x > 1.0 or y < 0.0 or y > 1.0 or
+                x <= previous_x or y < previous_y):
+            raise ValueError("H3 Guide tone-carry curve is not monotonic.")
+        previous_x, previous_y = x, y
+    return value
+
+
+def _decode_guide_tone_segment_window(
+        segment: dict[str, Any], position: str) -> Any:
+    """Decode only the small encoded boundary window needed for recovery."""
+    if av is None or np is None or torch is None:
+        raise RuntimeError(
+            "Saved-scene Guide tone recovery requires PyAV, NumPy, and torch.")
+    path_value = segment.get("segment")
+    if not isinstance(path_value, str) or not path_value:
+        raise ValueError("Saved H3 scene has no video artifact for tone recovery.")
+    path = _absolute_output_path(path_value)
+    if not os.path.isfile(path):
+        raise FileNotFoundError(
+            "Saved H3 scene video is missing for tone recovery: %s" % path)
+    if position == "tail":
+        selected: Any = deque(maxlen=BOUNDARY_TONE_MATCH_CONTEXT_FRAMES)
+        limit = BOUNDARY_TONE_MATCH_CONTEXT_FRAMES
+    elif position == "head":
+        selected = []
+        limit = BOUNDARY_TONE_MATCH_SEARCH_FRAMES
+    else:
+        raise ValueError("Guide tone recovery position must be head or tail.")
+    with av.open(path, mode="r") as container:
+        streams = list(container.streams.video)
+        if len(streams) != 1:
+            raise ValueError(
+                "Saved H3 scene %s contains %d video streams; expected 1." %
+                (path, len(streams)))
+        for frame in container.decode(streams[0]):
+            selected.append(frame.to_ndarray(format="rgb24"))
+            if position == "head" and len(selected) >= limit:
+                break
+    if not selected:
+        raise ValueError("Saved H3 scene contains no decodable video frames: %s"
+                         % path)
+    arrays = np.stack(list(selected), axis=0)
+    return torch.from_numpy(arrays.copy()).to(torch.float32).div_(255.0)
+
+
+def _recover_state_guide_tone_carry(
+        state: dict[str, Any]) -> dict[str, Any] | None:
+    """Backfill tone metadata from saved scenes without rerunning diffusion.
+
+    Early Tone Carry builds did not save a curve on existing checkpoints. A
+    scene-N resume still has immutable scene N-2 and N-1 video artifacts, so
+    the same bounded boundary analysis can be reconstructed from those files.
+    The saved latent/checkpoint is deliberately neither decoded nor rewritten.
+    """
+    existing = _state_guide_tone_carry(state)
+    if existing is not None:
+        return existing
+    segments = state.get("segments")
+    if not isinstance(segments, list) or len(segments) < 2:
+        return None
+    current = segments[-1]
+    previous = segments[-2]
+    if not isinstance(current, dict) or not isinstance(previous, dict):
+        return None
+    if bool(current.get("_guide_tone_recovery_attempted", False)):
+        return None
+    current["_guide_tone_recovery_attempted"] = True
+    try:
+        guide_reference = _decode_guide_tone_segment_window(previous, "tail")
+        generated_head = _decode_guide_tone_segment_window(current, "head")
+        # If this legacy scene was itself generated with Tone Carry, compare
+        # it against the corrected RGB Guide it actually received.
+        previous_curve = previous.get("guide_tone_carry")
+        if (bool(current.get("guide_tone_input_applied", False))
+                and isinstance(previous_curve, dict)):
+            guide_reference = _apply_guide_tone_carry(
+                guide_reference, previous_curve)
+        recovered = _detect_guide_tone_carry(
+            guide_reference, generated_head)
+    except Exception as exc:
+        _LOG.warning(
+            "H3 Chain Tone Carry Guide could not recover clip %d's RGB curve "
+            "from its saved scene videos; regular RGB Guide remains active: "
+            "%s", int(current.get("index", 0)), exc)
+        return None
+    if recovered is None:
+        _LOG.info(
+            "H3 Chain Tone Carry Guide found no coherent recoverable tone "
+            "step for saved clip %d; regular RGB Guide remains active.",
+            int(current.get("index", 0)))
+        return None
+    recovered["recovered_from"] = "saved_scene_videos"
+    current["guide_tone_carry"] = recovered
+    _LOG.info(
+        "H3 Chain Tone Carry Guide recovered clip %d's RGB curve from saved "
+        "scene videos (frame %d, luma jump %+.3f); its existing checkpoint "
+        "and sampled AV latent are reused unchanged.",
+        int(current.get("index", 0)), int(recovered["start_frame"]),
+        float(recovered["detected_luma_jump"]))
+    return recovered
+
+
+def _apply_guide_tone_carry(
+        frames: Any, match: dict[str, Any]) -> Any:
+    """Apply an assembly-compatible RGB curve without 8-bit quantization."""
+    if torch is None or not torch.is_tensor(frames):
+        raise ValueError("H3 Tone Carry Guide requires a torch IMAGE tensor.")
+    if frames.ndim != 4 or int(frames.shape[-1]) < 3:
+        raise ValueError(
+            "H3 Tone Carry Guide expects [frames,height,width,channels] RGB "
+            "images; received %s." % (tuple(frames.shape),))
+    if not frames.is_floating_point():
+        raise ValueError("H3 Tone Carry Guide requires floating-point images.")
+    points = match["points"]
+    xs = torch.tensor(
+        [float(point[0]) for point in points],
+        device=frames.device, dtype=frames.dtype)
+    ys = torch.tensor(
+        [float(point[1]) for point in points],
+        device=frames.device, dtype=frames.dtype)
+    result = frames.detach().contiguous().clone()
+    rgb = torch.clamp(result[..., :3], 0.0, 1.0)
+    upper = torch.bucketize(rgb.contiguous(), xs)
+    lower = torch.clamp(upper - 1, min=0, max=len(points) - 2)
+    upper = torch.clamp(upper, min=1, max=len(points) - 1)
+    x0, x1 = xs[lower], xs[upper]
+    y0, y1 = ys[lower], ys[upper]
+    amount = torch.where(
+        x1 > x0, (rgb - x0) / torch.clamp(x1 - x0, min=1e-8),
+        torch.zeros_like(rgb))
+    result[..., :3] = torch.clamp(y0 + amount * (y1 - y0), 0.0, 1.0)
+    return result
 
 
 def _compact_latent(latent: dict[str, Any]) -> dict[str, Any]:
@@ -2318,6 +5860,179 @@ def _compact_latent(latent: dict[str, Any]) -> dict[str, Any]:
                         _tensor_cpu_clone(parts[1])]}
 
 
+def _plan_uses_latent_color_carry(plan: dict[str, Any]) -> bool:
+    compatibility = plan.get("compatibility") or {}
+    fallback = str(compatibility.get("continuation_mode", "guide"))
+    return any(
+        migrate_continuation_mode(shot.get("continuation_mode", fallback))
+        in LATENT_COLOR_CARRY_CONTINUATION_MODES
+        for shot in (plan.get("shots") or ()))
+
+
+def _segment_latent_color_stats(
+    segment: dict[str, Any],
+) -> dict[str, Any]:
+    """Return saved tail-color stats, recovering old checkpoints lazily."""
+    existing = segment.get("latent_color_stats")
+    if isinstance(existing, dict):
+        return existing
+    if _st_load is None:
+        raise RuntimeError(
+            "H3 latent color carry needs safetensors to recover an older "
+            "scene anchor.")
+    checkpoint_value = segment.get("checkpoint")
+    if not isinstance(checkpoint_value, str):
+        raise ValueError(
+            "H3 latent color carry scene %d has no checkpoint path." %
+            int(segment.get("index", 0)))
+    checkpoint = _absolute_output_path(checkpoint_value)
+    tensors = _st_load(checkpoint)
+    frames = tensors.get("context_frames")
+    if (not torch.is_tensor(frames) or frames.ndim != 4
+            or int(frames.shape[0]) < 1):
+        raise ValueError(
+            "H3 latent color carry scene %d checkpoint has no retained RGB "
+            "tail. Regenerate that scene once with the current node version."
+            % int(segment.get("index", 0)))
+    from .latent_color_carry import tensor_scene_color_stats
+
+    stats = tensor_scene_color_stats(frames)
+    # This mutates only the in-memory resume record. Existing on-disk metadata
+    # remains immutable and will gain the field if the scene is regenerated.
+    segment["latent_color_stats"] = stats
+    _LOG.info(
+        "H3 latent color carry recovered scene %d tail statistics from its "
+        "saved checkpoint; no scene was regenerated.",
+        int(segment.get("index", 0)))
+    return stats
+
+
+def _state_latent_color_carry(
+    state: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Resolve first-generated-scene anchor and current predecessor stats."""
+    segments = state.get("segments")
+    if not isinstance(segments, list) or not segments:
+        return None
+    anchor_segment = segments[0]
+    current_segment = segments[-1]
+    if not isinstance(anchor_segment, dict) or not isinstance(
+            current_segment, dict):
+        raise ValueError("H3 latent color carry has malformed scene history.")
+    return {
+        "anchor_stats": _segment_latent_color_stats(anchor_segment),
+        "current_stats": _segment_latent_color_stats(current_segment),
+        "anchor_scene": int(anchor_segment.get("index", 1)),
+        "source_scene": int(current_segment.get("index", 0)),
+    }
+
+
+def _detail_av_clean_blend_prefix(
+        state: dict[str, Any], images_with_overlap: Any,
+        blend_frames: int) -> Any:
+    """Return the clean prefix streamed over a disposable AV blend head.
+
+    Returning only the predecessor view avoids cloning a complete 300+ frame
+    float RGB scene merely to replace its first few frames. The video writer
+    performs the substitution one frame at a time.
+    """
+    blend_frames = int(blend_frames)
+    if blend_frames <= 0:
+        return images_with_overlap
+    previous = state.get("previous_frames")
+    if (torch is None or not torch.is_tensor(previous)
+            or not torch.is_tensor(images_with_overlap)):
+        raise ValueError(
+            "H3 disposable-prefix AV blending requires the clean predecessor "
+            "IMAGE checkpoint.")
+    if previous.ndim != 4 or images_with_overlap.ndim != 4:
+        raise ValueError(
+            "H3 disposable-prefix AV blend tensors must be "
+            "[frames,height,width,channels].")
+    if int(previous.shape[0]) < blend_frames:
+        raise ValueError(
+            "H3 disposable-prefix AV blend requests %d clean predecessor "
+            "frames, but "
+            "only %d are checkpointed." %
+            (blend_frames, int(previous.shape[0])))
+    if tuple(previous.shape[1:]) != tuple(images_with_overlap.shape[1:]):
+        raise ValueError(
+            "H3 disposable-prefix AV clean predecessor/blend image geometry "
+            "differs: "
+            "%s vs %s." %
+            (tuple(previous.shape), tuple(images_with_overlap.shape)))
+    return previous[-blend_frames:].detach()
+
+
+def _previous_context_frames(state: dict[str, Any], vae: Any,
+                             requested: int) -> Any:
+    """Return the requested predecessor tail, recovering it from AV latent.
+
+    Checkpoints historically retained only the context length configured when
+    their scene was saved. If a later resume asks for a longer next-scene
+    context, the complete predecessor video latent is still present. Decode it
+    and remove that predecessor's own repeated leading overlap instead of
+    forcing an otherwise pointless regeneration.
+    """
+    frames = state.get("previous_frames")
+    if frames is None or getattr(frames, "ndim", 0) != 4:
+        raise ValueError(
+            "H3 chain continuation has no valid previous frame checkpoint.")
+    requested = int(requested)
+    if requested <= 0 or int(frames.shape[0]) >= requested:
+        return frames
+
+    segments = state.get("segments")
+    segment = segments[-1] if isinstance(segments, list) and segments else None
+    if not isinstance(segment, dict):
+        raise ValueError(
+            "H3 chain cannot recover a longer context tail because its "
+            "predecessor segment metadata is unavailable.")
+    previous_latent = state.get("previous_latent")
+    streams = (_streams_from_latent(previous_latent)
+               if previous_latent is not None else [])
+    if not streams:
+        raise ValueError(
+            "H3 chain cannot recover a longer context tail because its "
+            "predecessor video latent is unavailable.")
+
+    decoded = vae.decode(streams[0])
+    if not torch.is_tensor(decoded):
+        raise ValueError(
+            "H3 chain predecessor VAE returned %r instead of image frames."
+            % type(decoded))
+    if decoded.ndim == 5:
+        decoded = decoded.reshape(
+            -1, decoded.shape[-3], decoded.shape[-2], decoded.shape[-1])
+    if decoded.ndim != 4:
+        raise ValueError(
+            "H3 chain predecessor VAE returned image shape %s; expected "
+            "[frames,height,width,channels]." % (tuple(decoded.shape),))
+
+    raw_frames = int(segment.get("raw_frames", 0))
+    delivered_frames = int(segment.get("delivered_frames", 0))
+    trim_frames = raw_frames - delivered_frames
+    if (raw_frames <= 0 or delivered_frames <= 0 or trim_frames < 0
+            or int(decoded.shape[0]) != raw_frames):
+        raise ValueError(
+            "H3 chain cannot recover predecessor context: its latent decoded "
+            "to %d frames but segment metadata declares %d raw / %d "
+            "delivered frames." %
+            (int(decoded.shape[0]), raw_frames, delivered_frames))
+    delivered = decoded[trim_frames:trim_frames + delivered_frames]
+    if requested > int(delivered.shape[0]):
+        raise ValueError(
+            "H3 chain next scene requests %d context frames, but predecessor "
+            "clip %d delivers only %d." %
+            (requested, int(segment.get("index", 0)),
+             int(delivered.shape[0])))
+    _LOG.info(
+        "H3 Chain re-decoded clip %d's saved video latent to expand the next "
+        "scene context from %d to %d frames; no scene was regenerated.",
+        int(segment.get("index", 0)), int(frames.shape[0]), requested)
+    return _tensor_cpu_clone(delivered[-requested:])
+
+
 def _public_segment(value: dict[str, Any]) -> dict[str, Any]:
     return {key: value[key] for key in (
         "index", "id", "segment", "checkpoint", "metadata",
@@ -2326,9 +6041,14 @@ def _public_segment(value: dict[str, Any]) -> dict[str, Any]:
         "created_at", "branch_id", "forked_from_branch_id",
         "generated_audio", "generated_audio_sha256",
         "raw_frames", "delivered_frames", "history_hash",
+        "scene_dependency", "reference_cache",
         "prompt_prefix", "scene_prompt", "prompt", "prompt_hash", "archives",
         "seed", "steps", "continuation_mode", "context_length",
-        "audio_context_length", "resolved_context_length",
+        "audio_context_length", "context_spatial_proxy",
+        "guide_tone_carry",
+        "guide_tone_input_applied",
+        "latent_color_stats",
+        "resolved_context_length",
         "resolved_audio_context_length",
         "sample_rate", "segment_sha256",
         "checkpoint_sha256", "prompt_file_sha256", "predecessor_revision",
@@ -2417,12 +6137,23 @@ def _verify_segment_artifacts(segment: dict[str, Any], index: int) -> None:
                 "check." % index)
 
 
-def _load_resume_state(plan: dict[str, Any], start_clip: int) -> dict[str, Any]:
+def _load_resume_state(
+        plan: dict[str, Any], start_clip: int,
+        verify_history: bool = True, source_timeline: Any = None,
+        source_audio: Any = None) -> dict[str, Any]:
     if _st_load is None:
         raise RuntimeError("safetensors is required to resume H3 chains.")
     previous_index = start_clip - 1
     segments = []
     previous_meta = None
+    if not bool(verify_history):
+        _LOG.warning(
+            "H3 Chain Loop Start: predecessor history verification is "
+            "DISABLED for resume at clip %d. Saved artifact integrity will "
+            "still be checked, but the current Plan may not describe the "
+            "content stored in clips 1..%d.",
+            int(start_clip), int(previous_index),
+        )
     for index in range(1, previous_index + 1):
         paths = _artifact_paths(plan, index)
         if not os.path.isfile(paths["metadata"]):
@@ -2430,15 +6161,46 @@ def _load_resume_state(plan: dict[str, Any], start_clip: int) -> dict[str, Any]:
                 "Cannot resume clip %d: metadata for predecessor clip %d is "
                 "missing: %s" % (start_clip, index, paths["metadata"]))
         metadata = _read_json(paths["metadata"])
-        expected = _history_hash(plan, index)
-        if metadata.get("history_hash") != expected:
+        saved_dependency = metadata.get("scene_dependency")
+        if bool(verify_history) and isinstance(saved_dependency, dict):
+            current_source_dependency = _canonical_source_reference_dependency(
+                plan, index, source_timeline, source_audio)
+            if current_source_dependency is None:
+                saved_compatibility = metadata.get("compatibility") or {}
+                if (str(saved_compatibility.get("source_audio_hash") or "") ==
+                        str(plan["compatibility"].get(
+                            "source_audio_hash") or "")):
+                    current_source_dependency = saved_dependency.get(
+                        "scopes", {}).get("scene_generation", {}).get(
+                            "source_reference_window")
+            current_dependency = _scene_dependency_record(
+                plan, index, current_source_dependency)
+            dependency_diffs = _scene_dependency_diffs(
+                saved_dependency, current_dependency)
+            if dependency_diffs:
+                raise ValueError(
+                    "Cannot resume clip %d: %s. Regenerate scene %d before "
+                    "continuing." % (
+                        start_clip,
+                        _format_dependency_mismatches(dependency_diffs), index))
+            accepted = str(metadata.get("history_hash") or "") or None
+        else:
+            accepted = _selected_resume_history_hash(
+                plan, index, metadata, verify_history)
+        if accepted is None:
+            if bool(verify_history):
+                raise ValueError(
+                    "Cannot resume clip %d: clip %d was generated from "
+                    "different settings, prompts, seeds, or durations. To "
+                    "deliberately reuse it anyway, disable Loop Start's "
+                    "verify_resume_history switch." % (start_clip, index))
             raise ValueError(
-                "Cannot resume clip %d: clip %d was generated from different "
-                "settings, prompts, seeds, or durations." % (start_clip, index))
+                "Cannot resume clip %d without history verification: clip %d "
+                "metadata has no recorded history hash." % (start_clip, index))
         segment = metadata.get("segment")
         if not isinstance(segment, dict):
             raise ValueError("Checkpoint metadata for clip %d has no segment." % index)
-        if segment.get("history_hash") != expected:
+        if segment.get("history_hash") != accepted:
             raise ValueError(
                 "Checkpoint segment record for clip %d has a mismatched history."
                 % index)
@@ -2457,27 +6219,33 @@ def _load_resume_state(plan: dict[str, Any], start_clip: int) -> dict[str, Any]:
     missing = sorted(required - set(tensors))
     if missing:
         raise ValueError("H3 chain checkpoint is missing tensors: %s" % missing)
-    expected_context = min(
-        _plan_context_storage_length(plan),
-        int(plan["shots"][previous_index - 1]["delivered_frames"]))
-    if int(tensors["context_frames"].shape[0]) != expected_context:
+    context_frames = tensors["context_frames"]
+    previous_delivered = int(
+        previous_meta["segment"].get("delivered_frames", 0))
+    if (getattr(context_frames, "ndim", 0) != 4
+            or int(context_frames.shape[0]) > previous_delivered):
         raise ValueError(
-            "H3 chain predecessor checkpoint contains %d context frames; "
-            "expected %d." %
-            (int(tensors["context_frames"].shape[0]), expected_context))
+            "H3 chain predecessor checkpoint contains an invalid context "
+            "tensor shape %s for a %d-frame delivered clip." %
+            (tuple(getattr(context_frames, "shape", ())),
+             previous_delivered))
     return {
         "plan": plan,
         "index": start_clip,
-        "previous_frames": tensors["context_frames"],
+        "previous_frames": context_frames,
         "previous_latent": {"samples": [tensors["video"], tensors["audio"]]},
         "segments": segments,
         "resumed_from": previous_index,
+        "resume_history_verification_disabled": not bool(verify_history),
     }
 
 
 def _initial_state(plan: dict[str, Any], start_clip: int,
                    end_clip: int | None = None,
-                   external_context: dict[str, Any] | None = None) -> dict[str, Any]:
+                   external_context: dict[str, Any] | None = None,
+                   source_timeline: dict[str, Any] | None = None,
+                   source_audio: dict[str, Any] | None = None,
+                   verify_resume_history: bool = True) -> dict[str, Any]:
     total = len(plan["shots"])
     start_clip = int(start_clip)
     if start_clip < 1 or start_clip > total:
@@ -2488,7 +6256,9 @@ def _initial_state(plan: dict[str, Any], start_clip: int,
             "end_clip must be between start_clip %d and %d." %
             (start_clip, total))
     if start_clip > 1:
-        state = _load_resume_state(plan, start_clip)
+        state = _load_resume_state(
+            plan, start_clip, verify_history=verify_resume_history,
+            source_timeline=source_timeline, source_audio=source_audio)
     else:
         state = {
             "plan": plan,
@@ -2506,6 +6276,9 @@ def _initial_state(plan: dict[str, Any], start_clip: int,
         }
     state["range_start"] = start_clip
     state["end_clip"] = end_clip
+    if source_timeline is not None:
+        state["source_timeline"] = _validate_source_timeline(
+            source_timeline, require_runtime=True)
     return state
 
 
@@ -2615,7 +6388,8 @@ def _slice_audio_after_external_context(
 
 
 def _write_segment_video(images: Any, path: str, fps: int, crf: int,
-                         metadata: dict[str, Any] | None = None) -> None:
+                         metadata: dict[str, Any] | None = None,
+                         replacement_prefix: Any = None) -> None:
     if av is None or torch is None:
         raise RuntimeError("H3 segment saving requires PyAV and torch.")
     if len(images.shape) != 4 or int(images.shape[0]) < 1:
@@ -2623,6 +6397,19 @@ def _write_segment_video(images: Any, path: str, fps: int, crf: int,
     height, width = int(images.shape[1]), int(images.shape[2])
     if width % 2 or height % 2:
         raise ValueError("H.264 segment dimensions must be even.")
+    prefix_count = 0
+    if replacement_prefix is not None:
+        if (not torch.is_tensor(replacement_prefix)
+                or replacement_prefix.ndim != 4):
+            raise ValueError(
+                "H3 replacement video prefix must be an IMAGE tensor.")
+        if tuple(replacement_prefix.shape[1:]) != tuple(images.shape[1:]):
+            raise ValueError(
+                "H3 replacement video prefix geometry differs from its "
+                "scene: %s vs %s." % (
+                    tuple(replacement_prefix.shape), tuple(images.shape)))
+        prefix_count = min(
+            int(replacement_prefix.shape[0]), int(images.shape[0]))
     os.makedirs(os.path.dirname(path), exist_ok=True)
     temporary = path[:-4] + ".tmp.mp4"
     if os.path.exists(temporary):
@@ -2641,7 +6428,9 @@ def _write_segment_video(images: Any, path: str, fps: int, crf: int,
         stream.height = height
         stream.pix_fmt = "yuv420p"
         stream.options = {"crf": str(int(crf)), "preset": "medium"}
-        for image in images:
+        for frame_index, image in enumerate(images):
+            if frame_index < prefix_count:
+                image = replacement_prefix[frame_index]
             array = (torch.clamp(image[..., :3] * 255.0, 0, 255)
                      .to(device="cpu", dtype=torch.uint8).numpy())
             frame = av.VideoFrame.from_ndarray(array, format="rgb24")
@@ -2658,6 +6447,140 @@ def _write_segment_video(images: Any, path: str, fps: int, crf: int,
         if os.path.exists(temporary):
             os.unlink(temporary)
         raise
+
+
+def _write_lossless_rgb_video(
+    images: Any,
+    path: str,
+    fps: int,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    """Persist an ephemeral RGB checkpoint decode without generation loss."""
+    if av is None or torch is None:
+        raise RuntimeError("Lossless H3 recovery video requires PyAV and torch.")
+    if len(images.shape) != 4 or int(images.shape[0]) < 1:
+        raise ValueError(
+            "H3 recovery images must be [frames,height,width,channels].")
+    height, width = int(images.shape[1]), int(images.shape[2])
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    stem, extension = os.path.splitext(path)
+    temporary = stem + ".tmp" + extension
+    _safe_unlink(temporary)
+    container = None
+    try:
+        container = av.open(temporary, mode="w")
+        if metadata:
+            for key, value in metadata.items():
+                if value is not None:
+                    container.metadata[str(key)] = str(value)
+        stream = container.add_stream(
+            "libx264rgb", rate=Fraction(int(fps), 1))
+        stream.width = width
+        stream.height = height
+        stream.pix_fmt = "rgb24"
+        stream.options = {"crf": "0", "preset": "medium"}
+        for image in images:
+            array = (torch.clamp(image[..., :3] * 255.0, 0, 255)
+                     .to(device="cpu", dtype=torch.uint8).numpy())
+            frame = av.VideoFrame.from_ndarray(array, format="rgb24")
+            for packet in stream.encode(frame):
+                container.mux(packet)
+        for packet in stream.encode():
+            container.mux(packet)
+        container.close()
+        container = None
+        os.replace(temporary, path)
+    except Exception:
+        if container is not None:
+            container.close()
+        _safe_unlink(temporary)
+        raise
+
+
+def _rgb24_frame_array(image: Any) -> Any:
+    """Convert one decoded IMAGE frame to the exact bytes sent to a codec."""
+    if np is None:
+        raise RuntimeError("Streaming H3 video writing requires NumPy.")
+    if torch is not None and torch.is_tensor(image):
+        if image.ndim != 3 or int(image.shape[-1]) < 3:
+            raise ValueError(
+                "Streaming H3 video expected [height,width,channels]; got %s."
+                % (tuple(image.shape),))
+        return (torch.clamp(image[..., :3], 0.0, 1.0) * 255.0).round().to(
+            device="cpu", dtype=torch.uint8).contiguous().numpy()
+    array = np.asarray(image)
+    if array.ndim != 3 or int(array.shape[-1]) < 3:
+        raise ValueError(
+            "Streaming H3 video expected [height,width,channels]; got %s."
+            % (tuple(array.shape),))
+    array = array[..., :3]
+    if array.dtype != np.uint8:
+        array = np.clip(array, 0.0, 1.0)
+        array = np.rint(array * 255.0).astype(np.uint8)
+    return np.ascontiguousarray(array)
+
+
+class _StreamingLosslessRGBWriter:
+    """Incremental RGB writer; only one encoded frame is resident at a time."""
+
+    def __init__(self, path: str, fps: int,
+                 metadata: dict[str, Any] | None = None):
+        if av is None or np is None:
+            raise RuntimeError(
+                "Streaming H3 lossless video writing requires PyAV and NumPy.")
+        self.path = path
+        self.fps = int(fps)
+        self.metadata = metadata or {}
+        self.container = None
+        self.stream = None
+        self.width = None
+        self.height = None
+        self.written = 0
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        _safe_unlink(path)
+
+    def write(self, image: Any) -> None:
+        array = _rgb24_frame_array(image)
+        height, width = int(array.shape[0]), int(array.shape[1])
+        if self.container is None:
+            self.width, self.height = width, height
+            self.container = av.open(self.path, mode="w")
+            for key, value in self.metadata.items():
+                if value is not None:
+                    self.container.metadata[str(key)] = str(value)
+            self.stream = self.container.add_stream(
+                "libx264rgb", rate=Fraction(self.fps, 1))
+            self.stream.width = width
+            self.stream.height = height
+            self.stream.pix_fmt = "rgb24"
+            self.stream.options = {"crf": "0", "preset": "medium"}
+        elif width != self.width or height != self.height:
+            raise ValueError(
+                "H3 full-chain decode changed dimensions from %dx%d to %dx%d."
+                % (self.width, self.height, width, height))
+        frame = av.VideoFrame.from_ndarray(array, format="rgb24")
+        frame.pts = self.written
+        frame.time_base = Fraction(1, self.fps)
+        for packet in self.stream.encode(frame):
+            self.container.mux(packet)
+        self.written += 1
+
+    def close(self) -> None:
+        if self.container is None:
+            return
+        try:
+            for packet in self.stream.encode():
+                self.container.mux(packet)
+        finally:
+            self.container.close()
+            self.container = None
+            self.stream = None
+
+    def abort(self) -> None:
+        try:
+            self.close()
+        finally:
+            _safe_unlink(self.path)
 
 
 def _write_wav(audio: dict[str, Any], path: str) -> None:
@@ -2686,6 +6609,53 @@ def _atomic_wav(audio: dict[str, Any], path: str) -> None:
     try:
         _write_wav(audio, temporary)
         os.replace(temporary, path)
+    finally:
+        _safe_unlink(temporary)
+
+
+def _atomic_float_wav(audio: dict[str, Any], path: str) -> None:
+    """Publish lossless float32 PCM for a materialized source timeline."""
+    if av is None or np is None:
+        raise RuntimeError(
+            "H3 Source Timeline AUDIO materialization requires PyAV and NumPy.")
+    waveform, sample_rate = _validate_audio(
+        audio, "H3 Source Timeline materialized audio")
+    if waveform.ndim == 3:
+        waveform = waveform[0]
+    elif waveform.ndim == 1:
+        waveform = waveform.unsqueeze(0)
+    channels = int(waveform.shape[0])
+    if channels not in (1, 2):
+        raise ValueError(
+            "H3 Source Timeline materialized audio must be mono or stereo.")
+    values = waveform.detach().to(
+        device="cpu", dtype=torch.float32).contiguous().numpy()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    temporary = "%s.%s.tmp.wav" % (path, uuid.uuid4().hex)
+    container = None
+    try:
+        container = av.open(temporary, mode="w")
+        stream = container.add_stream("pcm_f32le", rate=int(sample_rate))
+        layout = "mono" if channels == 1 else "stereo"
+        stream.layout = layout
+        for start in range(0, int(values.shape[-1]), 16384):
+            chunk = values[:, start:start + 16384]
+            frame = av.AudioFrame.from_ndarray(
+                chunk, format="fltp", layout=layout)
+            frame.sample_rate = int(sample_rate)
+            frame.pts = start
+            frame.time_base = Fraction(1, int(sample_rate))
+            for packet in stream.encode(frame):
+                container.mux(packet)
+        for packet in stream.encode():
+            container.mux(packet)
+        container.close()
+        container = None
+        os.replace(temporary, path)
+    except Exception:
+        if container is not None:
+            container.close()
+        raise
     finally:
         _safe_unlink(temporary)
 
@@ -3092,13 +7062,16 @@ class MiniMaxH3ScheduledAudioReference:
                 raise ValueError(
                     "Scheduled H3 standalone audio received no audio (None). "
                     "Most likely, this input is connected to Current Shot's "
-                    "source_audio_slice while the Plan uses generated_audio; that "
-                    "output is intentionally empty in generated_audio mode. For a "
+                    "source_audio_slice while Source reference is off; that "
+                    "output is intentionally empty. For a "
                     "short voice/timbre reference, connect Load Audio directly to "
-                    "Scheduled Audio Ref. For frame-exact source slices plus "
-                    "generated-audio continuity, use source_plus_timeline and set "
-                    "Assemble audio_source to generated if that is the final track "
-                    "you want. Otherwise check that the upstream audio node is not "
+                    "Scheduled Audio Ref. For frame-exact source slices, set "
+                    "Source reference=on in H3 Audio Policy. Generated continuity "
+                    "and the final soundtrack remain independent. In legacy "
+                    "terms, generated_audio leaves this slice empty while "
+                    "source_plus_timeline enables both source reference and "
+                    "generated carry. Otherwise check "
+                    "that the upstream audio node is not "
                     "muted or bypassed, reconnect the AUDIO link, and queue again. "
                     "A playable browser preview does not guarantee that the socket "
                     "emitted AUDIO during this execution.")
@@ -3128,9 +7101,10 @@ class MiniMaxH3TaggedPictureReference:
                                "first image when a batch is connected."}),
                 "tag": ("STRING", {
                     "default": "hero_face",
-                    "tooltip": "Stable alias used as @tag in scene prompts. "
-                               "This picture is sent to H3 only in scenes "
-                               "whose resolved prompt contains that tag."}),
+                    "tooltip": "Stable picture alias. Write @hero_face for "
+                               "a native Ref2VA picture, #hero_face[2.50s] "
+                               "for a Qwen-only semantic checkpoint, or both. "
+                               "Semantic timestamps are local to the scene."}),
             },
             "optional": {
                 "previous": (TAGGED_REFERENCE_TYPE, {
@@ -3143,12 +7117,19 @@ class MiniMaxH3TaggedPictureReference:
 
     RETURN_TYPES = (TAGGED_REFERENCE_TYPE, "STRING", "STRING")
     RETURN_NAMES = ("references", "reference_fingerprint", "status")
+    OUTPUT_TOOLTIPS = (
+        "Updated prompt-driven reference registry; chain into another Tagged "
+        "reference or Tagged Ref2VA.",
+        "Fingerprint of the complete ordered registry for checkpoint safety.",
+        "Registered tag, media kind, source count, and fingerprint summary.",
+    )
     FUNCTION = "add"
     CATEGORY = "conditioning/minimax/contex_loop/references/prompt_driven"
-    DESCRIPTION = ("Register one picture under a stable @tag. No numeric "
-                   "schedule is needed: Tagged Ref2VA activates it only when "
-                   "the current scene prompt contains that tag, then assigns "
-                   "the compact native <Picture N> label.")
+    DESCRIPTION = ("Register one picture under a stable tag. @tag activates "
+                   "a native Ref2VA picture and assigns compact <Picture N> "
+                   "numbering. #tag[2.50s] presents that picture to Qwen at "
+                   "an approximate scene-local semantic checkpoint without "
+                   "adding a VAE reference. Both forms may be used together.")
 
     def add(self, image, tag, previous=None, dynprompt=None, unique_id=None):
         mode = _downstream_reference_compliance(dynprompt, unique_id)
@@ -3213,6 +7194,12 @@ class MiniMaxH3TaggedVideoReference:
 
     RETURN_TYPES = (TAGGED_REFERENCE_TYPE, "STRING", "STRING")
     RETURN_NAMES = ("references", "reference_fingerprint", "status")
+    OUTPUT_TOOLTIPS = (
+        "Updated prompt-driven registry containing this video and optional "
+        "paired audio.",
+        "Fingerprint of the complete ordered registry for checkpoint safety.",
+        "Registered tags, timeline mode, source count, and fingerprint summary.",
+    )
     FUNCTION = "add"
     CATEGORY = "conditioning/minimax/contex_loop/references/prompt_driven"
     DESCRIPTION = ("Register one 24 fps video and optional paired soundtrack "
@@ -3248,6 +7235,841 @@ class MiniMaxH3TaggedVideoReference:
             entry["tag"], paired, entry["timeline_mode"],
             len(references["entries"]), references["fingerprint"][:12])
         return references, references["fingerprint"], status
+
+
+def _motion_reference_fields(
+        target_subject: Any, motion_description: Any,
+        reference_short_edge: Any) -> tuple[str, str, str]:
+    target = " ".join(str(target_subject or "").split())
+    subject_labels = re.findall(
+        r"<Subject\s+[1-9]\d*>", target, flags=re.IGNORECASE)
+    target_remainder = re.sub(
+        r"<Subject\s+[1-9]\d*>", "", target, flags=re.IGNORECASE)
+    target_remainder = re.sub(
+        r"(?:\band\b|,|&|\s)+", "", target_remainder,
+        flags=re.IGNORECASE)
+    if not subject_labels or target_remainder:
+        raise ValueError(
+            "Tagged H3 motion target_subject must contain only existing "
+            "native labels, such as <Subject 1> or "
+            "<Subject 1> and <Subject 2>.")
+    description = " ".join(str(motion_description or "").split())
+    if not description:
+        raise ValueError("Tagged H3 motion_description cannot be blank.")
+    short_edge = str(reference_short_edge or "384").strip().lower()
+    if short_edge not in MOTION_REFERENCE_SHORT_EDGES:
+        raise ValueError(
+            "Tagged H3 motion reference_short_edge must be one of %s." %
+            (MOTION_REFERENCE_SHORT_EDGES,))
+    return target, description.rstrip(". "), short_edge
+
+
+def _decorate_motion_reference(
+        references: dict[str, Any], target: str, description: str,
+        short_edge: str) -> dict[str, Any]:
+    entries = references["entries"]
+    entries[-1]["semantic_role"] = "motion"
+    entries[-1]["motion_target"] = target
+    entries[-1]["motion_description"] = description
+    entries[-1]["motion_short_edge"] = short_edge
+    return _make_tagged_references(entries)
+
+
+class MiniMaxH3TaggedMotionReference:
+    """Register video media while exposing its action as a reusable Subject."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "video": ("IMAGE", {
+                    "tooltip": "Motion-reference frames at 24 fps. Use "
+                               "Reference Video Prep for other frame rates."}),
+                "tag": ("STRING", {
+                    "default": "motion",
+                    "tooltip": "Stable @tag for the reusable action Subject. "
+                               "The compiler keeps the physical clip as "
+                               "<Video N> but replaces this tag with a separate "
+                               "<Subject N> motion role."}),
+                "target_subject": ("STRING", {
+                    "default": "<Subject 1>",
+                    "tooltip": "Existing H3 subject that must perform the "
+                               "referenced action, for example <Subject 1>."}),
+                "motion_description": ("STRING", {
+                    "default": "the supplied pose sequence, action, and motion timing",
+                    "multiline": True,
+                    "tooltip": "Only the transferable performance evidence. "
+                               "Do not describe source identity, wardrobe, "
+                               "setting, lighting, or composition."}),
+                "reference_short_edge": (list(MOTION_REFERENCE_SHORT_EDGES), {
+                    "default": "384",
+                    "tooltip": "Spatial bandwidth of the native motion-video "
+                               "block. 384 keeps coarse pose and temporal "
+                               "movement while reducing source appearance "
+                               "tokens. source preserves the input resolution "
+                               "for an exact baseline."}),
+                "audio_tag": ("STRING", {
+                    "default": "",
+                    "tooltip": "Alias for optional synchronized audio. Blank "
+                               "derives @<motion_tag>_audio."}),
+                "timeline_mode": (list(REFERENCE_VIDEO_TIMELINE_MODES), {
+                    "default": "restart_each_scene",
+                    "tooltip": "restart_each_scene starts at frame 0. "
+                               "sequential follows the Plan timeline from the "
+                               "first scene that activates this reference. "
+                               "For masked AV continuation, motion advances "
+                               "on delivered frames so the repeated prefix is "
+                               "not replayed after the mask boundary."}),
+            },
+            "optional": {
+                "audio": ("AUDIO", {
+                    "tooltip": "Optional soundtrack synchronized to the "
+                               "motion-reference video."}),
+                "previous": (TAGGED_REFERENCE_TYPE, {
+                    "tooltip": "Optional preceding Tagged Ref chain."}),
+            },
+            "hidden": {"dynprompt": "DYNPROMPT", "unique_id": "UNIQUE_ID"},
+        }
+
+    RETURN_TYPES = (TAGGED_REFERENCE_TYPE, "STRING", "STRING")
+    RETURN_NAMES = ("references", "reference_fingerprint", "status")
+    OUTPUT_TOOLTIPS = (
+        "Updated prompt-driven registry with this reusable motion Subject.",
+        "Fingerprint of the complete ordered registry for checkpoint safety.",
+        "Motion tag, target Subject, decode size, timeline mode, and source "
+        "summary.",
+    )
+    FUNCTION = "add"
+    CATEGORY = "conditioning/minimax/contex_loop/references/prompt_driven"
+    DESCRIPTION = (
+        "Register a video as H3 motion/action evidence. The native video "
+        "remains <Video N>, while @tag compiles to a distinct reusable "
+        "<Subject N> whose performance is transferred to target_subject. "
+        "The default compact video block reduces source appearance pressure; "
+        "this is still semantic motion transfer, not a pose extractor."
+    )
+
+    def add(self, video, tag, target_subject, motion_description,
+            reference_short_edge="384", audio_tag="",
+            timeline_mode="restart_each_scene", audio=None, previous=None,
+            dynprompt=None, unique_id=None):
+        mode = _downstream_reference_compliance(dynprompt, unique_id)
+        try:
+            if (torch is None or not torch.is_tensor(video) or video.ndim != 4 or
+                    int(video.shape[0]) < 5 or int(video.shape[-1]) < 3):
+                raise ValueError(
+                    "Tagged H3 motion reference must be an IMAGE batch "
+                    "containing at least 5 frames.")
+            target, description, short_edge = _motion_reference_fields(
+                target_subject, motion_description, reference_short_edge)
+            prepared_video = video
+            if short_edge != "source":
+                source_h, source_w = int(video.shape[1]), int(video.shape[2])
+                source_short = min(source_h, source_w)
+                target_short = int(short_edge)
+                if source_short > target_short:
+                    scale = target_short / float(source_short)
+                    target_h = max(32, round(source_h * scale / 32) * 32)
+                    target_w = max(32, round(source_w * scale / 32) * 32)
+                    prepared_video = torch.nn.functional.interpolate(
+                        video[..., :3].movedim(-1, 1),
+                        size=(target_h, target_w), mode="bilinear",
+                        align_corners=False, antialias=True).movedim(1, -1)
+            paired_hash = ""
+            if audio is not None:
+                _validate_audio(audio, "Tagged H3 motion-reference audio")
+                paired_hash = _audio_fingerprint(audio)
+            references = _append_tagged_reference(
+                previous, kind="video", tag=tag, value=prepared_video,
+                content_hash=_tensor_fingerprint(prepared_video), audio=audio,
+                audio_tag=audio_tag, audio_hash=paired_hash,
+                compliance_mode=mode, timeline_mode=timeline_mode)
+            references = _decorate_motion_reference(
+                references, target, description, short_edge)
+        except (TypeError, ValueError) as exc:
+            if mode == "disabled":
+                return _skipped_tagged_reference_result(
+                    previous, "Tagged motion reference", exc)
+            raise
+        entry = references["entries"][-1]
+        paired = " + @%s" % entry["audio_tag"] if entry.get("audio_tag") else ""
+        status = (
+            "@%s%s motion -> %s; reusable Subject from native Video; %s px "
+            "short edge; %s; "
+            "%d sources; %s" % (
+                entry["tag"], paired, entry["motion_target"],
+                entry["motion_short_edge"], entry["timeline_mode"],
+                len(references["entries"]),
+                references["fingerprint"][:12]))
+        return references, references["fingerprint"], status
+
+
+class MiniMaxH3SourceTimeline:
+    """Describe source media once; downstream nodes request scene windows."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "video_path": ("STRING", {
+                    "default": "",
+                    "tooltip": "Optional direct video path. Prefer a native "
+                               "file-backed VIDEO connection when the same "
+                               "asset must also be archived."}),
+                "audio_path": ("STRING", {
+                    "default": "",
+                    "tooltip": "Optional external master-audio path. Leave "
+                               "blank to use embedded audio or source_audio."}),
+                "embedded_audio": (("auto", "required", "ignore"), {
+                    "default": "auto",
+                    "tooltip": "auto uses one embedded stream when present; "
+                               "required errors when absent; ignore registers "
+                               "video only. External audio takes precedence."}),
+                "skip_first_frames": ("INT", {
+                    "default": 0, "min": 0, "max": 100000000, "step": 1,
+                    "tooltip": "Set the shared timeline origin in native "
+                               "video frames. Skipped media remains on disk "
+                               "and is never decoded."}),
+            },
+            "optional": {
+                "source_video": ("VIDEO", {
+                    "tooltip": "Native file-backed VIDEO from core Load "
+                               "Video. The full frame tensor is never read."}),
+                "source_audio": ("AUDIO", {
+                    "tooltip": "Optional already-aligned external AUDIO. It "
+                               "is retained as a deferred source until Loop "
+                               "Start materializes its recovery copy."}),
+            },
+        }
+
+    RETURN_TYPES = (SOURCE_TIMELINE_TYPE, "STRING")
+    RETURN_NAMES = ("source_timeline", "status")
+    OUTPUT_TOOLTIPS = (
+        "Lazy typed source descriptor shared by Plan, Run Manager, previews, "
+        "motion references, Loop Start, and Assemble.",
+        "Resolved media route, timing extent, audio availability, and content "
+        "fingerprint.",
+    )
+    FUNCTION = "build"
+    CATEGORY = "conditioning/minimax/contex_loop/media"
+    DESCRIPTION = (
+        "0.5 source-media entry point. It records video, audio, native timing, "
+        "origin, content fingerprints, and recovery data behind one typed "
+        "wire. Video and path-backed audio stay lazy; consumers decode only "
+        "the current 24 fps scene window. This node does not choose whether "
+        "audio is final output, a reference, or generated continuity."
+    )
+
+    @classmethod
+    def IS_CHANGED(cls, video_path="", audio_path="", source_video=None,
+                   skip_first_frames=0, **kwargs):
+        try:
+            signatures = []
+            if source_video is not None or str(video_path or "").strip():
+                path, _route = _lazy_motion_media_path(
+                    video_path, source_video)
+                stat = os.stat(path)
+                signatures.append((
+                    path, int(stat.st_size), int(stat.st_mtime_ns)))
+            if str(audio_path or "").strip():
+                path = _resolved_media_path(
+                    audio_path, "Source Timeline audio path")
+                stat = os.stat(path)
+                signatures.append((
+                    path, int(stat.st_size), int(stat.st_mtime_ns)))
+            if not signatures:
+                return float("NaN")
+            return _fingerprint({
+                "files": signatures,
+                "skip_first_frames": int(skip_first_frames),
+            })
+        except (OSError, TypeError, ValueError):
+            return float("NaN")
+
+    def build(self, video_path="", audio_path="", embedded_audio="auto",
+              skip_first_frames=0, source_video=None, source_audio=None):
+        timeline = _make_source_timeline(
+            video_path, source_video=source_video, audio_path=audio_path,
+            source_audio=source_audio, embedded_audio=embedded_audio,
+            skip_first_frames=skip_first_frames)
+        video = timeline.get("video")
+        audio = timeline["audio"]
+        extent = timeline["extent"]
+        if video is None:
+            video_status = "audio-only"
+        else:
+            video_status = (
+                "%.6g fps %dx%d VIDEO -> lazy 24 fps" %
+                (float(video["source_fps"]), int(video["width"]),
+                 int(video["height"])))
+        audio_status = {
+            "none": "no audio",
+            "embedded": "lazy embedded audio",
+            "external_path": "lazy external-path audio",
+            "deferred_tensor": "deferred aligned AUDIO",
+        }[audio["kind"]]
+        status = (
+            "%s; %s; origin skip %d native frames (%.3fs); "
+            "%d frames / %.3fs; timeline %s" %
+            (video_status, audio_status,
+             int(timeline["origin"]["skip_first_frames"]),
+             float(timeline["origin"]["skip_seconds"]),
+             int(extent["frame_count"]),
+             float(extent["duration_seconds"]),
+             timeline["fingerprints"]["timeline"][:12]))
+        return timeline, status
+
+
+class MiniMaxH3LazyMotionAVLoader:
+    """Expose one disk-backed native VIDEO and its complete timeline audio."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "video_path": ("STRING", {
+                    "default": "",
+                    "tooltip": "Absolute path to the motion-reference video. "
+                               "VIDEO remains file-backed; only its embedded "
+                               "audio track is decoded."}),
+                "skip_first_frames": ("INT", {
+                    "default": 0, "min": 0, "max": 100000000, "step": 1,
+                    "tooltip": "Start the Plan timeline after this many "
+                               "native source frames. The VIDEO wrapper stays "
+                               "untrimmed; connect this INT to the tagged "
+                               "motion node's matching input."}),
+            },
+        }
+
+    RETURN_TYPES = ("VIDEO", "AUDIO", "INT", "STRING")
+    RETURN_NAMES = (
+        "source_video", "source_audio", "skip_first_frames", "status")
+    OUTPUT_TOOLTIPS = (
+        "Native file-backed VIDEO wrapper; the full picture stream remains "
+        "on disk.",
+        "Complete post-skip embedded soundtrack for legacy AUDIO wiring.",
+        "Validated native-frame origin to connect to Tagged Motion Ref Path.",
+        "Resolved path, skipped origin, audio duration, and lazy-load summary.",
+    )
+    FUNCTION = "load"
+    CATEGORY = "conditioning/minimax/contex_loop/media"
+    DESCRIPTION = (
+        "Legacy 0.4 adapter: load one motion-reference container without "
+        "decoding its video frames. source_video is ComfyUI's native "
+        "file-backed VIDEO; "
+        "source_audio is the complete post-skip track aligned to the same "
+        "24 fps timeline for legacy downstream AUDIO fan-out. New workflows "
+        "should register the container with Source Timeline instead."
+    )
+
+    @classmethod
+    def IS_CHANGED(cls, video_path="", skip_first_frames=0, **kwargs):
+        try:
+            path = _resolved_media_path(
+                video_path, "Lazy motion AV loader video path")
+            stat = os.stat(path)
+            return "%s:%d:%d:%d" % (
+                path, int(stat.st_size), int(stat.st_mtime_ns),
+                int(skip_first_frames))
+        except (OSError, ValueError):
+            return float("NaN")
+
+    def load(self, video_path, skip_first_frames=0):
+        path = _resolved_media_path(
+            video_path, "Lazy motion AV loader video path")
+        descriptor = _lazy_motion_descriptor_with_skip(
+            _probe_lazy_motion_path(path, True), skip_first_frames)
+        source_audio = _decode_lazy_motion_source_audio(descriptor)
+        source_video = _native_video_from_path(path)
+        waveform, sample_rate = _validate_audio(
+            source_audio, "Lazy motion AV loader source audio")
+        duration = int(waveform.shape[-1]) / float(sample_rate)
+        status = (
+            "Lazy native VIDEO + %.3fs full post-skip AUDIO; "
+            "%d source frames skipped; video frames remain disk-backed" %
+            (duration, int(descriptor["skip_first_frames"])))
+        return (source_video, source_audio,
+                int(descriptor["skip_first_frames"]), status)
+
+
+class MiniMaxH3TaggedMotionReferenceTimeline:
+    """Register motion directly from the typed 0.5 Source Timeline."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "source_timeline": (SOURCE_TIMELINE_TYPE, {
+                    "tooltip": "One Source Timeline wire. Only the active "
+                               "scene window is decoded."}),
+                "tag": ("STRING", {
+                    "default": "motion",
+                    "tooltip": "Stable @tag for this reusable motion subject."}),
+                "target_subject": ("STRING", {
+                    "default": "<Subject 1>",
+                    "tooltip": "Existing H3 Subject that performs the "
+                               "referenced action."}),
+                "motion_description": ("STRING", {
+                    "default": "the supplied pose sequence, action, and motion timing",
+                    "multiline": True,
+                    "tooltip": "Transferable action evidence only; exclude "
+                               "source identity, wardrobe, and setting."}),
+                "reference_short_edge": (list(MOTION_REFERENCE_SHORT_EDGES), {
+                    "default": "384",
+                    "tooltip": "Scene-local decode size. Source media remains "
+                               "file-backed at its original resolution."}),
+                "paired_audio": (("off", "embedded"), {
+                    "default": "off",
+                    "tooltip": "Reference-local choice. embedded sends the "
+                               "Source Timeline audio window beside motion; "
+                               "off never sends paired reference audio."}),
+                "audio_tag": ("STRING", {
+                    "default": "",
+                    "tooltip": "Alias for paired audio. Blank derives "
+                               "@<motion_tag>_audio."}),
+                "timeline_mode": (list(REFERENCE_VIDEO_TIMELINE_MODES), {
+                    "default": "sequential",
+                    "tooltip": "sequential follows Plan timing; "
+                               "restart_each_scene begins at source frame 0."}),
+            },
+            "optional": {
+                "previous": (TAGGED_REFERENCE_TYPE, {
+                    "tooltip": "Optional preceding Tagged Ref chain."}),
+            },
+            "hidden": {"dynprompt": "DYNPROMPT", "unique_id": "UNIQUE_ID"},
+        }
+
+    RETURN_TYPES = (
+        TAGGED_REFERENCE_TYPE, "STRING", "STRING", LAZY_MOTION_SOURCE_TYPE)
+    RETURN_NAMES = (
+        "references", "reference_fingerprint", "status", "preview_source")
+    OUTPUT_TOOLTIPS = (
+        "Updated prompt-driven registry containing the lazy motion reference.",
+        "Fingerprint of the complete ordered registry for checkpoint safety.",
+        "Motion tag, target Subject, timeline mode, paired-audio policy, and "
+        "fingerprint summary.",
+        "Lazy motion descriptor for the scene preview node; it does not decode "
+        "the full source.",
+    )
+    FUNCTION = "add"
+    CATEGORY = "conditioning/minimax/contex_loop/references/prompt_driven"
+    DESCRIPTION = (
+        "Primary 0.5 motion-reference node. It registers the typed Source "
+        "Timeline without decoding a full video or full audio track; Tagged "
+        "Ref2VA and preview request only the active scene window."
+    )
+
+    def add(self, source_timeline, tag, target_subject, motion_description,
+            reference_short_edge="384", paired_audio="off", audio_tag="",
+            timeline_mode="sequential", previous=None, dynprompt=None,
+            unique_id=None):
+        mode = _downstream_reference_compliance(dynprompt, unique_id)
+        try:
+            target, description, short_edge = _motion_reference_fields(
+                target_subject, motion_description, reference_short_edge)
+            prepared = _source_timeline_with_motion_short_edge(
+                source_timeline, short_edge)
+            paired_policy = _paired_audio_policy(paired_audio)
+            if (paired_policy == "embedded"
+                    and prepared["audio"]["kind"] == "none"):
+                raise ValueError(
+                    "paired_audio=embedded requires audio on Source Timeline.")
+            audio_value = prepared if paired_policy == "embedded" else None
+            audio_hash = (
+                str(prepared["fingerprints"]["audio"])
+                if audio_value is not None else "")
+            references = _append_tagged_reference(
+                previous, kind="video", tag=tag, value=prepared,
+                content_hash=str(prepared["fingerprints"]["video"]),
+                audio=audio_value, audio_tag=audio_tag,
+                audio_hash=audio_hash, compliance_mode=mode,
+                timeline_mode=timeline_mode,
+                paired_audio_policy=paired_policy)
+            references = _decorate_motion_reference(
+                references, target, description, short_edge)
+        except (TypeError, ValueError) as exc:
+            if mode == "disabled":
+                return _skipped_tagged_reference_result(
+                    previous, "Source Timeline motion reference", exc) + (None,)
+            raise
+        entry = references["entries"][-1]
+        paired = " + @%s" % entry["audio_tag"] if entry.get(
+            "audio_tag") else ""
+        status = (
+            "@%s%s Source Timeline motion -> %s; %s px; %s; paired audio %s; %s" %
+            (entry["tag"], paired, entry["motion_target"],
+             entry["motion_short_edge"], entry["timeline_mode"],
+             paired_policy, references["fingerprint"][:12]))
+        source = {
+            "version": LAZY_MOTION_SOURCE_VERSION,
+            "entry": entry,
+            "reference_fingerprint": references["fingerprint"],
+        }
+        return references, references["fingerprint"], status, source
+
+
+class MiniMaxH3TaggedMotionReferencePath:
+    """Register motion media by path and decode only the active scene."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "video_path": ("STRING", {
+                    "default": "",
+                    "tooltip": "Direct-path fallback for one CFR video. "
+                               "Normally leave blank and connect core Load "
+                               "Video to source_video, then fan that loader "
+                               "out to Run Manager. Neither route materializes "
+                               "the full IMAGE batch."}),
+                "tag": ("STRING", {
+                    "default": "motion",
+                    "tooltip": "Stable @tag for the reusable motion Subject."}),
+                "target_subject": ("STRING", {
+                    "default": "<Subject 1>",
+                    "tooltip": "Existing H3 Subject that performs the "
+                               "referenced action."}),
+                "motion_description": ("STRING", {
+                    "default": "the supplied pose sequence, action, and motion timing",
+                    "multiline": True,
+                    "tooltip": "Transferable action evidence only; exclude "
+                               "identity, wardrobe, setting, and lighting."}),
+                "reference_short_edge": (list(MOTION_REFERENCE_SHORT_EDGES), {
+                    "default": "384",
+                    "tooltip": "Resize each decoded scene window before it "
+                               "becomes a float IMAGE tensor. 384 minimizes "
+                               "RAM and appearance pressure; source preserves "
+                               "the original dimensions."}),
+                "use_embedded_audio": ("BOOLEAN", {
+                    "default": True,
+                    "tooltip": "Decode the same exact time window from the "
+                               "video's single embedded audio stream and send "
+                               "it as paired Ref2VA audio."}),
+                "audio_tag": ("STRING", {
+                    "default": "",
+                    "tooltip": "Alias for embedded paired audio. Blank "
+                               "derives @<motion_tag>_audio."}),
+                "timeline_mode": (list(REFERENCE_VIDEO_TIMELINE_MODES), {
+                    "default": "sequential",
+                    "tooltip": "sequential follows the Plan timeline and "
+                               "uses delivered-frame timing for masked AV. "
+                               "restart_each_scene decodes from frame 0."}),
+                "skip_first_frames": ("INT", {
+                    "default": 0, "min": 0, "max": 100000000, "step": 1,
+                    "tooltip": "Ignore this many frames at the source "
+                               "file's native FPS before the Plan timeline "
+                               "begins. The lazy decoder seeks near this "
+                               "point; skipped frames do not become tensors."}),
+            },
+            "optional": {
+                "previous": (TAGGED_REFERENCE_TYPE, {
+                    "tooltip": "Optional preceding Tagged Ref chain."}),
+                "source_video": ("VIDEO", {
+                    "tooltip": "Native VIDEO from core Load Video. The node "
+                               "reads only its file path, never get_components, "
+                               "so the same loader output can also connect to "
+                               "Run Manager as the source video asset."}),
+                "source_audio": ("AUDIO", {
+                    "tooltip": "Optional full post-skip track from Lazy "
+                               "Motion AV Loader. It is passed through as "
+                               "source_audio; when omitted and embedded audio "
+                               "is enabled, this node decodes the full track "
+                               "itself for direct-path compatibility."}),
+            },
+            "hidden": {"dynprompt": "DYNPROMPT", "unique_id": "UNIQUE_ID"},
+        }
+
+    RETURN_TYPES = (
+        TAGGED_REFERENCE_TYPE, "STRING", "STRING", LAZY_MOTION_SOURCE_TYPE,
+        "AUDIO")
+    RETURN_NAMES = (
+        "references", "reference_fingerprint", "status", "preview_source",
+        "source_audio")
+    OUTPUT_TOOLTIPS = (
+        "Updated prompt-driven registry containing the path-backed motion "
+        "reference.",
+        "Fingerprint of the complete ordered registry for checkpoint safety.",
+        "Resolved route, motion tag, timeline, frame origin, and decode summary.",
+        "Lazy descriptor for scene-local preview without a full IMAGE batch.",
+        "Complete post-skip soundtrack for legacy source-track wiring; empty "
+        "when embedded audio is disabled and no AUDIO was supplied.",
+    )
+    FUNCTION = "add"
+    CATEGORY = "conditioning/minimax/contex_loop/references/prompt_driven"
+    DESCRIPTION = (
+        "Path-backed Tagged Motion Ref. It stores a file descriptor and "
+        "fingerprint instead of a full decoded IMAGE batch. Tagged Ref2VA "
+        "later decodes, converts to 24 fps, and resizes only the current Plan "
+        "scene, with optional embedded audio from the identical time window "
+        "and a seekable native-frame start offset. Prefer Lazy Motion AV "
+        "Loader so native VIDEO can fan out to Run Manager and its complete "
+        "post-skip source_audio can drive source-track chain alignment."
+    )
+
+    @classmethod
+    def IS_CHANGED(cls, video_path="", skip_first_frames=0,
+                   source_video=None, **kwargs):
+        try:
+            path, _route = _lazy_motion_media_path(video_path, source_video)
+            stat = os.stat(path)
+            return "%s:%d:%d:%d" % (
+                path, int(stat.st_size), int(stat.st_mtime_ns),
+                int(skip_first_frames))
+        except (OSError, ValueError):
+            return float("NaN")
+
+    def add(self, video_path, tag, target_subject, motion_description,
+            reference_short_edge="384", use_embedded_audio=True,
+            audio_tag="", timeline_mode="sequential", skip_first_frames=0,
+            previous=None, source_video=None, source_audio=None,
+            dynprompt=None, unique_id=None):
+        mode = _downstream_reference_compliance(dynprompt, unique_id)
+        try:
+            target, description, short_edge = _motion_reference_fields(
+                target_subject, motion_description, reference_short_edge)
+            resolved_path, source_route = _lazy_motion_media_path(
+                video_path, source_video)
+            descriptor = _probe_lazy_motion_path(
+                resolved_path, bool(use_embedded_audio))
+            descriptor["source_route"] = source_route
+            descriptor = _lazy_motion_descriptor_with_skip(
+                descriptor, skip_first_frames)
+            descriptor["source_route"] = source_route
+            skip_first_frames = int(descriptor["skip_first_frames"])
+            file_hash = _file_sha256(descriptor["path"])
+            descriptor["file_sha256"] = file_hash
+            descriptor["motion_short_edge"] = short_edge
+            video_hash = _fingerprint({
+                "lazy_motion_file_sha256": file_hash,
+                "video_stream": 0,
+                "skip_first_frames": skip_first_frames,
+            })
+            audio_value = descriptor if bool(use_embedded_audio) else None
+            audio_hash = (_fingerprint({
+                "lazy_motion_file_sha256": file_hash,
+                "audio_stream": 0,
+                "skip_first_frames": skip_first_frames,
+            }) if audio_value is not None else "")
+            references = _append_tagged_reference(
+                previous, kind="video", tag=tag, value=descriptor,
+                content_hash=video_hash, audio=audio_value,
+                audio_tag=audio_tag, audio_hash=audio_hash,
+                compliance_mode=mode, timeline_mode=timeline_mode)
+            references = _decorate_motion_reference(
+                references, target, description, short_edge)
+            if source_audio is not None:
+                _validate_audio(
+                    source_audio, "Lazy tagged motion full source audio")
+                full_source_audio = source_audio
+            elif bool(use_embedded_audio):
+                full_source_audio = _decode_lazy_motion_source_audio(
+                    descriptor)
+            else:
+                full_source_audio = None
+        except (TypeError, ValueError) as exc:
+            if mode == "disabled":
+                skipped = _skipped_tagged_reference_result(
+                    previous, "Lazy tagged motion reference", exc)
+                return skipped + (None, None)
+            raise
+        entry = references["entries"][-1]
+        paired = " + @%s" % entry["audio_tag"] if entry.get(
+            "audio_tag") else ""
+        frames = int(descriptor.get("frame_count", 0))
+        frame_status = "%d indexed frames" % frames if frames else (
+            "container frame count unavailable")
+        source_fps = float(descriptor.get("source_fps", FPS))
+        rate_status = ("24 fps source" if abs(source_fps - FPS) <= 1e-3
+                       else "%.6g -> 24 fps scene-local" % source_fps)
+        skip_status = ("source start" if skip_first_frames == 0 else
+                       "skip %d source frames (%.3fs)" %
+                       (skip_first_frames, descriptor["skip_seconds"]))
+        status = (
+            "@%s%s lazy motion -> %s; %s; %s px short edge; %s; %s; %s; %s; %s" %
+            (entry["tag"], paired, entry["motion_target"],
+             descriptor["source_route"], entry["motion_short_edge"],
+             entry["timeline_mode"],
+             rate_status, skip_status, frame_status,
+             references["fingerprint"][:12]))
+        source = {
+            "version": LAZY_MOTION_SOURCE_VERSION,
+            "entry": entry,
+            "reference_fingerprint": references["fingerprint"],
+        }
+        return (references, references["fingerprint"], status, source,
+                full_source_audio)
+
+
+class MiniMaxH3LazyMotionScenePreview:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "source": (LAZY_MOTION_SOURCE_TYPE, {
+                    "tooltip": "preview_source from Tagged Motion Ref Path."}),
+                "scene": ("INT", {
+                    "default": 1, "min": 1, "max": MAX_SHOTS, "step": 1,
+                    "tooltip": "Plan scene to decode. The numeric arrows act "
+                               "as a scene counter."}),
+            },
+            "optional": {
+                "plan": (PLAN_TYPE, {
+                    "tooltip": "Connect the same Loop Plan used for "
+                               "generation. Without a Plan, IMAGE and AUDIO "
+                               "outputs remain blocked."}),
+            },
+        }
+
+    RETURN_TYPES = ("IMAGE", "AUDIO", "STRING")
+    RETURN_NAMES = ("scene_video", "scene_audio", "status")
+    OUTPUT_TOOLTIPS = (
+        "Decoded 24 fps motion-reference window for the selected Plan scene.",
+        "Audio from the identical scene window, or blocked when unavailable.",
+        "Selected scene, timeline rule, decoded frame count, and dimensions.",
+    )
+    FUNCTION = "preview"
+    CATEGORY = "conditioning/minimax/contex_loop/references/prompt_driven"
+    DESCRIPTION = (
+        "Decode the exact lazy motion-reference window for a selected Plan "
+        "scene. It is an inspection branch only and does not feed the "
+        "reference fingerprint back into Plan. No Plan means no media output."
+    )
+
+    @staticmethod
+    def _blocked(status: str):
+        blocker = (ExecutionBlocker(None)
+                   if ExecutionBlocker is not None else None)
+        return blocker, blocker, status
+
+    def preview(self, source, scene, plan=None):
+        if plan is None:
+            return self._blocked(
+                "No Plan connected; lazy motion scene preview is disabled.")
+        if (not isinstance(source, dict)
+                or int(source.get("version", -1)) !=
+                LAZY_MOTION_SOURCE_VERSION
+                or not isinstance(source.get("entry"), dict)):
+            raise ValueError(
+                "Lazy motion preview requires preview_source from Tagged "
+                "Motion Ref Path.")
+        if not isinstance(plan, dict) or not isinstance(plan.get("shots"), list):
+            raise ValueError("Lazy motion preview requires a valid H3 Plan.")
+        shots = plan["shots"]
+        scene = int(scene)
+        if scene < 1 or scene > len(shots):
+            return self._blocked(
+                "Scene %d is outside this %d-scene Plan." %
+                (scene, len(shots)))
+        entry = source["entry"]
+        prompt = _prompt_text(
+            shots[scene - 1].get("prompt", ""),
+            "Scene %d prompt" % scene)
+        active_tags = set(_REFERENCE_ALIAS_RE.findall(prompt)).intersection(
+            _reference_entry_tags(entry))
+        if not active_tags:
+            return self._blocked(
+                "Scene %d does not activate @%s or its paired audio tag." %
+                (scene, entry.get("tag", "motion")))
+        length = int(shots[scene - 1]["raw_frames"])
+        video, audio, detail = _scheduled_video_reference_slice(
+            entry, {"index": scene, "plan": plan}, scene, len(shots), length)
+        audio_output = audio
+        if audio_output is None:
+            audio_output = (ExecutionBlocker(None)
+                            if ExecutionBlocker is not None else None)
+        return video, audio_output, (
+            "Scene %d/%d: %s; decoded %d frames at %dx%d" %
+            (scene, len(shots), detail or "restart_each_scene",
+             int(video.shape[0]), int(video.shape[2]), int(video.shape[1])))
+
+
+class MiniMaxH3SourceTimelineScenePreview:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "source_timeline": (SOURCE_TIMELINE_TYPE, {
+                    "tooltip": "Typed source media to inspect scene-locally."}),
+                "scene": ("INT", {
+                    "default": 1, "min": 1, "max": MAX_SHOTS, "step": 1,
+                    "tooltip": "Plan scene counter."}),
+                "timeline_mode": (list(REFERENCE_VIDEO_TIMELINE_MODES), {
+                    "default": "sequential",
+                    "tooltip": "Use the same motion-window rule as Tagged "
+                               "Motion Ref."}),
+                "reference_short_edge": (list(MOTION_REFERENCE_SHORT_EDGES), {
+                    "default": "384",
+                    "tooltip": "Preview decode size."}),
+                "include_audio": ("BOOLEAN", {
+                    "default": True,
+                    "tooltip": "Decode the identical Source Timeline audio "
+                               "window when available."}),
+            },
+            "optional": {
+                "plan": (PLAN_TYPE, {
+                    "tooltip": "Required to resolve scene windows. Without a "
+                               "Plan, media outputs remain blocked."}),
+            },
+        }
+
+    RETURN_TYPES = ("IMAGE", "AUDIO", "STRING")
+    RETURN_NAMES = ("scene_video", "scene_audio", "status")
+    OUTPUT_TOOLTIPS = (
+        "Decoded 24 fps Source Timeline picture window for the selected scene.",
+        "Audio from the identical source window, or blocked when disabled or "
+        "unavailable.",
+        "Selected scene, timeline rule, decoded frame count, and dimensions.",
+    )
+    FUNCTION = "preview"
+    CATEGORY = "conditioning/minimax/contex_loop/media"
+    DESCRIPTION = (
+        "Preview the exact Source Timeline window selected for one Plan scene. "
+        "No Plan means no video or audio decode."
+    )
+
+    @staticmethod
+    def _blocked(status: str):
+        blocker = (ExecutionBlocker(None)
+                   if ExecutionBlocker is not None else None)
+        return blocker, blocker, status
+
+    def preview(self, source_timeline, scene, timeline_mode="sequential",
+                reference_short_edge="384", include_audio=True, plan=None):
+        if plan is None:
+            return self._blocked(
+                "No Plan connected; Source Timeline scene preview is disabled.")
+        if not isinstance(plan, dict) or not isinstance(plan.get("shots"), list):
+            raise ValueError("Source Timeline preview requires a valid H3 Plan.")
+        scene = int(scene)
+        shots = plan["shots"]
+        if scene < 1 or scene > len(shots):
+            return self._blocked(
+                "Scene %d is outside this %d-scene Plan." %
+                (scene, len(shots)))
+        prepared = _source_timeline_with_motion_short_edge(
+            source_timeline, reference_short_edge)
+        entry = {
+            "kind": "video",
+            "tag": "source_timeline_preview",
+            "value": prepared,
+            "audio": prepared if bool(include_audio) and prepared[
+                "audio"]["kind"] != "none" else None,
+            "timeline_mode": str(timeline_mode),
+            "semantic_role": "motion",
+            "activation": "schedule",
+            "ranges": (),
+        }
+        length = int(shots[scene - 1]["raw_frames"])
+        video, audio, detail = _scheduled_video_reference_slice(
+            entry, {"index": scene, "plan": plan}, scene, len(shots), length)
+        audio_output = audio
+        if audio_output is None:
+            audio_output = (ExecutionBlocker(None)
+                            if ExecutionBlocker is not None else None)
+        return video, audio_output, (
+            "Scene %d/%d: %s; decoded %d frames at %dx%d" %
+            (scene, len(shots), detail, int(video.shape[0]),
+             int(video.shape[2]), int(video.shape[1])))
 
 
 class MiniMaxH3TaggedAudioReference:
@@ -3286,6 +8108,12 @@ class MiniMaxH3TaggedAudioReference:
 
     RETURN_TYPES = (TAGGED_REFERENCE_TYPE, "STRING", "STRING")
     RETURN_NAMES = ("references", "reference_fingerprint", "status")
+    OUTPUT_TOOLTIPS = (
+        "Updated prompt-driven registry containing this audio reference.",
+        "Fingerprint of the complete ordered registry for checkpoint safety.",
+        "Registered tag, timeline mode, alignment policy, source count, and "
+        "fingerprint summary.",
+    )
     FUNCTION = "add"
     CATEGORY = "conditioning/minimax/contex_loop/references/prompt_driven"
     DESCRIPTION = ("Register audio under a stable @tag. It can remain a fixed "
@@ -3301,8 +8129,9 @@ class MiniMaxH3TaggedAudioReference:
             if audio is None:
                 raise ValueError(
                     "Tagged H3 audio received no AUDIO value. If Current Shot "
-                    "uses generated_audio, source_audio_slice is intentionally "
-                    "empty; connect a voice/music loader directly instead.")
+                    "has Source reference=off, source_audio_slice is "
+                    "intentionally empty; connect a voice/music loader directly "
+                    "instead.")
             _validate_audio(audio, "Tagged H3 standalone audio")
             references = _append_tagged_reference(
                 previous, kind="audio", tag=tag, value=audio,
@@ -3399,6 +8228,15 @@ class MiniMaxH3ScheduledReferenceToVideo:
                                "supported reference capacity. Failures in CLIP, "
                                "VAE, sampling, or checkpoint execution remain "
                                "real execution errors."}),
+                "cache_for_upscale": ("BOOLEAN", {
+                    "default": True,
+                    "tooltip": "Automatically save the active scene's native "
+                               "H3 reference latents, compact Qwen preview "
+                               "frames, and original picture masters needed "
+                               "for target-resolution pass-2 conditioning. "
+                               "Deferred upscale discovers them from the "
+                               "checkpoint fingerprint without reconnecting "
+                               "the original reference media."}),
             },
         }
 
@@ -3437,7 +8275,7 @@ class MiniMaxH3ScheduledReferenceToVideo:
     def apply(self, clip, vae, audio_vae, reference_schedule, clip_index,
               clip_count, prompt, width, height, length,
               ref_image_size="match", state=None,
-              prompt_compliance="strict"):
+              prompt_compliance="strict", cache_for_upscale=True):
         if GraphBuilder is None:
             raise RuntimeError(
                 "Scheduled H3 Ref2VA requires ComfyUI GraphBuilder.")
@@ -3456,9 +8294,11 @@ class MiniMaxH3ScheduledReferenceToVideo:
             ref2va.set_input(
                 "ref_images.ref_image_%d" % index, entry["value"])
         slice_details = []
+        resolved_videos = []
         for index, entry in enumerate(bindings["videos"]):
             video, paired_audio, detail = _scheduled_video_reference_slice(
                 entry, state, clip_index, clip_count, length)
+            resolved_videos.append({"video": video, "audio": paired_audio})
             ref2va.set_input(
                 "ref_videos.ref_video_%d" % index, video)
             if paired_audio is not None:
@@ -3467,7 +8307,9 @@ class MiniMaxH3ScheduledReferenceToVideo:
                     paired_audio)
             if detail:
                 slice_details.append(detail)
+        resolved_audios = []
         for index, entry in enumerate(bindings["audios"]):
+            resolved_audios.append(entry["value"])
             ref2va.set_input(
                 "ref_audios.ref_audio_%d" % index, entry["value"])
         if isinstance(reference_schedule, dict) and reference_schedule.get(
@@ -3481,6 +8323,28 @@ class MiniMaxH3ScheduledReferenceToVideo:
         else:
             raise ValueError(
                 "Scheduled references have no valid schedule fingerprint.")
+        cache_runtime_ready = (
+            callable(getattr(vae, "encode", None))
+            and not isinstance(vae, (str, bytes))
+            and (not resolved_audios and not any(
+                item.get("audio") is not None for item in resolved_videos)
+                 or (callable(getattr(audio_vae, "encode", None))
+                     and not isinstance(audio_vae, (str, bytes)))))
+        if bool(cache_for_upscale) and cache_runtime_ready and (
+                bindings["pictures"] or resolved_videos or resolved_audios):
+            try:
+                cache_status = _cache_reference_scene(
+                    fingerprint=fingerprint, scene=clip_index,
+                    scene_count=clip_count, prompt=prompt,
+                    compiled_prompt=compiled, width=width, height=height,
+                    length=length, ref_image_size=ref_image_size, vae=vae,
+                    audio_vae=audio_vae,
+                    pictures=[entry["value"] for entry in bindings["pictures"]],
+                    videos=resolved_videos, audios=resolved_audios)
+                summary += "; " + cache_status
+            except Exception as exc:
+                _LOG.warning(
+                    "H3 scheduled reference cache was not saved: %s", exc)
         if slice_details:
             summary += "; " + "; ".join(slice_details)
         return {
@@ -3488,6 +8352,51 @@ class MiniMaxH3ScheduledReferenceToVideo:
                 ref2va.out(0), ref2va.out(1), compiled, summary, fingerprint),
             "expand": graph.finalize(),
         }
+
+
+class MiniMaxH3SemanticAnchorConditioning:
+    """Internal presentation replacement used by Tagged Ref2VA expansion."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "positive": ("CONDITIONING", {
+                    "tooltip": "Native Ref2VA conditioning whose media "
+                               "payload is preserved while Qwen presentation "
+                               "tokens are rebuilt."}),
+                "clip": ("CLIP", {
+                    "tooltip": "MiniMax H3 text encoder used to rebuild the "
+                               "complete multimodal presentation."}),
+                "prompt": ("STRING", {
+                    "multiline": True,
+                    "tooltip": "Compiled current-scene prompt paired with "
+                               "the semantic anchor presentation."}),
+                "presentation": (SEMANTIC_PRESENTATION_TYPE, {
+                    "tooltip": "Internal timestamped-video or picture-"
+                               "storyboard presentation emitted by Tagged "
+                               "Ref2VA expansion."}),
+            },
+        }
+
+    RETURN_TYPES = ("CONDITIONING", "STRING")
+    RETURN_NAMES = ("positive", "status")
+    OUTPUT_TOOLTIPS = (
+        "Conditioning with the rebuilt Qwen presentation and original native "
+        "Ref2VA VAE/audio payload.",
+        "Semantic-anchor mode, selected checkpoints, and presentation summary.",
+    )
+    FUNCTION = "apply"
+    CATEGORY = "conditioning/minimax/contex_loop/references/internal"
+    DESCRIPTION = (
+        "Internal Tagged Ref2VA stage. Re-encodes the complete Qwen media "
+        "presentation with timestamped semantic Video checkpoints or "
+        "Qwen-only Picture storyboard cues, then preserves the native "
+        "Ref2VA VAE/audio payload.")
+
+    def apply(self, positive, clip, prompt, presentation):
+        return _replace_conditioning_presentation(
+            positive, clip, prompt, presentation)
 
 
 class MiniMaxH3TaggedReferenceToVideo:
@@ -3501,13 +8410,17 @@ class MiniMaxH3TaggedReferenceToVideo:
             "tooltip": "Resolved current-scene prompt. Mention a registered "
                        "@tag to activate that asset for this scene. Only "
                        "registered reference tags are replaced with native "
-                       "H3 labels; unrelated @syntax remains unchanged. The "
-                       "node never inserts reference definitions or other "
-                       "semantic prompt text."})
+                       "H3 labels; unrelated @syntax remains unchanged. For "
+                       "a Tagged Picture, #tag[2.50s] creates either a "
+                       "timestamped semantic checkpoint or an approximate "
+                       "Picture storyboard cue at 2.50 seconds into this "
+                       "scene. Neither is a hard frame or spatial lock."})
         required["references"] = (TAGGED_REFERENCE_TYPE, {
             "tooltip": "Final Tagged Picture/Video/Audio Ref chain. A source "
-                       "is active only when its registered @tag occurs in the "
-                       "resolved prompt for the current scene."})
+                       "is active when its registered @tag occurs in the "
+                       "resolved prompt. Tagged Pictures can additionally be "
+                       "used through #tag[timestamp] semantic checkpoints or "
+                       "Picture storyboard cues."})
         # Preserve the natural graph order: model inputs, references, current
         # scene metadata, prompt, and generation settings.
         ordered = {}
@@ -3520,9 +8433,10 @@ class MiniMaxH3TaggedReferenceToVideo:
             "state": (STATE_TYPE, {
                 "tooltip": "Current Shot state. Required by tagged video "
                            "sequential mode and tagged audio source_timeline. "
-                           "It supplies the exact scene and overlap-aware "
-                           "source offsets without routing dynamic media back "
-                           "through the Plan fingerprint."}),
+                           "It supplies exact scene timing; masked sequential "
+                           "motion skips the repeated continuation prefix. "
+                           "Dynamic media does not route back through the "
+                           "Plan fingerprint."}),
             "reference_policy": (list(REFERENCE_COMPLIANCE_MODES), {
                 "default": "strict",
                 "tooltip": "strict validates sources and stock H3 reference "
@@ -3531,13 +8445,45 @@ class MiniMaxH3TaggedReferenceToVideo:
                            "skips missing/invalid tagged media, and passes @tags "
                            "unchanged. Unregistered @syntax is always preserved "
                            "because it may represent a subject or dialogue tag."}),
+            "semantic_anchor_size": (list(SEMANTIC_ANCHOR_SIZES), {
+                "default": "512",
+                "tooltip": "Qwen-only #tag[timestamp] image resolution. "
+                           "512 is the balanced default; 1024 and 1280 retain "
+                           "more visual detail but increase Qwen token cost. "
+                           "This affects only semantic visual tokens, never "
+                           "native Ref2VA VAE reference latents."}),
+            # Keep this after semantic_anchor_size so older serialized
+            # widgets_values continue to deserialize positionally.
+            "semantic_anchor_mode": (list(SEMANTIC_ANCHOR_MODES), {
+                "default": "timestamped_video",
+                "tooltip": "timestamped_video presents each #tag as a "
+                           "scene-local Qwen Video checkpoint. "
+                           "picture_storyboard keeps each tagged image as a "
+                           "separate Qwen-only <Picture N> and writes its "
+                           "timestamps as approximate prompt instructions. "
+                               "Neither mode creates a VAE reference."}),
+            "cache_for_upscale": ("BOOLEAN", {
+                "default": True,
+                "tooltip": "Automatically save native H3 reference latents, "
+                           "compact Qwen presentation frames, and original "
+                           "picture masters for target-resolution pass 2. "
+                           "Deferred upscale discovers the cache from the "
+                           "source checkpoint fingerprint."}),
         }
         return {"required": ordered, "optional": optional}
 
     @classmethod
-    def VALIDATE_INPUTS(cls, reference_policy="strict"):
+    def VALIDATE_INPUTS(
+            cls, reference_policy="strict",
+            semantic_anchor_mode="timestamped_video",
+            semantic_anchor_size="512"):
         try:
             _reference_compliance_mode(reference_policy)
+            _semantic_anchor_mode(semantic_anchor_mode)
+            if str(semantic_anchor_size) not in SEMANTIC_ANCHOR_SIZES:
+                raise ValueError(
+                    "Semantic anchor size must be one of %s." %
+                    (SEMANTIC_ANCHOR_SIZES,))
         except ValueError as exc:
             return str(exc)
         return True
@@ -3549,8 +8495,8 @@ class MiniMaxH3TaggedReferenceToVideo:
     OUTPUT_TOOLTIPS = (
         "Positive conditioning produced by stock MiniMax H3 Ref2VA.",
         "Empty MiniMax H3 AV latent produced by stock Ref2VA.",
-        "Exact prompt sent to H3 after used registered tags become native labels.",
-        "Scene-local mapping of prompt-used tags to native reference labels.",
+        "Exact prompt sent to H3 after native @tags and semantic #anchors compile.",
+        "Scene-local mapping of native references and Qwen-only semantic anchors.",
         "Fingerprint of the complete registered source set for Plan checkpoint safety.",
     )
     FUNCTION = "apply"
@@ -3558,17 +8504,24 @@ class MiniMaxH3TaggedReferenceToVideo:
     DESCRIPTION = ("Prompt-driven Ref2VA with no numeric reference schedule. "
                    "Each scene activates only registered @tags present in its "
                    "resolved prompt, compactly renumbers those assets to native "
-                   "H3 labels, and leaves unrelated @syntax untouched.")
+                   "H3 labels, and leaves unrelated @syntax untouched. A "
+                   "Tagged Picture can also be written as #tag[2.50s] to add "
+                   "either a timestamped Qwen semantic checkpoint or an "
+                   "approximate Qwen-only Picture storyboard cue without a "
+                   "VAE reference.")
 
     def apply(self, clip, vae, audio_vae, references, clip_index,
               clip_count, prompt, width, height, length,
               ref_image_size="match", state=None,
-              reference_policy="strict"):
+              reference_policy="strict", semantic_anchor_size="512",
+              semantic_anchor_mode="timestamped_video",
+              cache_for_upscale=True):
         if GraphBuilder is None:
             raise RuntimeError(
                 "Tagged H3 Ref2VA requires ComfyUI GraphBuilder.")
         compiled, summary, bindings = _compile_tagged_reference_prompt(
-            references, clip_index, clip_count, prompt, reference_policy)
+            references, clip_index, clip_count, prompt, reference_policy,
+            semantic_anchor_mode)
         graph = GraphBuilder()
         ref2va = graph.node("MiniMaxH3ReferenceToVideo", "TaggedRef2VA")
         for key, value in (
@@ -3581,6 +8534,8 @@ class MiniMaxH3TaggedReferenceToVideo:
             ref2va.set_input(
                 "ref_images.ref_image_%d" % index, entry["value"])
         slice_details = []
+        presentation_videos = []
+        resolved_videos = []
         for index, entry in enumerate(bindings["videos"]):
             video, paired_audio, detail = _scheduled_video_reference_slice(
                 entry, state, clip_index, clip_count, length)
@@ -3589,11 +8544,18 @@ class MiniMaxH3TaggedReferenceToVideo:
                 ref2va.set_input(
                     "ref_video_audios.ref_video_audio_%d" % index,
                     paired_audio)
+            presentation_videos.append({
+                "video": video,
+                "paired_audio": paired_audio is not None,
+            })
+            resolved_videos.append({"video": video, "audio": paired_audio})
             if detail:
                 slice_details.append(detail)
+        resolved_audios = []
         for index, entry in enumerate(bindings["audios"]):
             audio, detail = _tagged_audio_reference_value(
                 entry, state, clip_index, clip_count, length)
+            resolved_audios.append(audio)
             ref2va.set_input(
                 "ref_audios.ref_audio_%d" % index, audio)
             if detail:
@@ -3608,11 +8570,71 @@ class MiniMaxH3TaggedReferenceToVideo:
         else:
             raise ValueError(
                 "Tagged references have no valid reference fingerprint.")
+        cache_fingerprint = fingerprint
+        positive = ref2va.out(0)
+        semantic_anchors = bindings.get("semantic_anchors") or []
+        presentation = None
+        if semantic_anchors:
+            anchor_mode = _semantic_anchor_mode(semantic_anchor_mode)
+            anchor_size = str(semantic_anchor_size)
+            presentation = {
+                "version": SEMANTIC_PRESENTATION_VERSION,
+                "width": int(width),
+                "height": int(height),
+                "length": int(length),
+                "ref_image_size": str(ref_image_size),
+                "semantic_anchor_size": anchor_size,
+                "semantic_anchor_mode": anchor_mode,
+                "pictures": [
+                    entry["value"] for entry in bindings["pictures"]],
+                "videos": presentation_videos,
+                "standalone_audio_count": len(bindings["audios"]),
+                "anchors": [{
+                    "tag": anchor["tag"],
+                    "image": anchor["entry"]["value"],
+                    "timestamps": tuple(anchor["timestamps"]),
+                } for anchor in semantic_anchors],
+            }
+            semantic = graph.node(
+                "MiniMaxH3SemanticAnchorConditioning", "SemanticAnchors")
+            semantic.set_input("positive", positive)
+            semantic.set_input("clip", clip)
+            semantic.set_input("prompt", compiled)
+            semantic.set_input("presentation", presentation)
+            positive = semantic.out(0)
+            fingerprint = _fingerprint({
+                "tagged_reference_fingerprint": fingerprint,
+                "semantic_anchor_mode": anchor_mode,
+                "semantic_anchor_size": anchor_size,
+            })
+        cache_runtime_ready = (
+            callable(getattr(vae, "encode", None))
+            and not isinstance(vae, (str, bytes))
+            and (not resolved_audios and not any(
+                item.get("audio") is not None for item in resolved_videos)
+                 or (callable(getattr(audio_vae, "encode", None))
+                     and not isinstance(audio_vae, (str, bytes)))))
+        if bool(cache_for_upscale) and cache_runtime_ready and (
+                bindings["pictures"] or resolved_videos or resolved_audios
+                or semantic_anchors):
+            try:
+                cache_status = _cache_reference_scene(
+                    fingerprint=cache_fingerprint, scene=clip_index,
+                    scene_count=clip_count, prompt=prompt,
+                    compiled_prompt=compiled, width=width, height=height,
+                    length=length, ref_image_size=ref_image_size, vae=vae,
+                    audio_vae=audio_vae,
+                    pictures=[entry["value"] for entry in bindings["pictures"]],
+                    videos=resolved_videos, audios=resolved_audios,
+                    semantic_presentation=presentation)
+                summary += "; " + cache_status
+            except Exception as exc:
+                _LOG.warning("H3 tagged reference cache was not saved: %s", exc)
         if slice_details:
             summary += "; " + "; ".join(slice_details)
         return {
             "result": (
-                ref2va.out(0), ref2va.out(1), compiled, summary, fingerprint),
+                positive, ref2va.out(1), compiled, summary, fingerprint),
             "expand": graph.finalize(),
         }
 
@@ -3755,7 +8777,7 @@ class MiniMaxH3ChainExternalVideo:
                 "H3 existing-video source audio")
             first_continuation_mode = plan["shots"][0].get(
                 "continuation_mode", cfg.get("continuation_mode", "guide"))
-            if first_continuation_mode == "masked_av":
+            if first_continuation_mode in MASKED_CONTINUATION_MODES:
                 # A clean target AV prefix is one physical interval. Unlike
                 # guide mode, masked continuation cannot use an independently
                 # sized audio-reference window.
@@ -3869,6 +8891,267 @@ class MiniMaxH3ChainExternalVideo:
         return (external_context, status)
 
 
+class MiniMaxH3ChainPolicy:
+    """Compact normal-user policy for transition and soundtrack intent."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "incoming_transition": (list(PRIMARY_TRANSITION_PRESETS), {
+                    "default": "guide",
+                    "tooltip": "Default boundary entering a scene: Visual "
+                               "Cut = no carried picture; Guide = 22-frame "
+                               "RGB continuation; Hard AV = protected "
+                               "39-frame picture/audio prefix; Soft AV = the "
+                               "same hard picture prefix with a short audio "
+                               "release. A scene can inherit or override this "
+                               "default in Plan Studio."}),
+                "final_audio": (list(FINAL_AUDIO_POLICIES), {
+                    "default": "generated",
+                    "tooltip": "Soundtrack muxed into the final MP4: H3's "
+                               "saved generated sound, the exact source "
+                               "track, or no soundtrack."}),
+                "source_reference": (list(SOURCE_REFERENCE_POLICIES), {
+                    "default": "off",
+                    "tooltip": "Use the matching Source Timeline audio as "
+                               "guidance while H3 generates this scene's "
+                               "sound. This does not copy the source waveform "
+                               "into the result or choose the final MP4 "
+                               "soundtrack. To force the exact source waveform "
+                               "during generation, enable Lock source audio; "
+                               "to put it in the final MP4, set Final audio to "
+                               "source. Lock automatically turns this "
+                               "reference off."}),
+                "generated_continuity": (
+                    list(GENERATED_CONTINUITY_POLICIES), {
+                        "default": "on",
+                        "tooltip": "On carries the previous sampled audio "
+                                   "latent across scene boundaries. Guide uses "
+                                   "the tested automatic 22-frame sound "
+                                   "context; AV follows its exact shared video "
+                                   "boundary. Off leaves target audio fully "
+                                   "denoisable. This does not select the final "
+                                   "soundtrack. Lock source audio overrides "
+                                   "this off."}),
+                # Keep this last so older serialized widget arrays retain the
+                # exact positions of all existing 0.5 choices.
+                "lock_source_audio": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Encode each scene's exact Source Timeline "
+                               "window directly into the target H3 audio "
+                               "latent and protect the complete audio mask "
+                               "from denoising. This automatically replaces "
+                               "Source reference and Generated continuity for "
+                               "generation. Choose Final audio=source when the "
+                               "final MP4 must retain the original waveform."}),
+            },
+        }
+
+    RETURN_TYPES = (CHAIN_POLICY_TYPE, "STRING")
+    RETURN_NAMES = ("chain_policy", "status")
+    OUTPUT_TOOLTIPS = (
+        "Combined 0.5 policy to connect to Chain Plan's chain_policy input.",
+        "Resolved transition, soundtrack, source-reference, generated-"
+        "continuity, and exact-target lock summary.",
+    )
+    FUNCTION = "build"
+    CATEGORY = "conditioning/minimax/contex_loop/policies"
+    DESCRIPTION = (
+        "Set the normal 0.5 transition and audio intent in one place. Plan "
+        "stores canonical audio and transition records so checkpoint "
+        "compatibility is based on behavior, not graph topology."
+    )
+
+    def build(self, incoming_transition="guide", final_audio="generated",
+              source_reference="off", generated_continuity="on",
+              lock_source_audio=False):
+        policy = _contract_chain_policy(
+            incoming_transition, final_audio, source_reference,
+            generated_continuity, lock_source_audio)
+        transition_status = _transition_policy_display({
+            "transition_policy": policy["transition_policy"]})
+        audio_status = _audio_policy_summary({
+            "audio_policy": policy["audio_policy"]})
+        source_need = (
+            "source timeline required"
+            if _audio_policy_requires_source({
+                "audio_policy": policy["audio_policy"]})
+            else "no source timeline required")
+        return policy, "%s; %s; %s; audio context automatic (%df)" % (
+            transition_status, audio_status, source_need,
+            int(policy["audio_context_length"]))
+
+
+class MiniMaxH3AdvancedPolicy:
+    """Apply a named advanced transition without replacing audio intent."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "chain_policy": (CHAIN_POLICY_TYPE, {
+                    "tooltip": "Connect Chain Policy, another Advanced "
+                               "Policy, or the Legacy 0.4 Policy Adapter. "
+                               "This node preserves its complete audio "
+                               "intent and replaces only the incoming "
+                               "transition."}),
+                "incoming_transition": (
+                    list(ADVANCED_TRANSITION_PRESETS), {
+                        "default": "drift_av",
+                        "tooltip": "Semantic incoming-boundary recipe. "
+                                   "Tone, Latent, Detail, and Drift-Control "
+                                   "choices expose experimental behavior. "
+                                   "Color-Stable Drift adds a tapered "
+                                   "scene-one VAE delta to the copied video "
+                                   "prefix while leaving audio untouched. It "
+                                   "does not mix with legacy 0.4 audio "
+                                   "settings. The recipe also supplies its "
+                                   "matching generated-audio context length."}),
+            },
+        }
+
+    RETURN_TYPES = (CHAIN_POLICY_TYPE, "STRING")
+    RETURN_NAMES = ("chain_policy", "status")
+    OUTPUT_TOOLTIPS = (
+        "The incoming policy with its audio intent preserved and the selected "
+        "advanced transition applied.",
+        "Resolved advanced transition and preserved audio-intent summary.",
+    )
+    FUNCTION = "apply"
+    CATEGORY = "conditioning/minimax/contex_loop/policies"
+    DESCRIPTION = (
+        "Layer a named advanced incoming-transition recipe onto an existing "
+        "Chain Policy. This is the normal route for Tone, Latent, Detail, "
+        "Drift-Control, or Color-Stable Drift continuation. It never "
+        "replaces Final audio, Source "
+        "reference, Generated continuity, or Lock source audio. Chain another "
+        "policy layer after it when a later override must win."
+    )
+
+    def apply(self, chain_policy, incoming_transition="drift_av"):
+        base = _validate_chain_policy(chain_policy)
+        transition = _contract_transition_policy(incoming_transition)
+        combined = _contract_compose_chain_policy(
+            base["audio_policy"], transition,
+            audio_context_length=transition["context_length"])
+        transition_status = _transition_policy_display({
+            "transition_policy": combined["transition_policy"]})
+        audio_status = _audio_policy_summary({
+            "audio_policy": combined["audio_policy"]})
+        return (
+            combined,
+            "advanced override: %s; audio preserved (%s); "
+            "audio context automatic (%df)" % (
+                transition_status, audio_status,
+                int(combined["audio_context_length"])),
+        )
+
+
+class MiniMaxH3Legacy04PolicyAdapter:
+    """Expose the retired 0.4 Plan policy widgets without cluttering Plan."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "audio_mode": (list(AUDIO_MODES), {
+                    "default": "generated_audio",
+                    "tooltip": "Legacy 0.4 combined audio mode. The adapter "
+                               "translates it exactly into the independent "
+                               "0.5 Audio Policy axes only when chain_policy "
+                               "is disconnected. A connected modern policy "
+                               "owns audio intent instead."}),
+                "continuation_mode": (list(CONTINUATION_MODES), {
+                    "default": "guide",
+                    "tooltip": "Legacy 0.4 low-level continuation "
+                               "implementation. Prefer Chain Policy plus "
+                               "Advanced Policy for new workflows."}),
+                "context_length": (list(H3_CONTEXT_LENGTHS), {
+                    "default": 22,
+                    "tooltip": "Legacy 0.4 global visual overlap. This is "
+                               "paired with continuation_mode and translated "
+                               "into the one-wire 0.5 policy."}),
+                "audio_context_length": ("INT", {
+                    "default": 22, "min": 0, "max": 240,
+                    "tooltip": "Legacy 0.4 generated-audio overlap in "
+                               "24-fps video-frame units. Guide can use this "
+                               "independently of visual context. AV treats "
+                               "zero as disabled and any positive value as "
+                               "enabled for the exact shared video boundary."}),
+            },
+            "optional": {
+                "chain_policy": (CHAIN_POLICY_TYPE, {
+                    "tooltip": "Optional policy layer to preserve. When "
+                               "connected, its complete 0.5 audio intent is "
+                               "kept and the legacy audio_mode widget is "
+                               "ignored; only the raw 0.4 transition and "
+                               "audio-context fields override it. Leave this "
+                               "disconnected only when migrating a standalone "
+                               "0.4 policy."}),
+            },
+        }
+
+    RETURN_TYPES = (CHAIN_POLICY_TYPE, "STRING")
+    RETURN_NAMES = ("chain_policy", "status")
+    OUTPUT_TOOLTIPS = (
+        "One-wire combined policy carrying all translated legacy settings.",
+        "Human-readable summary of the translated legacy settings.",
+    )
+    FUNCTION = "build"
+    CATEGORY = "conditioning/minimax/contex_loop/policies/legacy"
+    DESCRIPTION = (
+        "Migration-only adapter for the combined audio mode, raw incoming-"
+        "transition implementation, visual context, and audio context "
+        "formerly shown on the 0.4 Plan node. Connect a modern Chain Policy "
+        "to preserve its audio intent while applying only the legacy raw "
+        "boundary fields. New workflows should use Chain Policy and, when "
+        "needed, Advanced Policy."
+    )
+
+    def build(self, audio_mode="generated_audio",
+              continuation_mode="guide", context_length=22,
+              audio_context_length=22, chain_policy=None):
+        incoming = (
+            _validate_chain_policy(chain_policy)
+            if chain_policy is not None else None)
+        audio = (
+            incoming["audio_policy"]
+            if incoming is not None else migrate_legacy_audio_mode(audio_mode))
+        mode = str(continuation_mode)
+        context = int(context_length)
+        matched_preset = None
+        for candidate in (
+                "cut", "guide", "tone_guide", "latent_guide",
+                "detail_guide", "detail_av", "drift_av", "color_drift_av",
+                "hard_av", "soft_av",
+                "audio_feather_av"):
+            resolved = _contract_transition_policy(candidate)
+            if (resolved["continuation_mode"] == mode and
+                    int(resolved["context_length"]) == context):
+                matched_preset = candidate
+                break
+        transition = _contract_transition_policy(
+            matched_preset or "guide",
+            expert_override=matched_preset is None,
+            continuation_mode=mode,
+            context_length=context)
+        combined = _contract_compose_chain_policy(
+            audio, transition, audio_context_length=audio_context_length)
+        if incoming is not None:
+            status = (
+                "legacy 0.4 boundary override: incoming audio preserved "
+                "(%s); transition=%s/%df; audio context=%df" % (
+                    _audio_policy_summary({"audio_policy": audio}), mode,
+                    context, int(audio_context_length)))
+        else:
+            status = (
+                "legacy 0.4 migration: audio=%s; transition=%s/%df; "
+                "audio context=%df" % (
+                    audio_mode, mode, context, int(audio_context_length)))
+        return combined, status
+
+
 class MiniMaxH3ChainPlan:
     @classmethod
     def INPUT_TYPES(cls):
@@ -3891,8 +9174,9 @@ class MiniMaxH3ChainPlan:
                                "editor for normal work and Raw JSON only for "
                                "import, export, or advanced editing. Reference "
                                "media is connected elsewhere; this JSON only "
-                               "mentions its @tags or native <Picture/Video/Audio "
-                               "N> labels."}),
+                               "mentions native @tags, Tagged Picture semantic "
+                               "anchors such as #hero[2.50s], or native "
+                               "<Picture/Video/Audio N> labels."}),
                 "run_name": ("STRING", {
                     "default": "h3_chain",
                     "tooltip": "Identity of one render history and its folder "
@@ -3922,9 +9206,15 @@ class MiniMaxH3ChainPlan:
                                "so its latent always matches the plan."}),
                 "context_length": (list(H3_CONTEXT_LENGTHS), {
                     "default": 22,
-                    "tooltip": "Default previous-scene video frames used to "
+                    "tooltip": "Legacy 0.4 fallback, hidden in the normal 0.5 "
+                               "interface. Connect Chain Policy for new "
+                               "workflows or the Legacy 0.4 Policy Adapter when "
+                               "rebuilding an old control surface. Default "
+                               "previous-scene video frames used to "
                                "continue motion. Use 22 for guide mode and 39 "
-                               "for masked_av so the AV clocks meet exactly. "
+                               "for masked_av, tapered_av, feathered_av, or "
+                               "audio_feathered_av/Drift AV so the AV "
+                               "clocks meet exactly. "
                                "A scene's Advanced selector can override this; "
                                "blank inherits it and 0 starts a visually new scene. "
                                "Audio context is controlled separately. With head "
@@ -3960,8 +9250,11 @@ class MiniMaxH3ChainPlan:
                                "center-crops overflow. It does not crop Ref2VA "
                                "picture/video reference inputs."}),
                 "audio_mode": (list(AUDIO_MODES), {
-                    "default": "source_track",
-                    "tooltip": "Controls timeline continuity and final audio; it "
+                    "default": "generated_audio",
+                    "tooltip": "Legacy 0.4 fallback, hidden in the normal 0.5 "
+                               "interface and used only when no H3 Audio "
+                               "Policy is connected. It controls timeline "
+                               "continuity and final audio; it "
                                "does NOT enable or disable @voice/<Audio N> "
                                "references. For a finished prerecorded voice, "
                                "dialogue, or song that must remain exact, choose "
@@ -3977,15 +9270,20 @@ class MiniMaxH3ChainPlan:
                                "experimental and usually not the first choice."}),
                 "audio_context_length": ("INT", {
                     "default": 22, "min": 0, "max": 240,
-                    "tooltip": "Amount of previous generated sound carried into "
+                    "tooltip": "Legacy 0.4 fallback amount of previous "
+                               "generated sound carried into "
                                "the next scene, measured in 24-fps video frames. "
-                               "0 means use context_length; 22 is the tested "
-                               "explicit value. Only generated_audio and "
-                               "source_plus_timeline use it. source_track ignores "
-                               "it because each scene receives a fresh exact "
-                               "slice from the external track. masked_av also "
-                               "ignores it and always preserves audio for the "
-                               "same duration as context_length. A scene's "
+                               "Normal Chain Policy derives 0/22/39 from Cut, "
+                               "Guide, or AV automatically. This field is active "
+                               "only when the Audio "
+                               "Policy has Generated continuity=on. Legacy "
+                               "generated_audio and source_plus_timeline enable "
+                               "that axis; source_track disables it. AV mask modes "
+                               "use zero versus positive as an audio-carry "
+                               "switch: positive preserves audio for the exact "
+                               "video-prefix duration required by the shared AV "
+                               "clock, while zero leaves audio fully denoisable. "
+                               "A scene's "
                                "Advanced Audio context can override this default; "
                                "there, explicit 0 means no audio carry."}),
                 "default_duration_seconds": ("FLOAT", {
@@ -4020,28 +9318,55 @@ class MiniMaxH3ChainPlan:
                                "safetensors continuation checkpoint."}),
                 "video_blend_frames": ("INT", {
                     "default": 0, "min": 0, "max": 243,
-                    "tooltip": "Optional visual blend at each scene boundary, "
-                               "in frames. 0 preserves the current hard-cut "
-                               "assembly. A positive value must not exceed "
-                               "context_length and requires head anchors. "
-                               "Connect this output to Loop Trim's "
-                               "retain_overlap_frames and its "
+                    "tooltip": "Default visual blend entering each scene, in "
+                               "frames. A scene's Blend entering scene field "
+                               "can override it; blank inherits this value, "
+                               "capped to that scene's context, and 0 makes a "
+                               "hard cut. A positive value requires head "
+                               "anchors. In a 0.5 workflow, connect Current "
+                               "Shot's state output to Loop Trim's state input; "
+                               "Loop Trim resolves this default plus any scene "
+                               "override automatically. Connect Loop Trim's "
                                "images_with_overlap output to Segment Save. "
                                "Final and partial videos are re-encoded with a "
                                "linear cumulative blend; audio timing and the "
                                "delivered duration remain unchanged."}),
                 "continuation_mode": (list(CONTINUATION_MODES), {
                     "default": "guide",
-                    "tooltip": "Inherited default for scenes without a "
+                    "tooltip": "Legacy 0.4 fallback, hidden in the normal 0.5 "
+                               "interface. Connect Chain Policy for new "
+                               "workflows. Inherited default for scenes without a "
                                "per-scene continuation override. guide keeps "
                                "the established Motion Context "
                                "path: previous AV is supplied as fixed guide "
                                "rows while the overlap is regenerated. "
+                               "tone_carry_guide uses the RGB guide path and "
+                               "applies the predecessor's detected direct tone "
+                               "curve before VAE encoding. "
                                "masked_av (experimental) VAE-encodes the "
                                "previous video tail into the current target "
-                               "latent, copies its sampled audio tail, and "
-                               "protects both with per-stream denoise masks. "
-                               "masked_av requires video/head, context >= 5, "
+                               "latent and protects it with a denoise mask. "
+                               "tapered_av (Detail AV) makes a disposable "
+                               "Gaussian-noised copy of only that carried "
+                               "video prefix before applying the same hard "
+                               "mask; audio is never noised. "
+                               "With Generated continuity on it also copies and "
+                               "protects the matching sampled-audio tail; with "
+                               "that policy off, target audio remains fully "
+                               "denoisable for source/reference guidance. "
+                               "feathered_av uses the same prefix but "
+                               "progressively denoises its final temporal "
+                               "steps for a softer handoff. "
+                               "audio_feathered_av keeps the picture prefix "
+                               "hard while releasing only the last eight "
+                               "audio latent ticks with a half-cosine ramp. "
+                               "drift_control_av keeps the clean predecessor "
+                               "checkpoint unchanged but applies a per-model-"
+                               "evaluation, next-sigma video mask with an "
+                               "8+4 clean-seam taper; it requires the H3 MODEL "
+                               "to pass through Chain Context. "
+                               "All AV modes "
+                               "require video/head, context >= 5, "
                                "the Chain Context latent output wired to the "
                                "sampler, and native or compatible H3 AV-mask "
                                "support."}),
@@ -4057,6 +9382,14 @@ class MiniMaxH3ChainPlan:
                                "the same normalization and validation. Empty or "
                                "disconnected input uses the internal plan_json "
                                "unchanged."}),
+                "chain_policy": (CHAIN_POLICY_TYPE, {
+                    "tooltip": "Connect MiniMax H3 Chain Policy directly, "
+                               "or pass it through Advanced Policy or the "
+                               "Legacy 0.4 Policy Adapter. It combines "
+                               "transition, final "
+                               "soundtrack, source-audio reference, generated "
+                               "audio continuity, and automatic audio context "
+                               "in one connection."}),
             },
         }
 
@@ -4071,8 +9404,9 @@ class MiniMaxH3ChainPlan:
         "Number of scenes in the plan.",
         "Validated generation width; connect to the stock H3 conditioning node.",
         "Validated generation height; connect to the stock H3 conditioning node.",
-        "Configured boundary blend length. Connect it to Loop Trim's "
-        "retain_overlap_frames input.",
+        "Legacy Plan-wide default blend length. It cannot represent a "
+        "per-scene override because Plan has no active scene. Do not connect "
+        "it to Loop Trim in 0.5; connect Current Shot state to Loop Trim state.",
     )
     FUNCTION = "build"
     CATEGORY = "conditioning/minimax/contex_loop"
@@ -4086,7 +9420,7 @@ class MiniMaxH3ChainPlan:
               audio_context_length, default_duration_seconds, default_steps,
               base_seed, segment_crf, video_blend_frames=0,
               continuation_mode="guide",
-              plan_json_input=None):
+              plan_json_input=None, chain_policy=None):
         effective_plan_json = (
             plan_json_input
             if isinstance(plan_json_input, str) and plan_json_input.strip()
@@ -4097,7 +9431,8 @@ class MiniMaxH3ChainPlan:
             encode_mode,
             anchor_mode, crop, audio_mode, audio_context_length,
             default_duration_seconds, default_steps, base_seed, segment_crf,
-            generation_fingerprint, video_blend_frames, continuation_mode)
+            generation_fingerprint, video_blend_frames, continuation_mode,
+            chain_policy)
         return (plan, plan["summary"], len(plan["shots"]),
                 plan["compatibility"]["width"],
                 plan["compatibility"]["height"],
@@ -4166,6 +9501,776 @@ class MiniMaxH3ChainRichScenePromptEditor:
         return (plan,)
 
 
+def _preflight_issue(
+        report: dict[str, Any], level: str, code: str, message: str,
+        action: str = "", **context: Any) -> None:
+    issue = {"code": str(code), "message": str(message),
+             "action": str(action or "")}
+    issue.update({key: value for key, value in context.items()
+                  if value is not None})
+    report[level].append(issue)
+
+
+def _preflight_reference_window(
+        entry: dict[str, Any], plan: dict[str, Any], scene: int
+        ) -> dict[str, Any] | None:
+    if entry.get("kind") != "video":
+        return None
+    shots = plan["shots"]
+    shot = shots[int(scene) - 1]
+    mode = str(entry.get("timeline_mode") or "restart_each_scene")
+    if mode == "restart_each_scene":
+        start, length = 0, int(shot["raw_frames"])
+    elif mode == "sequential":
+        ranges = entry.get("ranges") or ()
+        if entry.get("activation") == "prompt":
+            aliases = set(_reference_entry_tags(entry))
+            origin = next((
+                index for index, candidate in enumerate(shots, 1)
+                if aliases.intersection(_REFERENCE_ALIAS_RE.findall(
+                    str(candidate.get("prompt") or "")))
+            ), int(scene))
+        else:
+            origin = int(ranges[0][0]) if ranges else 1
+        current_mode = str(shot.get(
+            "continuation_mode",
+            plan["compatibility"].get("continuation_mode", "guide")))
+        if (entry.get("semantic_role") == "motion"
+                and current_mode in MASKED_CONTINUATION_MODES):
+            start = sum(int(item["delivered_frames"])
+                        for item in shots[origin - 1:int(scene) - 1])
+            length = int(shot["delivered_frames"])
+        else:
+            start = (int(shot["generation_start_frame"])
+                     - int(shots[origin - 1]["generation_start_frame"]))
+            length = int(shot["raw_frames"])
+    else:
+        raise ValueError(
+            "Reference @%s has unknown timeline mode %r." %
+            (entry.get("tag", "video"), mode))
+    return {"mode": mode, "start_frame": int(start),
+            "end_frame": int(start + length), "frame_count": int(length)}
+
+
+def _preflight_runtime_compatibility(
+        plan: dict[str, Any], report: dict[str, Any]) -> dict[str, Any]:
+    try:
+        from .patch_layout import compatibility_report, native_guides_available
+    except ImportError as exc:
+        runtime = {
+            "guide": {"ok": None, "mode": "inspection_unavailable",
+                      "message": str(exc)},
+            "mask": {"needed": False},
+        }
+        _preflight_issue(
+            report, "warnings", "runtime_inspection_unavailable",
+            "H3 runtime compatibility could not be inspected in this "
+            "model-free process: %s" % exc,
+            "Run preflight inside the active ComfyUI process before sampling.")
+        return runtime
+
+    guide = compatibility_report()
+    runtime: dict[str, Any] = {"guide": guide, "mask": {"needed": False}}
+    if not guide["ok"]:
+        _preflight_issue(
+            report, "errors", "guide_layout_conflict", guide["message"],
+            guide["action"])
+    masked_scenes = []
+    default_mode = str(
+        plan["compatibility"].get("continuation_mode", "guide"))
+    for shot in plan["shots"]:
+        mode = str(shot.get("continuation_mode", default_mode))
+        if mode in MASKED_CONTINUATION_MODES:
+            masked_scenes.append(int(shot["index"]))
+    if not masked_scenes:
+        return runtime
+    mask: dict[str, Any] = {"needed": True, "scenes": masked_scenes}
+    runtime["mask"] = mask
+    if not native_guides_available():
+        mask.update({"ok": False, "mode": "native_guide_required"})
+        _preflight_issue(
+            report, "errors", "masked_av_requires_native_guides",
+            "Masked AV continuation requires ComfyUI's native H3 guide API.",
+            "Update ComfyUI to a build containing the native H3 Add Guide "
+            "API, then restart ComfyUI.", scenes=masked_scenes)
+        return runtime
+    try:
+        from .h3_mask_compat import capability_status as engine_status
+        from .h3_mask_payload_compat import capability_status as payload_status
+        engine = engine_status()
+        payload = payload_status()
+        indicators = engine.get("mask_engine_indicators") or {}
+        characteristic = [
+            bool(indicators.get("mask_row_values")),
+            bool(indicators.get("mod_row")),
+            bool(indicators.get("forward_masks")),
+            bool(indicators.get("inner_masks")),
+        ]
+        partial = any(characteristic) and not all(characteristic)
+        mask.update({
+            "ok": not partial,
+            "mode": ("ready" if (
+                engine.get("mask_engine_complete")
+                and (payload.get("native_av_mask_payload")
+                     or payload.get("wrapper_present")))
+                else "runtime_bridge_available"),
+            "engine": engine,
+            "payload": payload,
+        })
+        if partial:
+            _preflight_issue(
+                report, "errors", "partial_mask_runtime",
+                "A partially updated H3 AV-mask runtime was detected.",
+                "Update ComfyUI and this node pack together, then restart.",
+                scenes=masked_scenes)
+    except Exception as exc:
+        mask.update({"ok": False, "mode": "inspection_failed",
+                     "detail": str(exc)})
+        _preflight_issue(
+            report, "errors", "mask_runtime_inspection_failed",
+            "Could not inspect H3 AV-mask compatibility: %s" % exc,
+            "Update ComfyUI and restart before using masked AV transitions.",
+            scenes=masked_scenes)
+    return runtime
+
+
+def _preflight_bind_source(
+        plan: dict[str, Any], report: dict[str, Any],
+        source_timeline: Any = None, source_audio: Any = None
+        ) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    if source_timeline is not None and source_audio is not None:
+        raise ValueError(
+            "Connect Source Timeline or legacy source_audio, not both.")
+    if source_timeline is None and isinstance(plan.get("source_timeline"), dict):
+        source_timeline = _source_timeline_from_recovery(
+            plan["source_timeline"])
+    required = _audio_policy_requires_source(plan)
+    prepared = dict(plan)
+    prepared["base_plan_hash"] = str(
+        plan.get("base_plan_hash") or plan["plan_hash"])
+    prepared["compatibility"] = dict(plan["compatibility"])
+    required_frames = int(plan["total_delivered_frames"])
+    source_report: dict[str, Any] = {
+        "route": "none", "required_frames": required_frames,
+        "required_seconds": required_frames / float(FPS),
+    }
+    if source_timeline is not None:
+        source = _validate_source_timeline(source_timeline)
+        extent = int(source["extent"]["frame_count"])
+        audio_frames = _source_timeline_available_audio_frames(source)
+        source_report.update({
+            "route": "source_timeline",
+            "extent_frames": extent,
+            "extent_seconds": extent / float(FPS),
+            "audio_kind": source["audio"]["kind"],
+            "audio_frames": audio_frames,
+            "origin": dict(source["origin"]),
+            "timeline_fingerprint": source["fingerprints"]["timeline"],
+        })
+        paths = []
+        if source.get("video") is not None:
+            paths.append(("video", str(source["video"].get("path") or "")))
+        if source["audio"]["kind"] in ("embedded", "external_path"):
+            paths.append(("audio", str(source["audio"].get("path") or "")))
+        source_report["paths"] = [
+            {"kind": kind, "path": path,
+             "available": bool(path and os.path.isfile(path))}
+            for kind, path in paths]
+        for item in source_report["paths"]:
+            if not item["available"]:
+                _preflight_issue(
+                    report, "errors", "source_path_missing",
+                    "Source Timeline %s is unavailable: %s" %
+                    (item["kind"], item["path"] or "<empty path>"),
+                    "Relink the media in Source Timeline or restore its Run "
+                    "Manager archive.", kind=item["kind"])
+        if required and source["audio"]["kind"] == "none":
+            _preflight_issue(
+                report, "errors", "source_audio_missing",
+                "The active Audio Policy requires source audio, but Source "
+                "Timeline has none.",
+                "Choose embedded/external audio or disable source reference "
+                "and source final audio in H3 Audio Policy.")
+        shortfall = max(0, required_frames - audio_frames) if required else 0
+        source_report["shortfall_frames"] = shortfall
+        source_report["shortfall_seconds"] = shortfall / float(FPS)
+        if shortfall:
+            deferred = source["audio"].get("value")
+            silent = False
+            if source["audio"]["kind"] == "deferred_tensor" and deferred is not None:
+                waveform, _sample_rate = _validate_audio(
+                    deferred, "Preflight Source Timeline audio")
+                silent = _audio_is_silent(waveform)
+            if silent:
+                source_report["silent_padding_frames"] = shortfall
+                _preflight_issue(
+                    report, "warnings", "silent_source_will_pad",
+                    "Silent placeholder audio is %.3f seconds short and will "
+                    "be padded." % (shortfall / float(FPS)),
+                    "No action is required unless real source audio was intended.")
+            else:
+                _preflight_issue(
+                    report, "errors", "source_audio_too_short",
+                    "Source audio is %d frames (%.3fs) short." %
+                    (shortfall, shortfall / float(FPS)),
+                    "Shorten the Plan to a complete scene or provide a longer "
+                    "source track.")
+        audio_hash = (str(source["fingerprints"].get("audio") or "none")
+                      if required else "none")
+        timeline_hash = str(source["fingerprints"]["timeline"])
+        prepared["compatibility"].update({
+            "source_audio_hash": audio_hash,
+            "source_audio_silent_padding": bool(
+                source_report.get("silent_padding_frames")),
+            "source_timeline_fingerprint": timeline_hash,
+        })
+        prepared["plan_hash"] = _fingerprint({
+            "prepared_plan_hash": plan["plan_hash"],
+            "source_audio_hash": audio_hash,
+            "source_timeline_fingerprint": timeline_hash,
+        })
+        report["source"] = source_report
+        return prepared, source
+    if required and source_audio is None:
+        _preflight_issue(
+            report, "errors", "source_audio_missing",
+            "The active Audio Policy requires source audio.",
+            "Connect one H3 Source Timeline to Loop Start, or use the legacy "
+            "source_audio input.")
+        source_hash = "none"
+    elif source_audio is not None:
+        waveform, sample_rate = _validate_audio(
+            source_audio, "Preflight legacy source audio")
+        available = int(waveform.shape[-1])
+        available_frames = int(math.floor(
+            available / float(sample_rate) * FPS + 1e-9))
+        shortfall = max(0, required_frames - available_frames) if required else 0
+        source_report.update({
+            "route": "legacy_audio", "sample_rate": sample_rate,
+            "sample_count": available, "audio_frames": available_frames,
+            "shortfall_frames": shortfall,
+            "shortfall_seconds": shortfall / float(FPS),
+        })
+        if shortfall and not _audio_is_silent(waveform):
+            _preflight_issue(
+                report, "errors", "source_audio_too_short",
+                "Legacy source audio is %d frames (%.3fs) short." %
+                (shortfall, shortfall / float(FPS)),
+                "Shorten the Plan to a complete scene or provide a longer track.")
+        elif shortfall:
+            _preflight_issue(
+                report, "warnings", "silent_source_will_pad",
+                "Silent placeholder audio is %.3f seconds short and will be "
+                "padded." % (shortfall / float(FPS)))
+        source_hash = _audio_fingerprint(source_audio) if required else "none"
+    else:
+        source_hash = "none"
+    prepared["compatibility"].update({
+        "source_audio_hash": source_hash,
+        "source_audio_silent_padding": bool(
+            source_report.get("shortfall_frames") and source_audio is not None
+            and _audio_is_silent(_validate_audio(
+                source_audio, "Preflight legacy source audio")[0])),
+    })
+    prepared["plan_hash"] = _fingerprint(
+        {"prepared_plan_hash": plan["plan_hash"],
+         "source_audio_hash": source_hash}
+        if plan["compatibility"].get("external_context_hash") else
+        {"base_plan_hash": plan["plan_hash"],
+         "source_audio_hash": source_hash})
+    report["source"] = source_report
+    return prepared, None
+
+
+def _preflight_resume(
+        plan: dict[str, Any], start: int, verify_history: bool,
+        report: dict[str, Any], source_timeline: Any = None,
+        source_audio: Any = None) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "requested_start": int(start), "verify_history": bool(verify_history),
+        "eligible": True, "predecessors": [],
+    }
+    if int(start) <= 1:
+        return result
+    for index in range(1, int(start)):
+        item: dict[str, Any] = {"scene": index, "ok": False}
+        try:
+            metadata_path = _artifact_paths(plan, index)["metadata"]
+            item["metadata"] = metadata_path
+            if not os.path.isfile(metadata_path):
+                raise FileNotFoundError(
+                    "Predecessor scene %d metadata is missing." % index)
+            metadata = _read_json(metadata_path)
+            saved_dependency = metadata.get("scene_dependency")
+            dependency_diffs = []
+            if bool(verify_history) and isinstance(saved_dependency, dict):
+                current_source_dependency = (
+                    _canonical_source_reference_dependency(
+                        plan, index, source_timeline, source_audio))
+                if current_source_dependency is None:
+                    saved_compatibility = metadata.get("compatibility") or {}
+                    if (str(saved_compatibility.get("source_audio_hash") or "") ==
+                            str(plan["compatibility"].get(
+                                "source_audio_hash") or "")):
+                        current_source_dependency = saved_dependency.get(
+                            "scopes", {}).get("scene_generation", {}).get(
+                                "source_reference_window")
+                current_dependency = _scene_dependency_record(
+                    plan, index, current_source_dependency)
+                dependency_diffs = _scene_dependency_diffs(
+                    saved_dependency, current_dependency)
+                accepted = (str(metadata.get("history_hash") or "") or None)
+            else:
+                accepted = _selected_resume_history_hash(
+                    plan, index, metadata, verify_history)
+            item["mismatches"] = dependency_diffs
+            if dependency_diffs:
+                raise ValueError(
+                    "Predecessor scene %d dependency mismatch: %s" % (
+                        index, _format_dependency_mismatches(dependency_diffs)))
+            if accepted is None:
+                raise ValueError(
+                    "Predecessor scene %d does not match the current "
+                    "generation history." % index)
+            segment = metadata.get("segment")
+            if not isinstance(segment, dict):
+                raise ValueError(
+                    "Predecessor scene %d has no segment record." % index)
+            if str(segment.get("history_hash") or "") != accepted:
+                raise ValueError(
+                    "Predecessor scene %d has inconsistent history metadata."
+                    % index)
+            _verify_segment_artifacts(segment, index)
+            item.update({"ok": True, "history_hash": accepted,
+                         "revision": segment.get("revision")})
+        except (OSError, TypeError, ValueError) as exc:
+            result["eligible"] = False
+            item["error"] = str(exc)
+            _preflight_issue(
+                report, "errors", "resume_predecessor_invalid", str(exc),
+                ("Regenerate the missing/changed predecessor, or disable "
+                 "verify_resume_history only when intentionally reusing a "
+                 "valid saved predecessor."), scene=index)
+        result["predecessors"].append(item)
+    return result
+
+
+def _preflight_chain(
+        plan: Any, *, source_timeline: Any = None, source_audio: Any = None,
+        start_clip: int = 1, scene_range: Any = "",
+        verify_resume_history: bool = True, tagged_references: Any = None,
+        reference_schedule: Any = None) -> tuple[dict[str, Any], dict[str, Any]]:
+    report: dict[str, Any] = {
+        "version": PREFLIGHT_VERSION, "ok": False, "status": "error",
+        "errors": [], "warnings": [], "info": [], "scenes": [],
+        "source": {}, "references": {}, "runtime": {}, "resume": {},
+        "generation": {},
+    }
+    prepared = plan
+    try:
+        if not isinstance(plan, dict) or not isinstance(plan.get("shots"), list):
+            raise ValueError("Preflight requires a validated H3 Chain Plan.")
+        start, end = _parse_scene_range(
+            scene_range, len(plan["shots"]), start_clip)
+        report["selection"] = {"start": start, "end": end}
+        prepared, runtime_timeline = _preflight_bind_source(
+            plan, report, source_timeline, source_audio)
+        if not report.get("source"):
+            # Timeline route returns before setting the shared report field.
+            source = runtime_timeline
+            report["source"] = {
+                "route": "source_timeline",
+                "required_frames": int(plan["total_delivered_frames"]),
+                "required_seconds": int(plan["total_delivered_frames"]) / float(FPS),
+                "extent_frames": int(source["extent"]["frame_count"]),
+                "extent_seconds": float(source["extent"]["duration_seconds"]),
+                "audio_kind": source["audio"]["kind"],
+                "audio_frames": _source_timeline_available_audio_frames(source),
+                "origin": dict(source["origin"]),
+                "timeline_fingerprint": source["fingerprints"]["timeline"],
+            }
+        available = int(report["source"].get(
+            "audio_frames", report["source"].get("extent_frames", 0)))
+        cumulative = 0
+        last_complete = 0
+        for shot in prepared["shots"]:
+            cumulative += int(shot["delivered_frames"])
+            if available >= cumulative or not _audio_policy_requires_source(prepared):
+                last_complete = int(shot["index"])
+            context = int(shot["raw_frames"]) - int(shot["delivered_frames"])
+            mode = str(shot.get(
+                "continuation_mode",
+                prepared["compatibility"].get("continuation_mode", "guide")))
+            record = {
+                "index": int(shot["index"]), "id": str(shot["id"]),
+                "selected": start <= int(shot["index"]) <= end,
+                "raw_frames": int(shot["raw_frames"]),
+                "delivered_frames": int(shot["delivered_frames"]),
+                "overlap_trim_frames": context,
+                "duration_seconds": int(shot["raw_frames"]) / float(FPS),
+                "delivered_seconds": int(shot["delivered_frames"]) / float(FPS),
+                "source_start_frame": max(
+                    0, int(shot["generation_start_frame"])),
+                "source_end_frame": max(
+                    0, int(shot["generation_start_frame"]))
+                    + int(shot["raw_frames"]),
+                "transition": mode,
+                "prompt_tags": sorted(set(_REFERENCE_ALIAS_RE.findall(
+                    str(shot.get("prompt") or "")))),
+                "semantic_anchors": _semantic_anchor_specs(
+                    shot.get("prompt")),
+                "references": [],
+            }
+            if (not any(issue["code"].startswith("source_")
+                        for issue in report["errors"])):
+                source_dependency = _canonical_source_reference_dependency(
+                    prepared, int(shot["index"]), runtime_timeline,
+                    source_audio)
+                record["dependency"] = _scene_dependency_record(
+                    prepared, int(shot["index"]), source_dependency)
+            report["scenes"].append(record)
+        report["source"]["last_complete_scene"] = last_complete
+
+        if tagged_references is not None and reference_schedule is not None:
+            _preflight_issue(
+                report, "errors", "multiple_reference_routes",
+                "Connect tagged_references or reference_schedule, not both.",
+                "Keep the reference system used by the active Ref2VA node.")
+        references = (tagged_references if tagged_references is not None
+                      else reference_schedule)
+        route = ("tagged" if tagged_references is not None else
+                 "scheduled" if reference_schedule is not None else "none")
+        report["references"] = {"route": route, "fingerprint": "",
+                                "registered_tags": []}
+        if references is not None:
+            entries = (_tagged_reference_entries(references)
+                       if route == "tagged"
+                       else _reference_schedule_entries(references))
+            registered = sorted({tag for entry in entries
+                                 for tag in _reference_entry_tags(entry)})
+            report["references"].update({
+                "fingerprint": str(references.get("fingerprint") or ""),
+                "registered_tags": registered,
+            })
+            for scene_record, shot in zip(report["scenes"], prepared["shots"]):
+                prompt_tags = set(scene_record["prompt_tags"])
+                semantic_anchors = list(scene_record["semantic_anchors"])
+                semantic_tags = {item["tag"] for item in semantic_anchors}
+                if route == "tagged":
+                    active_tags = prompt_tags | semantic_tags
+                    active = [entry for entry in entries if active_tags.intersection(
+                        _reference_entry_tags(entry))]
+                    entries_by_tag = {
+                        tag: entry for entry in entries
+                        for tag in _reference_entry_tags(entry)
+                    }
+                    for anchor in semantic_anchors:
+                        tag = anchor["tag"]
+                        entry = entries_by_tag.get(tag)
+                        if entry is None:
+                            _preflight_issue(
+                                report, "errors", "unresolved_semantic_anchor",
+                                "Scene %d uses unresolved semantic anchor #%s." %
+                                (int(shot["index"]), tag),
+                                "Register a Tagged Picture with that tag or "
+                                "remove the semantic anchor.",
+                                scene=int(shot["index"]), tag=tag)
+                        elif entry.get("kind") != "picture":
+                            _preflight_issue(
+                                report, "errors", "invalid_semantic_anchor_kind",
+                                "Scene %d semantic anchor #%s resolves to %s, "
+                                "not a Tagged Picture." % (
+                                    int(shot["index"]), tag,
+                                    str(entry.get("kind") or "unknown")),
+                                "Semantic anchors accept Tagged Picture refs only.",
+                                scene=int(shot["index"]), tag=tag)
+                        if float(anchor["timestamp_seconds"]) > (
+                                int(shot["raw_frames"]) / float(FPS)):
+                            _preflight_issue(
+                                report, "errors", "semantic_anchor_out_of_range",
+                                "Scene %d semantic anchor #%s[%.3fs] exceeds "
+                                "the %.3fs scene duration." % (
+                                    int(shot["index"]), tag,
+                                    float(anchor["timestamp_seconds"]),
+                                    int(shot["raw_frames"]) / float(FPS)),
+                                "Use a scene-local timestamp inside this scene.",
+                                scene=int(shot["index"]), tag=tag)
+                else:
+                    active = [entry for entry in entries if _reference_is_active(
+                        entry, int(shot["index"]))]
+                    for anchor in semantic_anchors:
+                        _preflight_issue(
+                            report, "errors", "semantic_anchor_requires_tagged",
+                            "Scene %d uses #%s[%.3fs], but semantic anchors "
+                            "require the Tagged reference route." % (
+                                int(shot["index"]), anchor["tag"],
+                                float(anchor["timestamp_seconds"])),
+                            "Use Tagged Picture Ref + Tagged Ref2VA, or remove "
+                            "the #anchor from this scheduled workflow.",
+                            scene=int(shot["index"]), tag=anchor["tag"])
+                    unresolved = sorted(prompt_tags - set(registered))
+                    for tag in unresolved:
+                        _preflight_issue(
+                            report, "errors", "unresolved_reference_tag",
+                            "Scene %d uses unresolved scheduled reference @%s."
+                            % (int(shot["index"]), tag),
+                            "Register that tag or remove it from the scene prompt.",
+                            scene=int(shot["index"]), tag=tag)
+                for entry in active:
+                    detail = {"tag": str(entry.get("tag") or ""),
+                              "kind": str(entry.get("kind") or ""),
+                              "semantic_role": str(
+                                  entry.get("semantic_role") or "")}
+                    window = _preflight_reference_window(
+                        entry, prepared, int(shot["index"]))
+                    if window is not None:
+                        detail["window"] = window
+                        value = entry.get("value")
+                        if _is_source_timeline(value):
+                            capacity = int(value["extent"]["frame_count"])
+                        elif _is_lazy_motion_descriptor(value):
+                            capacity = int(value.get("frame_count", 0))
+                            path = str(value.get("path") or "")
+                            detail["available"] = bool(
+                                path and os.path.isfile(path))
+                        else:
+                            capacity = int(getattr(value, "shape", (0,))[0])
+                        detail["available_frames"] = capacity
+                        if capacity and int(window["end_frame"]) > capacity:
+                            _preflight_issue(
+                                report, "errors", "reference_too_short",
+                                "Reference @%s needs frames %d:%d for scene %d, "
+                                "but has %d." % (
+                                    detail["tag"], window["start_frame"],
+                                    window["end_frame"], int(shot["index"]),
+                                    capacity),
+                                "Provide a longer reference or change its timeline mode.",
+                                scene=int(shot["index"]), tag=detail["tag"])
+                    scene_record["references"].append(detail)
+        elif any(item["prompt_tags"] or item["semantic_anchors"]
+                 for item in report["scenes"]):
+            _preflight_issue(
+                report, "warnings", "reference_registry_not_connected",
+                "Scene prompts contain @tags or #semantic anchors, but no "
+                "reference registry is connected to preflight.",
+                "Connect the active Tagged or Scheduled reference output to "
+                "preflight for scene-window validation.")
+
+        fingerprint = str(
+            prepared["compatibility"].get("generation_fingerprint") or "")
+        report["generation"] = {
+            "fingerprint": fingerprint,
+            "covered": bool(fingerprint),
+            "scope": "external model/sampler/reference graph",
+        }
+        if not fingerprint:
+            _preflight_issue(
+                report, "warnings", "generation_fingerprint_missing",
+                "Model, sampler, CFG, scheduler, and reference graph are not "
+                "covered by the Plan's generation fingerprint.",
+                "Connect an automatic generation fingerprint before relying "
+                "on strict resume verification.")
+        report["runtime"] = _preflight_runtime_compatibility(prepared, report)
+        report["resume"] = _preflight_resume(
+            prepared, start, verify_resume_history, report,
+            runtime_timeline, source_audio)
+    except Exception as exc:
+        _preflight_issue(
+            report, "errors", "preflight_internal_validation", str(exc),
+            "Correct the reported Plan or media input and run preflight again.")
+    report["ok"] = not report["errors"]
+    report["status"] = (
+        "ready" if report["ok"] and not report["warnings"]
+        else "warning" if report["ok"] else "error")
+    report["summary"] = (
+        "H3 preflight %s: %d error(s), %d warning(s), %d scene(s)." %
+        (report["status"], len(report["errors"]), len(report["warnings"]),
+         len(report["scenes"])))
+    return prepared, report
+
+
+def _preflight_failure_text(report: dict[str, Any]) -> str:
+    lines = [str(report.get("summary") or "H3 preflight failed.")]
+    for issue in report.get("errors") or ():
+        line = "%s: %s" % (issue.get("code", "error"), issue.get("message", ""))
+        if issue.get("action"):
+            line += " Action: %s" % issue["action"]
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def _plan_studio_preview_cleanup() -> None:
+    now = time.monotonic()
+    expired = [
+        token for token, session in _PLAN_STUDIO_SOURCE_PREVIEWS.items()
+        if now - float(session.get("created", 0.0)) >
+        PLAN_STUDIO_PREVIEW_TTL_SECONDS
+    ]
+    for token in expired:
+        _PLAN_STUDIO_SOURCE_PREVIEWS.pop(token, None)
+    overflow = len(_PLAN_STUDIO_SOURCE_PREVIEWS) - (
+        PLAN_STUDIO_PREVIEW_MAX_SESSIONS - 1)
+    if overflow > 0:
+        oldest = sorted(
+            _PLAN_STUDIO_SOURCE_PREVIEWS,
+            key=lambda item: float(
+                _PLAN_STUDIO_SOURCE_PREVIEWS[item].get("created", 0.0)))
+        for token in oldest[:overflow]:
+            _PLAN_STUDIO_SOURCE_PREVIEWS.pop(token, None)
+
+
+def _plan_studio_preview_media(
+        value: Any, window: dict[str, Any]) -> dict[str, Any] | None:
+    start = int(window["start_frame"])
+    end = int(window["end_frame"])
+    if _is_source_timeline(value):
+        source = _validate_source_timeline(value, require_runtime=True)
+        video = source.get("video")
+        if video is None:
+            return None
+        audio = source["audio"]
+        audio_kind = str(audio.get("kind") or "none")
+        audio_path = ""
+        audio_seek = 0.0
+        if audio_kind in ("embedded", "external_path"):
+            audio_path = _resolved_media_path(
+                audio.get("path"), "Plan Studio source-preview audio")
+            audio_seek = (
+                float(audio.get("timeline_offset_seconds", 0.0)) +
+                start / float(FPS))
+        media_fingerprint = str(source["fingerprints"]["timeline"])
+    elif _is_lazy_motion_descriptor(value):
+        video = value
+        audio_kind = "embedded" if value.get("audio") is not None else "none"
+        audio_path = str(value.get("path") or "") if audio_kind == "embedded" else ""
+        audio_seek = (
+            float(value.get("skip_seconds", 0.0)) +
+            start / float(FPS))
+        media_fingerprint = str(value.get("file_sha256") or "")
+        if not media_fingerprint:
+            media_fingerprint = _file_sha256(_resolved_media_path(
+                value.get("path"), "Plan Studio source-preview video"))
+    else:
+        return None
+    video_path = _resolved_media_path(
+        video.get("path"), "Plan Studio source-preview video")
+    video_seek = (
+        float(video.get("skip_seconds", 0.0)) +
+        start / float(FPS))
+    return {
+        "video_path": video_path,
+        "video_seek_seconds": video_seek,
+        "audio_path": audio_path,
+        "audio_seek_seconds": audio_seek,
+        "audio_kind": audio_kind,
+        "has_audio": bool(audio_path),
+        "start_frame": start,
+        "end_frame": end,
+        "frame_count": end - start,
+        "media_fingerprint": media_fingerprint,
+    }
+
+
+def _register_plan_studio_source_previews(
+        plan: dict[str, Any], report: dict[str, Any],
+        tagged_references: Any = None,
+        reference_schedule: Any = None) -> dict[str, Any]:
+    references = (tagged_references if tagged_references is not None
+                  else reference_schedule)
+    route = ("tagged" if tagged_references is not None else
+             "scheduled" if reference_schedule is not None else "none")
+    payload: dict[str, Any] = {
+        "version": 1,
+        "run_name": str(plan.get("run_name") or ""),
+        "route": route,
+        "token": "",
+        "scenes": [],
+        "status": "No active path-backed motion reference is available.",
+    }
+    if references is None:
+        return payload
+    entries = (_tagged_reference_entries(references)
+               if route == "tagged"
+               else _reference_schedule_entries(references))
+    motion_entries: dict[str, dict[str, Any]] = {}
+    for entry in entries:
+        if (str(entry.get("kind") or "") != "video" or
+                str(entry.get("semantic_role") or "") != "motion"):
+            continue
+        for alias in _reference_entry_tags(entry):
+            motion_entries[str(alias)] = entry
+    if not motion_entries:
+        return payload
+
+    token = secrets.token_urlsafe(24)
+    records: dict[str, dict[str, Any]] = {}
+    public_scenes = []
+    shots = {int(shot["index"]): shot for shot in plan["shots"]}
+    for scene in report.get("scenes") or ():
+        scene_index = int(scene.get("index", 0))
+        shot = shots.get(scene_index)
+        if shot is None:
+            continue
+        public_refs = []
+        for detail in scene.get("references") or ():
+            if (str(detail.get("kind") or "") != "video" or
+                    str(detail.get("semantic_role") or "") != "motion" or
+                    not isinstance(detail.get("window"), dict)):
+                continue
+            tag = str(detail.get("tag") or "")
+            entry = motion_entries.get(tag)
+            if entry is None:
+                continue
+            try:
+                media = _plan_studio_preview_media(
+                    entry.get("value"), detail["window"])
+            except (OSError, TypeError, ValueError) as exc:
+                _LOG.warning(
+                    "Plan Studio could not register @%s source preview: %s",
+                    tag, exc)
+                continue
+            if media is None:
+                continue
+            slot = len(public_refs)
+            record_key = "%d:%d" % (scene_index, slot)
+            records[record_key] = media
+            comparison_offset = max(
+                0, int(media["frame_count"]) -
+                int(shot["delivered_frames"]))
+            public_refs.append({
+                "slot": slot,
+                "tag": tag,
+                "start_frame": int(media["start_frame"]),
+                "end_frame": int(media["end_frame"]),
+                "frame_count": int(media["frame_count"]),
+                "compare_offset_frames": comparison_offset,
+                "has_audio": bool(media["has_audio"]),
+                "timeline_mode": str(
+                    detail["window"].get("mode") or ""),
+            })
+        if public_refs:
+            public_scenes.append({
+                "scene": scene_index,
+                "scene_id": str(scene.get("id") or shot["id"]),
+                "delivered_frames": int(shot["delivered_frames"]),
+                "references": public_refs,
+            })
+    if not records:
+        return payload
+    _plan_studio_preview_cleanup()
+    _PLAN_STUDIO_SOURCE_PREVIEWS[token] = {
+        "created": time.monotonic(),
+        "records": records,
+    }
+    payload.update({
+        "token": token,
+        "scenes": public_scenes,
+        "status": "%d scene source window(s) ready for lazy preview." %
+                  len(public_scenes),
+    })
+    return payload
+
+
 class MiniMaxH3ChainPlanStudio:
     @classmethod
     def INPUT_TYPES(cls):
@@ -4177,15 +10282,37 @@ class MiniMaxH3ChainPlanStudio:
                                "interface and writes edits back to the connected "
                                "Plan; this socket passes the validated Plan "
                                "through unchanged."}),
-            }
+            },
+            "optional": {
+                "source_timeline": (SOURCE_TIMELINE_TYPE, {
+                    "tooltip": "Optional source media for the shared model-free preflight."}),
+                "source_audio": ("AUDIO", {
+                    "tooltip": "Legacy source route; do not connect with Source Timeline."}),
+                "start_clip": ("INT", {"default": 1, "min": 1,
+                    "max": MAX_SHOTS, "tooltip": "Resume scene to preflight."}),
+                "scene_range": ("STRING", {"default": "",
+                    "tooltip": "Optional contiguous scene selection to preflight."}),
+                "verify_resume_history": ("BOOLEAN", {
+                    "default": True,
+                    "tooltip": "When resuming after scene 1, compare every "
+                               "saved predecessor dependency with the active "
+                               "Plan. Disable only for an intentional advanced "
+                               "recovery from known artifacts."}),
+                "tagged_references": (TAGGED_REFERENCE_TYPE, {
+                    "tooltip": "Optional active prompt-driven reference registry."}),
+                "reference_schedule": (REFERENCE_SCHEDULE_TYPE, {
+                    "tooltip": "Optional legacy scheduled reference registry."}),
+            },
         }
 
-    RETURN_TYPES = (PLAN_TYPE,)
-    RETURN_NAMES = ("plan",)
+    RETURN_TYPES = (PLAN_TYPE, PREFLIGHT_TYPE, "BOOLEAN", "STRING", "STRING")
+    RETURN_NAMES = ("plan", "preflight", "ready", "status", "report_json")
     OUTPUT_TOOLTIPS = (
-        "The connected validated Plan, unchanged at execution time. Plan "
-        "Studio may be inline before Loop Start or connected as an editor-only "
-        "branch.",
+        "The connected validated Plan, unchanged at execution time.",
+        "Structured model-free preflight report.",
+        "True when no blocking preflight error remains.",
+        "Concise error/warning count.",
+        "JSON serialization of the structured report.",
     )
     FUNCTION = "passthrough"
     CATEGORY = "conditioning/minimax/contex_loop"
@@ -4193,8 +10320,52 @@ class MiniMaxH3ChainPlanStudio:
                    "scene navigation, prompt revisions, saved-segment status, "
                    "and preview playback. The original Plan node is unchanged.")
 
-    def passthrough(self, plan):
-        return (plan,)
+    def passthrough(self, plan, source_timeline=None, source_audio=None,
+                    start_clip=1, scene_range="", verify_resume_history=True,
+                    tagged_references=None, reference_schedule=None):
+        prepared, report = _preflight_chain(
+            plan, source_timeline=source_timeline, source_audio=source_audio,
+            start_clip=start_clip, scene_range=scene_range,
+            verify_resume_history=verify_resume_history,
+            tagged_references=tagged_references,
+            reference_schedule=reference_schedule)
+        try:
+            source_previews = _register_plan_studio_source_previews(
+                prepared, report, tagged_references, reference_schedule)
+        except Exception as exc:
+            _LOG.warning("Plan Studio source-preview registration failed: %s", exc)
+            source_previews = {
+                "version": 1,
+                "run_name": str(plan.get("run_name") or ""),
+                "route": "none",
+                "token": "",
+                "scenes": [],
+                "status": "Source preview registration failed: %s" % exc,
+            }
+        result = (plan, report, bool(report["ok"]), report["summary"],
+                  json.dumps(report, ensure_ascii=False, sort_keys=True))
+        return {
+            "ui": {"h3_plan_studio_source_timeline": [source_previews]},
+            "result": result,
+        }
+
+
+class MiniMaxH3ChainPreflight:
+    @classmethod
+    def INPUT_TYPES(cls):
+        studio = MiniMaxH3ChainPlanStudio.INPUT_TYPES()
+        return {"required": studio["required"], "optional": studio["optional"]}
+
+    RETURN_TYPES = MiniMaxH3ChainPlanStudio.RETURN_TYPES
+    RETURN_NAMES = MiniMaxH3ChainPlanStudio.RETURN_NAMES
+    OUTPUT_TOOLTIPS = MiniMaxH3ChainPlanStudio.OUTPUT_TOOLTIPS
+    FUNCTION = "check"
+    CATEGORY = "conditioning/minimax/contex_loop"
+    DESCRIPTION = ("Model-free validation of Plan timing, Source Timeline, "
+                   "references, runtime compatibility, and resume artifacts.")
+
+    def check(self, plan, **kwargs):
+        return MiniMaxH3ChainPlanStudio().passthrough(plan, **kwargs)
 
 
 class MiniMaxH3ChainRunManager:
@@ -4235,13 +10406,21 @@ class MiniMaxH3ChainRunManager:
                 "tooltip": "Connect a loader output to register its source "
                            "file for this run. The manager reads the graph "
                            "link without decoding or retaining the media."})
+        inputs["optional"]["source_timeline"] = (SOURCE_TIMELINE_TYPE, {
+            "tooltip": "Primary 0.5 media wire. The manager materializes "
+                       "deferred AUDIO once, persists recovery metadata, and "
+                       "passes the path-backed timeline onward."})
         return inputs
 
-    RETURN_TYPES = (PLAN_TYPE,)
-    RETURN_NAMES = ("plan",)
+    # The timeline output is appended so the established Plan output remains
+    # positional slot zero for every 0.4 workflow.
+    RETURN_TYPES = (PLAN_TYPE, SOURCE_TIMELINE_TYPE)
+    RETURN_NAMES = ("plan", "source_timeline")
     OUTPUT_TOOLTIPS = (
-        "The connected Plan, unchanged. Put the manager inline when connected "
-        "asset bindings should be archived automatically on execution.",
+        "The connected Plan with JSON-safe Source Timeline recovery metadata "
+        "when the primary media wire is connected.",
+        "Path-backed Source Timeline for Loop Start, Tagged Motion, preview, "
+        "and final assembly.",
     )
     FUNCTION = "passthrough"
     CATEGORY = "conditioning/minimax/contex_loop"
@@ -4250,7 +10429,26 @@ class MiniMaxH3ChainRunManager:
                    "content-addressed image, audio, and video fallbacks.")
 
     def passthrough(self, plan, archive_images, archive_audio, archive_video,
-                    asset_bindings_json, **_assets):
+                    asset_bindings_json, source_timeline=None, **_assets):
+        managed_plan = plan
+        managed_timeline = source_timeline
+        if managed_timeline is None and isinstance(
+                plan.get("source_timeline"), dict):
+            managed_timeline = _source_timeline_from_recovery(
+                plan["source_timeline"])
+        if managed_timeline is not None:
+            managed_timeline = _materialize_source_timeline_audio(
+                managed_timeline, plan)
+            managed_timeline = _archive_source_timeline_media(
+                managed_timeline, plan,
+                archive_audio=bool(archive_audio),
+                archive_video=bool(archive_video))
+            managed_plan = dict(plan)
+            managed_plan["source_timeline"] = (
+                _source_timeline_recovery_record(managed_timeline))
+            _atomic_json(
+                os.path.join(_run_dir(plan), "source_timeline.json"),
+                managed_plan["source_timeline"])
         try:
             bindings = json.loads(str(asset_bindings_json or "[]"))
             if not isinstance(bindings, list):
@@ -4270,7 +10468,7 @@ class MiniMaxH3ChainRunManager:
             # Recovery metadata is supplementary and must never waste a long
             # H3 generation that already reached this pass-through.
             _LOG.warning("H3 Run Manager could not archive assets: %s", exc)
-        return (plan,)
+        return (managed_plan, managed_timeline)
 
 
 class MiniMaxH3ChainCheckpointManager:
@@ -4278,31 +10476,40 @@ class MiniMaxH3ChainCheckpointManager:
     def INPUT_TYPES(cls):
         return {
             "required": {
+                "selection_json": ("STRING", {
+                    "default": "",
+                    "tooltip": "Hidden serialized run and revision lineage "
+                               "maintained by the Checkpoint Manager browser."}),
+            },
+            "optional": {
                 "plan": (PLAN_TYPE, {
-                    "tooltip": "Connect the active H3 Chain Plan to preselect "
-                               "its run. The Checkpoint Manager inspects "
-                               "revision branches and performs confirmed, "
-                               "dependency-safe cleanup; execution passes the "
-                               "Plan through unchanged."}),
-            }
+                    "tooltip": "Connect the editable H3 Chain Plan when you "
+                               "want Load selected branch to restore that "
+                               "Plan. It is not required for checkpoint "
+                               "inspection, deletion, or deferred upscaling."}),
+            },
         }
 
-    RETURN_TYPES = (PLAN_TYPE,)
-    RETURN_NAMES = ("plan",)
+    RETURN_TYPES = (MANIFEST_TYPE,)
+    RETURN_NAMES = ("selected_manifest",)
     OUTPUT_TOOLTIPS = (
-        "The connected Plan, unchanged. This is a management companion and "
-        "never blocks or pauses execution.",
+        "The selected checkpoint lineage as a verified manifest. A partial "
+        "generated lineage is valid even when the saved Plan contains later "
+        "scenes. This is the only Checkpoint Upscale Adapter input.",
     )
     FUNCTION = "passthrough"
     CATEGORY = "conditioning/minimax/contex_loop"
     DESCRIPTION = (
         "Browse checkpoint scenes and inferred revision branches across H3 "
         "runs; preview saved media, inspect exact video/audio context "
-        "dependencies and storage, and delete one inactive leaf revision at "
-        "a time after a complete deletion preview.")
+        "dependencies and storage, emit the selected generated lineage for "
+        "standalone upscaling, load any branch into a connected Plan, "
+        "delete inactive leaves, or roll back the active branch tip after a "
+        "complete deletion preview.")
 
-    def passthrough(self, plan):
-        return (plan,)
+    def passthrough(self, selection_json="", plan=None):
+        manifest = _checkpoint_selection_manifest(selection_json)
+        return (manifest,)
 
 
 class MiniMaxH3ChainFirstSceneImage:
@@ -4443,16 +10650,40 @@ class MiniMaxH3ChainLoopStart:
                                "3 through 8. A start above 1 requires the "
                                "preceding checkpoint. Disjoint comma selections "
                                "are rejected because they break continuity."}),
+                "verify_resume_history": ("BOOLEAN", {
+                    "default": True,
+                    "tooltip": "Recommended ON: require every completed "
+                               "predecessor to match the current Plan's "
+                               "prompts, seeds, timing, source audio, model, "
+                               "and reference fingerprint. Turn OFF only to "
+                               "deliberately reuse the saved predecessor after "
+                               "changing the current Plan. Missing files, "
+                               "SHA-256 artifact integrity, checkpoint tensor "
+                               "shape, and internal metadata consistency are "
+                               "still verified. Changes to the predecessor "
+                               "itself are not applied retroactively."}),
                 "source_audio": ("AUDIO", {
-                    "tooltip": "Full external soundtrack. Required by "
-                               "source_track and source_plus_timeline. Current "
-                               "Shot slices the exact window for each scene. A "
-                               "short, completely silent placeholder is padded."}),
+                    "tooltip": "Legacy 0.4 full-AUDIO route. Leave this "
+                               "unconnected in a 0.5 workflow when "
+                               "source_timeline is connected; the two inputs "
+                               "are mutually exclusive. Use this socket only "
+                               "for an older workflow whose Audio Policy "
+                               "needs final source audio or Source "
+                               "reference=on. A short, completely silent "
+                               "placeholder is padded."}),
                 "external_context": (EXTERNAL_CONTEXT_TYPE, {
                     "tooltip": "Optional output from MiniMax H3 Existing Video "
                                "Context. When connected, scene 1 continues from "
                                "that video's tail and its repeated head is "
                                "trimmed exactly like every later scene."}),
+                # Append 0.5 sockets after every 0.4 custom-type socket. Saved
+                # workflows address these positions numerically even though
+                # execution ultimately resolves the input by name.
+                "source_timeline": (SOURCE_TIMELINE_TYPE, {
+                    "tooltip": "Primary 0.5 media wire from Source Timeline "
+                               "or Run Manager. It replaces the repeated full "
+                               "source_audio connection and stays lazy across "
+                               "recursive scenes."}),
             },
             "hidden": {
                 "initial_state": (STATE_TYPE,),
@@ -4470,23 +10701,56 @@ class MiniMaxH3ChainLoopStart:
     FUNCTION = "start"
     CATEGORY = "conditioning/minimax/contex_loop"
     DESCRIPTION = ("Start or resume a contiguous range of a sequential H3 "
-                   "chain. Ranges beginning above 1 load and validate the "
-                   "preceding segment checkpoint.")
+                   "chain. Ranges beginning above 1 load the preceding "
+                   "checkpoint with safe Plan-history verification enabled "
+                   "by default and an explicit override when required.")
 
     @classmethod
     def IS_CHANGED(cls, *args, **kwargs):
         return float("NaN")
 
     def start(self, plan, start_clip, source_audio=None, scene_range="",
-              external_context=None, initial_state=None):
+              verify_resume_history=True, external_context=None,
+              source_timeline=None,
+              initial_state=None):
         if initial_state is None:
             prepared_plan = _plan_with_external_context(plan, external_context)
-            prepared_plan = _plan_with_source_audio(prepared_plan, source_audio)
+            if source_timeline is None and isinstance(
+                    plan.get("source_timeline"), dict):
+                source_timeline = _source_timeline_from_recovery(
+                    plan["source_timeline"])
+            if source_timeline is not None and source_audio is not None:
+                raise ValueError(
+                    "H3 Chain Loop Start accepts one source-media route: "
+                    "connect Source Timeline or legacy source_audio, not both.")
+            _dry_plan, preflight = _preflight_chain(
+                prepared_plan, source_timeline=source_timeline,
+                source_audio=source_audio, start_clip=start_clip,
+                scene_range=scene_range,
+                verify_resume_history=verify_resume_history)
+            if not preflight["ok"]:
+                raise ValueError(_preflight_failure_text(preflight))
+            for issue in preflight["warnings"]:
+                _LOG.warning(
+                    "H3 preflight warning [%s]: %s%s",
+                    issue.get("code", "warning"), issue.get("message", ""),
+                    (" Action: %s" % issue["action"]
+                     if issue.get("action") else ""))
+            runtime_timeline = None
+            if source_timeline is not None:
+                prepared_plan, runtime_timeline = _plan_with_source_timeline(
+                    prepared_plan, source_timeline)
+            else:
+                prepared_plan = _plan_with_source_audio(
+                    prepared_plan, source_audio)
             range_start, range_end = _parse_scene_range(
                 scene_range, len(prepared_plan["shots"]), start_clip)
             state = _initial_state(
                 prepared_plan, range_start, range_end,
-                external_context=external_context if range_start == 1 else None)
+                external_context=external_context if range_start == 1 else None,
+                source_timeline=runtime_timeline,
+                source_audio=source_audio,
+                verify_resume_history=verify_resume_history)
         else:
             state = dict(initial_state)
             prepared_plan = state["plan"]
@@ -4499,8 +10763,12 @@ class MiniMaxH3ChainLoopStart:
             int(state.get("range_start", state["index"])), end_clip)
         if state.get("resumed_from"):
             status += "; resumed from clip %d" % state["resumed_from"]
+        if state.get("resume_history_verification_disabled"):
+            status += "; WARNING: predecessor history verification disabled"
         if prepared_plan["compatibility"].get("source_audio_silent_padding"):
             status += "; silent source audio will be padded to the plan duration"
+        if state.get("source_timeline") is not None:
+            status += "; Source Timeline active"
         if prepared_plan["compatibility"].get("external_context_hash"):
             status += "; scene 1 extends imported video"
             if isinstance(prepared_plan.get("prelude"), dict):
@@ -4518,9 +10786,9 @@ class MiniMaxH3ChainCurrent:
             },
             "optional": {
                 "source_audio": ("AUDIO", {
-                    "tooltip": "The same full source track connected to Loop "
-                               "Start. It is sliced frame-exactly for the current "
-                               "scene in source-track modes."}),
+                    "tooltip": "Legacy 0.4 full-track input. New workflows "
+                               "obtain the frame-exact scene slice from Source "
+                               "Timeline carried in state."}),
                 "align_audio_reference": ("BOOLEAN", {
                     "default": False,
                     "tooltip": "Experimental. Cap only source_audio_slice 5ms "
@@ -4535,11 +10803,11 @@ class MiniMaxH3ChainCurrent:
 
     RETURN_TYPES = (STATE_TYPE, "INT", "INT", "STRING", "STRING", "INT",
                     "INT", "INT", "INT", "INT", "FLOAT", "FLOAT",
-                    "AUDIO", "STRING")
+                    "AUDIO", "STRING", "INT")
     RETURN_NAMES = ("state", "clip_index", "clip_count", "shot_id", "prompt",
                     "noise_seed", "length", "steps", "width", "height",
                     "audio_start", "audio_duration", "source_audio_slice",
-                    "status")
+                    "status", "video_blend_frames")
     OUTPUT_TOOLTIPS = (
         "Unchanged current state for Chain Context, Segment Save, Review, and "
         "Loop End.",
@@ -4559,45 +10827,92 @@ class MiniMaxH3ChainCurrent:
         "imported-video scene 1, its separate context lead precedes this time.",
         "Raw conditioning-audio duration in seconds, including any imported "
         "scene 1 context lead.",
-        "Current source-audio window for Ref2VA. It is frame-exact normally, "
-        "or capped to the target H3 audio grid when alignment is enabled. It is "
-        "empty in generated_audio mode.",
+        "Current source-audio window for a separate Ref2VA Audio reference. It "
+        "is frame-exact normally, or capped to the target H3 audio grid when "
+        "alignment is enabled. It is empty when Source reference=off, including "
+        "when Lock source audio carries the full window privately in state.",
         "Current scene timing, delivered frames, source window, and seed.",
+        "Legacy resolved blend integer. New 0.5 workflows connect Current "
+        "Shot state to Loop Trim state, which resolves scene overrides "
+        "internally. This output remains for older workflows and diagnostics.",
     )
     FUNCTION = "current"
     CATEGORY = "conditioning/minimax/contex_loop"
     DESCRIPTION = ("Expose the current shot's prompt, seed, dimensions, valid "
-                   "length, steps, and source-audio reference window.")
+                   "length, steps, and source-audio reference/target window.")
 
     def current(self, state, source_audio=None, align_audio_reference=False):
         plan = state["plan"]
         index = int(state["index"])
         shot = plan["shots"][index - 1]
-        mode = plan["compatibility"]["audio_mode"]
+        source_timeline = state.get("source_timeline")
+        if source_timeline is not None and source_audio is not None:
+            raise ValueError(
+                "H3 Chain Current Shot already receives source media through "
+                "Loop Start's Source Timeline; disconnect legacy source_audio.")
         audio_slice = None
+        target_audio_slice = None
         alignment_status = "audio ref unavailable"
-        if mode in ("source_track", "source_plus_timeline"):
-            _validate_source_audio_hash(
-                plan["compatibility"], source_audio, "H3 Chain Current Shot")
+        source_reference_enabled = _audio_policy_uses_source_reference(plan)
+        source_audio_locked = _audio_policy_locks_source_audio(plan)
+        if source_reference_enabled or source_audio_locked:
             external_lead = int(shot.get("external_context_frames", 0))
-            if index == 1 and external_lead > 0:
-                audio_slice = _slice_audio_after_external_context(
-                    source_audio, state.get("previous_audio"),
-                    int(shot["raw_frames"]), external_lead,
-                    pad_silence=bool(plan["compatibility"].get(
-                        "source_audio_silent_padding")))
+            if source_timeline is not None:
+                _validate_source_timeline_hash(
+                    plan["compatibility"], source_timeline,
+                    "H3 Chain Current Shot")
+                if index == 1 and external_lead > 0:
+                    delivered = int(shot["delivered_frames"])
+                    extension_audio = _source_timeline_scene_audio(
+                        source_timeline, 0, delivered)
+                    target_audio_slice = _slice_audio_after_external_context(
+                        extension_audio, state.get("previous_audio"),
+                        int(shot["raw_frames"]), external_lead,
+                        pad_silence=False)
+                else:
+                    source_start = int(round(
+                        float(shot["audio_start_seconds"]) * FPS))
+                    source_end = source_start + int(shot["raw_frames"])
+                    target_audio_slice = _source_timeline_scene_audio(
+                        source_timeline, source_start, source_end)
+                alignment_status = "Source Timeline frame-exact"
             else:
-                audio_slice = _slice_audio(
-                    source_audio, shot["audio_start_seconds"],
-                    shot["audio_duration_seconds"],
-                    pad_silence=bool(plan["compatibility"].get(
-                        "source_audio_silent_padding")))
-            if bool(align_audio_reference):
+                _validate_source_audio_hash(
+                    plan["compatibility"], source_audio,
+                    "H3 Chain Current Shot")
+                if index == 1 and external_lead > 0:
+                    target_audio_slice = _slice_audio_after_external_context(
+                        source_audio, state.get("previous_audio"),
+                        int(shot["raw_frames"]), external_lead,
+                        pad_silence=bool(plan["compatibility"].get(
+                            "source_audio_silent_padding")))
+                else:
+                    target_audio_slice = _slice_audio(
+                        source_audio, shot["audio_start_seconds"],
+                        shot["audio_duration_seconds"],
+                        pad_silence=bool(plan["compatibility"].get(
+                            "source_audio_silent_padding")))
+            if source_audio_locked and target_audio_slice is None:
+                raise ValueError(
+                    "H3 Chain Current Shot cannot lock source audio because "
+                    "the active Source Timeline has no audio track.")
+            # Alignment is a Ref2VA-only experiment. The locked target keeps
+            # the complete frame-exact waveform and crops only after audio-VAE
+            # encoding to the target latent's authoritative 40 Hz length.
+            audio_slice = target_audio_slice if source_reference_enabled else None
+            if source_reference_enabled and bool(align_audio_reference):
                 audio_slice, alignment_status = (
                     _align_audio_reference_to_h3_grid(
                         audio_slice, int(shot["raw_frames"])))
             else:
-                alignment_status = "audio ref frame-exact"
+                alignment_status = (
+                    ("Source Timeline target-locked"
+                     if source_timeline is not None else
+                     "source audio target-locked")
+                    if source_audio_locked else
+                    ("Source Timeline frame-exact"
+                     if source_timeline is not None else
+                     "audio ref frame-exact"))
         external_lead = int(shot.get("external_context_frames", 0))
         if index == 1 and external_lead > 0:
             audio_status = "imported lead %.3fs + song 0..%.3fs" % (
@@ -4607,16 +10922,32 @@ class MiniMaxH3ChainCurrent:
             audio_status = "song %.3f..%.3fs" % (
                 shot["audio_start_seconds"],
                 shot["audio_start_seconds"] + shot["audio_duration_seconds"])
-        status = ("clip %d/%d %s; raw=%df delivered=%df; %s; %s; seed=%d" %
-                  (index, len(plan["shots"]), shot["id"], shot["raw_frames"],
-                   shot["delivered_frames"], audio_status, alignment_status,
-                   shot["seed"]))
         cfg = plan["compatibility"]
+        context_length = _shot_context_length(
+            shot, int(cfg.get("context_length", 0)))
+        repeated_frames = max(
+            0, int(shot["raw_frames"]) - int(shot["delivered_frames"]))
+        video_blend_frames = min(
+            repeated_frames,
+            _shot_video_blend_frames(
+                shot, int(cfg.get("video_blend_frames", 0)), context_length))
+        status = ("clip %d/%d %s; raw=%df delivered=%df; blend=%df; %s; %s; "
+                  "seed=%d" %
+                  (index, len(plan["shots"]), shot["id"], shot["raw_frames"],
+                   shot["delivered_frames"], video_blend_frames, audio_status,
+                   alignment_status, shot["seed"]))
+        dependency_state = dict(state)
+        if source_audio_locked:
+            dependency_state["current_source_audio_target"] = target_audio_slice
+        dependency_state["current_source_reference_dependency"] = (
+            _canonical_source_reference_dependency(
+                plan, index, source_timeline, source_audio))
         result = (
-            state, index, len(plan["shots"]), shot["id"], shot["prompt"],
+            dependency_state, index, len(plan["shots"]), shot["id"], shot["prompt"],
             shot["seed"], shot["raw_frames"], shot["steps"], cfg["width"],
             cfg["height"], shot["audio_start_seconds"],
             shot["audio_duration_seconds"], audio_slice, status,
+            video_blend_frames,
         )
         # ComfyUI adds prompt_id and display_node to the resulting `executed`
         # event. The frontend therefore receives an authoritative loop index
@@ -4699,21 +11030,40 @@ class MiniMaxH3ChainContext:
                     "tooltip": "The CURRENT scene's empty AV latent from the "
                                "stock H3 conditioning node. Chain Context "
                                "passes it through in guide mode or returns a "
-                               "masked preserved-prefix copy in masked_av mode."}),
+                               "masked preserved-prefix copy in an AV "
+                               "mask mode."}),
             },
             "optional": {
                 "audio_vae": ("VAE", {
-                    "tooltip": "H3 audio VAE used only when scene 1 continues "
-                               "from imported video audio. Later loop scenes "
-                               "reuse their saved AV latent directly. It may be "
-                               "left disconnected for visual-only context or "
-                               "source_track mode."}),
+                    "tooltip": "H3 audio VAE used when scene 1 continues from "
+                               "imported audio or when Chain Policy locks each "
+                               "source-audio window into the target latent. It "
+                               "may be left disconnected only when neither "
+                               "behavior is active."}),
+                "model": ("MODEL", {
+                    "tooltip": "Required by Drift-Control AV and Color-Stable "
+                               "Drift AV. Connect "
+                               "one MiniMax H3 MODEL here for a single-model "
+                               "sampler. For a sigma split that switches "
+                               "models, leave this disconnected, connect the "
+                               "full drift_sigmas schedule, and put one "
+                               "Drift-Control Model Patch on EACH raw model "
+                               "branch. Other modes pass a connected MODEL "
+                               "through unchanged."}),
+                "drift_sigmas": ("SIGMAS", {
+                    "tooltip": "Optional original FULL sigma schedule before "
+                               "any split. Connect it for either Drift AV "
+                               "when sampling is divided across stages so "
+                               "both model branches use one canonical "
+                               "next-sigma schedule. This also selects the "
+                               "external per-model patch route when Chain "
+                               "Context's MODEL input is disconnected."}),
             }
         }
 
-    RETURN_TYPES = ("CONDITIONING", "INT", "BOOLEAN", "LATENT")
+    RETURN_TYPES = ("CONDITIONING", "INT", "BOOLEAN", "LATENT", "MODEL")
     RETURN_NAMES = ("conditioning", "trim_frames", "is_continuation",
-                    "latent")
+                    "latent", "model")
     OUTPUT_TOOLTIPS = (
         "Conditioning ready for the H3 guider/sampler: scene 1 passes through "
         "unless Existing Video Context seeds it; later scenes use their "
@@ -4722,18 +11072,31 @@ class MiniMaxH3ChainContext:
         "MiniMax H3 Contex Loop Trim.",
         "True when preceding video or generated audio is carried, including "
         "audio-only guide continuation; false for a fully independent scene.",
-        "Sampler-ready target latent. In guide mode this is the input latent "
-        "unchanged. In masked_av mode its preserved AV prefix and nested "
-        "denoise mask carry the previous scene into the current target. Wire "
-        "this output to the sampler for both modes so Plan can switch safely.",
+        "Sampler-ready target latent. With Lock source audio, its complete "
+        "scene-local audio stream is source encoded and protected even in "
+        "Guide/Cut modes. AV mask modes additionally preserve the selected "
+        "video prefix. Wire this output to the sampler so Plan can switch "
+        "safely.",
+        "H3 MODEL patched only while either Drift-Control AV mode is active; "
+        "otherwise "
+        "the optional input MODEL passes through unchanged. This is None on "
+        "the external sigma-split route, where each raw model instead passes "
+        "through its own Drift-Control Model Patch.",
     )
     FUNCTION = "apply"
     CATEGORY = "conditioning/minimax/contex_loop"
-    DESCRIPTION = ("Apply each scene's inherited or overridden guide/masked "
-                   "AV continuation, including independent guide audio carry "
-                   "and scene 1 Existing Video Context.")
+    DESCRIPTION = ("Apply each scene's inherited or overridden RGB guide, "
+                   "tone-carry RGB guide, latent guide, masked AV, full AV "
+                   "latent taper, schedule-matched drift control, scene-one "
+                   "latent color carry, feather, or "
+                   "audio-only "
+                   "AV feather, "
+                   "including "
+                   "independent guide audio carry and scene 1 Existing Video "
+                   "Context.")
 
-    def apply(self, state, conditioning, vae, latent, audio_vae=None):
+    def apply(self, state, conditioning, vae, latent, audio_vae=None,
+              model=None, drift_sigmas=None):
         index = int(state["index"])
         plan = state["plan"]
         cfg = plan["compatibility"]
@@ -4744,27 +11107,53 @@ class MiniMaxH3ChainContext:
             shot, int(cfg["audio_context_length"]), context_length)
         continuation_mode = shot.get(
             "continuation_mode", cfg.get("continuation_mode", "guide"))
+        context_spatial_proxy = _shot_context_spatial_proxy(shot)
         external_first = index == 1 and bool(state.get("external_context"))
+        source_audio_locked = _audio_policy_locks_source_audio(cfg)
+        target_latent = latent
+        if source_audio_locked:
+            from .masked_context import apply_locked_source_audio_target
+
+            target_latent = apply_locked_source_audio_target(
+                latent, audio_vae, state.get("current_source_audio_target"))
         generated_audio_context = (
-            continuation_mode == "guide"
-            and cfg["audio_mode"] in (
-                "generated_audio", "source_plus_timeline")
+            continuation_mode in GUIDE_CONTINUATION_MODES
+            and _audio_policy_uses_generated_continuity(cfg)
+            and not source_audio_locked
             and audio_context_length > 0)
         has_context = context_length > 0 or generated_audio_context
         if not has_context or (index == 1 and not external_first):
-            if any(
+            masked_required = any(
                     candidate.get(
                         "continuation_mode",
-                        cfg.get("continuation_mode", "guide")) == "masked_av"
+                        cfg.get("continuation_mode", "guide"))
+                    in MASKED_CONTINUATION_MODES
                     and _shot_context_length(
                         candidate, int(cfg["context_length"])) > 0
-                    for candidate in plan["shots"]):
+                    for candidate in plan["shots"])
+            drift_required = any(
+                candidate.get(
+                    "continuation_mode",
+                    cfg.get("continuation_mode", "guide")) in
+                DRIFT_CONTROL_CONTINUATION_MODES
+                and _shot_context_length(
+                    candidate, int(cfg["context_length"])) > 0
+                for candidate in plan["shots"])
+            if masked_required:
                 # Fail before spending minutes on scene 1 if this ComfyUI
                 # cannot run a masked continuation required by a later scene.
                 from .masked_context import _require_h3_mask_support
 
                 _require_h3_mask_support()
-            if continuation_mode == "masked_av":
+            if (drift_required and model is None
+                    and drift_sigmas is None):
+                raise ValueError(
+                    "This Plan contains Drift-Control AV. For one model, "
+                    "connect it to Chain Context. For a sigma-split model "
+                    "switch, connect the original full schedule to "
+                    "drift_sigmas and put a Drift-Control Model Patch on "
+                    "each raw model branch before generating scene 1.")
+            if continuation_mode in MASKED_CONTINUATION_MODES:
                 prepared_conditioning = conditioning
             else:
                 prepared_conditioning = _prepare_native_guide_conditioning(
@@ -4773,19 +11162,30 @@ class MiniMaxH3ChainContext:
                 prepared_conditioning,
                 0,
                 False,
-                latent,
+                target_latent,
+                model,
             )
-        previous_frames = state.get("previous_frames")
-        if previous_frames is None:
-            raise ValueError("H3 chain continuation has no previous frame checkpoint.")
-        if continuation_mode == "masked_av":
+        previous_frames = _previous_context_frames(
+            state, vae, context_length)
+        if continuation_mode in MASKED_CONTINUATION_MODES:
             from .masked_context import apply_masked_prefix
 
             previous_latent = state.get("previous_latent")
+            latent_color_carry = (
+                _state_latent_color_carry(state)
+                if continuation_mode in LATENT_COLOR_CARRY_CONTINUATION_MODES
+                and previous_latent is not None
+                else None)
+            preserve_audio_prefix = (
+                _audio_policy_uses_generated_continuity(cfg)
+                and not source_audio_locked
+                and audio_context_length > 0)
+            detail_video_seed = (
+                int(shot["seed"]) ^ int(DETAIL_AV_RECIPE["seed_xor"]))
             out_conditioning, out_latent, trim = apply_masked_prefix(
                 conditioning=conditioning,
                 vae=vae,
-                latent=latent,
+                latent=target_latent,
                 previous_frames=previous_frames,
                 context_length=context_length,
                 crop=cfg["crop"],
@@ -4793,19 +11193,109 @@ class MiniMaxH3ChainContext:
                 audio_vae=audio_vae,
                 previous_audio=(state.get("previous_audio")
                                 if external_first else None),
+                temporal_feather=(continuation_mode == "feathered_av"),
+                audio_only_feather=(
+                    continuation_mode == "audio_feathered_av"),
+                preserve_audio_prefix=preserve_audio_prefix,
+                detail_video_taper=(continuation_mode == "tapered_av"),
+                detail_video_seed=detail_video_seed,
+                context_spatial_proxy=context_spatial_proxy,
+                latent_color_carry=latent_color_carry,
             )
-            return (out_conditioning, trim, True, out_latent)
+            out_model = model
+            if continuation_mode in DRIFT_CONTROL_CONTINUATION_MODES:
+                if trim != int(DRIFT_CONTROL_AV_RECIPE["context_frames"]):
+                    raise RuntimeError(
+                        "H3 Drift-Control AV expected a %d-frame prefix, got "
+                        "%d." %
+                        (int(DRIFT_CONTROL_AV_RECIPE["context_frames"]), trim))
+                from .drift_control import (
+                    install_drift_control_av_model,
+                    mark_drift_control_latent,
+                )
+
+                validated_steps = int(
+                    DRIFT_CONTROL_AV_RECIPE["validated_steps"])
+                if int(shot["steps"]) != validated_steps:
+                    _LOG.warning(
+                        "H3 %s scene %d uses %d steps; the "
+                        "initial validated baseline is %d steps. This run is "
+                        "experimental.",
+                        ("Color-Stable Drift AV"
+                         if continuation_mode in
+                         LATENT_COLOR_CARRY_CONTINUATION_MODES
+                         else "Drift-Control AV"),
+                        index, int(shot["steps"]), validated_steps)
+                prefix_steps = int(DRIFT_CONTROL_AV_RECIPE["video_steps"])
+                out_latent = mark_drift_control_latent(
+                    out_latent, prefix_steps)
+                install_kwargs = {}
+                if drift_sigmas is not None:
+                    install_kwargs["schedule_override"] = drift_sigmas
+                if model is not None:
+                    out_model = install_drift_control_av_model(
+                        model, out_latent, prefix_steps, **install_kwargs)
+                elif drift_sigmas is None:
+                    raise ValueError(
+                        "Drift-Control AV has no MODEL patch route. Connect "
+                        "one MODEL to Chain Context, or connect drift_sigmas "
+                        "and patch every switched MODEL branch inline."
+                    )
+            return (out_conditioning, trim, True, out_latent, out_model)
         previous_latent = (state.get("previous_latent")
                            if generated_audio_context else None)
+        video_context_latent = (
+            state.get("previous_latent")
+            if continuation_mode == "latent_guide" and not external_first
+            else None)
         previous_audio = (state.get("previous_audio")
                           if generated_audio_context and external_first else None)
         if (generated_audio_context and previous_latent is None
                 and previous_audio is None and not external_first):
             raise ValueError("H3 chain continuation has no previous AV latent.")
+        if context_spatial_proxy == "rgb_5_6":
+            previous_frames, proxy_size = _low_grid_guide_context(
+                state, vae, context_length,
+                int(cfg["width"]), int(cfg["height"]))
+            _LOG.info(
+                "H3 Chain low-grid Guide proxy: scene %d decoded the full "
+                "saved predecessor latent at %dx%d, selected its final %d "
+                "delivered frames, then Motion Context restores them to "
+                "%dx%d before Guide VAE encoding. Saved artifacts remain "
+                "untouched.",
+                index, int(proxy_size[0]), int(proxy_size[1]),
+                int(previous_frames.shape[0]),
+                int(cfg["width"]), int(cfg["height"]))
+        if continuation_mode == "tone_carry_guide" and context_length > 0:
+            tone_carry = _recover_state_guide_tone_carry(state)
+            if tone_carry is not None:
+                previous_frames = _apply_guide_tone_carry(
+                    previous_frames, tone_carry)
+                _LOG.info(
+                    "H3 Chain Tone Carry Guide: applied clip %d's saved RGB "
+                    "curve to %d context frames before video VAE encoding; "
+                    "direct-latent Guide is intentionally disabled.",
+                    max(0, index - 1), int(previous_frames.shape[0]))
+            else:
+                _LOG.info(
+                    "H3 Chain Tone Carry Guide: clip %d has no detected carry "
+                    "curve; using regular RGB Guide for this boundary.",
+                    max(0, index - 1))
+        if continuation_mode == "tapered_guide" and context_length > 0:
+            noise_seed = int(shot["seed"]) ^ 0x5A17
+            previous_frames = _tapered_guide_context(
+                previous_frames, context_length, noise_seed)
+            _LOG.info(
+                "H3 Chain Tapered Guide: %d context frames; block chroma "
+                "alpha %.2f, final %d frames taper to %.2f; noise seed %d",
+                int(previous_frames.shape[0]), _TAPERED_GUIDE_ALPHA,
+                min(_TAPERED_GUIDE_RAMP_FRAMES,
+                    int(previous_frames.shape[0])),
+                _TAPERED_GUIDE_ALPHA_END, noise_seed)
         out, trim = MiniMaxH3MotionContext().apply(
             conditioning=conditioning,
             vae=vae,
-            latent=latent,
+            latent=target_latent,
             context_frames=previous_frames,
             context_length=context_length,
             encode_mode=cfg["encode_mode"],
@@ -4817,8 +11307,90 @@ class MiniMaxH3ChainContext:
             context_latent=previous_latent,
             audio_vae=audio_vae,
             context_audio=previous_audio,
+            video_context_latent=video_context_latent,
         )
-        return (out, trim, True, latent)
+        return (out, trim, True, target_latent, model)
+
+
+class MiniMaxH3DriftControlModelPatch:
+    """Patch one additional H3 model branch without owning both loaders."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "model": ("MODEL", {
+                    "tooltip": "One raw MiniMax H3 AV MODEL used by a "
+                               "sigma-split sampler. Use one patch node per "
+                               "model branch, including the first."}),
+                "state": (STATE_TYPE, {
+                    "tooltip": "Current Shot state. Non-Drift scenes pass "
+                               "the MODEL through unchanged."}),
+                "latent": ("LATENT", {
+                    "tooltip": "Chain Context's latent output. Its private "
+                               "marker verifies that the sampler and model "
+                               "patch use the same Drift-Control prefix, and "
+                               "it remains the clean inpaint reference across "
+                               "a multi-sampler sigma handoff."}),
+                "full_sigmas": ("SIGMAS", {
+                    "tooltip": "The original complete sigma schedule BEFORE "
+                               "it is split. Every model-patch instance must "
+                               "receive this same schedule, while each sampler "
+                               "still receives its own split half."}),
+            },
+        }
+
+    RETURN_TYPES = ("MODEL",)
+    RETURN_NAMES = ("model",)
+    OUTPUT_TOOLTIPS = (
+        "The input MODEL with Drift-Control's shared full-schedule mask patch "
+        "and automatic clean-reference sigma handoff only for an active "
+        "Drift-Control scene; otherwise unchanged.",
+    )
+    FUNCTION = "patch"
+    CATEGORY = "conditioning/minimax/contex_loop"
+    DESCRIPTION = (
+        "Lightweight inline patch for sigma-split workflows that switch H3 "
+        "models. It also serves Color-Stable Drift AV. It stores the small "
+        "full sigma tuple plus a non-copying "
+        "reference to Chain Context's clean latent, and clones ModelPatcher "
+        "metadata; it does not duplicate or jointly load model weights or "
+        "latent data. Leave Chain Context's MODEL input disconnected, connect "
+        "its drift_sigmas input, and use one instance for each raw model "
+        "branch."
+    )
+
+    def patch(self, model, state, latent, full_sigmas):
+        index = int(state["index"])
+        plan = state["plan"]
+        cfg = plan["compatibility"]
+        shot = plan["shots"][index - 1]
+        continuation_mode = migrate_continuation_mode(shot.get(
+            "continuation_mode",
+            cfg.get("continuation_mode", "guide")))
+        context_length = _shot_context_length(
+            shot, int(cfg.get("context_length", 0)))
+        active = (
+            continuation_mode in DRIFT_CONTROL_CONTINUATION_MODES
+            and context_length > 0
+            and (index > 1 or bool(state.get("external_context")))
+        )
+        if not active:
+            return (model,)
+
+        from .drift_control import (
+            drift_control_latent_prefix_steps,
+            install_drift_control_av_model,
+        )
+
+        prefix_steps = drift_control_latent_prefix_steps(latent)
+        patched = install_drift_control_av_model(
+            model,
+            latent,
+            prefix_steps,
+            schedule_override=full_sigmas,
+        )
+        return (patched,)
 
 
 class MiniMaxH3ChainSegmentSave:
@@ -4842,6 +11414,8 @@ class MiniMaxH3ChainSegmentSave:
                 "audio": ("AUDIO", {
                     "tooltip": "Delivered decoded audio AFTER MiniMax H3 "
                                "Contex Loop Trim with match_tail enabled. "
+                               "Connect Trim's audio output directly so its "
+                               "private AV overlap can also be checkpointed. "
                                "Connect it in every audio mode to preserve "
                                "H3's generated sound as WAV sidecars. Required "
                                "for generated_audio and synchronized review."}),
@@ -4888,6 +11462,12 @@ class MiniMaxH3ChainSegmentSave:
         plan = state["plan"]
         index = int(state["index"])
         shot = plan["shots"][index - 1]
+        compatibility = plan["compatibility"]
+        effective_context_length = _shot_context_length(
+            shot, int(compatibility.get("context_length", 0)))
+        effective_audio_context_length = _shot_audio_context_length(
+            shot, int(compatibility.get("audio_context_length", 0)),
+            effective_context_length)
         actual_frames = int(images.shape[0])
         expected_frames = int(shot["delivered_frames"])
         if actual_frames != expected_frames:
@@ -4896,18 +11476,20 @@ class MiniMaxH3ChainSegmentSave:
                 "Wire decoded images through MiniMax H3 Contex Loop Trim before "
                 "Segment Save." % (index, actual_frames, expected_frames))
 
-        configured_blend = int(
-            plan["compatibility"].get("video_blend_frames", 0))
         repeated_frames = max(
             0, int(shot["raw_frames"]) - int(shot["delivered_frames"]))
-        blend_frames = min(configured_blend, repeated_frames)
+        blend_frames = min(
+            repeated_frames,
+            _shot_video_blend_frames(
+                shot, int(compatibility.get("video_blend_frames", 0)),
+                effective_context_length))
         if blend_frames:
             if images_with_overlap is None:
                 raise ValueError(
                     "H3 chain clip %d needs %d retained blend frames. Connect "
-                    "Plan video_blend_frames to Loop Trim "
-                    "retain_overlap_frames, then connect images_with_overlap "
-                    "to Segment Save." % (index, blend_frames))
+                    "Current Shot state to Loop Trim state, then connect "
+                    "images_with_overlap to Segment Save." %
+                    (index, blend_frames))
             blend_count = int(images_with_overlap.shape[0])
             expected_blend_count = expected_frames + blend_frames
             if blend_count != expected_blend_count:
@@ -4918,14 +11500,54 @@ class MiniMaxH3ChainSegmentSave:
                     (index, blend_count, expected_blend_count, blend_frames,
                      expected_frames))
 
-        mode = plan["compatibility"]["audio_mode"]
-        if mode == "generated_audio" and audio is None:
+        if _audio_policy_final(plan) == "generated" and audio is None:
             raise ValueError(
-                "H3 chain generated_audio mode requires decoded audio on Segment "
-                "Save. Wire it through MiniMax H3 Contex Loop Trim first.")
+                "H3 chain final_audio=generated requires decoded audio on "
+                "Segment Save. Wire it through MiniMax H3 Contex Loop Trim "
+                "first.")
         compact = _compact_latent(sampled_latent)
+        continuation_mode = migrate_continuation_mode(shot.get(
+            "continuation_mode",
+            compatibility.get("continuation_mode", "guide")))
+        clean_blend_prefix = None
+        if (continuation_mode in DISPOSABLE_PREFIX_CONTINUATION_MODES
+                and blend_frames):
+            clean_blend_prefix = _detail_av_clean_blend_prefix(
+                state, images_with_overlap, blend_frames)
+            _LOG.info(
+                "H3 %s: restored %d clean predecessor frames in the blend "
+                "artifact; the disposable sampled latent overlap remains "
+                "fully trimmed from delivered video.",
+                continuation_mode, blend_frames)
+        incoming_guide_tone = (
+            _state_guide_tone_carry(state)
+            if continuation_mode == "tone_carry_guide" else None)
+        guide_reference = state.get("previous_frames")
+        if incoming_guide_tone is not None and guide_reference is not None:
+            guide_reference = _apply_guide_tone_carry(
+                guide_reference, incoming_guide_tone)
+        guide_tone_carry = _detect_guide_tone_carry(
+            guide_reference, images)
+        if guide_tone_carry is not None:
+            _LOG.info(
+                "H3 Chain saved Guide tone carry for clip %d: generated frame "
+                "%d, luma jump %+.3f, percentile shifts %s.",
+                index, int(guide_tone_carry["start_frame"]),
+                float(guide_tone_carry["detected_luma_jump"]),
+                ",".join("%+.3f" % float(value) for value in
+                         guide_tone_carry["applied_shifts"]))
         context_length = min(_plan_context_storage_length(plan), actual_frames)
-        context_frames = _tensor_cpu_clone(images[-context_length:])
+        context_frames = _tensor_cpu_clone(
+            images[:0] if context_length == 0 else images[-context_length:])
+        latent_color_stats = None
+        if _plan_uses_latent_color_carry(plan):
+            if int(context_frames.shape[0]) < 1:
+                raise ValueError(
+                    "H3 Color-Stable Drift AV requires at least one retained "
+                    "RGB context frame in every generated scene checkpoint.")
+            from .latent_color_carry import tensor_scene_color_stats
+
+            latent_color_stats = tensor_scene_color_stats(context_frames)
         parts = compact["samples"]
         tensors = {
             "context_frames": context_frames,
@@ -4944,6 +11566,69 @@ class MiniMaxH3ChainSegmentSave:
                 audio, "H3 chain clip %d delivered audio" % index,
                 expected_frames=expected_frames)
             tensors["delivered_audio"] = _tensor_cpu_clone(waveform)
+            overlap_keys = (
+                AUDIO_WITH_OVERLAP_WAVEFORM_KEY,
+                AUDIO_WITH_OVERLAP_FRAMES_KEY,
+                AUDIO_TRIM_FRAMES_KEY,
+            )
+            overlap_present = [key in audio for key in overlap_keys]
+            if any(overlap_present) and not all(overlap_present):
+                raise ValueError(
+                    "H3 chain clip %d received incomplete private Loop Trim "
+                    "AV overlap audio metadata." % index)
+            overlap_waveform = None
+            if all(overlap_present):
+                overlap_waveform = audio[AUDIO_WITH_OVERLAP_WAVEFORM_KEY]
+                try:
+                    overlap_frames = int(audio[AUDIO_WITH_OVERLAP_FRAMES_KEY])
+                    overlap_trim = int(audio[AUDIO_TRIM_FRAMES_KEY])
+                except (TypeError, ValueError, OverflowError) as exc:
+                    raise ValueError(
+                        "H3 chain clip %d received invalid private Loop Trim "
+                        "AV overlap audio metadata." % index) from exc
+            if (overlap_waveform is not None and repeated_frames > 0
+                    and continuation_mode in MASKED_CONTINUATION_MODES):
+                if not torch.is_tensor(overlap_waveform) or (
+                        overlap_waveform.ndim not in (1, 2, 3)):
+                    raise ValueError(
+                        "H3 chain clip %d Loop Trim overlap audio has invalid "
+                        "shape %r." %
+                        (index, getattr(overlap_waveform, "shape", None)))
+                if overlap_frames != int(shot["raw_frames"]):
+                    raise ValueError(
+                        "H3 chain clip %d Loop Trim overlap audio describes "
+                        "%d frames; expected %d raw frames." %
+                        (index, overlap_frames, int(shot["raw_frames"])))
+                if overlap_trim != repeated_frames:
+                    raise ValueError(
+                        "H3 chain clip %d Loop Trim overlap audio removed %d "
+                        "frames; expected %d." %
+                        (index, overlap_trim, repeated_frames))
+                expected_overlap_samples = sample_boundary_from_frames(
+                    overlap_frames, sample_rate, FPS)
+                if int(overlap_waveform.shape[-1]) != expected_overlap_samples:
+                    raise ValueError(
+                        "H3 chain clip %d Loop Trim overlap audio has %d "
+                        "samples; expected %d for %d raw frames." %
+                        (index, int(overlap_waveform.shape[-1]),
+                         expected_overlap_samples, overlap_frames))
+                if tuple(overlap_waveform.shape[:-1]) != tuple(
+                        waveform.shape[:-1]):
+                    raise ValueError(
+                        "H3 chain clip %d delivered and overlap audio channel "
+                        "shapes differ: %s vs %s." %
+                        (index, tuple(waveform.shape[:-1]),
+                         tuple(overlap_waveform.shape[:-1])))
+                tensors["audio_with_overlap"] = _tensor_cpu_clone(
+                    overlap_waveform)
+            elif (repeated_frames > 0
+                  and continuation_mode in MASKED_CONTINUATION_MODES
+                  and _audio_policy_final(plan) == "generated"):
+                _LOG.warning(
+                    "H3 Chain clip %d uses %s with generated final audio, but "
+                    "Segment Save did not receive Loop Trim's private overlap "
+                    "audio. Final assembly will use the legacy hard-cut audio "
+                    "path for this boundary.", index, continuation_mode)
 
         paths = _artifact_paths(plan, index)
         os.makedirs(os.path.dirname(paths["segment"]), exist_ok=True)
@@ -4974,6 +11659,16 @@ class MiniMaxH3ChainSegmentSave:
         checkpoint_tmp = "%s.%s.tmp" % (published_checkpoint, uuid.uuid4().hex)
         committed = False
         try:
+            source_dependency = state.get(
+                "current_source_reference_dependency")
+            if (source_dependency is None
+                    and state.get("source_timeline") is not None
+                    and (_audio_policy_uses_source_reference(plan)
+                         or _audio_policy_locks_source_audio(plan))):
+                source_dependency = _canonical_source_reference_dependency(
+                    plan, index, state.get("source_timeline"), None)
+            scene_dependency = _scene_dependency_record(
+                plan, index, source_dependency)
             video_metadata = _archive_media_metadata(archives)
             video_metadata.update({
                 "title": "H3 scene %d - %s" % (index, shot["id"]),
@@ -4994,7 +11689,7 @@ class MiniMaxH3ChainSegmentSave:
                         "title": "H3 blend-ready scene %d - %s" %
                                  (index, shot["id"]),
                         "h3_blend_frames": str(blend_frames),
-                    })
+                    }, replacement_prefix=clean_blend_prefix)
             if published_audio is not None:
                 _atomic_wav(
                     {"waveform": tensors["delivered_audio"],
@@ -5005,6 +11700,7 @@ class MiniMaxH3ChainSegmentSave:
                 "format": "h3_chain_checkpoint_v3",
                 "index": str(index),
                 "history_hash": _history_hash(plan, index),
+                "scene_dependency_hash": scene_dependency["generation_hash"],
                 "prompt_prefix": str(plan.get("prompt_prefix") or ""),
                 "scene_prompt": str(shot.get("scene_prompt") or ""),
                 "prompt": str(shot["prompt"]),
@@ -5013,6 +11709,8 @@ class MiniMaxH3ChainSegmentSave:
                 "sample_rate": str(sample_rate),
                 "denoised_latent": (
                     "true" if denoised_latent is not None else "false"),
+                "audio_with_overlap": str(
+                    "audio_with_overlap" in tensors).lower(),
             })
             os.replace(checkpoint_tmp, published_checkpoint)
 
@@ -5030,47 +11728,61 @@ class MiniMaxH3ChainSegmentSave:
                 "raw_frames": shot["raw_frames"],
                 "delivered_frames": shot["delivered_frames"],
                 "history_hash": _history_hash(plan, index),
+                "scene_dependency": scene_dependency,
                 **_prompt_fields(plan, index),
                 "archives": archives,
                 "seed": shot["seed"],
                 "steps": shot["steps"],
+                "continuation_mode": shot.get(
+                    "continuation_mode",
+                    plan["compatibility"].get("continuation_mode", "guide")),
+                "context_length": effective_context_length,
+                "audio_context_length": effective_audio_context_length,
+                "blend_frames": blend_frames,
                 "sample_rate": sample_rate,
                 "segment_sha256": _file_sha256(published_segment),
                 "checkpoint_sha256": _file_sha256(published_checkpoint),
                 "prompt_file_sha256": _file_sha256(published_prompt),
             }
-            resolved_context = _shot_context_length(
-                shot, int(plan["compatibility"]["context_length"]))
-            resolved_audio_context = _shot_audio_context_length(
-                shot, int(plan["compatibility"]["audio_context_length"]),
-                resolved_context)
-            continuation_mode = str(shot.get(
-                "continuation_mode",
-                plan["compatibility"].get("continuation_mode", "guide")))
-            if index == 1:
-                # These fields describe dependencies on a preceding saved
-                # scene, not optional imported context used to begin a run.
-                resolved_context = 0
-                resolved_audio_context = 0
-            elif (continuation_mode != "masked_av" and
-                  plan["compatibility"]["audio_mode"] not in (
-                      "generated_audio", "source_plus_timeline")):
-                resolved_audio_context = 0
-            segment.update({
-                "continuation_mode": continuation_mode,
-                "resolved_context_length": resolved_context,
-                "resolved_audio_context_length": resolved_audio_context,
-            })
-            if "context_length" in shot:
-                segment["context_length"] = shot["context_length"]
-            if "audio_context_length" in shot:
-                segment["audio_context_length"] = shot[
-                    "audio_context_length"]
+            cache_metadata = _find_reference_cache(
+                str(plan["compatibility"].get(
+                    "generation_fingerprint") or ""),
+                index, len(plan["shots"]), str(shot["prompt"]),
+                int(plan["compatibility"]["width"]),
+                int(plan["compatibility"]["height"]),
+                int(shot["raw_frames"]))
+            try:
+                if cache_metadata is not None:
+                    cache_metadata = _adopt_reference_cache_for_run(
+                        plan, cache_metadata)
+            except (OSError, TypeError, ValueError) as exc:
+                _LOG.warning(
+                    "H3 Chain could not adopt scene %d reference cache into "
+                    "the run folder: %s", index, exc)
+                cache_metadata = None
+            cache_descriptor = _reference_cache_descriptor(cache_metadata)
+            if cache_descriptor is not None:
+                segment["reference_cache"] = cache_descriptor
+            context_spatial_proxy = _shot_context_spatial_proxy(shot)
+            if context_spatial_proxy != "off":
+                segment["context_spatial_proxy"] = context_spatial_proxy
+            if incoming_guide_tone is not None:
+                segment["guide_tone_input_applied"] = True
+            if guide_tone_carry is not None:
+                segment["guide_tone_carry"] = guide_tone_carry
+            if latent_color_stats is not None:
+                segment["latent_color_stats"] = latent_color_stats
+            # These are dependencies on a preceding saved scene. Imported
+            # context used to begin scene 1 is tracked separately by 0.5's
+            # scene dependency contract.
+            segment["resolved_context_length"] = (
+                0 if index == 1 else effective_context_length)
+            segment["resolved_audio_context_length"] = (
+                0 if index == 1 else effective_audio_context_length)
             if published_blend is not None:
                 segment.update({
                     "blend_segment": _relative_output_path(published_blend),
                     "blend_segment_sha256": _file_sha256(published_blend),
-                    "blend_frames": blend_frames,
                 })
             if published_audio is not None:
                 segment.update({
@@ -5127,6 +11839,7 @@ class MiniMaxH3ChainSegmentSave:
                 "run_name": plan["run_name"],
                 "plan_hash": plan["plan_hash"],
                 "history_hash": segment["history_hash"],
+                "scene_dependency": scene_dependency,
                 "compatibility": plan["compatibility"],
                 "archives": archives,
                 "segment": segment,
@@ -5417,6 +12130,109 @@ def _throw_if_review_interrupted() -> None:
         check()
 
 
+def _release_loop_boundary_resources(
+        policy: str, scene_index: int) -> dict[str, int | str]:
+    """Best-effort model/cache cleanup after a durable scene checkpoint.
+
+    ComfyUI does not expose a supported full PromptExecutor reset while a
+    dynamic subgraph is still resolving. ``fresh_scene`` therefore uses the
+    public model manager plus the RAM-pressure cache release callback installed
+    by PromptExecutor. The recursive carry has already been reduced to CPU
+    context/checkpoint state before this runs, so evictable loader and
+    intermediate outputs may be rebuilt safely by the following scene.
+    """
+    resolved = str(policy or "off").strip().lower()
+    if resolved not in LOOP_MEMORY_POLICIES:
+        raise ValueError(
+            "H3 Loop End between_scene_cleanup must be one of %s; got %r." %
+            (LOOP_MEMORY_POLICIES, policy))
+    result: dict[str, int | str] = {
+        "policy": resolved,
+        "pinned_bytes": 0,
+        "cache_bytes": 0,
+        "collected_objects": 0,
+    }
+    if resolved == "off":
+        return result
+
+    try:
+        import comfy.model_management as model_management
+    except ImportError as exc:
+        _LOG.warning(
+            "H3 Chain could not run %s cleanup after scene %d: %s",
+            resolved, int(scene_index), exc)
+        return result
+
+    if resolved == "fresh_scene":
+        # Execution outputs can retain complete loader branches, decoded
+        # videos, and patched model objects. Evict them before model unload so
+        # unloading cannot briefly coexist with all of those allocations in
+        # host RAM. This ordering is essential for workflows that switch two
+        # large H3 checkpoints inside one recursive scene body.
+        try:
+            import comfy.memory_management as memory_management
+            release = getattr(memory_management, "extra_ram_release", None)
+            if callable(release):
+                result["cache_bytes"] = int(release(
+                    sys.maxsize, free_active=True))
+        except Exception as exc:
+            _LOG.warning(
+                "H3 Chain fresh-scene cleanup could not request execution "
+                "cache eviction after scene %d: %s", int(scene_index), exc)
+        result["collected_objects"] = int(gc.collect())
+
+    cleanup_models = getattr(model_management, "cleanup_models_gc", None)
+    if resolved == "fresh_scene" and callable(cleanup_models):
+        try:
+            cleanup_models()
+        except Exception as exc:
+            _LOG.warning(
+                "H3 Chain could not prune unreferenced models after scene "
+                "%d: %s", int(scene_index), exc)
+
+    if resolved == "fresh_scene":
+        # Any DynamicVRAM pins still associated with this now-durable scene
+        # can be released after the execution cache and dead model references
+        # are gone. This leaves less host state for unload_all_models to walk.
+        free_pins = getattr(model_management, "free_pins", None)
+        if callable(free_pins):
+            try:
+                result["pinned_bytes"] = int(free_pins(
+                    sys.maxsize, evict_active=True))
+            except Exception as exc:
+                _LOG.warning(
+                    "H3 Chain fresh-scene cleanup could not release pinned "
+                    "model pages after scene %d: %s", int(scene_index), exc)
+
+    try:
+        model_management.unload_all_models()
+    except Exception as exc:
+        _LOG.warning(
+            "H3 Chain could not unload models after scene %d: %s",
+            int(scene_index), exc)
+
+    empty_cache = getattr(model_management, "soft_empty_cache", None)
+    if callable(empty_cache):
+        try:
+            empty_cache(force=True)
+        except TypeError:
+            empty_cache()
+        except Exception as exc:
+            _LOG.warning(
+                "H3 Chain could not empty the device allocator after scene "
+                "%d: %s", int(scene_index), exc)
+
+    _LOG.info(
+        "H3 Chain scene %d boundary cleanup=%s: execution cache %.1f MB, "
+        "pinned model pages %.1f MB, Python objects %d; the next scene "
+        "reloads any evicted model or intermediate outputs.",
+        int(scene_index), resolved,
+        int(result["cache_bytes"]) / float(1024 ** 2),
+        int(result["pinned_bytes"]) / float(1024 ** 2),
+        int(result["collected_objects"]))
+    return result
+
+
 async def _await_review_decision(future: asyncio.Future,
                                  timeout_seconds: float) -> dict[str, Any]:
     """Wait with a heartbeat so cross-thread HTTP decisions always wake up.
@@ -5485,9 +12301,13 @@ class MiniMaxH3ChainReview:
                                "through the current scene into a partial MP4."}),
                 "partial_audio_source": (["checkpointed", "source", "none"], {
                     "default": "checkpointed",
-                    "tooltip": "Audio for the partial MP4. checkpointed uses each "
-                               "saved delivered-audio track; source requires the "
-                               "full source_audio input."}),
+                    "tooltip": "Audio for the partial MP4 created by Approve "
+                               "& Stop. checkpointed uses each saved generated "
+                               "delivered-audio track; source uses the exact "
+                               "Source Timeline audio carried in state, or the "
+                               "legacy full source_audio input when no Source "
+                               "Timeline is available; none creates a silent "
+                               "partial."}),
             },
             "optional": {
                 "audio": ("AUDIO", {
@@ -5495,8 +12315,12 @@ class MiniMaxH3ChainReview:
                                "MiniMax H3 Contex Loop Trim for synchronized "
                                "review."}),
                 "source_audio": ("AUDIO", {
-                    "tooltip": "Optional full source track used only when partial "
-                               "audio source is source."}),
+                    "tooltip": "Legacy fallback full source track used only "
+                               "when partial_audio_source is source and state "
+                               "does not carry a 0.5 Source Timeline. Leave this "
+                               "disconnected in Source Timeline workflows. It "
+                               "does not affect generation or the per-scene "
+                               "review preview."}),
                 "candidate_count": ("INT", {
                     "default": 1,
                     "min": 1,
@@ -5849,6 +12673,9 @@ def _manifest_from_segments(plan: dict[str, Any], values: list[dict[str, Any]],
         manifest["archives"] = archives
     if isinstance(plan.get("prelude"), dict):
         manifest["prelude"] = _json_document(plan["prelude"])
+    if isinstance(plan.get("source_timeline"), dict):
+        manifest["source_timeline"] = _json_document(
+            plan["source_timeline"])
     if not complete:
         manifest["planned_clip_count"] = len(plan["shots"])
         manifest["last_completed_clip"] = len(segments)
@@ -5873,6 +12700,23 @@ def _partial_manifest(state: dict[str, Any],
 
 def _manifest_path(plan: dict[str, Any]) -> str:
     return os.path.join(_run_dir(plan), "manifest.json")
+
+
+def _saved_scene_prefix_length(plan: dict[str, Any]) -> int:
+    """Return the contiguous active checkpoint prefix available for recovery.
+
+    Segment Save publishes one canonical metadata pointer only after all of a
+    scene's immutable artifacts are durable.  Recovery can therefore discover
+    an interrupted run without opening every large checkpoint up front.  The
+    selected prefix is still passed through ``_load_resume_state`` below,
+    which performs the authoritative history, artifact, and SHA-256 checks.
+    """
+    saved = 0
+    for index in range(1, len(plan["shots"]) + 1):
+        if not os.path.isfile(_artifact_paths(plan, index)["metadata"]):
+            break
+        saved = index
+    return saved
 
 
 class MiniMaxH3ChainLoopEnd:
@@ -5901,6 +12745,23 @@ class MiniMaxH3ChainLoopEnd:
                     "tooltip": "Approved persisted segment from Review Gate, "
                                "or directly from Segment Save when no review is "
                                "wanted."}),
+            },
+            "optional": {
+                "between_scene_cleanup": (list(LOOP_MEMORY_POLICIES), {
+                    "default": "off",
+                    "tooltip": "Runtime-only memory policy applied after a "
+                               "scene is safely checkpointed and before the "
+                               "next scene or retry starts. off keeps ComfyUI "
+                               "caches; unload_models releases loaded weights "
+                               "from VRAM; fresh_scene first requests active "
+                               "RAM-pressure-cache eviction and Python garbage "
+                               "collection, then releases remaining pinned "
+                               "model pages, unloads models, and empties the "
+                               "CUDA allocator. fresh_scene may "
+                               "reload model/reference nodes and is best for "
+                               "model-switching chains. ComfyUI has no safe "
+                               "full executor reset inside a running recursive "
+                               "prompt, so the small live loop carry remains."}),
             },
             "hidden": {
                 "dynprompt": "DYNPROMPT",
@@ -6019,6 +12880,8 @@ class MiniMaxH3ChainLoopEnd:
         # not keep the adapter dependency alive or prepare the prelude again.
         if "external_context" in start_info.get("inputs", {}):
             graph.lookup_node(open_node).set_input("external_context", None)
+        if "source_timeline" in start_info.get("inputs", {}):
+            graph.lookup_node(open_node).set_input("source_timeline", None)
         recurse = graph.lookup_node("Recurse")
         return {
             "result": tuple(recurse.out(index)
@@ -6027,7 +12890,7 @@ class MiniMaxH3ChainLoopEnd:
         }
 
     def end(self, flow, state, images, sampled_latent, segment,
-            dynprompt=None, unique_id=None):
+            between_scene_cleanup="off", dynprompt=None, unique_id=None):
         plan = state["plan"]
         index = int(state["index"])
         if int(segment.get("index", -1)) != index:
@@ -6050,7 +12913,14 @@ class MiniMaxH3ChainLoopEnd:
             # Keep the predecessor context and accepted segment list unchanged.
             # Segment Save makes the new take active when this index completes
             # again while retaining the rejected take as an immutable revision.
-            return self._recurse(flow, retry_state, dynprompt, unique_id)
+            expansion = self._recurse(
+                flow, retry_state, dynprompt, unique_id)
+            # Drop the rejected scene's live tensors before cache eviction so
+            # soft_empty_cache can release their allocator blocks as well.
+            del images, sampled_latent, segment, state
+            _release_loop_boundary_resources(
+                between_scene_cleanup, index)
+            return expansion
         selected_frames = images
         selected_latent = sampled_latent
         if (isinstance(review, dict)
@@ -6078,9 +12948,19 @@ class MiniMaxH3ChainLoopEnd:
                         [_public_segment(segment)],
             "resumed_from": state.get("resumed_from", 0),
         }
+        if state.get("source_timeline") is not None:
+            next_state["source_timeline"] = state["source_timeline"]
         end_clip = int(next_state["end_clip"])
         if index < end_clip:
-            return self._recurse(flow, next_state, dynprompt, unique_id)
+            expansion = self._recurse(
+                flow, next_state, dynprompt, unique_id)
+            # The recursive state owns independent CPU clones. Release this
+            # iteration's full-resolution arguments before emptying caches.
+            del selected_frames, selected_latent
+            del images, sampled_latent, segment, state
+            _release_loop_boundary_resources(
+                between_scene_cleanup, index)
+            return expansion
 
         complete = end_clip == len(plan["shots"])
         manifest = _manifest_from_segments(
@@ -6116,58 +12996,99 @@ class MiniMaxH3ChainManifestLoad:
             "optional": {
                 "source_audio": ("AUDIO", {
                     "tooltip": "The original full source track when the plan "
-                               "uses source_track or source_plus_timeline. Its "
+                               "selects final source audio or enables Source "
+                               "reference. Its "
                                "fingerprint must match the saved checkpoints."}),
                 "external_context": (EXTERNAL_CONTEXT_TYPE, {
                     "tooltip": "Reconnect the same Existing Video Context used "
                                "for scene 1. Its tail fingerprint restores the "
                                "correct resume contract and its persisted "
                                "prelude remains available to Assemble."}),
+                "source_timeline": (SOURCE_TIMELINE_TYPE, {
+                    "tooltip": "Primary 0.5 recovery route. Reconnect the "
+                               "same Source Timeline, or leave blank when its "
+                               "path-backed descriptor is already stored on "
+                               "the managed Plan."}),
             },
         }
 
     RETURN_TYPES = (MANIFEST_TYPE, "STRING", "STRING")
     RETURN_NAMES = ("manifest", "manifest_json", "status")
     OUTPUT_TOOLTIPS = (
-        "Verified completed manifest reconstructed from saved scene "
-        "checkpoints; connect to H3 Chain Assemble.",
+        "Verified completed or partial manifest reconstructed from the "
+        "longest contiguous saved scene prefix; connect to H3 Chain Assemble.",
         "Human-readable JSON form of the reconstructed manifest.",
         "Number of verified scenes and checkpoint directory used.",
     )
     FUNCTION = "load"
     CATEGORY = "conditioning/minimax/contex_loop"
-    DESCRIPTION = ("Validate every saved clip and rebuild a completed chain "
-                   "manifest without rerendering the final clip.")
+    DESCRIPTION = ("Validate the longest contiguous saved scene prefix and "
+                   "rebuild a completed or partial chain manifest without "
+                   "rerendering.")
 
     @classmethod
     def IS_CHANGED(cls, *args, **kwargs):
         return float("NaN")
 
-    def load(self, plan, source_audio=None, external_context=None):
+    def load(self, plan, source_audio=None, external_context=None,
+             source_timeline=None):
         prepared_plan = _plan_with_external_context(plan, external_context)
-        prepared_plan = _plan_with_source_audio(prepared_plan, source_audio)
-        completed = _load_resume_state(
-            prepared_plan, len(prepared_plan["shots"]) + 1)
-        manifest = _manifest_from_state(completed)
-        _atomic_json(_manifest_path(prepared_plan), manifest)
+        runtime_timeline = None
+        if source_timeline is None and isinstance(
+                plan.get("source_timeline"), dict):
+            source_timeline = _source_timeline_from_recovery(
+                plan["source_timeline"])
+        if source_timeline is not None and source_audio is not None:
+            raise ValueError(
+                "H3 Chain Manifest Load accepts Source Timeline or legacy "
+                "source_audio, not both.")
+        if source_timeline is not None:
+            prepared_plan, runtime_timeline = _plan_with_source_timeline(
+                prepared_plan, source_timeline)
+        else:
+            prepared_plan = _plan_with_source_audio(
+                prepared_plan, source_audio)
+        saved_count = _saved_scene_prefix_length(prepared_plan)
+        if saved_count < 1:
+            raise FileNotFoundError(
+                "H3 Chain Manifest Load found no saved scenes for run %s in %s."
+                % (prepared_plan["run_name"], _run_dir(prepared_plan)))
+        recovered = _load_resume_state(
+            prepared_plan, saved_count + 1,
+            source_timeline=runtime_timeline,
+            source_audio=source_audio if runtime_timeline is None else None)
+        complete = saved_count == len(prepared_plan["shots"])
+        manifest = _manifest_from_segments(
+            prepared_plan, recovered["segments"], complete=complete)
+        if complete:
+            manifest_path = _manifest_path(prepared_plan)
+            kind = "completed"
+        else:
+            manifest_path = os.path.join(
+                _run_dir(prepared_plan), "partial",
+                "through_clip_%04d.manifest.json" % saved_count)
+            kind = "partial"
+        _atomic_json(manifest_path, manifest)
         manifest_json = json.dumps(
             manifest, ensure_ascii=False, indent=2, sort_keys=True)
-        status = "loaded and verified %d saved clips from %s" % (
-            len(manifest["segments"]), _run_dir(prepared_plan))
+        status = "loaded and verified %s manifest through clip %d/%d from %s" % (
+            kind, saved_count, len(prepared_plan["shots"]),
+            _run_dir(prepared_plan))
         return (manifest, manifest_json, status)
 
 
 def _generated_audio(manifest: dict[str, Any]) -> dict[str, Any]:
     if _st_load is None or torch is None:
         raise RuntimeError("Generated-audio assembly requires safetensors and torch.")
-    waveforms = []
+    segments = list(manifest["segments"])
+    if not segments:
+        raise ValueError("Generated-audio assembly requires at least one scene.")
     sample_rate = None
-    # Cumulative boundary budgeting was inspired by seitanism's
-    # ComfyUI-H3-Motion-Context-MultiRef. Reconcile each saved scene against
-    # the full delivered timeline so independent rounding cannot accumulate.
-    cumulative_frames = 0
-    cumulative_samples = 0
-    for segment in manifest["segments"]:
+    records = []
+    compatibility = manifest.get("compatibility") or {}
+    default_mode = migrate_continuation_mode(
+        compatibility.get("continuation_mode", "guide"))
+    for segment in segments:
         checkpoint = _absolute_output_path(segment["checkpoint"])
         tensors = _st_load(checkpoint)
         if "delivered_audio" not in tensors:
@@ -6183,27 +13104,126 @@ def _generated_audio(manifest: dict[str, Any]) -> dict[str, Any]:
         elif current_rate != sample_rate:
             raise ValueError("Generated segment audio sample rates do not match.")
         waveform = tensors["delivered_audio"]
-        expected = int(round(
-            int(segment["delivered_frames"]) / float(FPS) * current_rate))
+        delivered_frames = int(segment["delivered_frames"])
+        expected = sample_boundary_from_frames(
+            delivered_frames, current_rate, FPS)
         if int(waveform.shape[-1]) != expected:
             raise ValueError(
                 "Checkpoint for clip %d has %d delivered audio samples; expected "
                 "%d for %d frames." %
                 (segment["index"], int(waveform.shape[-1]), expected,
-                 int(segment["delivered_frames"])))
-        cumulative_frames += int(segment["delivered_frames"])
-        next_boundary = int(round(
-            cumulative_frames / float(FPS) * current_rate))
-        budget = next_boundary - cumulative_samples
-        have = int(waveform.shape[-1])
+                 delivered_frames))
+        mode = migrate_continuation_mode(segment.get(
+            "continuation_mode", default_mode))
+        raw_frames = int(segment.get("raw_frames", delivered_frames))
+        repeated_frames = raw_frames - delivered_frames
+        if repeated_frames < 0:
+            raise ValueError(
+                "Clip %d has %d raw frames but %d delivered frames." %
+                (int(segment["index"]), raw_frames, delivered_frames))
+        overlap = tensors.get("audio_with_overlap")
+        if overlap is not None:
+            overlap_expected = sample_boundary_from_frames(
+                raw_frames, current_rate, FPS)
+            if int(overlap.shape[-1]) != overlap_expected:
+                raise ValueError(
+                    "Checkpoint for clip %d has %d overlap-audio samples; "
+                    "expected %d for %d raw frames." %
+                    (segment["index"], int(overlap.shape[-1]),
+                     overlap_expected, raw_frames))
+            if tuple(overlap.shape[:-1]) != tuple(waveform.shape[:-1]):
+                raise ValueError(
+                    "Checkpoint for clip %d has mismatched delivered/overlap "
+                    "audio channel shapes %s and %s." %
+                    (segment["index"], tuple(waveform.shape[:-1]),
+                     tuple(overlap.shape[:-1])))
+        records.append({
+            "segment": segment,
+            "delivered": waveform,
+            "overlap": overlap,
+            "delivered_frames": delivered_frames,
+            "raw_frames": raw_frames,
+            "repeated_frames": repeated_frames,
+            "mode": mode,
+        })
+
+    total_frames = sum(record["delivered_frames"] for record in records)
+    total_samples = sample_boundary_from_frames(
+        total_frames, int(sample_rate), FPS)
+    first = records[0]["delivered"]
+    assembled = torch.zeros(
+        (*tuple(first.shape[:-1]), total_samples),
+        dtype=first.dtype, device=first.device)
+
+    # Reconcile every write against absolute video-frame boundaries so
+    # independent PCM rounding never accumulates. For AV continuation, the
+    # later scene owns its complete decoded overlap: this preserves the actual
+    # hard/feathered audio prefix heard by the sampler instead of discarding it
+    # in Loop Trim and hard-cutting two independently decoded waveforms.
+    cumulative_frames = 0
+    for ordinal, record in enumerate(records):
+        segment = record["segment"]
+        source = record["delivered"]
+        start_frame = cumulative_frames
+        use_overlap = (
+            ordinal > 0
+            and record["mode"] in MASKED_CONTINUATION_MODES
+            and record["repeated_frames"] > 0
+            and record["overlap"] is not None)
+        if use_overlap:
+            source = record["overlap"]
+            start_frame -= record["repeated_frames"]
+            if start_frame < 0:
+                raise ValueError(
+                    "Clip %d AV overlap begins before the generated timeline."
+                    % int(segment["index"]))
+            _LOG.info(
+                "H3 generated audio: clip %d owns its %d-frame AV overlap at "
+                "the incoming boundary.", int(segment["index"]),
+                int(record["repeated_frames"]))
+        elif (ordinal > 0
+              and record["mode"] in MASKED_CONTINUATION_MODES
+              and record["repeated_frames"] > 0):
+            _LOG.warning(
+                "H3 generated audio: legacy clip %d has no saved overlap "
+                "audio; using delivered-only hard-cut assembly.",
+                int(segment["index"]))
+
+        end_frame = cumulative_frames + record["delivered_frames"]
+        start_sample = sample_boundary_from_frames(
+            start_frame, int(sample_rate), FPS)
+        end_sample = sample_boundary_from_frames(
+            end_frame, int(sample_rate), FPS)
+        budget = end_sample - start_sample
+        have = int(source.shape[-1])
         if have > budget:
-            waveform = waveform[..., :budget]
+            source = source[..., :budget]
         elif have < budget:
-            waveform = torch.nn.functional.pad(waveform, (0, budget - have))
-        waveforms.append(waveform)
-        cumulative_samples = next_boundary
-    return {"waveform": torch.cat(waveforms, dim=-1),
-            "sample_rate": int(sample_rate)}
+            source = torch.nn.functional.pad(source, (0, budget - have))
+        if tuple(source.shape[:-1]) != tuple(assembled.shape[:-1]):
+            raise ValueError(
+                "Generated clip %d audio channel shape %s does not match %s."
+                % (int(segment["index"]), tuple(source.shape[:-1]),
+                   tuple(assembled.shape[:-1])))
+        assembled[..., start_sample:end_sample] = source.to(
+            device=assembled.device, dtype=assembled.dtype)
+        cumulative_frames = end_frame
+
+    result = {"waveform": assembled, "sample_rate": int(sample_rate)}
+    first_record = records[0]
+    if (first_record["mode"] in MASKED_CONTINUATION_MODES
+            and first_record["repeated_frames"] > 0
+            and first_record["overlap"] is not None):
+        # Preserve scene 1's complete decoded AV window until an optional
+        # external prelude is joined.  _audio_with_prelude then gives this
+        # later generated scene ownership of the incoming audio overlap just
+        # as the loop assembly above does at generated scene boundaries.
+        result.update({
+            AUDIO_WITH_OVERLAP_WAVEFORM_KEY: first_record["overlap"],
+            AUDIO_WITH_OVERLAP_FRAMES_KEY: first_record["raw_frames"],
+            AUDIO_TRIM_FRAMES_KEY: first_record["repeated_frames"],
+        })
+    return result
 
 
 def _validate_prelude(manifest: dict[str, Any]) -> dict[str, Any] | None:
@@ -6290,11 +13310,83 @@ def _audio_with_prelude(
         prefix = _resample_audio_exact(
             saved, sample_rate, prelude_samples, channels,
             "H3 chain prelude audio")["waveform"]
-    return {
-        "waveform": torch.cat(
-            (prefix, normalized_extension["waveform"]), dim=-1),
-        "sample_rate": sample_rate,
-    }
+    assembled = torch.cat(
+        (prefix, normalized_extension["waveform"]), dim=-1)
+
+    # When scene 1 is an AV continuation of Existing Video Context, its
+    # decoded raw audio includes the repeated incoming prefix.  Give the
+    # generated scene ownership of that overlap so Soft AV's audio feather is
+    # not replaced by a hard splice at the prelude boundary.
+    overlap = audio.get(AUDIO_WITH_OVERLAP_WAVEFORM_KEY)
+    if overlap is not None:
+        try:
+            overlap_frames = int(audio[AUDIO_WITH_OVERLAP_FRAMES_KEY])
+            trim_frames = int(audio[AUDIO_TRIM_FRAMES_KEY])
+        except (KeyError, TypeError, ValueError, OverflowError) as exc:
+            raise ValueError(
+                "H3 extension assembly audio has invalid private AV overlap "
+                "metadata.") from exc
+        delivered_frames = overlap_frames - trim_frames
+        if overlap_frames < 1 or trim_frames < 1 or delivered_frames < 1:
+            raise ValueError(
+                "H3 extension assembly audio has invalid AV overlap frame "
+                "counts %d raw / %d trimmed." %
+                (overlap_frames, trim_frames))
+        if delivered_frames > int(extension_frames):
+            raise ValueError(
+                "H3 extension assembly first scene delivers %d frames, but "
+                "the complete extension contains only %d." %
+                (delivered_frames, int(extension_frames)))
+        if trim_frames > prelude_frames:
+            raise ValueError(
+                "H3 extension assembly needs %d incoming AV overlap frames, "
+                "but the prelude contains only %d." %
+                (trim_frames, prelude_frames))
+
+        overlap_waveform, overlap_rate = _audio_waveform_3d({
+            "waveform": overlap,
+            "sample_rate": sample_rate,
+        }, "H3 extension assembly AV overlap audio")
+        if (overlap_rate != sample_rate or
+                int(overlap_waveform.shape[1]) != channels):
+            raise ValueError(
+                "H3 extension assembly AV overlap audio format does not "
+                "match the generated extension audio.")
+        relative_samples = sample_boundary_from_frames(
+            overlap_frames, sample_rate, FPS)
+        if int(overlap_waveform.shape[-1]) != relative_samples:
+            raise ValueError(
+                "H3 extension assembly AV overlap audio has %d samples; "
+                "expected %d for %d raw frames." %
+                (int(overlap_waveform.shape[-1]), relative_samples,
+                 overlap_frames))
+
+        start_frame = prelude_frames - trim_frames
+        end_frame = prelude_frames + delivered_frames
+        start_sample = sample_boundary_from_frames(
+            start_frame, sample_rate, FPS)
+        end_sample = sample_boundary_from_frames(
+            end_frame, sample_rate, FPS)
+        absolute_samples = end_sample - start_sample
+        overlap_waveform = overlap_waveform.to(
+            dtype=assembled.dtype, device=assembled.device)
+        if int(overlap_waveform.shape[-1]) != absolute_samples:
+            # Absolute boundary rounding can differ by one sample from a
+            # zero-based raw-window budget. Interpolate that residual rather
+            # than introducing a silent sample at the join.
+            shape = tuple(overlap_waveform.shape)
+            overlap_waveform = torch.nn.functional.interpolate(
+                overlap_waveform.reshape(-1, 1, shape[-1]),
+                size=absolute_samples,
+                mode="linear",
+                align_corners=False,
+            ).reshape(*shape[:-1], absolute_samples)
+        assembled[..., start_sample:end_sample] = overlap_waveform
+        _LOG.info(
+            "H3 generated audio: scene 1 owns its %d-frame AV overlap at "
+            "the external-prelude boundary.", trim_frames)
+
+    return {"waveform": assembled, "sample_rate": sample_rate}
 
 
 def _validate_manifest(manifest: dict[str, Any]) -> list[dict[str, Any]]:
@@ -6476,56 +13568,722 @@ def _fit_pyav_audio_samples(waveform: Any, required_samples: int) -> Any:
     return waveform[..., :required_samples]
 
 
+def _scheduled_blend_frames(
+    value: Any,
+    boundary_count: int,
+    configured: int,
+) -> list[int]:
+    """Resolve a compact per-boundary assembly schedule.
+
+    ``plan`` retains the historical global value. Numeric lists are consumed
+    in timeline order and repeat their final value for later boundaries, which
+    lets ``5,30`` express a five-frame first join followed by thirty-frame
+    joins without knowing whether recovery is currently partial or complete.
+    """
+    boundary_count = max(0, int(boundary_count))
+    if boundary_count == 0:
+        return []
+    text = str(value if value is not None else "plan").strip().lower()
+    if not text or text == "plan":
+        return [max(0, int(configured))] * boundary_count
+    parts = [part for part in re.split(r"[\s,;]+", text) if part]
+    if not parts:
+        raise ValueError(
+            "H3 Chain Assemble blend_schedule must be 'plan' or a list of "
+            "non-negative frame counts such as 5,30.")
+    values = []
+    for part in parts:
+        try:
+            frame_count = int(part)
+        except ValueError as exc:
+            raise ValueError(
+                "H3 Chain Assemble blend_schedule contains %r; use 'plan' "
+                "or integer frame counts such as 5,30." % part) from exc
+        if frame_count < 0:
+            raise ValueError(
+                "H3 Chain Assemble blend_schedule cannot contain negative "
+                "frame counts.")
+        values.append(frame_count)
+    if len(values) < boundary_count:
+        values.extend([values[-1]] * (boundary_count - len(values)))
+    return values[:boundary_count]
+
+
+def _decode_scheduled_blend_artifact(
+    manifest: dict[str, Any],
+    segment: dict[str, Any],
+    requested_blend: int,
+    video_vae: Any,
+    output_path: str,
+) -> None:
+    """Re-decode one checkpoint's raw video for a larger recovery blend."""
+    if video_vae is None:
+        raise ValueError(
+            "H3 Chain Assemble boundary before clip %d requests %d blend "
+            "frames, but only %d were saved. Connect the original MiniMax H3 "
+            "video VAE to blend_video_vae so recovery can re-decode the saved "
+            "checkpoint without rerunning diffusion." %
+            (int(segment.get("index", 0)), int(requested_blend),
+             int(segment.get("blend_frames", 0))))
+    if _st_load is None or torch is None:
+        raise RuntimeError(
+            "Scheduled H3 recovery blending requires safetensors and torch.")
+    checkpoint = _absolute_output_path(segment["checkpoint"])
+    tensors = _st_load(checkpoint)
+    video = tensors.get("video")
+    if video is None:
+        raise ValueError(
+            "H3 Chain checkpoint for clip %d has no video latent." %
+            int(segment.get("index", 0)))
+    images = video_vae.decode(video)
+    if not torch.is_tensor(images):
+        raise ValueError(
+            "H3 Chain blend recovery VAE returned %r instead of IMAGE." %
+            type(images))
+    if images.ndim == 5:
+        images = images.reshape(
+            -1, images.shape[-3], images.shape[-2], images.shape[-1])
+    if images.ndim != 4:
+        raise ValueError(
+            "H3 Chain blend recovery VAE returned image shape %s; expected "
+            "[frames,height,width,channels]." % (tuple(images.shape),))
+    raw_frames = int(segment["raw_frames"])
+    delivered_frames = int(segment["delivered_frames"])
+    repeated_frames = raw_frames - delivered_frames
+    if int(images.shape[0]) != raw_frames:
+        raise ValueError(
+            "H3 Chain blend recovery decoded %d frames for clip %d; its "
+            "checkpoint requires %d." %
+            (int(images.shape[0]), int(segment.get("index", 0)), raw_frames))
+    start = repeated_frames - int(requested_blend)
+    scheduled = images[start:raw_frames]
+    expected = delivered_frames + int(requested_blend)
+    if int(scheduled.shape[0]) != expected:
+        raise RuntimeError(
+            "H3 Chain blend recovery selected %d frames; expected %d." %
+            (int(scheduled.shape[0]), expected))
+    try:
+        _write_lossless_rgb_video(
+            scheduled, output_path, FPS, metadata={
+                "title": "H3 scheduled recovery blend clip %d" %
+                         int(segment.get("index", 0)),
+                "h3_blend_frames": str(int(requested_blend)),
+                "h3_checkpoint_sha256": str(
+                    segment.get("checkpoint_sha256") or ""),
+            })
+    except Exception:
+        _safe_unlink(output_path)
+        raise
+    finally:
+        del scheduled, images, video, tensors
+    _LOG.info(
+        "H3 Chain re-decoded clip %d checkpoint for a %d-frame recovery "
+        "blend; diffusion was not rerun.",
+        int(segment.get("index", 0)), int(requested_blend))
+
+
 def _blend_video_records(
     manifest: dict[str, Any],
     segments: list[dict[str, Any]],
     prelude: dict[str, Any] | None,
+    blend_schedule: Any = "plan",
+    video_vae: Any = None,
+    temporary_paths: list[str] | None = None,
+    force_records: bool = False,
 ) -> list[dict[str, Any]]:
-    """Resolve the hard base and each disk-backed overlap continuation."""
+    """Resolve scheduled joins and their disk-backed overlap continuations."""
     configured = int(
         (manifest.get("compatibility") or {}).get("video_blend_frames", 0))
-    if configured < 1:
+    boundary_count = len(segments) if prelude is not None else max(
+        0, len(segments) - 1)
+    schedule_text = str(
+        blend_schedule if blend_schedule is not None else "plan").strip().lower()
+    if not schedule_text or schedule_text == "plan":
+        # New manifests persist the resolved incoming-scene blend on every
+        # segment, including explicit zero. Older manifests inherit the
+        # historical Plan-wide value when that field is absent.
+        incoming = segments if prelude is not None else segments[1:]
+        schedule = []
+        for item in incoming:
+            delivered = int(item["delivered_frames"])
+            repeated = max(
+                0, int(item.get("raw_frames", delivered)) - delivered)
+            schedule.append(min(
+                repeated, max(0, int(item.get(
+                    "blend_frames", configured)))))
+    else:
+        schedule = _scheduled_blend_frames(
+            blend_schedule, boundary_count, configured)
+    if not any(schedule) and not bool(force_records):
         return []
     records: list[dict[str, Any]] = []
     has_predecessor = prelude is not None
+    boundary_index = 0
     if prelude is not None:
         records.append({
+            "kind": "prelude",
             "path": _absolute_output_path(prelude["video"]),
             "input_frames": int(prelude["frame_count"]),
             "delivered_frames": int(prelude["frame_count"]),
             "blend_frames": 0,
+            "skip_frames": 0,
         })
 
     for item in segments:
         delivered = int(item["delivered_frames"])
         repeated = max(0, int(item.get("raw_frames", delivered)) - delivered)
-        expected_blend = min(configured, repeated) if has_predecessor else 0
+        expected_blend = int(schedule[boundary_index]) if has_predecessor else 0
+        if has_predecessor:
+            boundary_index += 1
+        if expected_blend > repeated:
+            raise ValueError(
+                "H3 Chain Assemble boundary before clip %d requests a "
+                "%d-frame blend, but that scene repeats only %d context "
+                "frames." %
+                (int(item.get("index", 0)), expected_blend, repeated))
+        skip_frames = 0
         if expected_blend:
             recorded_blend = int(item.get("blend_frames", 0))
             value = item.get("blend_segment")
-            if recorded_blend != expected_blend or not isinstance(value, str):
-                raise ValueError(
-                    "H3 chain clip %d requires a %d-frame blend artifact, but "
-                    "the manifest contains %d. Re-save the scene with Plan "
-                    "video_blend_frames connected to Loop Trim and its "
-                    "images_with_overlap connected to Segment Save." %
-                    (int(item.get("index", 0)), expected_blend,
-                     recorded_blend))
-            path = _absolute_output_path(value)
+            if recorded_blend >= expected_blend and isinstance(value, str):
+                path = _absolute_output_path(value)
+                skip_frames = recorded_blend - expected_blend
+            else:
+                if temporary_paths is None:
+                    raise RuntimeError(
+                        "H3 Chain scheduled blend recovery has no temporary "
+                        "artifact owner.")
+                final_dir = os.path.join(
+                    _output_root(), "h3_chains",
+                    _safe_name(manifest.get("run_name"), "h3_chain"), "final")
+                os.makedirs(final_dir, exist_ok=True)
+                path = os.path.join(
+                    final_dir, ".scheduled_blend_clip_%04d.%s.mkv" %
+                    (int(item.get("index", 0)), uuid.uuid4().hex))
+                _decode_scheduled_blend_artifact(
+                    manifest, item, expected_blend, video_vae, path)
+                temporary_paths.append(path)
         else:
             path = _absolute_output_path(item["segment"])
         if not os.path.isfile(path):
             raise FileNotFoundError("H3 chain blend input is missing: %s" % path)
         records.append({
+            "kind": "segment",
+            "scene_index": int(item.get("index", len(records) + 1)),
             "path": path,
             "input_frames": delivered + expected_blend,
             "delivered_frames": delivered,
             "blend_frames": expected_blend,
+            "skip_frames": skip_frames,
+            # This scene's protected Guide was already moved into its
+            # predecessor's corrected RGB space before sampling. Final
+            # assembly must therefore stop propagating an older post-grade
+            # into this raw record or it would apply that curve twice.
+            "generation_tone_carry": bool(
+                item.get("guide_tone_input_applied", False)),
         })
         has_predecessor = True
     if not records:
         raise ValueError("H3 chain blend assembly has no video inputs.")
-    return records if any(int(item["blend_frames"]) for item in records) else []
+    return (records if bool(force_records) or any(
+        int(item["blend_frames"]) for item in records) else [])
+
+
+def _boundary_luma(array: Any, stride: int = 1) -> Any:
+    """Return gamma-domain Rec.709 luma for inexpensive boundary analysis."""
+    if np is None:
+        raise RuntimeError("Automatic H3 boundary tone matching requires NumPy.")
+    if not isinstance(array, np.ndarray) or array.ndim != 3 or array.shape[-1] < 3:
+        raise ValueError(
+            "H3 boundary tone matching expected an RGB frame; got %r." %
+            (getattr(array, "shape", None),))
+    stride = max(1, int(stride))
+    sample = array[::stride, ::stride, :3].astype(np.float32, copy=False)
+    return (sample[..., 0] * 0.2126 + sample[..., 1] * 0.7152 +
+            sample[..., 2] * 0.0722)
+
+
+def _boundary_tone_curve(previous: Any, current: Any) -> dict[str, Any] | None:
+    """Fit a small monotonic curve from one generated boundary frame pair.
+
+    Percentiles distinguish a flat exposure step from ordinary local motion.
+    The correction is deliberately capped: assembly may remove a tiny H3
+    decode/generation tone step, but it must never become a general grade.
+    """
+    previous_luma = _boundary_luma(previous)
+    current_luma = _boundary_luma(current)
+    quantiles = (5.0, 50.0, 95.0)
+    target = np.percentile(previous_luma, quantiles).astype(np.float64)
+    source = np.percentile(current_luma, quantiles).astype(np.float64)
+    shifts = np.clip(
+        target - source,
+        -BOUNDARY_TONE_MATCH_MAX_SHIFT,
+        BOUNDARY_TONE_MATCH_MAX_SHIFT)
+    mean_jump = float(current_luma.mean() - previous_luma.mean())
+    desired_sign = -1.0 if mean_jump > 0.0 else 1.0
+    aligned = int(np.count_nonzero(shifts * desired_sign > 0.0))
+    if aligned < 2:
+        return None
+    # A percentile moving against the dominant exposure step is usually
+    # foreground motion. Do not build a curve that exaggerates it.
+    shifts = np.where(shifts * desired_sign < 0.0, 0.0, shifts)
+
+    points = [(0.0, 0.0)]
+    for source_value, shift in zip(source, shifts):
+        x = float(np.clip(source_value, 0.0, 255.0))
+        y = float(np.clip(source_value + shift, 0.0, 255.0))
+        if x <= points[-1][0] + 0.5:
+            continue
+        y = max(points[-1][1], y)
+        points.append((x, y))
+    if points[-1][0] < 254.5:
+        points.append((255.0, 255.0))
+    else:
+        points[-1] = (255.0, 255.0)
+    if len(points) < 3:
+        return None
+    # Preserve monotonicity from both ends after capping and de-duplication.
+    for index in range(len(points) - 2, -1, -1):
+        x, y = points[index]
+        points[index] = (x, min(y, points[index + 1][1]))
+    return {
+        "points": [[x / 255.0, y / 255.0] for x, y in points],
+        "source_percentiles": source.tolist(),
+        "target_percentiles": target.tolist(),
+        "applied_shifts": shifts.tolist(),
+        "mean_luma_jump": mean_jump,
+    }
+
+
+def _images_rgb8(frames: Any, usage: str) -> Any:
+    if torch is None or np is None or not torch.is_tensor(frames):
+        raise ValueError("%s requires a torch IMAGE tensor and NumPy." % usage)
+    if frames.ndim != 4 or int(frames.shape[-1]) < 3:
+        raise ValueError(
+            "%s expected [frames,height,width,channels] RGB images; got %s." %
+            (usage, tuple(frames.shape)))
+    return (torch.clamp(frames[..., :3].detach(), 0.0, 1.0)
+            .mul(255.0).round().to(torch.uint8).cpu().numpy())
+
+
+def _detect_guide_tone_carry(
+    previous_frames: Any,
+    generated_frames: Any,
+) -> dict[str, Any] | None:
+    """Fit the current scene's raw output back to its actual RGB Guide.
+
+    Unlike final assembly, this sees delivered tensors before they are written
+    to disk.  The saved direct curve can therefore be applied to this scene's
+    tail when it becomes the next scene's RGB Guide.
+    """
+    if previous_frames is None:
+        return None
+    context_count = min(
+        int(previous_frames.shape[0]), BOUNDARY_TONE_MATCH_CONTEXT_FRAMES)
+    probe_count = min(
+        int(generated_frames.shape[0]), BOUNDARY_TONE_MATCH_SEARCH_FRAMES)
+    if context_count < 2 or probe_count < 1:
+        return None
+    # Slice on the source device before the CPU/uint8 conversion. A full H3
+    # scene can be hundreds of frames and is unnecessary for this four-frame
+    # boundary probe.
+    context = _images_rgb8(
+        previous_frames[-context_count:], "H3 Guide tone detection")
+    probe = _images_rgb8(
+        generated_frames[:probe_count], "H3 Guide tone detection")
+    context_means = [
+        float(_boundary_luma(frame, stride=8).mean()) for frame in context]
+    probe_means = [
+        float(_boundary_luma(frame, stride=8).mean()) for frame in probe]
+    baseline_deltas = [
+        abs(context_means[index] - context_means[index - 1])
+        for index in range(1, len(context_means))]
+    baseline = float(np.median(baseline_deltas)) if baseline_deltas else 0.0
+    mad = (float(np.median(np.abs(
+        np.asarray(baseline_deltas, dtype=np.float64) - baseline)))
+        if baseline_deltas else 0.0)
+    threshold = max(
+        BOUNDARY_TONE_MATCH_MIN_JUMP, baseline + 4.0 * mad)
+    joined_means = [context_means[-1], *probe_means]
+    onset = max(
+        range(probe_count),
+        key=lambda index: abs(joined_means[index + 1] -
+                              joined_means[index]))
+    jump = float(joined_means[onset + 1] - joined_means[onset])
+    if abs(jump) < threshold:
+        return None
+    predecessor = context[-1] if onset == 0 else probe[onset - 1]
+    curve = _boundary_tone_curve(predecessor, probe[onset])
+    if curve is None:
+        return None
+    curve.update({
+        "version": "h3_guide_tone_carry_v1",
+        "start_frame": int(onset),
+        "detected_luma_jump": jump,
+        "detection_threshold": threshold,
+        "context_motion_baseline": baseline,
+    })
+    return curve
+
+
+def _detect_boundary_tone_match(
+    record: dict[str, Any],
+    inherited_matches: list[dict[str, Any]] | None = None,
+) -> dict[str, Any] | None:
+    """Detect the first coherent tone step after an incoming overlap."""
+    if av is None or np is None:
+        return None
+    blend = int(record.get("blend_frames", 0))
+    delivered = int(record.get("delivered_frames", 0))
+    if blend < 2 or delivered < 1:
+        return None
+    skip = max(0, int(record.get("skip_frames", 0)))
+    baseline_start = max(0, blend - BOUNDARY_TONE_MATCH_CONTEXT_FRAMES)
+    probe_stop = blend + min(
+        delivered, BOUNDARY_TONE_MATCH_SEARCH_FRAMES)
+    means: dict[int, float] = {}
+    candidates: dict[int, Any] = {}
+    inherited_luts = [
+        _boundary_tone_lut(match)
+        for match in (inherited_matches or [])
+    ]
+    local_index = -skip
+    for array in _decode_rgb_frames(record["path"]):
+        if local_index >= probe_stop:
+            break
+        for lut in inherited_luts:
+            array = lut[array]
+        if local_index >= baseline_start:
+            means[local_index] = float(_boundary_luma(array, stride=8).mean())
+        if local_index >= blend - 1:
+            candidates[local_index] = array
+        local_index += 1
+
+    required = tuple(range(blend - 1, probe_stop))
+    if any(index not in means or index not in candidates for index in required):
+        raise ValueError(
+            "H3 boundary tone analysis could not decode the expected frames "
+            "around overlap %d from %s." % (blend, record["path"]))
+    baseline_deltas = [
+        abs(means[index] - means[index - 1])
+        for index in range(baseline_start + 1, blend)
+        if index in means and index - 1 in means
+    ]
+    if baseline_deltas:
+        baseline = float(np.median(baseline_deltas))
+        mad = float(np.median(np.abs(
+            np.asarray(baseline_deltas, dtype=np.float64) - baseline)))
+    else:
+        baseline = mad = 0.0
+    threshold = max(
+        BOUNDARY_TONE_MATCH_MIN_JUMP,
+        baseline + 4.0 * mad)
+
+    onset = max(
+        range(blend, probe_stop),
+        key=lambda index: abs(means[index] - means[index - 1]))
+    jump = float(means[onset] - means[onset - 1])
+    if abs(jump) < threshold:
+        return None
+    curve = _boundary_tone_curve(
+        candidates[onset - 1], candidates[onset])
+    if curve is None:
+        return None
+    curve.update({
+        "start_frame": int(onset),
+        "detected_luma_jump": jump,
+        "detection_threshold": threshold,
+        "context_motion_baseline": baseline,
+    })
+    return curve
+
+
+def _auto_boundary_tone_match_records(
+    records: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Annotate blend inputs with conservative post-context tone curves."""
+    prepared = [dict(record) for record in records]
+    if av is None or np is None:
+        _LOG.warning(
+            "H3 automatic boundary tone matching is unavailable because "
+            "PyAV or NumPy could not be imported; continuing without it.")
+        return prepared
+    inherited_matches: list[dict[str, Any]] = []
+    for index, record in enumerate(prepared[1:], start=2):
+        if bool(record.get("generation_tone_carry", False)):
+            inherited_matches = []
+        if inherited_matches:
+            # Every later scene's protected overlap came from the ungraded
+            # predecessor checkpoint. Carry the already accepted assembly
+            # curves across that overlap so a correction never creates the
+            # next boundary it was meant to remove.
+            record["tone_match_prefix"] = [
+                dict(match) for match in inherited_matches
+            ]
+        try:
+            match = _detect_boundary_tone_match(
+                record, inherited_matches=inherited_matches)
+        except Exception as exc:
+            _LOG.warning(
+                "H3 boundary tone analysis skipped input %d: %s", index, exc)
+            continue
+        if match is None:
+            continue
+        record["tone_match"] = match
+        inherited_matches.append(match)
+        _LOG.info(
+            "H3 boundary tone match input %d: start frame %d, luma jump "
+            "%+.3f, percentile shifts %s.",
+            index, int(match["start_frame"]),
+            float(match["detected_luma_jump"]),
+            ",".join("%+.3f" % float(value)
+                     for value in match["applied_shifts"]))
+    return prepared
+
+
+def _scene_color_frame_stats(array: Any) -> tuple[Any, Any]:
+    """Return center-weighted luma and saturation percentiles for one frame."""
+    if np is None:
+        raise RuntimeError("H3 scene color stabilization requires NumPy.")
+    if not isinstance(array, np.ndarray) or array.ndim != 3 or array.shape[-1] < 3:
+        raise ValueError(
+            "H3 scene color stabilization expected an RGB frame; got %r." %
+            (getattr(array, "shape", None),))
+    height, width = int(array.shape[0]), int(array.shape[1])
+    y0, y1 = int(height * 0.12), max(int(height * 0.92), 1)
+    x0, x1 = int(width * 0.20), max(int(width * 0.80), 1)
+    sample = array[y0:y1:4, x0:x1:4, :3].astype(np.float32, copy=False)
+    if not int(sample.size):
+        sample = array[::4, ::4, :3].astype(np.float32, copy=False)
+    luma = (sample[..., 0] * 0.2126 + sample[..., 1] * 0.7152 +
+            sample[..., 2] * 0.0722)
+    maximum = np.max(sample, axis=-1)
+    minimum = np.min(sample, axis=-1)
+    saturation = np.divide(
+        maximum - minimum, np.maximum(maximum, 1.0),
+        out=np.zeros_like(maximum), where=maximum > 0.0) * 255.0
+    valid = (luma >= 20.0) & (luma <= 235.0)
+    if int(np.count_nonzero(valid)) >= 64:
+        luma = luma[valid]
+        saturation = saturation[valid]
+    return (
+        np.percentile(luma, (10.0, 50.0, 90.0)).astype(np.float64),
+        np.percentile(saturation, (25.0, 50.0, 75.0)).astype(np.float64),
+    )
+
+
+def _record_scene_color_stats(record: dict[str, Any]) -> dict[str, Any]:
+    """Measure a bounded number of interior frames from one assembly record."""
+    if av is None or np is None:
+        raise RuntimeError(
+            "H3 scene color stabilization requires PyAV and NumPy.")
+    skip = max(0, int(record.get("skip_frames", 0)))
+    count = int(record.get("input_frames", 0))
+    blend = max(0, int(record.get("blend_frames", 0)))
+    delivered = max(1, int(record.get("delivered_frames", count - blend)))
+    margin = min(24, max(2, delivered // 10))
+    start = min(count - 1, blend + margin)
+    stop = max(start + 1, count - margin)
+    step = max(1, (stop - start) // 24)
+    luma_rows = []
+    saturation_rows = []
+    tone_prefix_luts = [
+        _boundary_tone_lut(match)
+        for match in (record.get("tone_match_prefix") or [])
+        if isinstance(match, dict)
+    ]
+    tone_match = record.get("tone_match")
+    tone_start = (int(tone_match["start_frame"])
+                  if isinstance(tone_match, dict) else None)
+    tone_lut = (_boundary_tone_lut(tone_match)
+                if isinstance(tone_match, dict) else None)
+    local_index = -skip
+    for array in _decode_rgb_frames(record["path"]):
+        if local_index >= count:
+            break
+        if (local_index >= start and local_index < stop and
+                (local_index - start) % step == 0):
+            for prefix_lut in tone_prefix_luts:
+                array = prefix_lut[array]
+            if (tone_lut is not None and tone_start is not None and
+                    local_index >= tone_start):
+                array = tone_lut[array]
+            luma, saturation = _scene_color_frame_stats(array)
+            luma_rows.append(luma)
+            saturation_rows.append(saturation)
+        local_index += 1
+    if not luma_rows:
+        raise ValueError(
+            "H3 scene color stabilization could not sample delivered frames "
+            "from %s." % record["path"])
+    return {
+        "luma_percentiles": np.median(
+            np.stack(luma_rows, axis=0), axis=0).tolist(),
+        "saturation_percentiles": np.median(
+            np.stack(saturation_rows, axis=0), axis=0).tolist(),
+        "sampled_frames": len(luma_rows),
+    }
+
+
+def _coherent_color_delta(values: Any, minimum: float) -> float:
+    values = np.asarray(values, dtype=np.float64)
+    positive = values[values > 0.0]
+    negative = values[values < 0.0]
+    selected = positive if len(positive) >= 2 else (
+        negative if len(negative) >= 2 else np.asarray([], dtype=np.float64))
+    if not len(selected):
+        return 0.0
+    value = float(np.median(selected))
+    return value if abs(value) >= float(minimum) else 0.0
+
+
+def _scene_color_transform(
+    anchor: dict[str, Any],
+    current: dict[str, Any],
+) -> tuple[float, float]:
+    """Fit a deliberately weak exposure/saturation transform to scene one."""
+    target_luma = np.asarray(anchor["luma_percentiles"], dtype=np.float64)
+    source_luma = np.asarray(current["luma_percentiles"], dtype=np.float64)
+    luma_shift = _coherent_color_delta(target_luma - source_luma, 1.0)
+    luma_shift = float(np.clip(
+        luma_shift * ASSEMBLY_COLOR_STABILIZATION_STRENGTH,
+        -ASSEMBLY_COLOR_STABILIZATION_MAX_LUMA_SHIFT,
+        ASSEMBLY_COLOR_STABILIZATION_MAX_LUMA_SHIFT))
+
+    target_sat = np.asarray(
+        anchor["saturation_percentiles"], dtype=np.float64)
+    source_sat = np.asarray(
+        current["saturation_percentiles"], dtype=np.float64)
+    ratios = np.divide(
+        target_sat, np.maximum(source_sat, 1.0),
+        out=np.ones_like(target_sat), where=source_sat > 0.0)
+    saturation_delta = _coherent_color_delta(ratios - 1.0, 0.02)
+    saturation = 1.0 + (
+        saturation_delta * ASSEMBLY_COLOR_STABILIZATION_STRENGTH)
+    saturation = float(np.clip(
+        saturation,
+        1.0 - ASSEMBLY_COLOR_STABILIZATION_MAX_SATURATION_CHANGE,
+        1.0 + ASSEMBLY_COLOR_STABILIZATION_MAX_SATURATION_CHANGE))
+    return luma_shift / 255.0, saturation
+
+
+def _auto_scene_color_stabilization_records(
+    records: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Anchor later scenes to scene one's color without changing a seam.
+
+    Each new record enters with its predecessor's accepted transform. The
+    transform then moves toward that scene's conservative scene-one match over
+    three seconds. This keeps the exact join unchanged and avoids a hard grade
+    step while preventing slow exposure/saturation drift from accumulating.
+    """
+    prepared = [dict(record) for record in records]
+    anchor_index = next(
+        (index for index, record in enumerate(prepared)
+         if str(record.get("kind") or "segment") == "segment"),
+        None)
+    if anchor_index is None or anchor_index + 1 >= len(prepared):
+        return prepared
+    anchor = _record_scene_color_stats(prepared[anchor_index])
+    previous_brightness = 0.0
+    previous_saturation = 1.0
+    for record_index in range(anchor_index + 1, len(prepared)):
+        record = prepared[record_index]
+        if str(record.get("kind") or "segment") != "segment":
+            continue
+        stats = _record_scene_color_stats(record)
+        brightness, saturation = _scene_color_transform(anchor, stats)
+        ramp = min(
+            ASSEMBLY_COLOR_STABILIZATION_RAMP_FRAMES,
+            max(1, int(record.get("delivered_frames", 1))))
+        record["scene_color_stabilization"] = {
+            "version": "h3_scene_1_color_anchor_v1",
+            "start_frame": max(0, int(record.get("blend_frames", 0))),
+            "ramp_frames": int(ramp),
+            "previous_brightness": float(previous_brightness),
+            "brightness": float(brightness),
+            "previous_saturation": float(previous_saturation),
+            "saturation": float(saturation),
+            "anchor": anchor,
+            "source": stats,
+        }
+        previous_brightness = brightness
+        previous_saturation = saturation
+        _LOG.info(
+            "H3 scene-one color anchor scene %d: brightness %+.4f, "
+            "saturation %.4f, ramp %d frames.",
+            int(record.get("scene_index", record_index + 1)),
+            brightness, saturation, ramp)
+    return prepared
+
+
+def _ffmpeg_scene_color_filter(schedule: dict[str, Any]) -> str:
+    start = int(schedule["start_frame"])
+    ramp = max(1, int(schedule["ramp_frames"]))
+    progress = "clip((n-%d)/%d\\,0\\,1)" % (start, ramp)
+    previous_brightness = float(schedule["previous_brightness"])
+    brightness_delta = float(
+        schedule["brightness"]) - previous_brightness
+    previous_saturation = float(schedule["previous_saturation"])
+    saturation_delta = float(
+        schedule["saturation"]) - previous_saturation
+    # FFmpeg's hue filter evaluates b/s per frame while operating directly on
+    # the existing YUV planes. Its brightness unit spans one tenth of the
+    # normalized RGB range, so multiply our normalized code-value offset by
+    # ten. Unlike eq, hue's identity path stays neutral on H3's untagged
+    # yuv420p segments instead of switching to a range-sensitive LUT.
+    brightness = "10*(%.9f+(%.9f)*%s)" % (
+        previous_brightness, brightness_delta, progress)
+    saturation = "%.9f+(%.9f)*%s" % (
+        previous_saturation, saturation_delta, progress)
+    return "hue=b='%s':s='%s'" % (brightness, saturation)
+
+
+def _apply_scene_color_stabilization(
+    array: Any,
+    schedule: dict[str, Any],
+    frame_index: int,
+) -> Any:
+    start = int(schedule["start_frame"])
+    ramp = max(1, int(schedule["ramp_frames"]))
+    progress = float(np.clip((int(frame_index) - start) / float(ramp), 0.0, 1.0))
+    brightness = float(schedule["previous_brightness"]) + progress * (
+        float(schedule["brightness"]) -
+        float(schedule["previous_brightness"]))
+    saturation = float(schedule["previous_saturation"]) + progress * (
+        float(schedule["saturation"]) -
+        float(schedule["previous_saturation"]))
+    rgb = array[..., :3].astype(np.float32, copy=False) / 255.0
+    luma = (rgb[..., 0:1] * 0.2126 + rgb[..., 1:2] * 0.7152 +
+            rgb[..., 2:3] * 0.0722)
+    adjusted = luma + saturation * (rgb - luma) + brightness
+    return np.clip(adjusted * 255.0, 0.0, 255.0).round().astype(np.uint8)
+
+
+def _ffmpeg_boundary_tone_filter(match: dict[str, Any]) -> str:
+    points = " ".join(
+        "%.6f/%.6f" % (float(x), float(y))
+        for x, y in match["points"])
+    # Use the post-trim input frame index. A rounded N/FPS timestamp can land
+    # a fraction above the actual PTS and activate one frame late.
+    start = int(match["start_frame"])
+    return "curves=all='%s':enable='gte(n\\,%d)'" % (points, start)
+
+
+def _ffmpeg_boundary_tone_prefix_filter(match: dict[str, Any]) -> str:
+    points = " ".join(
+        "%.6f/%.6f" % (float(x), float(y))
+        for x, y in match["points"])
+    return "curves=all='%s'" % points
+
+
+def _boundary_tone_lut(match: dict[str, Any]) -> Any:
+    if np is None:
+        raise RuntimeError("Automatic H3 boundary tone matching requires NumPy.")
+    points = np.asarray(match["points"], dtype=np.float64) * 255.0
+    values = np.interp(
+        np.arange(256, dtype=np.float64), points[:, 0], points[:, 1])
+    return np.clip(values, 0.0, 255.0).round().astype(np.uint8)
 
 
 def _ffmpeg_blend_video(
@@ -6544,22 +14302,39 @@ def _ffmpeg_blend_video(
 
     filters = []
     for index in range(len(records)):
-        filters.append(
-            "[%d:v]fps=%d,settb=AVTB,setpts=N/(%d*TB)[v%d]" %
-            (index, FPS, FPS, index))
+        skip = int(records[index].get("skip_frames", 0))
+        count = int(records[index]["input_frames"])
+        operations = (
+            "fps=%d,trim=start_frame=%d:end_frame=%d,"
+            "settb=AVTB,setpts=N/(%d*TB)" %
+            (FPS, skip, skip + count, FPS))
+        tone_prefix = records[index].get("tone_match_prefix") or []
+        for match in tone_prefix:
+            if isinstance(match, dict):
+                operations += "," + _ffmpeg_boundary_tone_prefix_filter(match)
+        tone_match = records[index].get("tone_match")
+        if isinstance(tone_match, dict):
+            operations += "," + _ffmpeg_boundary_tone_filter(tone_match)
+        color_schedule = records[index].get("scene_color_stabilization")
+        if isinstance(color_schedule, dict):
+            operations += "," + _ffmpeg_scene_color_filter(color_schedule)
+        filters.append("[%d:v]%s[v%d]" % (index, operations, index))
     previous = "v0"
     cumulative = int(records[0]["delivered_frames"])
     for index, record in enumerate(records[1:], start=1):
         blend = int(record["blend_frames"])
-        if blend < 1:
-            raise ValueError(
-                "H3 cumulative blend input %d has no retained overlap." % index)
         raw_output = "xfade%d" % index
         output = "blend%d" % index
-        filters.append(
-            "[%s][v%d]xfade=transition=fade:duration=%.9f:offset=%.9f[%s]" %
-            (previous, index, blend / float(FPS),
-             (cumulative - blend) / float(FPS), raw_output))
+        if blend:
+            filters.append(
+                "[%s][v%d]xfade=transition=fade:duration=%.9f:"
+                "offset=%.9f[%s]" %
+                (previous, index, blend / float(FPS),
+                 (cumulative - blend) / float(FPS), raw_output))
+        else:
+            filters.append(
+                "[%s][v%d]concat=n=2:v=1:a=0[%s]" %
+                (previous, index, raw_output))
         # xfade reports an unknown 1/0 frame rate on its output in some FFmpeg
         # builds. Normalize every intermediate before feeding the next xfade;
         # otherwise chains longer than two clips fail despite CFR inputs.
@@ -6642,9 +14417,39 @@ def _pyav_blend_video(
             iterator = iter(_decode_rgb_frames(record["path"]))
             expected_input = int(record["input_frames"])
             blend = int(record["blend_frames"])
+            tone_prefix_luts = [
+                _boundary_tone_lut(match)
+                for match in (record.get("tone_match_prefix") or [])
+                if isinstance(match, dict)
+            ]
+            tone_match = record.get("tone_match")
+            tone_start = (int(tone_match["start_frame"])
+                          if isinstance(tone_match, dict) else None)
+            tone_lut = (_boundary_tone_lut(tone_match)
+                        if isinstance(tone_match, dict) else None)
+            color_schedule = record.get("scene_color_stabilization")
             next_blend = (int(records[record_index + 1]["blend_frames"])
                           if record_index + 1 < len(records) else 0)
             seen = 0
+
+            def tone_adjust(array: Any, frame_index: int) -> Any:
+                for prefix_lut in tone_prefix_luts:
+                    array = prefix_lut[array]
+                if (tone_lut is not None and tone_start is not None and
+                        int(frame_index) >= tone_start):
+                    array = tone_lut[array]
+                if isinstance(color_schedule, dict):
+                    array = _apply_scene_color_stabilization(
+                        array, color_schedule, frame_index)
+                return array
+
+            for _ in range(int(record.get("skip_frames", 0))):
+                try:
+                    next(iterator)
+                except StopIteration as exc:
+                    raise ValueError(
+                        "H3 blend input ended before its scheduled overlap.") \
+                        from exc
             if record_index == 0:
                 for array in iterator:
                     pending.append(array)
@@ -6662,6 +14467,7 @@ def _pyav_blend_video(
                     except StopIteration as exc:
                         raise ValueError(
                             "H3 blend input ended inside its overlap.") from exc
+                    incoming = tone_adjust(incoming, seen)
                     previous = pending.popleft()
                     alpha = (offset + 1) / float(blend + 1)
                     mixed = np.clip(
@@ -6671,6 +14477,7 @@ def _pyav_blend_video(
                     encode(mixed)
                     seen += 1
                 for array in iterator:
+                    array = tone_adjust(array, seen)
                     pending.append(array)
                     seen += 1
                     while len(pending) > next_blend:
@@ -7077,6 +14884,587 @@ class MiniMaxH3ChainExportPNG:
                 "result": (output_dir, written, status)}
 
 
+def _full_chain_blend_schedule(
+    manifest: dict[str, Any],
+    segments: list[dict[str, Any]],
+    prelude: dict[str, Any] | None,
+    value: Any,
+) -> list[int]:
+    """Resolve the overlap entering every latent-decoded scene."""
+    configured = int(
+        (manifest.get("compatibility") or {}).get("video_blend_frames", 0))
+    boundary_count = len(segments) if prelude is not None else max(
+        0, len(segments) - 1)
+    text = str(value if value is not None else "plan").strip().lower()
+    if not text or text == "plan":
+        incoming = segments if prelude is not None else segments[1:]
+        schedule = []
+        for item in incoming:
+            delivered = int(item["delivered_frames"])
+            repeated = max(
+                0, int(item.get("raw_frames", delivered)) - delivered)
+            schedule.append(min(
+                repeated,
+                max(0, int(item.get("blend_frames", configured)))))
+        return schedule
+    return _scheduled_blend_frames(value, boundary_count, configured)
+
+
+def _full_chain_selected_audio(
+    manifest: dict[str, Any],
+    selected: str,
+    prelude: dict[str, Any] | None,
+    source_audio: Any = None,
+) -> dict[str, Any] | None:
+    """Recover exactly the final audio policy without another Plan socket."""
+    extension_frames = int(manifest["total_delivered_frames"])
+    if selected == "none":
+        return None
+    if selected == "generated":
+        audio = _generated_audio(manifest)
+    elif selected == "source":
+        timeline = _source_timeline_from_metadata(manifest)
+        if timeline is not None and source_audio is not None:
+            raise ValueError(
+                "H3 Full-Chain Latent Video already recovered its Source "
+                "Timeline from the manifest; disconnect legacy source_audio.")
+        if timeline is not None:
+            _validate_source_timeline_hash(
+                manifest["compatibility"], timeline,
+                "H3 Full-Chain Latent Video")
+            audio = _source_timeline_scene_audio(
+                timeline, 0, extension_frames)
+        else:
+            _validate_source_audio_hash(
+                manifest["compatibility"], source_audio,
+                "H3 Full-Chain Latent Video")
+            waveform, sample_rate = _validate_audio(
+                source_audio, "H3 Full-Chain Latent Video source audio")
+            required = int(round(
+                extension_frames / float(FPS) * sample_rate))
+            if int(waveform.shape[-1]) < required:
+                if (manifest["compatibility"].get(
+                        "source_audio_silent_padding")
+                        and _audio_is_silent(waveform)):
+                    audio = _pad_audio_to_samples(
+                        source_audio, required,
+                        "H3 Full-Chain Latent Video silent source audio")
+                else:
+                    raise ValueError(
+                        "H3 Full-Chain Latent Video source audio has %d "
+                        "samples; %d are required." %
+                        (int(waveform.shape[-1]), required))
+            else:
+                audio = source_audio
+    else:
+        raise ValueError(
+            "Unknown H3 full-chain audio source %r." % selected)
+    if audio is not None and prelude is not None:
+        audio = _audio_with_prelude(audio, extension_frames, prelude)
+    return audio
+
+
+def _mux_full_chain_adapter_audio(
+    video_path: str,
+    audio: dict[str, Any],
+    output_path: str,
+    bitrate_kbps: int,
+    total_frames: int,
+) -> None:
+    """Attach audio while stream-copying the lossless RGB video track."""
+    ffmpeg = _usable_ffmpeg()
+    if ffmpeg is None:
+        raise RuntimeError(
+            "H3 Full-Chain Latent Video needs a usable ffmpeg executable to "
+            "embed audio in its lossless RGB adapter movie. Select "
+            "audio_source=none only if audio will be restored downstream.")
+    wav_path = "%s.%s.audio.wav" % (output_path, uuid.uuid4().hex)
+    try:
+        _write_wav(audio, wav_path)
+        _run_ffmpeg([
+            ffmpeg, "-y", "-i", video_path, "-i", wav_path,
+            "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy",
+            "-c:a", "aac", "-b:a", "%dk" % int(bitrate_kbps),
+            "-t", "%.9f" % (int(total_frames) / float(FPS)),
+            "-map_metadata", "0", output_path,
+        ])
+    finally:
+        _safe_unlink(wav_path)
+
+
+def _full_chain_vae_signature(video_vae: Any) -> str:
+    first_stage = getattr(video_vae, "first_stage_model", None)
+    value = first_stage if first_stage is not None else video_vae
+    cls = type(value)
+    return "%s.%s" % (cls.__module__, cls.__qualname__)
+
+
+def _full_chain_cache_identity(
+    manifest: dict[str, Any],
+    segments: list[dict[str, Any]],
+    prelude: dict[str, Any] | None,
+    schedule: list[int],
+    audio_source: str,
+    video_vae: Any,
+) -> tuple[str, dict[str, Any]]:
+    identity = {
+        "format": "h3_full_chain_latent_video_cache_v1",
+        "run_name": str(manifest.get("run_name") or ""),
+        "plan_hash": str(manifest.get("plan_hash") or ""),
+        "vae": _full_chain_vae_signature(video_vae),
+        "audio_source": str(audio_source),
+        "source_audio_hash": str(
+            (manifest.get("compatibility") or {}).get(
+                "source_audio_hash") or ""),
+        "blend_schedule": [int(item) for item in schedule],
+        "prelude": ({
+            "video_sha256": str(prelude.get("video_sha256") or ""),
+            "audio_sha256": str(prelude.get("audio_sha256") or ""),
+            "frame_count": int(prelude.get("frame_count", 0)),
+        } if prelude is not None else None),
+        "segments": [{
+            "index": int(item["index"]),
+            "revision": str(item.get("revision") or ""),
+            "checkpoint_sha256": str(item.get("checkpoint_sha256") or ""),
+            "raw_frames": int(item["raw_frames"]),
+            "delivered_frames": int(item["delivered_frames"]),
+        } for item in segments],
+    }
+    digest = hashlib.sha256(
+        _canonical_json(identity).encode("utf-8")).hexdigest()
+    return digest, identity
+
+
+def _full_chain_cached_video(
+    path: str, sidecar_path: str, digest: str, total_frames: int,
+) -> bool:
+    if not os.path.isfile(path) or not os.path.isfile(sidecar_path):
+        return False
+    try:
+        record = _read_json(sidecar_path)
+        return (
+            isinstance(record, dict)
+            and record.get("format") == "h3_full_chain_latent_video_v1"
+            and bool(record.get("complete"))
+            and str(record.get("cache_key") or "") == digest
+            and int(record.get("frame_count", -1)) == int(total_frames)
+            and int(record.get("file_size", -1)) == os.path.getsize(path)
+            and os.path.getsize(path) > 0
+        )
+    except (OSError, TypeError, ValueError):
+        return False
+
+
+def _decode_checkpoint_video_for_streaming(
+    video_vae: Any,
+    video: Any,
+    decode_buffer: str,
+    buffer_path: str,
+) -> tuple[Any, Any, str]:
+    """Decode one scene, optionally into an mmap instead of heap RAM."""
+    mode = str(decode_buffer or "disk-backed").strip().lower()
+    if mode not in ("disk-backed", "memory"):
+        raise ValueError(
+            "H3 Full-Chain Latent Video decode_buffer must be disk-backed "
+            "or memory; got %r." % decode_buffer)
+    if not torch.is_tensor(video) or video.ndim != 5:
+        raise ValueError(
+            "H3 Full-Chain Latent Video expected a five-dimensional saved "
+            "video latent; got %r." % (getattr(video, "shape", None),))
+    first_stage = getattr(video_vae, "first_stage_model", None)
+    latent_mean = getattr(first_stage, "latents_mean", None)
+    if torch.is_tensor(latent_mean):
+        expected_channels = int(latent_mean.numel())
+        actual_channels = int(video.shape[1])
+        if expected_channels != actual_channels:
+            raise ValueError(
+                "H3 Full-Chain Latent Video received a %d-channel VAE for a "
+                "%d-channel video latent. Select "
+                "minimax_h3_video_vae_fp16.safetensors, not the 32-channel "
+                "MiniMax audio VAE." %
+                (expected_channels, actual_channels))
+    can_map = (
+        mode == "disk-backed"
+        and torch is not None
+        and first_stage is not None
+        and bool(getattr(first_stage, "comfy_has_chunked_io", False))
+        and callable(getattr(first_stage, "decode_output_shape", None))
+        and callable(getattr(first_stage, "decode", None))
+        and torch.is_tensor(latent_mean)
+        and int(latent_mean.numel()) == 24
+        and int(video.shape[1]) == 24
+        and callable(getattr(video_vae, "memory_used_decode", None))
+        and callable(getattr(video_vae, "throw_exception_if_invalid", None))
+        and hasattr(video_vae, "patcher")
+        and hasattr(video_vae, "device")
+        and hasattr(video_vae, "vae_dtype")
+        and hasattr(video_vae, "disable_offload")
+    )
+    if can_map:
+        # MiniMax H3's decoder already handles its causal temporal chunks and
+        # accepts an output buffer. Mapping that buffer avoids ComfyUI's normal
+        # full-scene float allocation without changing the decoder's math.
+        from comfy import model_management
+
+        output_shape = tuple(
+            int(part) for part in first_stage.decode_output_shape(video.shape))
+        if len(output_shape) != 5 or output_shape[0] != 1:
+            raise ValueError(
+                "H3 disk-backed VAE decode expected [1,C,T,H,W], got %s."
+                % (output_shape,))
+        os.makedirs(os.path.dirname(buffer_path), exist_ok=True)
+        _safe_unlink(buffer_path)
+        mapped = torch.from_file(
+            buffer_path, shared=True,
+            size=math.prod(output_shape), dtype=torch.float32).reshape(
+                output_shape)
+        video_vae.throw_exception_if_invalid()
+        memory_used = video_vae.memory_used_decode(
+            video.shape, video_vae.vae_dtype)
+        model_management.load_models_gpu(
+            [video_vae.patcher], memory_required=memory_used,
+            force_full_load=video_vae.disable_offload)
+        with model_management.cuda_device_context(video_vae.device):
+            samples = video.to(
+                device=video_vae.device, dtype=video_vae.vae_dtype)
+            first_stage.decode(samples, output_buffer=mapped)
+            del samples
+        images = mapped.movedim(1, -1)[0]
+        return images, mapped, "disk-backed mmap"
+
+    if mode == "disk-backed":
+        _LOG.warning(
+            "H3 Full-Chain Latent Video could not use a disk-backed output "
+            "buffer with VAE %s; falling back to one in-memory scene.",
+            _full_chain_vae_signature(video_vae))
+    images = video_vae.decode(video)
+    if not torch.is_tensor(images):
+        raise ValueError(
+            "H3 Full-Chain Latent Video VAE returned %r instead of IMAGE."
+            % type(images))
+    if images.ndim == 5:
+        images = images.reshape(
+            -1, images.shape[-3], images.shape[-2], images.shape[-1])
+    if images.ndim != 4:
+        raise ValueError(
+            "H3 Full-Chain Latent Video VAE returned shape %s; expected "
+            "[frames,height,width,channels]." % (tuple(images.shape),))
+    return images, None, "one-scene memory"
+
+
+def _first_video_frames(path: str, count: int):
+    seen = 0
+    for frame in _decode_rgb_frames(path):
+        if seen >= int(count):
+            return
+        seen += 1
+        yield frame
+
+
+class MiniMaxH3ChainLatentVideoAdapter:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "manifest": (MANIFEST_TYPE, {
+                    "tooltip": "Selected generated lineage from Checkpoint "
+                               "Manager. Partial runs are supported and no "
+                               "source Plan is required."}),
+                "video_vae": ("VAE", {
+                    "tooltip": "The original MiniMax H3 video VAE. Every "
+                               "checkpoint latent is decoded directly; saved "
+                               "H.264 scene files are not used."}),
+                "audio_source": (["plan", "source", "generated", "none"], {
+                    "default": "plan",
+                    "tooltip": "Audio embedded in the continuous adapter "
+                               "video. plan follows the saved final-audio "
+                               "policy; Source Timeline recovery comes from "
+                               "the manifest."}),
+                "blend_schedule": ("STRING", {
+                    "default": "plan",
+                    "tooltip": "Boundary crossfades applied before SeedVR2. "
+                               "plan uses each saved incoming-scene value; a "
+                               "list such as 5,30 overrides the boundaries."}),
+                "decode_buffer": (["disk-backed", "memory"], {
+                    "default": "disk-backed",
+                    "tooltip": "disk-backed lets MiniMax's temporal decoder "
+                               "write each scene into a temporary mmap. RAM "
+                               "then holds only boundary frames. memory uses "
+                               "ComfyUI's normal one-scene decode."}),
+                "reuse_cache": ("BOOLEAN", {
+                    "default": True,
+                    "tooltip": "Reuse an already completed adapter movie for "
+                               "the exact checkpoint lineage, VAE class, "
+                               "blend schedule, and audio policy."}),
+                "audio_bitrate": ("INT", {
+                    "default": 256, "min": 64, "max": 512,
+                    "tooltip": "AAC bitrate embedded in the lossless RGB "
+                               "adapter movie for SeedVR2 to preserve."}),
+            },
+            "optional": {
+                "source_audio": ("AUDIO", {
+                    "tooltip": "Legacy fallback only. Current runs recover "
+                               "source audio from the Source Timeline stored "
+                               "on the selected manifest."}),
+            },
+        }
+
+    RETURN_TYPES = ("VIDEO", "STRING", "STRING")
+    RETURN_NAMES = ("video", "video_path", "status")
+    OUTPUT_TOOLTIPS = (
+        "One native file-backed continuous VIDEO for SeedVR2 Direct Video "
+        "Upscaler. It already contains the selected chain audio.",
+        "Absolute path of the cached lossless RGB adapter movie.",
+        "Cache/decode mode, scene count, frame count, blends, and output path.",
+    )
+    FUNCTION = "adapt"
+    CATEGORY = "conditioning/minimax/contex_loop"
+    DESCRIPTION = (
+        "Stream a selected checkpoint lineage from original H3 video latents "
+        "into one lossless, audio-bearing, file-backed VIDEO. Scene overlap "
+        "blends happen before a whole-video upscaler; the full frame sequence "
+        "never becomes one ComfyUI IMAGE tensor.")
+
+    @classmethod
+    def IS_CHANGED(cls, *args, **kwargs):
+        return float("NaN")
+
+    def adapt(self, manifest, video_vae, audio_source, blend_schedule,
+              decode_buffer, reuse_cache, audio_bitrate, source_audio=None):
+        if _st_load is None or torch is None or av is None or np is None:
+            raise RuntimeError(
+                "H3 Full-Chain Latent Video requires safetensors, torch, "
+                "NumPy, and PyAV.")
+        if not isinstance(manifest, dict) or manifest.get(
+                "format") != "h3_chain_manifest_v3":
+            raise ValueError(
+                "H3 Full-Chain Latent Video requires a generated lineage from "
+                "Checkpoint Manager.")
+        segments = _checkpoint_export_segments(manifest)
+        prelude = _validate_prelude(manifest)
+        schedule = _full_chain_blend_schedule(
+            manifest, segments, prelude, blend_schedule)
+        selected_audio = str(audio_source or "plan").strip().lower()
+        if selected_audio == "plan":
+            selected_audio = _audio_policy_final(manifest)
+        if selected_audio not in ("source", "generated", "none"):
+            raise ValueError(
+                "H3 Full-Chain Latent Video audio_source must resolve to "
+                "source, generated, or none; got %r." % selected_audio)
+
+        prelude_frames = int(prelude["frame_count"]) if prelude else 0
+        total_frames = prelude_frames + int(
+            manifest["total_delivered_frames"])
+        digest, identity = _full_chain_cache_identity(
+            manifest, segments, prelude, schedule, selected_audio, video_vae)
+        run_name = _safe_name(manifest.get("run_name"), "h3_chain")
+        cache_dir = os.path.join(
+            _output_root(), "h3_chains", run_name, "upscaled", "seedvr2",
+            "source")
+        os.makedirs(cache_dir, exist_ok=True)
+        final_path = os.path.join(cache_dir, digest + ".mkv")
+        sidecar_path = os.path.join(cache_dir, digest + ".json")
+        if bool(reuse_cache) and _full_chain_cached_video(
+                final_path, sidecar_path, digest, total_frames):
+            status = (
+                "reused full-chain SeedVR2 source cache: %d scenes / %d "
+                "frames / blends [%s] -> %s" %
+                (len(segments), total_frames,
+                 ",".join(str(item) for item in schedule), final_path))
+            return (_native_video_from_path(final_path), final_path, status)
+
+        transaction = uuid.uuid4().hex
+        silent_path = os.path.join(
+            cache_dir, ".%s.%s.video.mkv" % (digest, transaction))
+        muxed_path = os.path.join(
+            cache_dir, ".%s.%s.muxed.mkv" % (digest, transaction))
+        buffer_paths: list[str] = []
+        writer = _StreamingLosslessRGBWriter(
+            silent_path, FPS, _manifest_media_metadata(manifest))
+        pending: deque[Any] = deque()
+        decoder_modes: list[str] = []
+
+        records: list[dict[str, Any]] = []
+        if prelude is not None:
+            records.append({
+                "kind": "prelude",
+                "input_frames": prelude_frames,
+                "blend_frames": 0,
+                "path": _absolute_output_path(prelude["video"]),
+            })
+        schedule_index = 0
+        for ordinal, segment in enumerate(segments):
+            has_predecessor = bool(records)
+            blend = int(schedule[schedule_index]) if has_predecessor else 0
+            if has_predecessor:
+                schedule_index += 1
+            delivered = int(segment["delivered_frames"])
+            raw = int(segment["raw_frames"])
+            repeated = raw - delivered
+            if blend > repeated:
+                raise ValueError(
+                    "H3 Full-Chain Latent Video boundary before clip %d "
+                    "requests %d blend frames, but that scene repeats only "
+                    "%d context frames." %
+                    (int(segment["index"]), blend, repeated))
+            records.append({
+                "kind": "segment",
+                "segment": segment,
+                "input_frames": delivered + blend,
+                "blend_frames": blend,
+                "start_frame": repeated - blend,
+            })
+        if schedule_index != len(schedule):
+            raise RuntimeError(
+                "H3 Full-Chain Latent Video did not consume its complete "
+                "blend schedule.")
+
+        def consume(iterator: Any, expected: int, blend: int,
+                    next_blend: int, label: str) -> None:
+            seen = 0
+            if writer.written == 0 and not pending:
+                for image in iterator:
+                    pending.append(_rgb24_frame_array(image))
+                    seen += 1
+                    while len(pending) > next_blend:
+                        writer.write(pending.popleft())
+            else:
+                if len(pending) != blend:
+                    raise RuntimeError(
+                        "%s retained %d predecessor frames; expected %d." %
+                        (label, len(pending), blend))
+                iterator = iter(iterator)
+                for offset in range(blend):
+                    try:
+                        incoming = _rgb24_frame_array(next(iterator))
+                    except StopIteration as exc:
+                        raise ValueError(
+                            "%s ended inside its overlap." % label) from exc
+                    previous = pending.popleft()
+                    alpha = (offset + 1) / float(blend + 1)
+                    mixed = np.clip(
+                        previous.astype(np.float32) * (1.0 - alpha)
+                        + incoming.astype(np.float32) * alpha,
+                        0.0, 255.0).round().astype(np.uint8)
+                    writer.write(mixed)
+                    seen += 1
+                for image in iterator:
+                    pending.append(_rgb24_frame_array(image))
+                    seen += 1
+                    while len(pending) > next_blend:
+                        writer.write(pending.popleft())
+            if seen != int(expected):
+                raise ValueError(
+                    "%s provided %d frames; expected %d." %
+                    (label, seen, int(expected)))
+            if len(pending) != int(next_blend):
+                raise RuntimeError(
+                    "%s retained %d frames for the next boundary; expected "
+                    "%d." % (label, len(pending), int(next_blend)))
+
+        try:
+            for record_index, record in enumerate(records):
+                next_blend = (int(records[record_index + 1]["blend_frames"])
+                              if record_index + 1 < len(records) else 0)
+                if record["kind"] == "prelude":
+                    consume(
+                        _first_video_frames(
+                            record["path"], record["input_frames"]),
+                        record["input_frames"], 0, next_blend,
+                        "H3 full-chain prelude")
+                    continue
+
+                segment = record["segment"]
+                index = int(segment["index"])
+                checkpoint = _absolute_output_path(segment["checkpoint"])
+                tensors = _st_load(checkpoint)
+                video = tensors.get("video")
+                if video is None:
+                    raise ValueError(
+                        "H3 Full-Chain Latent Video checkpoint for clip %d "
+                        "has no video latent." % index)
+                buffer_path = os.path.join(
+                    cache_dir, ".%s.%s.clip_%04d.buffer" %
+                    (digest, transaction, index))
+                images = mapped = None
+                try:
+                    images, mapped, decoder_mode = (
+                        _decode_checkpoint_video_for_streaming(
+                            video_vae, video, decode_buffer, buffer_path))
+                    decoder_modes.append(decoder_mode)
+                    if mapped is not None:
+                        buffer_paths.append(buffer_path)
+                    raw = int(segment["raw_frames"])
+                    if int(images.shape[0]) != raw:
+                        raise ValueError(
+                            "H3 Full-Chain Latent Video decoded %d frames for "
+                            "clip %d; its checkpoint requires %d." %
+                            (int(images.shape[0]), index, raw))
+                    start = int(record["start_frame"])
+                    stop = start + int(record["input_frames"])
+                    consume(
+                        images[start:stop], record["input_frames"],
+                        record["blend_frames"], next_blend,
+                        "H3 full-chain clip %d" % index)
+                finally:
+                    del images, mapped, video, tensors
+                    gc.collect()
+                    _safe_unlink(buffer_path)
+
+            while pending:
+                writer.write(pending.popleft())
+            writer.close()
+            if writer.written != total_frames:
+                raise RuntimeError(
+                    "H3 Full-Chain Latent Video wrote %d frames; expected %d."
+                    % (writer.written, total_frames))
+
+            audio = _full_chain_selected_audio(
+                manifest, selected_audio, prelude, source_audio)
+            if audio is None:
+                os.replace(silent_path, final_path)
+            else:
+                _mux_full_chain_adapter_audio(
+                    silent_path, audio, muxed_path, int(audio_bitrate),
+                    total_frames)
+                os.replace(muxed_path, final_path)
+                _safe_unlink(silent_path)
+                del audio
+            record = {
+                "format": "h3_full_chain_latent_video_v1",
+                "complete": True,
+                "cache_key": digest,
+                "identity": identity,
+                "frame_count": total_frames,
+                "scene_count": len(segments),
+                "prelude_frames": prelude_frames,
+                "blend_schedule": schedule,
+                "audio_source": selected_audio,
+                "decoder_modes": decoder_modes,
+                "file": os.path.basename(final_path),
+                "file_size": os.path.getsize(final_path),
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            _atomic_json(sidecar_path, record)
+        except BaseException:
+            writer.abort()
+            _safe_unlink(muxed_path)
+            raise
+        finally:
+            for path in buffer_paths:
+                _safe_unlink(path)
+
+        mode_status = ", ".join(sorted(set(decoder_modes))) or "cached"
+        status = (
+            "built full-chain SeedVR2 source: %d scenes / %d frames / %s / "
+            "blends [%s] / audio=%s -> %s" %
+            (len(segments), total_frames, mode_status,
+             ",".join(str(item) for item in schedule), selected_audio,
+             final_path))
+        _LOG.info("H3 Chain %s", status)
+        return (_native_video_from_path(final_path), final_path, status)
+
+
 class MiniMaxH3ChainAssemble:
     @classmethod
     def INPUT_TYPES(cls):
@@ -7089,10 +15477,13 @@ class MiniMaxH3ChainAssemble:
                 "audio_source": (["plan", "source", "generated", "none"],
                                  {
                                      "default": "plan",
-                                     "tooltip": "plan follows the plan's audio "
-                                                "mode; source muxes the external "
-                                                "track; generated joins saved "
-                                                "delivered scene audio; none "
+                                     "tooltip": "plan follows the Plan Audio "
+                                                "Policy's Final audio choice; "
+                                                "source muxes the external "
+                                                "track; generated assembles "
+                                                "saved scene audio and lets "
+                                                "later AV scenes own their "
+                                                "decoded overlap; none "
                                                 "creates a silent MP4."}),
                 "filename": ("STRING", {
                     "default": "final",
@@ -7119,10 +15510,51 @@ class MiniMaxH3ChainAssemble:
                                "date tokens such as renders/%date:yyyy-MM-dd% "
                                "are supported; the filename widget above still "
                                "sets the MP4 name."}),
+                "blend_schedule": ("STRING", {
+                    "default": "plan",
+                    "tooltip": "Assembly-only visual blend schedule. 'plan' "
+                               "uses the Plan's global value. A list such as "
+                               "5,30 applies 5 frames at the first boundary "
+                               "and 30 at every later boundary. The final "
+                               "value repeats; extra values are ignored by a "
+                               "shorter partial manifest. This never reruns "
+                               "diffusion."}),
+                "boundary_tone_match": (BOUNDARY_TONE_MATCH_MODES, {
+                    "default": "off",
+                    "tooltip": "Optional assembly-only boundary correction. "
+                               "auto compares the protected overlap with the "
+                               "first generated frames, detects a coherent "
+                               "exposure/contrast step, and applies a small "
+                               "capped tone curve only after that step. "
+                               "Accepted corrections are carried through "
+                               "later overlaps so they do not create a new "
+                               "seam. This never reruns diffusion."}),
+                "color_stabilization": (ASSEMBLY_COLOR_STABILIZATION_MODES, {
+                    "default": "off",
+                    "tooltip": "Optional assembly-only temporal grade. "
+                               "scene_1_anchor measures the first scene as a "
+                               "fixed color reference, applies no new change "
+                               "at a join, then gently ramps a capped "
+                               "exposure/saturation correction over 72 "
+                               "frames. It uses one assembly encode, never "
+                               "blends pixels for color, and does not affect "
+                               "motion or audio sync. Off preserves the "
+                               "existing stream-copy/blend behavior."}),
                 "source_audio": ("AUDIO", {
                     "tooltip": "Full original source track. Required when "
                                "audio_source resolves to source; it is trimmed "
                                "or safely silent-padded to the final duration."}),
+                "source_timeline": (SOURCE_TIMELINE_TYPE, {
+                    "tooltip": "Primary 0.5 source-audio route. Usually this "
+                               "can be left unconnected because the manifest "
+                               "contains its path-backed recovery descriptor."}),
+                "blend_video_vae": ("VAE", {
+                    "tooltip": "Optional recovery-only MiniMax H3 video VAE. "
+                               "Connect the original VAE when blend_schedule "
+                               "requests more overlap than the saved blend "
+                               "MP4 retained. Assemble then re-decodes the "
+                               "existing checkpoint; it does not sample or "
+                               "regenerate the scene."}),
             },
         }
 
@@ -7135,7 +15567,10 @@ class MiniMaxH3ChainAssemble:
     OUTPUT_NODE = True
     CATEGORY = "conditioning/minimax/contex_loop"
     DESCRIPTION = ("Stream-copy saved H3 segments into one MP4 and mux either "
-                   "the original source track or checkpointed generated audio.")
+                   "the original source track or checkpointed generated audio. "
+                   "Optional assembly filters can blend joins, remove a small "
+                   "boundary tone step, or stabilize later scene color to "
+                   "scene one without rerunning diffusion.")
 
     @classmethod
     def IS_CHANGED(cls, *args, **kwargs):
@@ -7143,15 +15578,29 @@ class MiniMaxH3ChainAssemble:
 
     def assemble(self, manifest, audio_source, filename, audio_bitrate,
                  source_audio=None, overwrite_existing=False,
-                 copy_to_output=False, output_subfolder=""):
+                 copy_to_output=False, output_subfolder="",
+                 source_timeline=None, blend_schedule="plan",
+                 blend_video_vae=None, boundary_tone_match="off",
+                 color_stabilization="off"):
         segments = _validate_manifest(manifest)
         prelude = _validate_prelude(manifest)
+        tone_match_mode = str(
+            boundary_tone_match if boundary_tone_match is not None
+            else "off").strip().lower()
+        if tone_match_mode not in BOUNDARY_TONE_MATCH_MODES:
+            raise ValueError(
+                "H3 Chain Assemble boundary_tone_match must be off or auto; "
+                "got %r." % boundary_tone_match)
+        color_stabilization_mode = str(
+            color_stabilization if color_stabilization is not None
+            else "off").strip().lower()
+        if color_stabilization_mode not in ASSEMBLY_COLOR_STABILIZATION_MODES:
+            raise ValueError(
+                "H3 Chain Assemble color_stabilization must be off or "
+                "scene_1_anchor; got %r." % color_stabilization)
         selected = audio_source
         if selected == "plan":
-            mode = manifest["compatibility"]["audio_mode"]
-            selected = ("source" if mode in
-                        ("source_track", "source_plus_timeline")
-                        else "generated")
+            selected = _audio_policy_final(manifest)
         preserve_generated = manifest.get("format") == "h3_chain_manifest_v3"
         generated_track = None
         generated_warning = ""
@@ -7166,9 +15615,23 @@ class MiniMaxH3ChainAssemble:
                 _LOG.warning("H3 Chain %s", generated_warning)
         audio = None
         if selected == "source":
-            _validate_source_audio_hash(
-                manifest["compatibility"], source_audio,
-                "H3 Chain Assemble")
+            if source_timeline is None:
+                source_timeline = _source_timeline_from_metadata(manifest)
+            if source_timeline is not None and source_audio is not None:
+                raise ValueError(
+                    "H3 Chain Assemble accepts Source Timeline or legacy "
+                    "source_audio, not both.")
+            if source_timeline is not None:
+                _validate_source_timeline_hash(
+                    manifest["compatibility"], source_timeline,
+                    "H3 Chain Assemble")
+                source_audio = _source_timeline_scene_audio(
+                    source_timeline, 0,
+                    int(manifest["total_delivered_frames"]))
+            else:
+                _validate_source_audio_hash(
+                    manifest["compatibility"], source_audio,
+                    "H3 Chain Assemble")
             waveform, sample_rate = _validate_audio(
                 source_audio, "H3 Chain Assemble source audio")
             required_samples = int(round(
@@ -7231,8 +15694,6 @@ class MiniMaxH3ChainAssemble:
                 raise FileNotFoundError("H3 chain segment is missing: %s" % path)
             segment_paths.append(path)
             delivered_frames.append(int(item["delivered_frames"]))
-        blend_records = _blend_video_records(manifest, segments, prelude)
-        blend_enabled = bool(blend_records)
         ffmpeg = _usable_ffmpeg()
         if not ffmpeg and av is None:
             raise RuntimeError(
@@ -7243,7 +15704,26 @@ class MiniMaxH3ChainAssemble:
             if os.path.exists(temporary):
                 os.unlink(temporary)
         backend = "ffmpeg"
+        blend_records: list[dict[str, Any]] = []
+        scheduled_blend_temps: list[str] = []
         try:
+            blend_records = _blend_video_records(
+                manifest, segments, prelude,
+                blend_schedule=blend_schedule,
+                video_vae=blend_video_vae,
+                temporary_paths=scheduled_blend_temps,
+                force_records=color_stabilization_mode != "off")
+            if tone_match_mode == "auto" and blend_records:
+                blend_records = _auto_boundary_tone_match_records(
+                    blend_records)
+            if (color_stabilization_mode == "scene_1_anchor" and
+                    blend_records):
+                blend_records = _auto_scene_color_stabilization_records(
+                    blend_records)
+            blend_enabled = bool(blend_records)
+            has_visual_blends = any(
+                int(record.get("blend_frames", 0))
+                for record in blend_records)
             media_metadata = _manifest_media_metadata(manifest)
             if blend_enabled:
                 _write_ffmetadata(metadata_tmp, media_metadata)
@@ -7254,11 +15734,15 @@ class MiniMaxH3ChainAssemble:
                             total_output_frames,
                             int(manifest["compatibility"].get(
                                 "segment_crf", 18)))
-                        backend = "ffmpeg cumulative linear blend"
+                        backend = ("ffmpeg cumulative linear blend"
+                                   if has_visual_blends else
+                                   "ffmpeg temporal color stabilization")
                     except Exception as exc:
                         if av is None:
                             raise
-                        backend = "PyAV cumulative linear blend fallback"
+                        backend = ("PyAV cumulative linear blend fallback"
+                                   if has_visual_blends else
+                                   "PyAV temporal color stabilization fallback")
                         _LOG.warning(
                             "H3 Chain ffmpeg blending failed; retrying with "
                             "the built-in PyAV fallback: %s", exc)
@@ -7269,7 +15753,9 @@ class MiniMaxH3ChainAssemble:
                             int(manifest["compatibility"].get(
                                 "segment_crf", 18)))
                 else:
-                    backend = "PyAV cumulative linear blend fallback"
+                    backend = ("PyAV cumulative linear blend fallback"
+                               if has_visual_blends else
+                               "PyAV temporal color stabilization fallback")
                     _LOG.warning(
                         "H3 Chain usable ffmpeg executable unavailable; "
                         "blending with "
@@ -7322,7 +15808,7 @@ class MiniMaxH3ChainAssemble:
             os.replace(final_tmp, final_path)
         finally:
             for temporary in (concat_path, video_tmp, final_tmp, wav_tmp,
-                              metadata_tmp):
+                              metadata_tmp, *scheduled_blend_temps):
                 if os.path.exists(temporary):
                     os.unlink(temporary)
 
@@ -7334,13 +15820,31 @@ class MiniMaxH3ChainAssemble:
             ("; %s" % generated_warning if generated_warning else ""))
         copy_status = ("; output copy -> %s" % output_copy
                        if output_copy is not None else "")
+        resolved_blends = [
+            int(record["blend_frames"])
+            for record in blend_records[1:]
+        ] if blend_records else []
         blend_status = (
-            "; %d-frame cumulative visual blend" % int(
-                manifest["compatibility"].get("video_blend_frames", 0))
-            if blend_enabled else "; hard cuts")
-        status = "assembled %d generated clips%s with %s%s -> %s%s%s" % (
+            "; scheduled visual blends [%s]" % ",".join(
+                str(value) for value in resolved_blends)
+            if any(resolved_blends) else "; hard cuts")
+        matched_boundaries = sum(
+            1 for record in blend_records[1:]
+            if isinstance(record.get("tone_match"), dict))
+        tone_status = (
+            "; auto tone matched %d %s" % (
+                matched_boundaries,
+                "boundary" if matched_boundaries == 1 else "boundaries")
+            if tone_match_mode == "auto" and matched_boundaries else
+            ("; auto tone match found no coherent step"
+             if tone_match_mode == "auto" else ""))
+        color_status = (
+            "; scene-one temporal color anchor"
+            if color_stabilization_mode == "scene_1_anchor" else "")
+        status = "assembled %d generated clips%s with %s%s%s%s -> %s%s%s" % (
             len(segments), " + existing-video prelude" if prelude else "",
-            backend, blend_status, final_path, sidecar_status, copy_status)
+            backend, blend_status, tone_status, color_status, final_path,
+            sidecar_status, copy_status)
         _LOG.info("H3 Chain %s", status)
         published_video = output_copy or final_path
         _publish_final_review_preview(manifest, published_video, status)
@@ -7352,6 +15856,19 @@ class MiniMaxH3ChainAssemble:
             },
             "result": (final_path,),
         }
+
+
+def _partial_boundary_tone_match_mode(manifest: dict[str, Any]) -> str:
+    """Keep automatic review partials faithful to Tone Carry generation."""
+    if str((manifest.get("compatibility") or {}).get(
+            "continuation_mode", "")) == "tone_carry_guide":
+        return "auto"
+    if any(
+            isinstance(item.get("guide_tone_carry"), dict)
+            or bool(item.get("guide_tone_input_applied", False))
+            for item in manifest.get("segments", [])):
+        return "auto"
+    return "off"
 
 
 def _assemble_review_partial(
@@ -7377,11 +15894,18 @@ def _assemble_review_partial(
 
     assembler = MiniMaxH3ChainAssemble()
     filename = "partial_through_clip_%04d" % index
+    # Tone Carry changes the RGB Guide consumed by the following scene, while
+    # its predecessor's immutable segment remains raw on disk. The automatic
+    # Issue Gate partial must therefore apply the matching assembly correction
+    # too; otherwise its preview disagrees with the final Tone Carry output.
+    tone_match = _partial_boundary_tone_match_mode(manifest)
     warning = ""
     try:
         result = assembler.assemble(
             manifest, selected, filename, 192, source_audio,
-            overwrite_existing=True)
+            overwrite_existing=True,
+            source_timeline=state.get("source_timeline"),
+            boundary_tone_match=tone_match)
     except Exception as audio_error:
         if selected == "none":
             raise
@@ -7390,7 +15914,9 @@ def _assemble_review_partial(
             audio_error)
         result = assembler.assemble(
             manifest, "none", filename, 192, source_audio,
-            overwrite_existing=True)
+            overwrite_existing=True,
+            source_timeline=state.get("source_timeline"),
+            boundary_tone_match=tone_match)
         warning = "audio unavailable, so the partial video is silent (%s)" % audio_error
     return str(result["result"][0]), warning
 
@@ -7612,6 +16138,139 @@ def _load_checkpoint_revision(
     return metadata, metadata_path
 
 
+def _checkpoint_selection_manifest(value: Any) -> dict[str, Any] | None:
+    """Build one immutable generated lineage directly from manager selection."""
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    selection = _json_document(value)
+    if not isinstance(selection, dict):
+        raise ValueError(
+            "Checkpoint Manager selection is not a JSON object. Select a "
+            "checkpoint revision again.")
+    run_name = _safe_name(selection.get("run_name"), "")
+    if not run_name:
+        raise ValueError("Checkpoint Manager selection has no saved run.")
+    lineage = selection.get("lineage")
+    if not isinstance(lineage, list) or not lineage:
+        raise ValueError(
+            "Checkpoint Manager has no selected checkpoint lineage.")
+
+    plan_path = _run_archive_paths({"run_name": run_name})["plan"]
+    if not os.path.isfile(plan_path):
+        raise FileNotFoundError(
+            "Selected H3 run has no archived recovery Plan: %s" % plan_path)
+    archived_plan = _read_json(plan_path)
+    shots = archived_plan.get("shots") if isinstance(archived_plan, dict) else None
+    if not isinstance(shots, list) or not shots:
+        raise ValueError("Selected H3 run has no valid archived scene list.")
+    if len(lineage) > len(shots):
+        raise ValueError(
+            "Checkpoint Manager selected a lineage through scene %d, but the "
+            "archived Plan contains only %d scenes." %
+            (len(lineage), len(shots)))
+
+    loaded = []
+    compatibility = None
+    prompt_prefix = None
+    for index, item in enumerate(lineage, start=1):
+        if not isinstance(item, dict) or int(item.get("scene", 0)) != index:
+            raise ValueError(
+                "Checkpoint Manager lineage must contain contiguous scenes "
+                "1 through %d." % len(lineage))
+        metadata, _metadata_path = _load_checkpoint_revision(
+            run_name, index, item.get("revision"))
+        current_compatibility = metadata.get("compatibility")
+        if not isinstance(current_compatibility, dict):
+            raise ValueError(
+                "Selected checkpoint scene %d has no compatibility record."
+                % index)
+        if compatibility is None:
+            compatibility = current_compatibility
+        elif _canonical_json(current_compatibility) != _canonical_json(
+                compatibility):
+            raise ValueError(
+                "Selected checkpoint revisions use different compatibility "
+                "settings.")
+        segment = metadata["segment"]
+        current_prefix = str(segment.get("prompt_prefix") or "")
+        if prompt_prefix is None:
+            prompt_prefix = current_prefix
+        elif current_prefix != prompt_prefix:
+            raise ValueError(
+                "Selected checkpoint revisions use different shared prompts.")
+        if loaded:
+            predecessor = loaded[-1]["segment"]
+            expected_revision = str(
+                segment.get("predecessor_revision") or "")
+            expected_hash = str(
+                segment.get("predecessor_checkpoint_sha256") or "")
+            if expected_revision and expected_revision != str(
+                    predecessor.get("revision") or ""):
+                raise ValueError(
+                    "Selected scene %d was generated from another scene %d "
+                    "revision." % (index, index - 1))
+            if expected_hash and expected_hash != str(
+                    predecessor.get("checkpoint_sha256") or ""):
+                raise ValueError(
+                    "Selected scene %d was generated from another scene %d "
+                    "checkpoint." % (index, index - 1))
+        descriptor = segment.get("reference_cache")
+        if isinstance(descriptor, dict):
+            try:
+                local_cache = _run_local_reference_cache(
+                    run_name, index, descriptor)
+                adopted = local_cache is None
+                if local_cache is None:
+                    legacy_cache = _load_reference_cache_descriptor(descriptor)
+                    local_cache = _adopt_reference_cache_for_run(
+                        archived_plan, legacy_cache)
+                local_descriptor = _reference_cache_descriptor(local_cache)
+                if local_descriptor is None:
+                    raise ValueError(
+                        "adopted H3 reference cache has no valid descriptor")
+                metadata = dict(metadata)
+                metadata["segment"] = dict(segment)
+                metadata["segment"]["reference_cache"] = local_descriptor
+                segment = metadata["segment"]
+                if adopted:
+                    _LOG.info(
+                        "H3 Checkpoint Manager adopted legacy scene %d "
+                        "reference cache into run %s", index, run_name)
+            except (OSError, TypeError, ValueError) as exc:
+                # Cache relocation is supplementary. Preserve branch loading
+                # and its immutable revision record when migration is not
+                # possible; the upscale node will report the missing cache.
+                _LOG.warning(
+                    "H3 Checkpoint Manager could not adopt scene %d legacy "
+                    "reference cache into run %s: %s", index, run_name, exc)
+        loaded.append(metadata)
+
+    segments = [_public_segment(item["segment"]) for item in loaded]
+    total_frames = sum(int(item["delivered_frames"]) for item in segments)
+    manifest = {
+        "format": "h3_chain_manifest_v3",
+        "run_name": run_name,
+        "plan_hash": str(loaded[-1].get("plan_hash") or
+                         archived_plan.get("plan_hash") or ""),
+        "prompt_prefix": str(prompt_prefix or ""),
+        "compatibility": _json_document(compatibility),
+        "clip_count": len(segments),
+        "planned_clip_count": len(shots),
+        "selection_complete": len(segments) == len(shots),
+        "total_delivered_frames": total_frames,
+        "duration_seconds": total_frames / float(FPS),
+        "segments": segments,
+    }
+    archives = _available_run_archives({"run_name": run_name})
+    if archives:
+        manifest["archives"] = archives
+    for key in ("prelude", "source_timeline"):
+        if isinstance(archived_plan.get(key), dict):
+            manifest[key] = _json_document(archived_plan[key])
+    _validate_manifest(manifest)
+    return manifest
+
+
 def _checkpoint_plan_revision(segment: dict[str, Any]) -> dict[str, Any]:
     revision = {
         "scene": int(segment["index"]),
@@ -7644,8 +16303,9 @@ async def _restore_checkpoint_revisions(request):
         if not run_name:
             raise ValueError("A non-empty H3 chain run_name is required.")
         resume_scene = int(body.get("resume_scene", 0))
-        if resume_scene < 2 or resume_scene > MAX_SHOTS:
-            raise ValueError("Resume scene must be between 2 and %d." % MAX_SHOTS)
+        if resume_scene < 2 or resume_scene > MAX_SHOTS + 1:
+            raise ValueError(
+                "Resume scene must be between 2 and %d." % (MAX_SHOTS + 1))
         selections = body.get("revisions")
         if not isinstance(selections, list):
             raise ValueError("Checkpoint recovery requires a revision list.")
@@ -7706,26 +16366,49 @@ async def _restore_checkpoint_revisions(request):
             _output_root(), "h3_chains", run_name, "checkpoints")
         originals = {}
         committed = []
-        try:
-            for scene, metadata, _metadata_path in loaded:
-                canonical = os.path.join(
-                    checkpoint_dir, "clip_%04d.json" % scene)
-                originals[canonical] = (_read_json(canonical)
-                                        if os.path.isfile(canonical) else None)
-                _atomic_json(canonical, metadata)
-                committed.append(canonical)
-        except Exception:
-            for canonical in reversed(committed):
-                original = originals.get(canonical)
-                try:
-                    if original is None:
-                        _safe_unlink(canonical)
-                    else:
-                        _atomic_json(canonical, original)
-                except Exception:
-                    _LOG.exception(
-                        "Could not roll back checkpoint pointer %s", canonical)
-            raise
+        retired = []
+        transaction = uuid.uuid4().hex
+        with checkpoint_run_lock(_output_root(), run_name):
+            try:
+                # Loading an earlier branch is a real rollback. Retire mutable
+                # pointers at and after the resume scene while preserving every
+                # immutable revision file for later branch switching.
+                for filename in sorted(os.listdir(checkpoint_dir)):
+                    match = re.fullmatch(r"clip_(\d{4})\.json", filename)
+                    if match is None or int(match.group(1)) < resume_scene:
+                        continue
+                    canonical = os.path.join(checkpoint_dir, filename)
+                    temporary = "%s.restore.%s.tmp" % (canonical, transaction)
+                    os.replace(canonical, temporary)
+                    retired.append((canonical, temporary))
+                for scene, metadata, _metadata_path in loaded:
+                    canonical = os.path.join(
+                        checkpoint_dir, "clip_%04d.json" % scene)
+                    originals[canonical] = (_read_json(canonical)
+                                            if os.path.isfile(canonical) else None)
+                    _atomic_json(canonical, metadata)
+                    committed.append(canonical)
+            except Exception:
+                for canonical in reversed(committed):
+                    original = originals.get(canonical)
+                    try:
+                        if original is None:
+                            _safe_unlink(canonical)
+                        else:
+                            _atomic_json(canonical, original)
+                    except Exception:
+                        _LOG.exception(
+                            "Could not roll back checkpoint pointer %s", canonical)
+                for canonical, temporary in reversed(retired):
+                    try:
+                        os.replace(temporary, canonical)
+                    except Exception:
+                        _LOG.exception(
+                            "Could not restore retired checkpoint pointer %s",
+                            canonical)
+                raise
+            for _canonical, temporary in retired:
+                _safe_unlink(temporary)
 
         restored = [
             _checkpoint_plan_revision(metadata["segment"])
@@ -7736,6 +16419,13 @@ async def _restore_checkpoint_revisions(request):
             "run_name": run_name,
             "resume_scene": resume_scene,
             "restored": restored,
+            "retired_later_pointers": len(retired),
+            # The revision chain is authoritative.  The latest plan.json can
+            # legitimately describe newer 0.5 policies than an older revision
+            # selected here, so return the selected checkpoint policy values.
+            "policy_inputs": archive_policy_inputs({
+                "compatibility": compatibility,
+            }),
             "message": "Restored scenes 1 through %d; resume scene %d is ready."
                        % (resume_scene - 1, resume_scene),
         })
@@ -7929,6 +16619,21 @@ async def _update_prompt_history(request):
                 store.activate,
                 body.get("run_name"), body.get("scene_id"),
                 body.get("revision"))
+        elif action == "label":
+            payload = await asyncio.to_thread(
+                store.set_label,
+                body.get("run_name"), body.get("scene_id"),
+                body.get("revision"), body.get("label", ""))
+        elif action == "archive":
+            payload = await asyncio.to_thread(
+                store.set_archived,
+                body.get("run_name"), body.get("scene_id"),
+                body.get("revision"), body.get("archived", True))
+        elif action == "delete":
+            payload = await asyncio.to_thread(
+                store.delete_draft,
+                body.get("run_name"), body.get("scene_id"),
+                body.get("revision"))
         else:
             return web.json_response(
                 {"error": "Unknown prompt-history action."}, status=400)
@@ -7984,6 +16689,118 @@ async def _save_run_assets(request):
     return web.json_response(payload)
 
 
+def _plan_studio_source_preview_path(record: dict[str, Any]) -> str:
+    cache_key = _fingerprint({
+        "version": 1,
+        "media": record["media_fingerprint"],
+        "video_seek": round(float(record["video_seek_seconds"]), 9),
+        "audio_seek": round(float(record["audio_seek_seconds"]), 9),
+        "start_frame": int(record["start_frame"]),
+        "end_frame": int(record["end_frame"]),
+        "audio_kind": str(record["audio_kind"]),
+        "max_height": PLAN_STUDIO_PREVIEW_MAX_HEIGHT,
+    })
+    cache_dir = os.path.join(
+        _output_root(), "h3_chains", ".plan_studio_source_previews")
+    os.makedirs(cache_dir, exist_ok=True)
+    return os.path.join(cache_dir, "%s.mp4" % cache_key)
+
+
+def _build_plan_studio_source_preview(record: dict[str, Any]) -> str:
+    # The active timeline card and comparison player can request the same URL
+    # at once. Serialize the short cache fill so that only one ffmpeg process
+    # builds a given (or any other) Studio preview at a time.
+    with _PLAN_STUDIO_PREVIEW_BUILD_LOCK:
+        return _build_plan_studio_source_preview_unlocked(record)
+
+
+def _build_plan_studio_source_preview_unlocked(
+        record: dict[str, Any]) -> str:
+    output_path = _plan_studio_source_preview_path(record)
+    if os.path.isfile(output_path) and os.path.getsize(output_path) > 0:
+        return output_path
+    ffmpeg = _usable_ffmpeg()
+    if ffmpeg is None:
+        raise RuntimeError(
+            "Plan Studio source comparison requires a working ffmpeg.")
+    temporary = "%s.%s.tmp.mp4" % (output_path, uuid.uuid4().hex)
+    duration = int(record["frame_count"]) / float(FPS)
+    command = [
+        ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+        "-ss", "%.9f" % float(record["video_seek_seconds"]),
+        "-i", str(record["video_path"]),
+    ]
+    external_audio = (
+        bool(record.get("audio_path")) and
+        os.path.realpath(str(record["audio_path"])) !=
+        os.path.realpath(str(record["video_path"])))
+    if external_audio:
+        command.extend([
+            "-ss", "%.9f" % float(record["audio_seek_seconds"]),
+            "-i", str(record["audio_path"]),
+        ])
+    command.extend([
+        "-t", "%.9f" % duration,
+        "-map", "0:v:0",
+        "-vf", "fps=%d,scale=854:%d:force_original_aspect_ratio=decrease:"
+               "force_divisible_by=2" % (FPS, PLAN_STUDIO_PREVIEW_MAX_HEIGHT),
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "29",
+        "-pix_fmt", "yuv420p", "-fps_mode", "cfr",
+    ])
+    if record.get("has_audio"):
+        command.extend([
+            "-map", "1:a:0?" if external_audio else "0:a:0?",
+            "-af", "aresample=async=1:first_pts=0,apad",
+            "-c:a", "aac", "-b:a", "64k", "-ac", "2",
+        ])
+    else:
+        command.append("-an")
+    command.extend(["-movflags", "+faststart", temporary])
+    try:
+        _run_ffmpeg(command, timeout_seconds=max(60.0, duration * 8.0))
+        if not os.path.isfile(temporary) or os.path.getsize(temporary) < 1:
+            raise RuntimeError("ffmpeg produced an empty source preview.")
+        os.replace(temporary, output_path)
+    finally:
+        _safe_unlink(temporary)
+    return output_path
+
+
+async def _plan_studio_source_preview(request):
+    token = str(request.query.get("token") or "")
+    try:
+        scene = int(request.query.get("scene", 0))
+        slot = int(request.query.get("slot", 0))
+    except (TypeError, ValueError):
+        return web.json_response(
+            {"error": "Source preview scene and slot must be integers."},
+            status=400)
+    if not re.fullmatch(r"[A-Za-z0-9_-]{24,64}", token):
+        return web.json_response(
+            {"error": "Source preview token is invalid."}, status=400)
+    _plan_studio_preview_cleanup()
+    session = _PLAN_STUDIO_SOURCE_PREVIEWS.get(token)
+    if session is None:
+        return web.json_response(
+            {"error": "Source preview expired. Queue Plan Studio once to refresh it."},
+            status=410)
+    record = session.get("records", {}).get("%d:%d" % (scene, slot))
+    if record is None:
+        return web.json_response(
+            {"error": "No active motion-reference window exists for this scene."},
+            status=404)
+    session["created"] = time.monotonic()
+    try:
+        path = await asyncio.to_thread(
+            _build_plan_studio_source_preview, record)
+    except (OSError, RuntimeError, TypeError, ValueError) as exc:
+        _LOG.warning("Plan Studio source preview failed: %s", exc)
+        return web.json_response({"error": str(exc)}, status=500)
+    return web.FileResponse(path, headers={
+        "Cache-Control": "private, max-age=21600, immutable",
+    })
+
+
 async def _optimize_scene_prompt(request):
     try:
         body = await request.json()
@@ -8034,15 +16851,22 @@ if (PromptServer is not None and web is not None and
         "/minimax_h3_context_loop/run")(_load_saved_run)
     PromptServer.instance.routes.post(
         "/minimax_h3_context_loop/run-assets")(_save_run_assets)
+    PromptServer.instance.routes.get(
+        "/minimax_h3_context_loop/plan-studio/source-preview")(
+            _plan_studio_source_preview)
     PromptServer.instance.routes.post(
         "/minimax_h3_context_loop/prompt-optimize")(_optimize_scene_prompt)
 
 
 CHAIN_NODE_CLASS_MAPPINGS = {
+    "MiniMaxH3ChainPolicy": MiniMaxH3ChainPolicy,
+    "MiniMaxH3AdvancedPolicy": MiniMaxH3AdvancedPolicy,
+    "MiniMaxH3Legacy04PolicyAdapter": MiniMaxH3Legacy04PolicyAdapter,
     "MiniMaxH3ChainPlan": MiniMaxH3ChainPlan,
     "MiniMaxH3ChainScenePromptEditor": MiniMaxH3ChainScenePromptEditor,
     "MiniMaxH3ChainRichScenePromptEditor": MiniMaxH3ChainRichScenePromptEditor,
     "MiniMaxH3ChainPlanStudio": MiniMaxH3ChainPlanStudio,
+    "MiniMaxH3ChainPreflight": MiniMaxH3ChainPreflight,
     "MiniMaxH3ChainRunManager": MiniMaxH3ChainRunManager,
     "MiniMaxH3ChainCheckpointManager": MiniMaxH3ChainCheckpointManager,
     "MiniMaxH3ChainFirstSceneImage": MiniMaxH3ChainFirstSceneImage,
@@ -8054,27 +16878,45 @@ CHAIN_NODE_CLASS_MAPPINGS = {
     "MiniMaxH3ScheduledReferenceToVideo": MiniMaxH3ScheduledReferenceToVideo,
     "MiniMaxH3TaggedPictureReference": MiniMaxH3TaggedPictureReference,
     "MiniMaxH3TaggedVideoReference": MiniMaxH3TaggedVideoReference,
+    "MiniMaxH3TaggedMotionReference": MiniMaxH3TaggedMotionReference,
+    "MiniMaxH3SourceTimeline": MiniMaxH3SourceTimeline,
+    "MiniMaxH3TaggedMotionReferenceTimeline": (
+        MiniMaxH3TaggedMotionReferenceTimeline),
+    "MiniMaxH3LazyMotionAVLoader": MiniMaxH3LazyMotionAVLoader,
+    "MiniMaxH3TaggedMotionReferencePath": MiniMaxH3TaggedMotionReferencePath,
+    "MiniMaxH3LazyMotionScenePreview": MiniMaxH3LazyMotionScenePreview,
+    "MiniMaxH3SourceTimelineScenePreview": (
+        MiniMaxH3SourceTimelineScenePreview),
     "MiniMaxH3TaggedAudioReference": MiniMaxH3TaggedAudioReference,
+    "MiniMaxH3SemanticAnchorConditioning": (
+        MiniMaxH3SemanticAnchorConditioning),
     "MiniMaxH3TaggedReferenceToVideo": MiniMaxH3TaggedReferenceToVideo,
     "MiniMaxH3ChainExternalVideo": MiniMaxH3ChainExternalVideo,
     "MiniMaxH3ChainLoopStart": MiniMaxH3ChainLoopStart,
     "MiniMaxH3ChainCurrent": MiniMaxH3ChainCurrent,
     "MiniMaxH3PatchPriority": MiniMaxH3PatchPriority,
     "MiniMaxH3ChainContext": MiniMaxH3ChainContext,
+    "MiniMaxH3DriftControlModelPatch": MiniMaxH3DriftControlModelPatch,
     "MiniMaxH3ChainSegmentSave": MiniMaxH3ChainSegmentSave,
     "MiniMaxH3ChainReview": MiniMaxH3ChainReview,
     "MiniMaxH3ChainLoopEnd": MiniMaxH3ChainLoopEnd,
     "MiniMaxH3ChainManifestLoad": MiniMaxH3ChainManifestLoad,
     "MiniMaxH3ChainExportPNG": MiniMaxH3ChainExportPNG,
+    "MiniMaxH3ChainLatentVideoAdapter": MiniMaxH3ChainLatentVideoAdapter,
     "MiniMaxH3ChainAssemble": MiniMaxH3ChainAssemble,
 }
 
 CHAIN_NODE_DISPLAY_NAME_MAPPINGS = {
+    "MiniMaxH3ChainPolicy": "MiniMax H3 Chain Policy",
+    "MiniMaxH3AdvancedPolicy": "MiniMax H3 Advanced Policy Override",
+    "MiniMaxH3Legacy04PolicyAdapter": (
+        "MiniMax H3 Legacy 0.4 Policy Adapter"),
     "MiniMaxH3ChainPlan": "MiniMax H3 Contex Loop Plan",
     "MiniMaxH3ChainScenePromptEditor": "MiniMax H3 Scene Prompt Editor",
     "MiniMaxH3ChainRichScenePromptEditor": (
         "MiniMax H3 Rich Scene Prompt Editor (Experimental)"),
     "MiniMaxH3ChainPlanStudio": "MiniMax H3 Plan Studio (Experimental)",
+    "MiniMaxH3ChainPreflight": "MiniMax H3 Chain Preflight",
     "MiniMaxH3ChainRunManager": "MiniMax H3 Run Manager",
     "MiniMaxH3ChainCheckpointManager": "MiniMax H3 Checkpoint Manager",
     "MiniMaxH3ChainFirstSceneImage": "MiniMax H3 Frame Gate",
@@ -8086,17 +16928,34 @@ CHAIN_NODE_DISPLAY_NAME_MAPPINGS = {
     "MiniMaxH3ScheduledReferenceToVideo": "MiniMax H3 Scheduled Ref2VA",
     "MiniMaxH3TaggedPictureReference": "MiniMax H3 Tagged Picture Ref",
     "MiniMaxH3TaggedVideoReference": "MiniMax H3 Tagged Video Ref",
+    "MiniMaxH3TaggedMotionReference": "MiniMax H3 Tagged Motion Ref",
+    "MiniMaxH3SourceTimeline": "MiniMax H3 Source Timeline",
+    "MiniMaxH3TaggedMotionReferenceTimeline": (
+        "MiniMax H3 Tagged Motion Ref (Source Timeline)"),
+    "MiniMaxH3LazyMotionAVLoader": "MiniMax H3 Lazy Motion AV Loader",
+    "MiniMaxH3TaggedMotionReferencePath": (
+        "MiniMax H3 Tagged Motion Ref (Lazy VIDEO/Path)"),
+    "MiniMaxH3LazyMotionScenePreview": (
+        "MiniMax H3 Lazy Motion Scene Preview"),
+    "MiniMaxH3SourceTimelineScenePreview": (
+        "MiniMax H3 Source Timeline Scene Preview"),
     "MiniMaxH3TaggedAudioReference": "MiniMax H3 Tagged Audio Ref",
+    "MiniMaxH3SemanticAnchorConditioning": (
+        "MiniMax H3 Semantic Anchors (Internal)"),
     "MiniMaxH3TaggedReferenceToVideo": "MiniMax H3 Tagged Ref2VA",
     "MiniMaxH3ChainExternalVideo": "MiniMax H3 Existing Video Context",
     "MiniMaxH3ChainLoopStart": "MiniMax H3 Contex Loop Start",
     "MiniMaxH3ChainCurrent": "MiniMax H3 Contex Loop Current Shot",
     "MiniMaxH3PatchPriority": "MiniMax H3 Patch Priority",
     "MiniMaxH3ChainContext": "MiniMax H3 Contex Loop Context",
+    "MiniMaxH3DriftControlModelPatch": (
+        "MiniMax H3 Drift-Control Model Patch (Sigma Split)"),
     "MiniMaxH3ChainSegmentSave": "MiniMax H3 Contex Loop Segment + Checkpoint",
     "MiniMaxH3ChainReview": "MiniMax H3 Contex Loop Review Gate",
     "MiniMaxH3ChainLoopEnd": "MiniMax H3 Contex Loop End",
     "MiniMaxH3ChainManifestLoad": "MiniMax H3 Contex Loop Load Manifest",
     "MiniMaxH3ChainExportPNG": "MiniMax H3 Contex Loop Export PNG Sequence",
+    "MiniMaxH3ChainLatentVideoAdapter": (
+        "MiniMax H3 Full-Chain Latent Video Adapter"),
     "MiniMaxH3ChainAssemble": "MiniMax H3 Contex Loop Assemble",
 }

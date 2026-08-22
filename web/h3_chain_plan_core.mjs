@@ -5,11 +5,22 @@ export const FPS = 24;
 export const MAX_SHOTS = 128;
 export const MAX_H3_FRAMES = 3592;
 export const MAX_SEED = 18446744073709551615n;
-export const CONTINUATION_MODES = Object.freeze(["guide", "masked_av"]);
+export const CONTINUATION_MODES = Object.freeze([
+    "guide", "tone_carry_guide", "latent_guide", "tapered_guide",
+    "masked_av", "tapered_av", "feathered_av", "audio_feathered_av",
+    "drift_control_av", "color_stable_drift_av",
+]);
+export const CONTEXT_SPATIAL_PROXY_MODES = Object.freeze([
+    "off", "rgb_5_6", "latent_5_6",
+]);
+const RETIRED_CONTINUATION_MODES = Object.freeze({
+    feathered_av_rgb: "feathered_av",
+});
 export const H3_CONTEXT_LENGTHS = Object.freeze([
     1, 5, 22, 39, 56, 73, 90, 107, 124,
     141, 158, 175, 192, 209, 226, 243,
 ]);
+export const AV_CONTEXT_LENGTHS = Object.freeze([39, 90, 141, 192, 243]);
 export const AUTO_SCENE_COLORS = Object.freeze([
     "#6ea8fe", "#ffb86b", "#63d69f", "#c493ff",
     "#ff7fa6", "#55d6e8", "#e6cb65", "#ff7878",
@@ -398,11 +409,13 @@ export function setShotLengthMode(shot, mode, fallbackSeconds = 15) {
 }
 
 export function sceneContinuationMode(shot, planDefault = "guide") {
-    const fallback = String(planDefault ?? "guide");
+    const rawFallback = String(planDefault ?? "guide");
+    const fallback = RETIRED_CONTINUATION_MODES[rawFallback] ?? rawFallback;
     if (!CONTINUATION_MODES.includes(fallback)) {
         throw new Error(`Unknown Plan continuation mode “${fallback}”.`);
     }
-    const mode = shot?.continuation_mode ?? fallback;
+    const rawMode = shot?.continuation_mode ?? fallback;
+    const mode = RETIRED_CONTINUATION_MODES[rawMode] ?? rawMode;
     if (!CONTINUATION_MODES.includes(mode)) {
         throw new Error(`Unknown scene continuation mode “${String(mode)}”.`);
     }
@@ -447,6 +460,32 @@ export function sceneAudioContextLength(
     return resolved;
 }
 
+export function sceneVideoBlendFrames(
+    shot, planDefault = 0, videoContextLength = 22,
+) {
+    const fallback = Number(planDefault);
+    const context = Number(videoContextLength);
+    if (!Number.isInteger(fallback) || fallback < 0) {
+        throw new Error("Plan video blend frames must be a non-negative integer.");
+    }
+    if (!Number.isInteger(context) || context < 0) {
+        throw new Error("Scene video context must be a non-negative integer.");
+    }
+    const value = shot?.video_blend_frames;
+    if (value === undefined || value === null
+            || (typeof value === "string" && !value.trim())) {
+        return Math.min(fallback, context);
+    }
+    const resolved = Number(value);
+    if (typeof value === "boolean" || !Number.isInteger(resolved)
+            || resolved < 0 || resolved > context) {
+        throw new Error(
+            `Scene video blend frames must be between 0 and its context length (${context}).`,
+        );
+    }
+    return resolved;
+}
+
 export function validateH3Length(value) {
     const length = Number(value);
     if (!Number.isInteger(length) || length < 5 || length > MAX_H3_FRAMES || length % 17 !== 5) {
@@ -486,6 +525,7 @@ export function calculatePlanTiming(plan, settings = {}) {
     const rows = [];
     const contextLength = Number(settings.contextLength ?? 22);
     const audioContextLength = Number(settings.audioContextLength ?? 22);
+    const videoBlendFrames = Number(settings.videoBlendFrames ?? 0);
     const encodeMode = settings.encodeMode ?? "video";
     const anchorMode = settings.anchorMode ?? "head";
     const planContinuationMode = settings.continuationMode ?? "guide";
@@ -500,6 +540,12 @@ export function calculatePlanTiming(plan, settings = {}) {
     if (!Number.isInteger(audioContextLength)
             || audioContextLength < 0 || audioContextLength > 240) {
         errors.push("Audio context length must be between 0 and 240 frames.");
+    }
+    if (!Number.isInteger(videoBlendFrames) || videoBlendFrames < 0
+            || videoBlendFrames > contextLength) {
+        errors.push(
+            `Video blend frames must be between 0 and context length (${contextLength}).`,
+        );
     }
     if (!Number.isFinite(planDefaultDuration) || planDefaultDuration <= 0) {
         errors.push("Default duration must be a finite positive number.");
@@ -549,26 +595,104 @@ export function calculatePlanTiming(plan, settings = {}) {
             rowErrors.push(error.message);
         }
 
+        let sceneBlendFrames = Math.min(
+            Math.max(0, videoBlendFrames), Math.max(0, sceneContext),
+        );
+        try {
+            sceneBlendFrames = sceneVideoBlendFrames(
+                shot, videoBlendFrames, sceneContext,
+            );
+            if (sceneBlendFrames > 0 && anchorMode !== "head") {
+                rowErrors.push("Video blending requires head anchor mode.");
+            }
+        } catch (error) {
+            rowErrors.push(error.message);
+        }
+
         let continuationMode = "guide";
         try {
             continuationMode = sceneContinuationMode(
                 shot, planContinuationMode,
             );
-            if (sceneContext > 0 && continuationMode === "masked_av") {
-                if (sceneContext < 5) {
+            if (sceneContext > 0 && [
+                "masked_av", "tapered_av", "feathered_av",
+                "audio_feathered_av", "drift_control_av",
+                "color_stable_drift_av",
+            ].includes(
+                continuationMode,
+            )) {
+                if (!AV_CONTEXT_LENGTHS.includes(sceneContext)) {
                     rowErrors.push(
-                        "Masked AV requires a context length of at least 5 frames.",
+                        "AV mask continuation requires an exact shared video/audio boundary: 39, 90, 141, 192, or 243 context frames.",
                     );
                 }
                 if (encodeMode !== "video") {
-                    rowErrors.push("Masked AV requires video encode mode.");
+                    rowErrors.push("AV mask continuation requires video encode mode.");
                 }
                 if (anchorMode !== "head") {
-                    rowErrors.push("Masked AV requires head anchor mode.");
+                    rowErrors.push("AV mask continuation requires head anchor mode.");
+                }
+                if (continuationMode === "tapered_av" && sceneContext !== 39) {
+                    rowErrors.push(
+                        "Detail AV currently requires exactly 39 context frames.",
+                    );
+                }
+                if (["drift_control_av", "color_stable_drift_av"].includes(
+                    continuationMode,
+                ) && sceneContext !== 39) {
+                    rowErrors.push(
+                        "Drift-Control AV and Color-Stable Drift AV currently require exactly 39 context frames.",
+                    );
+                }
+            }
+            if (sceneContext > 0 && continuationMode === "latent_guide") {
+                if (sceneContext < 5) {
+                    rowErrors.push(
+                        "Latent Guide requires a context length of at least 5 frames.",
+                    );
+                }
+                if (encodeMode !== "video") {
+                    rowErrors.push("Latent Guide requires video encode mode.");
                 }
             }
         } catch (error) {
             rowErrors.push(error.message);
+        }
+
+        const contextSpatialProxy = String(
+            shot.context_spatial_proxy ?? "off",
+        ).trim().toLowerCase() || "off";
+        if (!CONTEXT_SPATIAL_PROXY_MODES.includes(contextSpatialProxy)) {
+            rowErrors.push(
+                `Unknown boundary spatial proxy “${contextSpatialProxy}”.`,
+            );
+        } else if (contextSpatialProxy !== "off") {
+            if (sceneContext <= 0) {
+                rowErrors.push(
+                    "Boundary spatial proxy requires positive video context.",
+                );
+            }
+            if (contextSpatialProxy === "rgb_5_6" && ![
+                "guide", "tone_carry_guide", "tapered_guide",
+            ].includes(continuationMode)) {
+                rowErrors.push(
+                    "Low-grid 5/6 boundary proxy requires Guide, Tone Carry Guide, or Detail Guide.",
+                );
+            }
+            if (contextSpatialProxy === "latent_5_6" && ![
+                "masked_av", "tapered_av", "feathered_av",
+                "audio_feathered_av", "drift_control_av",
+                "color_stable_drift_av",
+            ].includes(continuationMode)) {
+                rowErrors.push(
+                    "Latent 5/6 boundary proxy requires an AV continuation mode.",
+                );
+            }
+            if (index === 1) {
+                rowErrors.push(
+                    "Scene 1 cannot use a 5/6 boundary proxy because imported context has no sampled predecessor latent.",
+                );
+            }
         }
 
         let rawFrames = 0;
@@ -599,9 +723,17 @@ export function calculatePlanTiming(plan, settings = {}) {
             deliveredSeconds: deliveredFrames / FPS,
             generationStartFrame,
             contextLength: sceneContext,
-            audioContextLength: continuationMode === "masked_av"
+            videoBlendFrames: sceneBlendFrames,
+            audioContextLength: [
+                "masked_av", "tapered_av", "feathered_av",
+                "audio_feathered_av", "drift_control_av",
+                "color_stable_drift_av",
+            ].includes(
+                continuationMode,
+            )
                 ? sceneContext : sceneAudioContext,
             continuationMode,
+            contextSpatialProxy,
             errors: rowErrors,
         });
         stitchedFrames += deliveredFrames;

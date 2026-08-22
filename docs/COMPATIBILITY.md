@@ -6,21 +6,39 @@ Installing the pack does not globally alter ordinary ComfyUI workflows. Its H3
 conditioning patches activate when a Contex Loop Context node executes and
 self-check the live model/layout assumptions before use.
 
-The two continuation engines are capability-gated independently:
+The two continuation engines and public masking path are capability-gated:
 
-- `guide` prefers native Add Guide / MultiRef behavior from ComfyUI PR #15439
-  and uses the existing guarded guide fallback only on older builds;
-- `masked_av` prefers native per-token H3 AV masks from PR #15375 and lazily
-  installs only missing mask-engine, payload, token-grid helpers,
+- `guide`, `latent_guide`, and `tapered_guide` prefer native Add Guide /
+  MultiRef behavior from ComfyUI PR #15439 and use the existing guarded guide
+  fallback only on older builds. Latent Guide directly slices a compatible
+  generated predecessor's saved video latent and otherwise falls back to the
+  RGB/VAE route. Tapered Guide alters only its disposable RGB context before
+  VAE encoding;
+- `masked_av`, `tapered_av`, `feathered_av`, and `drift_control_av` prefer native per-token H3 AV masks from PR
+  #15375 and lazily install only missing mask-engine, payload, token-aligned
   inpaint-scale, and legacy sampler-bridge behavior when the masked path
-  executes. The merged helper API remains authoritative and is not wrapped.
-  Masked mode still requires the native #15439 Add Guide / MultiRef core
-  baseline and is not enabled on the older guide-fallback architecture.
+  executes. It follows
+  PR #15375 commit `989e7a9`: pixel masks stay intact for final sampler
+  blending while internal H3 timesteps use pooled token-grid values. It still
+  requires the native #15439 Add Guide / MultiRef core baseline; masked mode
+  is not enabled on the older guide-fallback architecture.
+- `drift_control_av` additionally needs current ModelPatcher dynamic-mask and
+  apply-model-wrapper APIs. Chain Context installs both hooks on a cloned MODEL
+  and refuses an existing dynamic denoise-mask function rather than composing
+  two incompatible owners. A sigma-split model switch uses the dedicated
+  one-model Drift-Control Model Patch for each raw branch and shares the
+  original unsplit sigma schedule; the patch does not copy model weights.
+- `MiniMaxH3ContexMaskedTarget` uses the same native-first per-token AV mask
+  layer for arbitrary manual targets. It activates compatibility only when the
+  node executes and does not require a separate MODEL patch node.
 
 Importing the node pack or running a guide-only workflow does not activate the
-masked runtime compatibility. Recognized pre-merge compatibility wrappers are
-upgraded to the final merged contract; unknown partial mask engines are
+masked runtime compatibility. A partially updated native mask engine is
 rejected rather than mixed with the vendored snapshot.
+
+The general masking IDs are deliberately different from
+`ComfyUI-MiniMaxH3-PerRowMasking`, so both folders may be installed during
+migration without one pack replacing the other's registered nodes.
 
 After updating ComfyUI or H3 optimization packs, restart the process fully so
 patch ownership is rebuilt cleanly.

@@ -1,8 +1,8 @@
 {
   "id": "c0b8422a-84d4-44f8-91ce-31c68a9a119e",
   "revision": 0,
-  "last_node_id": 1950,
-  "last_link_id": 99,
+  "last_node_id": 1952,
+  "last_link_id": 104,
   "nodes": [
     {
       "id": 1,
@@ -28,7 +28,7 @@
           ]
         }
       ],
-      "title": "H3 MODEL — REQUIRED",
+      "title": "Load Diffusion Model — H3 MODEL — REQUIRED",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -63,7 +63,7 @@
           ]
         }
       ],
-      "title": "H3 TEXT ENCODER",
+      "title": "Load CLIP — H3 TEXT ENCODER",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -99,7 +99,7 @@
           ]
         }
       ],
-      "title": "Sampler algorithm",
+      "title": "KSamplerSelect — Sampler algorithm",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -133,7 +133,7 @@
           ]
         }
       ],
-      "title": "H3 Video VAE",
+      "title": "Load VAE — H3 Video VAE",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -168,7 +168,7 @@
           ]
         }
       ],
-      "title": "H3 Audio VAE",
+      "title": "Load VAE — H3 Audio VAE",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -182,7 +182,7 @@
       "id": 1906,
       "type": "Note",
       "pos": [
-        -3008,
+        -3936,
         -1088
       ],
       "size": [
@@ -194,7 +194,7 @@
       "mode": 0,
       "inputs": [],
       "outputs": [],
-      "title": "REF2VA SIX-SECTION PROMPT FORMAT",
+      "title": "Note — REF2VA SIX-SECTION PROMPT FORMAT",
       "properties": {},
       "widgets_values": [
         "REF2VA PROMPT FORMAT — SIX SECTIONS\n\n1. subject_definitions:\n2. summary:\n3. retention_analysis:\n4. detailed_description:\n5. overall_soundscape:\n6. non_diegetic_music:\n\nWrite stable @tags in the Plan. Tagged Ref2VA activates only registered @tags present in the resolved scene prompt and compiles them to native <Picture N> labels; it does not insert definitions for you."
@@ -327,7 +327,7 @@
           "links": null
         }
       ],
-      "title": "LOOP START / RESUME",
+      "title": "MiniMax H3 Contex Loop Start — LOOP START / RESUME",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -447,7 +447,8 @@
             24,
             41,
             46,
-            77
+            77,
+            103
           ]
         },
         {
@@ -530,9 +531,14 @@
           "name": "status",
           "type": "STRING",
           "links": null
+        },
+        {
+          "name": "video_blend_frames",
+          "type": "INT",
+          "links": null
         }
       ],
-      "title": "CURRENT REF2V SCENE — PROMPT / SEED / TIMING",
+      "title": "MiniMax H3 Contex Loop Current Shot — CURRENT REF2V SCENE — PROMPT / SEED / TIMING",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -579,7 +585,7 @@
           "links": null
         }
       ],
-      "title": "RECOVERY: ASSEMBLE WITHOUT RENDERING",
+      "title": "MiniMax H3 Contex Loop Assemble — RECOVERY: ASSEMBLE WITHOUT RENDERING",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -662,7 +668,7 @@
           ]
         }
       ],
-      "title": "Per-shot noise seed",
+      "title": "RandomNoise — Per-shot noise seed",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -794,7 +800,7 @@
           "links": null
         }
       ],
-      "title": "TAGGED REF2VA — COMPILES @TAGS PER SCENE",
+      "title": "MiniMax H3 Tagged Ref2VA — TAGGED REF2VA — COMPILES @TAGS PER SCENE",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.4.0",
@@ -844,7 +850,7 @@
           ]
         }
       ],
-      "title": "LIGHTX2V TURBO — 8 STEP V1.0",
+      "title": "Load LoRA — LIGHTX2V TURBO — 8 STEP V1.0",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -925,7 +931,7 @@
           ]
         }
       ],
-      "title": "MASKED AV CONTEXT — PRESERVE PREFIX / GENERATE FUTURE",
+      "title": "MiniMax H3 Contex Loop Context — MASKED AV CONTEXT — PRESERVE PREFIX / GENERATE FUTURE",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -1082,7 +1088,7 @@
           ]
         }
       ],
-      "title": "Loop guider",
+      "title": "Basic Guider — Loop guider",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -1128,7 +1134,7 @@
           ]
         }
       ],
-      "title": "Per-shot scheduler steps",
+      "title": "BasicScheduler — Per-shot scheduler steps",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -1198,7 +1204,7 @@
           "links": null
         }
       ],
-      "title": "H3 sampler — SINGLE LOOP BODY",
+      "title": "SamplerCustomAdvanced — H3 sampler — SINGLE LOOP BODY",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -1241,7 +1247,7 @@
           ]
         }
       ],
-      "title": "Decode current clip frames",
+      "title": "VAE Decode — Decode current clip frames",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -1284,7 +1290,7 @@
           ]
         }
       ],
-      "title": "Decode current clip audio",
+      "title": "VAE Decode Audio — Decode current clip audio",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -1333,7 +1339,13 @@
           "widget": {
             "name": "retain_overlap_frames"
           },
-          "link": 80
+          "link": null
+        },
+        {
+          "name": "state",
+          "type": "H3_CHAIN_STATE",
+          "link": 103,
+          "shape": 7
         }
       ],
       "outputs": [
@@ -1366,7 +1378,7 @@
           "links": null
         }
       ],
-      "title": "TRIM 39 MASKED PREFIX FRAMES / RETAIN 5 FOR BLEND",
+      "title": "MiniMax H3 Contex Loop Trim — TRIM CONTEXT / AUTO-RESOLVE SCENE BLEND",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -1439,7 +1451,7 @@
           "links": null
         }
       ],
-      "title": "SAVE DELIVERED + BLEND-READY SEGMENTS",
+      "title": "MiniMax H3 Contex Loop Segment + Checkpoint — SAVE DELIVERED + BLEND-READY SEGMENTS",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -1484,7 +1496,7 @@
           "links": null
         }
       ],
-      "title": "FINAL ASSEMBLY — 5-FRAME VISUAL BLEND",
+      "title": "MiniMax H3 Contex Loop Assemble — FINAL ASSEMBLY — 5-FRAME VISUAL BLEND",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -1529,7 +1541,7 @@
           ]
         }
       ],
-      "title": "COMFY KITCHEN ATTENTION",
+      "title": "ModelAttentionBackend — COMFY KITCHEN ATTENTION",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.31.0",
@@ -1591,7 +1603,7 @@
           "links": null
         }
       ],
-      "title": "RECOVERY: LOAD ALL SAVED CLIPS",
+      "title": "MiniMax H3 Contex Loop Load Manifest — RECOVERY: LOAD ALL SAVED CLIPS",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -1618,7 +1630,7 @@
       "mode": 0,
       "inputs": [],
       "outputs": [],
-      "title": "RECOVERY / ASSEMBLE LATER",
+      "title": "Note — RECOVERY / ASSEMBLE LATER",
       "properties": {
         "Node name for S&R": "Note"
       },
@@ -1633,7 +1645,7 @@
       "type": "Note",
       "pos": [
         3136,
-        512
+        1312
       ],
       "size": [
         576,
@@ -1644,7 +1656,7 @@
       "mode": 0,
       "inputs": [],
       "outputs": [],
-      "title": "REF2V STUDIO TAGGED — HOW TO USE",
+      "title": "Note — REF2V STUDIO TAGGED — HOW TO USE",
       "properties": {
         "Node name for S&R": "Note"
       },
@@ -1684,7 +1696,7 @@
           "links": null
         }
       ],
-      "title": "@style_base — USED IN BOTH PROMPTS",
+      "title": "Load Image — @style_base — USED IN BOTH PROMPTS",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.31.0",
@@ -1733,7 +1745,7 @@
           "links": null
         }
       ],
-      "title": "@interior — USED IN SCENE 2 PROMPT",
+      "title": "Load Image — @interior — USED IN SCENE 2 PROMPT",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.31.0",
@@ -1798,7 +1810,7 @@
           "links": null
         }
       ],
-      "title": "1 — @style_base / PROMPT ACTIVATED",
+      "title": "MiniMax H3 Tagged Picture Ref — 1 — @style_base / PROMPT ACTIVATED",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.4.0",
@@ -1863,7 +1875,7 @@
           "links": null
         }
       ],
-      "title": "REVIEW GATE — APPROVE / EDIT+RETRY / REROLL / STOP",
+      "title": "MiniMax H3 Contex Loop Review Gate — REVIEW GATE — APPROVE / EDIT+RETRY / REROLL / STOP",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.4.0",
@@ -1948,7 +1960,7 @@
           "links": null
         }
       ],
-      "title": "LOOP END — ADVANCE REF2V SCENE",
+      "title": "MiniMax H3 Contex Loop End — LOOP END — ADVANCE REF2V SCENE",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -1975,7 +1987,7 @@
       "mode": 0,
       "inputs": [],
       "outputs": [],
-      "title": "REF2V PROMPT / IMAGE SOURCE",
+      "title": "Note — REF2V PROMPT / IMAGE SOURCE",
       "properties": {
         "Node name for S&R": "Note"
       },
@@ -2017,7 +2029,8 @@
           "name": "references",
           "type": "H3_TAGGED_REFERENCES",
           "links": [
-            87
+            87,
+            102
           ]
         },
         {
@@ -2033,7 +2046,7 @@
           "links": null
         }
       ],
-      "title": "2 — @interior / PROMPT ACTIVATED",
+      "title": "MiniMax H3 Tagged Picture Ref — 2 — @interior / PROMPT ACTIVATED",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.4.0",
@@ -2051,7 +2064,7 @@
       "type": "MiniMaxH3ChainPlanStudio",
       "pos": [
         384,
-        544
+        1344
       ],
       "size": [
         1536,
@@ -2065,6 +2078,30 @@
           "name": "plan",
           "type": "H3_CHAIN_PLAN",
           "link": 74
+        },
+        {
+          "name": "source_timeline",
+          "type": "H3_SOURCE_TIMELINE",
+          "link": null,
+          "shape": 7
+        },
+        {
+          "name": "source_audio",
+          "type": "AUDIO",
+          "link": null,
+          "shape": 7
+        },
+        {
+          "name": "tagged_references",
+          "type": "H3_TAGGED_REFERENCES",
+          "link": 102,
+          "shape": 7
+        },
+        {
+          "name": "reference_schedule",
+          "type": "H3_REFERENCE_SCHEDULE",
+          "link": null,
+          "shape": 7
         }
       ],
       "outputs": [
@@ -2077,7 +2114,7 @@
           ]
         }
       ],
-      "title": "PLAN STUDIO — TIMELINE / REVISIONS / PREVIEWS",
+      "title": "MiniMax H3 Plan Studio (Experimental) — PLAN STUDIO — TIMELINE / REVISIONS / PREVIEWS",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -2086,7 +2123,11 @@
         "h3_plan_studio_active_scene": 0,
         "h3_plan_studio_view": "scene"
       },
-      "widgets_values": [],
+      "widgets_values": [
+        1,
+        "",
+        true
+      ],
       "color": "#1f1f48",
       "bgcolor": "rgba(24,24,27,.9)"
     },
@@ -2141,7 +2182,7 @@
           ]
         }
       ],
-      "title": "RUN MANAGER — RESTORE PLAN + REFERENCE ASSETS",
+      "title": "MiniMax H3 Run Manager — RUN MANAGER — RESTORE PLAN + REFERENCE ASSETS",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.4.0",
@@ -2166,7 +2207,7 @@
       "type": "MiniMaxH3ChainRichScenePromptEditor",
       "pos": [
         1984,
-        544
+        1344
       ],
       "size": [
         1088,
@@ -2208,7 +2249,7 @@
       "type": "MiniMaxH3ChainPlan",
       "pos": [
         -640,
-        544
+        1344
       ],
       "size": [
         992,
@@ -2231,6 +2272,12 @@
             "name": "generation_fingerprint"
           },
           "link": 96
+        },
+        {
+          "name": "chain_policy",
+          "type": "H3_CHAIN_POLICY",
+          "link": 104,
+          "shape": 7
         }
       ],
       "outputs": [
@@ -2264,12 +2311,10 @@
         {
           "name": "video_blend_frames",
           "type": "INT",
-          "links": [
-            80
-          ]
+          "links": null
         }
       ],
-      "title": "REF2V STUDIO TAGGED PLAN — EDITED THROUGH STUDIO",
+      "title": "MiniMax H3 Contex Loop Plan — REF2V STUDIO TAGGED PLAN — EDITED THROUGH STUDIO",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -2305,6 +2350,46 @@
       ],
       "color": "#1f1f48",
       "bgcolor": "rgba(24,24,27,.9)"
+    },
+    {
+      "id": 1952,
+      "type": "MiniMaxH3ChainPolicy",
+      "pos": [
+        -1060,
+        1504
+      ],
+      "size": [
+        340,
+        190
+      ],
+      "flags": {},
+      "order": 46,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "chain_policy",
+          "type": "H3_CHAIN_POLICY",
+          "links": [
+            104
+          ]
+        },
+        {
+          "name": "status",
+          "type": "STRING",
+          "links": null
+        }
+      ],
+      "title": "MiniMax H3 Chain Policy — 0.5 CHAIN POLICY",
+      "properties": {
+        "Node name for S&R": "MiniMaxH3ChainPolicy"
+      },
+      "widgets_values": [
+        "hard_av",
+        "generated",
+        "off",
+        "on"
+      ]
     }
   ],
   "links": [
@@ -2741,14 +2826,6 @@
       "H3_CHAIN_SEGMENT"
     ],
     [
-      80,
-      1700,
-      5,
-      132,
-      3,
-      "INT"
-    ],
-    [
       81,
       132,
       2,
@@ -2859,6 +2936,30 @@
       1949,
       0,
       "H3_CHAIN_PLAN"
+    ],
+    [
+      102,
+      1948,
+      0,
+      1930,
+      3,
+      "H3_TAGGED_REFERENCES"
+    ],
+    [
+      103,
+      1702,
+      0,
+      132,
+      4,
+      "H3_CHAIN_STATE"
+    ],
+    [
+      104,
+      1952,
+      0,
+      1700,
+      2,
+      "H3_CHAIN_POLICY"
     ]
   ],
   "groups": [
@@ -2867,9 +2968,9 @@
       "title": "H3 MODEL STACK",
       "bounding": [
         -2112,
-        -1024,
+        -1536,
         2200,
-        650
+        1162
       ],
       "color": "#3f789e",
       "flags": {}
@@ -2881,7 +2982,7 @@
         -448,
         -352,
         5792,
-        800
+        1568
       ],
       "color": "#744c8c",
       "flags": {}
@@ -2914,10 +3015,10 @@
       "id": 6,
       "title": "REF2V — PLAN STUDIO + RICH PROMPT EDITOR",
       "bounding": [
-        -672,
-        480,
-        3764,
-        1392
+        -1152,
+        1280,
+        4244,
+        1472
       ],
       "color": "#3f789e",
       "flags": {}
@@ -2941,9 +3042,21 @@
         -1088,
         -352,
         608,
-        688
+        720
       ],
       "color": "#432f66",
+      "flags": {}
+    },
+    {
+      "id": 9,
+      "title": "WORKFLOW GUIDE",
+      "bounding": [
+        -4000,
+        -1152,
+        864,
+        1280
+      ],
+      "color": "#2f596b",
       "flags": {}
     }
   ],

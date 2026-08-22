@@ -69,3 +69,79 @@ export function locateStudioTimelineSecond(rows, seconds) {
     }
     return {index: scenes.length - 1, startSeconds, localSeconds: 0, targetSeconds, totalSeconds};
 }
+
+export function matchingStudioSourceScene(payload, index, timingRow) {
+    if (!payload?.token || !timingRow) return null;
+    const scene = Number(index) + 1;
+    const item = (Array.isArray(payload.scenes) ? payload.scenes : []).find(
+        (candidate) => Number(candidate?.scene) === scene,
+    );
+    if (!item || String(item.scene_id ?? "") !== String(timingRow.id ?? "")) {
+        return null;
+    }
+    if (Number(item.delivered_frames) !== Number(timingRow.deliveredFrames)) {
+        return null;
+    }
+    const references = Array.isArray(item.references) ? item.references : [];
+    return references.length ? item : null;
+}
+
+export function studioSourceSecond(reference, deliveredLocalSeconds, fps = 24) {
+    const rate = Math.max(1, Number(fps) || 24);
+    const offset = Math.max(0, Number(reference?.compare_offset_frames) || 0) / rate;
+    const local = Math.max(0, Number(deliveredLocalSeconds) || 0);
+    const duration = Math.max(0, Number(reference?.frame_count) || 0) / rate;
+    return Math.min(Math.max(0, duration - 0.02), offset + local);
+}
+
+export function h3StudioGridMarkers(
+    rawFrames, contextFrames = 0, continuationMode = "guide",
+) {
+    const frames = Math.trunc(Number(rawFrames));
+    const context = Math.trunc(Number(contextFrames));
+    const rawIndex = Number.isInteger(frames) ? (frames - 5) / 17 : NaN;
+    const rawOnGrid = Number.isInteger(rawIndex) && rawIndex >= 0;
+    const raw = {
+        frames,
+        onGrid:rawOnGrid,
+        index:rawOnGrid ? rawIndex : null,
+        label:rawOnGrid
+            ? `${frames}f = 17×${rawIndex}+5`
+            : `${frames}f is off the 17n+5 grid`,
+    };
+
+    const avMode = [
+        "masked_av", "tapered_av", "feathered_av", "audio_feathered_av",
+        "drift_control_av",
+    ].includes(
+        String(continuationMode ?? ""),
+    );
+    let av = null;
+    if (avMode && Number.isInteger(context) && context > 0) {
+        const latentIndex = (context - 5) / 17;
+        const latentGrid = Number.isInteger(latentIndex) && latentIndex >= 0;
+        const exact = latentGrid && context % 3 === 0;
+        const audioTicks = context * 5 / 3;
+        av = {
+            frames:context,
+            latentGrid,
+            exact,
+            audioTicks,
+            label:exact
+                ? `${context}f AV = ${audioTicks} audio ticks`
+                : `${context}f AV = ${audioTicks.toFixed(3)} audio ticks`,
+        };
+    }
+
+    // Community experiments report fewer flashes when a generated-to-real
+    // cut lands within the four-frame window beginning at 17n-3.  Surface the
+    // nearest completed window as an optional diagnostic, never a validator.
+    const packet = Number.isInteger(frames) ? Math.floor(frames / 17) : 0;
+    const cut = packet > 0 ? {
+        start:17 * packet - 3,
+        end:17 * packet,
+        experimental:true,
+        label:`cut test ${17 * packet - 3}–${17 * packet}f`,
+    } : null;
+    return {raw, av, cut};
+}

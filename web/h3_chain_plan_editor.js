@@ -18,12 +18,23 @@ import {
     safeShotId,
     sceneContextLength,
     sceneContinuationMode,
+    sceneVideoBlendFrames,
     setShotLengthMode,
     setSharedPrompt,
     shotLengthMode,
     sharedPrompt,
-} from "./h3_chain_plan_core.mjs?v=0.4.20";
-import {availableReferenceRecords} from "./h3_reference_preview_core.mjs?v=0.4.20";
+} from "./h3_chain_plan_core.mjs?v=0.5.5";
+import {availableReferenceRecords} from "./h3_reference_preview_core.mjs?v=0.5.5";
+import {
+    applySceneTransitionPreset,
+    primaryTransitionOptions,
+    sceneTransitionPreset,
+    transitionPresetLabel,
+} from "./h3_policy_core.mjs?v=0.5.5";
+import {
+    resolveAudioContextLength,
+    resolveTransitionPolicy,
+} from "./h3_socket_presentation_core.mjs?v=0.5.5";
 
 // This scene editor is an original implementation. Its quick @ reference and
 // # dialogue interactions are inspired by nkxx188/ComfyUI-MiniMaxH3-Easy,
@@ -170,6 +181,8 @@ function injectStyles() {
             align-items:center; gap:6px; }
         .h3c-seed-status { grid-column:1 / -1; color:var(--h3c-muted);
             overflow-wrap:anywhere; }
+        .h3c-boundary-fields { display:grid; grid-template-columns:minmax(220px,1fr)
+            minmax(180px,.7fr); gap:7px; margin-top:8px; }
         .h3c-advanced-fields { display: none; grid-template-columns:repeat(4, minmax(140px, 1fr)); gap: 7px; margin-top: 8px; }
         .h3c-editor.h3c-show-advanced .h3c-advanced-fields { display: grid; }
         .h3c-errors { display: none; margin: 7px 0; padding: 7px; border-radius: 5px; color: #ffb4b8; background: #5d202866; white-space: pre-wrap; }
@@ -183,7 +196,7 @@ function injectStyles() {
         .h3c-footer a { color: var(--h3c-accent); }
         @media (max-width: 650px) {
             .h3c-defaults, .h3c-length-row, .h3c-advanced-fields,
-            .h3c-seed-control { grid-template-columns: 1fr; }
+            .h3c-seed-control, .h3c-boundary-fields { grid-template-columns: 1fr; }
             .h3c-seed-status { grid-column:1; }
             .h3c-card-head { flex-wrap: wrap; }
             .h3c-timing { width: 100%; }
@@ -464,12 +477,19 @@ function mountEditor(node) {
     }
 
     function currentSettings() {
+        const transition = resolveTransitionPolicy(node);
         return {
-            contextLength: widgetValue(node, "context_length", 22),
-            audioContextLength: widgetValue(node, "audio_context_length", 22),
+            contextLength: transition.known
+                ? transition.contextLength
+                : widgetValue(node, "context_length", 22),
+            audioContextLength: resolveAudioContextLength(node),
+            videoBlendFrames: widgetValue(node, "video_blend_frames", 0),
             encodeMode: widgetValue(node, "encode_mode", "video"),
             anchorMode: widgetValue(node, "anchor_mode", "head"),
-            continuationMode: widgetValue(node, "continuation_mode", "guide"),
+            continuationMode: transition.known
+                ? transition.continuationMode
+                : widgetValue(node, "continuation_mode", "guide"),
+            transitionPreset: transition.known ? transition.preset : "custom",
             defaultDurationSeconds: widgetValue(node, "default_duration_seconds", 15),
             defaultSteps: widgetValue(node, "default_steps", 20),
         };
@@ -505,7 +525,9 @@ function mountEditor(node) {
             const label = card.querySelector(".h3c-timing");
             if (label) {
                 label.textContent = `${row.rawFrames || "—"} raw / ${row.deliveredFrames || "—"} delivered · ${formatClock(row.deliveredSeconds)}`;
-                label.title = row.errors.join("\n") || `Generation starts at delivered frame ${row.generationStartFrame}.`;
+                label.title = row.errors.join("\n") ||
+                    `Generation starts at delivered frame ${row.generationStartFrame}. ` +
+                    `The incoming assembly boundary blends ${row.videoBlendFrames} frame(s).`;
             }
             card.classList.toggle("h3c-invalid", row.errors.length > 0);
         }
@@ -833,7 +855,59 @@ function mountEditor(node) {
             syncPlan();
         });
         const context = element("select", "h3c-context");
-        const planContextLength = Number(widgetValue(node, "context_length", 22));
+        const resolvedPlanSettings = currentSettings();
+        const planContextLength = Number(resolvedPlanSettings.contextLength);
+        const incomingTransition = element("select", "h3c-incoming-transition");
+        const inheritedPreset = resolvedPlanSettings.transitionPreset;
+        const inheritOption = element(
+            "option", "",
+            `Inherit Chain Policy · ${transitionPresetLabel(inheritedPreset)}`,
+        );
+        inheritOption.value = "inherit";
+        incomingTransition.append(inheritOption);
+        for (const preset of primaryTransitionOptions()) {
+            const option = element(
+                "option", "",
+                `${preset.label} · ${preset.description}`,
+            );
+            option.value = preset.name;
+            incomingTransition.append(option);
+        }
+        function refreshIncomingTransition() {
+            const selected = sceneTransitionPreset(
+                shot, resolvedPlanSettings.continuationMode,
+                resolvedPlanSettings.contextLength,
+                resolvedPlanSettings.audioContextLength,
+            );
+            let custom = incomingTransition.querySelector(
+                'option[value="custom"]',
+            );
+            if (selected === "custom" && !custom) {
+                custom = element(
+                    "option", "", transitionPresetLabel("custom"),
+                );
+                custom.value = "custom";
+                incomingTransition.append(custom);
+            }
+            incomingTransition.value = selected;
+        }
+        refreshIncomingTransition();
+        incomingTransition.title = "One semantic boundary choice. Inherit uses "
+            + "the connected Chain Policy. Choosing a preset writes its tested "
+            + "visual implementation/context pair and returns generated-audio "
+            + "context to automatic behavior. Custom means this scene still "
+            + "contains raw Advanced boundary overrides below.";
+        incomingTransition.addEventListener("change", () => {
+            if (incomingTransition.value === "custom") return;
+            applySceneTransitionPreset(shot, incomingTransition.value);
+            const nextContext = sceneContextLength(shot, planContextLength);
+            if (Object.hasOwn(shot, "video_blend_frames")
+                    && Number(shot.video_blend_frames) > nextContext) {
+                shot.video_blend_frames = nextContext;
+            }
+            syncPlan();
+            render();
+        });
         for (const [value, label] of [
             ["", `Plan default · ${planContextLength}`],
             ["0", "0 · new visual"],
@@ -852,41 +926,74 @@ function mountEditor(node) {
             if (context.value === "") delete shot.context_length;
             else shot.context_length = Number(context.value);
             sceneContextLength(shot, planContextLength);
+            refreshBlendControl();
+            refreshIncomingTransition();
             syncPlan();
         });
         const audioContext = numberInput(shot.audio_context_length ?? "", {
             min: "0", max: "240", step: "1",
         });
-        const planAudioContextLength = Number(widgetValue(
-            node, "audio_context_length", 22,
-        ));
+        const planAudioContextLength = Number(
+            resolvedPlanSettings.audioContextLength,
+        );
         audioContext.placeholder = planAudioContextLength
             ? String(planAudioContextLength)
             : `Follow video · ${planContextLength}`;
-        audioContext.title = "Generated-audio context entering this scene. Blank inherits the Plan audio default (whose 0 follows video context). An explicit 0 carries no prior generated sound. A positive value can continue audio when video context is 0. Masked AV ignores this override and keeps audio synchronized to its video prefix; source_track uses its exact timeline slice instead.";
+        audioContext.title = "Generated-audio context entering this scene. Blank inherits the Plan audio default (whose 0 follows video context). An explicit 0 carries no prior generated sound. A positive value can continue audio when video context is 0. AV mask modes ignore this override and keep audio synchronized to the video prefix; source_track uses its exact timeline slice instead.";
         audioContext.addEventListener("input", () => {
             if (audioContext.value === "") delete shot.audio_context_length;
             else shot.audio_context_length = Number(audioContext.value);
+            refreshIncomingTransition();
+            syncPlan();
+        });
+        const blendFrames = numberInput(shot.video_blend_frames ?? "", {
+            min: "0", max: String(planContextLength), step: "1",
+        });
+        const planBlendFrames = Number(resolvedPlanSettings.videoBlendFrames);
+        function refreshBlendControl() {
+            const resolvedContext = sceneContextLength(shot, planContextLength);
+            blendFrames.max = String(resolvedContext);
+            blendFrames.placeholder = String(Math.min(
+                planBlendFrames, resolvedContext,
+            ));
+        }
+        refreshBlendControl();
+        blendFrames.title = index === 0
+            ? "Visible assembly blend entering scene 1 when Existing Video Context supplies a predecessor. Blank inherits the Plan default, capped to this scene's video context. This is assembly-only and does not alter sampling."
+            : "Visible assembly blend at the boundary from the previous scene into this scene. Blank inherits the Plan default, capped to this scene's video context. Zero keeps a hard cut. This is assembly-only and does not alter sampling.";
+        blendFrames.addEventListener("input", () => {
+            if (blendFrames.value === "") delete shot.video_blend_frames;
+            else shot.video_blend_frames = Number(blendFrames.value);
+            sceneVideoBlendFrames(
+                shot, planBlendFrames,
+                sceneContextLength(shot, planContextLength),
+            );
             syncPlan();
         });
         const continuation = element("select", "h3c-continuation");
-        const planContinuationMode = widgetValue(
-            node, "continuation_mode", "guide",
-        );
+        const planContinuationMode = resolvedPlanSettings.continuationMode;
         for (const [value, label] of [
             ["", `Plan default · ${planContinuationMode}`],
             ["guide", "Guide · new shot"],
+            ["tone_carry_guide", "Tone Carry Guide · corrected RGB context"],
+            ["latent_guide", "Latent Guide · direct generated latent"],
+            ["tapered_guide", "Detail Guide · color injection"],
+            ["tapered_av", "Detail AV · experimental latent taper"],
+            ["drift_control_av", "Drift-Control AV · schedule-matched mask"],
+            ["color_stable_drift_av", "Color-Stable Drift AV · tapered scene-one latent delta"],
             ["masked_av", "Masked AV · same shot"],
+            ["feathered_av", "Feathered AV · experimental dual-stream feather"],
+            ["audio_feathered_av", "Audio Feather AV · hard picture, soft sound"],
         ]) {
             const option = element("option", "", label);
             option.value = value;
             continuation.append(option);
         }
         continuation.value = Object.hasOwn(shot, "continuation_mode")
-            ? shot.continuation_mode : "";
+            ? sceneContinuationMode(shot, planContinuationMode) : "";
         continuation.title = index === 0
-            ? "Continuation into this scene. Scene 1 uses it only when Existing Video Context supplies a predecessor. Guide allows a new shot; Masked AV preserves the same shot exactly."
-            : "Continuation from the preceding scene into this one. Guide is flexible for a new shot; Masked AV preserves an exact prefix for the same shot.";
+            ? "Continuation into this scene. Scene 1 uses it only when Existing Video Context supplies a predecessor. Guide re-encodes RGB; Latent Guide directly reuses a generated predecessor latent and falls back to RGB for imported context; Detail Guide adds a tapered chroma treatment; Detail AV applies a disposable video-only latent taper; Drift-Control AV applies a scheduler-matched video mask with a clean seam and needs the Chain Context MODEL path; Color-Stable Drift AV additionally carries a weak scene-one color correction as a tapered VAE delta on the copied video latent only; Masked AV protects an exact prefix; experimental Feathered AV softens both streams; Audio-Feathered AV keeps the picture exact and softens only the final audio ticks."
+            : "Continuation from the preceding scene. Guide re-encodes RGB into persistent conditioning; Latent Guide supplies the saved sampled-latent tail as persistent conditioning; Detail Guide applies luma-preserving tapered chroma injection; Detail AV applies a disposable video-only latent taper; Drift-Control AV applies a scheduler-matched video mask with a clean seam and needs the Chain Context MODEL path; Color-Stable Drift AV additionally carries a weak scene-one color correction as a tapered VAE delta on the copied video latent only; Masked AV protects an exact prefix; experimental Feathered AV softens both streams; Audio-Feathered AV keeps the picture exact and softens only the final audio ticks.";
         continuation.addEventListener("change", () => {
             if (continuation.value) {
                 shot.continuation_mode = continuation.value;
@@ -896,13 +1003,40 @@ function mountEditor(node) {
             // Resolve once here so malformed externally supplied values cannot
             // be introduced through the compact editor control.
             sceneContinuationMode(shot, planContinuationMode);
+            refreshIncomingTransition();
             syncPlan();
         });
+        const spatialProxy = element("select", "h3c-spatial-proxy");
+        for (const [value, label] of [
+            ["", "Off · native context"],
+            ["rgb_5_6", "Low-grid 5/6 proxy · Guide"],
+            ["latent_5_6", "Latent 5/6 proxy · AV"],
+        ]) {
+            const option = element("option", "", label);
+            option.value = value;
+            spatialProxy.append(option);
+        }
+        spatialProxy.value = shot.context_spatial_proxy ?? "";
+        spatialProxy.title = "Scheduled only on the boundary entering scenes 2+. Low-grid 5/6 reduces and VAE-decodes the complete saved predecessor video latent at the proxy canvas, takes its delivered tail, then Motion Context restores those Guide frames to the target; 1376×768 uses 1152×640 (48×86 → 40×72 latent). This exact low-grid decode costs extra preparation time and peak memory. Latent 5/6 applies a cheaper latent down/up filter only to the copied AV video prefix. Audio, generated output, checkpoints, and assembly remain native size.";
+        spatialProxy.addEventListener("change", () => {
+            if (spatialProxy.value) {
+                shot.context_spatial_proxy = spatialProxy.value;
+            } else {
+                delete shot.context_spatial_proxy;
+            }
+            syncPlan();
+        });
+        const boundary = element("div", "h3c-boundary-fields");
+        boundary.append(
+            field("Incoming transition", incomingTransition),
+            field("Final assembly crossfade frames", blendFrames),
+        );
         advanced.append(
             field("Steps (blank = default)", steps),
-            field("Video context", context),
-            field("Audio context", audioContext),
-            field("Continuation into scene", continuation),
+            field("Advanced visual context", context),
+            field("Advanced audio context", audioContext),
+            field("Advanced implementation", continuation),
+            field("Boundary spatial proxy", spatialProxy),
         );
         card.append(
             head,
@@ -910,6 +1044,7 @@ function mountEditor(node) {
             field("Scene prompt (optional with shared prompt)", prompt),
             promptTools(prompt, index + 1),
             field("Scene seed", seedControl),
+            boundary,
             advanced,
         );
         return card;

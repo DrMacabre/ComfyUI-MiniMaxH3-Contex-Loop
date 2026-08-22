@@ -1,75 +1,270 @@
 # Audio and continuity
 
-## Choose an audio mode
+## Choose an audio policy
 
-| Mode | Timeline behavior | Final assembly |
+Version 0.5 separates three independent decisions and one exact-target switch:
+
+| Axis | Values | Meaning |
 |---|---|---|
-| `source_track` | Current Shot provides the current source slice to Ref2VA; Motion Context carries picture history. | Uses the original source track. |
-| `generated_audio` | Motion Context carries the previous H3 audio latent. | Concatenates checkpointed generated audio. |
-| `source_plus_timeline` | Ref2VA receives the source slice and Motion Context carries generated-audio history. Experimental. | `audio_source: plan` selects the source track. |
+| Final audio | `generated`, `source`, `none` | What Assemble places in the final MP4 |
+| Source reference | `on`, `off` | Whether the exact active source window guides H3 |
+| Generated continuity | `on`, `off` | Whether the previous sampled audio latent continues into the next scene |
+| Lock source audio | `on`, `off` | Whether each exact source window occupies the complete target audio latent and is protected from denoising |
 
-For a complete prerecorded voice, song, or dialogue performance that must remain
-exact, use `source_track`. For a short voice/timbre reference where H3 should
-generate new words, use `generated_audio` and schedule that short clip as an
-ordinary audio reference.
+Set these controls and the default incoming boundary on the single **Chain
+Policy** node. Its one output may connect directly to Plan or pass through an
+**Advanced Policy Override**. Advanced Policy preserves every audio choice and
+replaces only the incoming transition with a named experimental recipe such as
+Drift-Control AV. Use the **Legacy 0.4 Policy Adapter** only for a genuine 0.4
+import, a raw implementation/context pair, or an independent numeric audio
+overlap. It can also accept an incoming Chain Policy, in which case its legacy
+`audio_mode` is ignored and the modern audio intent is preserved.
 
-These descriptions are for the default `guide` continuation mode. In
-experimental `masked_av`, Chain Context always preserves a matching video and
-audio prefix inside the target latent, including when final assembly uses
-`source_track`. For recursive scenes it copies the previous sampler's audio
-latent directly. For scene 1 after Existing Video Context, source audio and the
-H3 audio VAE must both be connected.
-
-Prefer a 39-frame masked prefix. It maps exactly to 65 audio steps; 22 frames
-maps to 36.666... steps and therefore requires rounding at the AV boundary.
-
-The Plan node mode is an inherited default and each scene may override it. The
-override controls the transition into that scene: `guide` for a new shot with
-interpretive continuity, `masked_av` for exact same-shot continuation. Mixed
-plans must still use global context/encode/anchor settings compatible with
-every masked scene.
-
-## Source-track wiring
-
-Connect the same full ComfyUI AUDIO value to:
+Policy layers are ordered left to right. Each downstream layer replaces only
+the boundary fields it owns; the last boundary layer wins, while the audio
+record continues unchanged:
 
 ```text
-Load Audio ─┬→ Loop Start
-            ├→ Current Shot
-            └→ Assemble
-
-Current Shot source_audio_slice → Ref2VA / Scheduled Audio Ref
+Chain Policy → Plan
+Chain Policy → Advanced Policy Override → Plan
+Chain Policy → Legacy 0.4 Policy Adapter → Plan
+Chain Policy → Advanced Policy Override → Legacy 0.4 Policy Adapter → Plan
 ```
 
-Current Shot cuts each raw scene window from the full track. Loop Start hashes
-the waveform so a changed or incorrectly wired track cannot silently resume old
-checkpoints. The track must cover the total delivered video; a truly silent
-placeholder may be shorter and is padded safely.
+The reverse Advanced/Legacy order is also valid: whichever is nearest Plan
+owns the effective transition. A standalone Legacy Adapter retains exact 0.4
+`audio_mode` behavior for imported workflows.
+
+For a prerecorded song or dialogue performance that must remain exact, choose
+Source final audio and enable **Lock source audio**. The switch resolves Source
+reference and Generated continuity off: the source is no longer a loose Ref2VA
+audio bank or a carried predecessor prefix. Chain Context VAE-encodes the
+scene-local source window into H3's target audio stream and sets its complete
+denoise mask to zero. Video remains denoisable and can attend to the protected
+audio for timing and lip sync. Source-rate conversion for H3's audio VAE may
+still occur; final assembly with Final audio=source uses the Source Timeline
+track rather than model-decoded audio. For a short voice/timbre
+reference where H3 should generate new words, choose Generated final audio and
+schedule that clip as an ordinary tagged audio reference.
+
+Saved 0.4 modes migrate without changing behavior:
+
+| Legacy `audio_mode` | Final | Source reference | Generated continuity |
+|---|---|---|---|
+| `generated_audio` | generated | off | on |
+| `source_track` | source | on | off |
+| `source_plus_timeline` | source | on | on |
+
+These descriptions apply to `guide`, `tone_carry_guide`, `latent_guide`, and
+`tapered_guide`.
+Tone Carry Guide uses the RGB/VAE route and applies the predecessor's saved,
+direct boundary-tone curve before encoding its context. It falls back to clean
+Guide when no coherent curve was detected and never silently takes the direct
+video-latent path.
+When an older checkpoint predates this curve metadata, resume recovers it from
+the two existing scene videos. The saved checkpoint and sampled AV latent are
+reused unchanged; diffusion is not rerun.
+Latent Guide reuses the generated predecessor's sampled video-latent tail
+directly, while imported or incompatible context falls back to the normal
+RGB/VAE Guide route. Tapered Guide changes only the disposable video context
+passed to the Guide VAE. In the
+experimental `masked_av`, `tapered_av`, `feathered_av`, and
+`drift_control_av` modes, Chain Context always places a video prefix inside the
+target latent. With Generated continuity on it also
+places the matching audio prefix; `masked_av` protects that complete prefix and
+`tapered_av` protects a disposable video-only latent-noise copy of that prefix;
+`feathered_av` progressively denoises its final latent steps. With Generated
+continuity off, the audio mask remains fully open even when final assembly uses
+`source_track`. For recursive scenes, enabled audio carry copies the previous
+sampler's audio latent directly. For scene 1 after Existing Video Context,
+carrying imported audio requires source audio and the H3 audio VAE.
+
+With **Lock source audio** on, the complete scene-local audio mask is zero
+instead. This composes with every picture boundary: Cut and Guide affect only
+video context, while AV modes preserve or taper their video prefix without
+copying predecessor audio over the locked source window.
+
+Experimental `drift_control_av` is a recursive picture-only treatment layered
+on the same 39-frame AV prefix. It does not bake random noise into a checkpoint
+or redraw noise between scenes. At each model evaluation, it uses the sampler's
+existing noise field and sets the prefix mask to `next_sigma / current_sigma`.
+The oldest eight of the 12 video-latent steps use that complete ratio; the last
+four multiply it by `.75`, `.50`, `.25`, and `.00`, leaving the actual seam
+clean. The same live mask drives both ComfyUI's inpaint blend and, through an
+apply-model hook, H3's internal per-row timestep labels. Audio remains exact or
+open according to Audio Policy.
+
+Select **Drift-Control AV**, connect the H3 MODEL to Chain Context's optional
+`model` input, and use its `model` output for the first or only sampler stage.
+Chain Context stops before scene 1 when a Drift-Control Plan is missing that
+route. For a sigma split that switches models, leave Chain Context's `model`
+input disconnected. Connect the original full schedule (before the split) to
+its `drift_sigmas` input, then place **MiniMax H3 Drift-Control Model Patch
+(Sigma Split)** between each raw model and its sampler. Feed every patch Current
+Shot `state`, Chain Context `latent`, and that same original full sigma
+schedule. This keeps both model loaders independent and sequential. Each patch
+stores only a small CPU sigma tuple and cloned ModelPatcher metadata, not
+another copy of either model's weights.
+
+Do not put Differential Diffusion or another dynamic denoise-mask patch on the
+same MODEL path. The initial validated baseline is 39 frames and 20 sampling
+steps; other samplers, schedulers, and step counts remain experimental.
+
+The 0.5 **Soft AV** preset selects `audio_feathered_av`: all picture-prefix
+steps remain exact. With Generated continuity on, only the final eight carried
+audio ticks are released with a half-cosine ramp. With Generated continuity
+off, the target audio stays fully denoisable and paired source audio spans the
+complete raw scene window instead of inheriting the delivered-video window.
+This is the tested upstream AV extension recipe. The older
+dual-stream `feathered_av` remains a raw Legacy Adapter override for
+compatibility.
+
+AV prefixes must end on both native clocks: 39, 90, 141, 192, or 243 frames.
+The normal 39-frame prefix maps exactly to 12 video latent steps and 65 audio
+steps; 22 frames maps to 36.666... audio steps and is rejected before model
+loading. At 39 frames, legacy raw `feathered_av` fully protects the first 8 video /
+42 audio steps and ramps the final 4 video / 23 audio prefix steps.
+
+Chain Policy controls the normal incoming boundary: Cut carries no picture,
+Guide uses 22 clean RGB/VAE guide frames, Tone Carry Guide uses the same RGB
+span with the predecessor's detected tone correction, Latent Guide uses the
+same span from the saved sampled video latent, Detail Guide uses the same span with an
+eight-frame chroma-noise exit taper, Detail AV uses a protected disposable
+39-frame video-latent copy with matched-variance Gaussian noise tapering from
+0.30 to a completely clean boundary while leaving audio exact, Drift-Control
+AV applies schedule-matched noise to a clean carried prefix at every model
+evaluation, Hard AV uses a protected 39-frame prefix, and Soft AV keeps the
+picture exact while feathering only a carried-audio exit. With Generated
+continuity off, all AV presets carry picture only.
+Detail AV v2 is fixed to 39 frames. Its seed and complete recipe enter the
+incoming-boundary dependency fingerprint, its predecessor checkpoint is never
+mutated, and the entire treated prefix is trimmed before delivery. Advanced
+mode may pair either experimental Guide with another Guide context length; 22
+is the published baseline. Mixed plans must still use
+encode/anchor settings compatible with every AV-mask scene.
+
+Drift-Control AV v1 is also fixed to 39 frames. Its sigma rule, 8+4 temporal
+taper, mask quantization, audio behavior, and validated-step baseline enter the
+incoming-boundary dependency fingerprint. Changing the mode or recipe therefore
+requires regenerating that incoming scene, while the saved predecessor remains
+unchanged.
+
+**Color-Stable Drift AV** is the opt-in latent-domain counterpart to Final
+Assembly's scene-one color stabilizer. It keeps Drift-Control's 39-frame mask,
+but adds only the difference between a VAE encode of a weakly corrected RGB
+decode and an encode of the unchanged RGB decode. The shared VAE reconstruction
+error cancels. That low-frequency delta ramps from zero at the old overlap edge
+to full strength beside the generated future. The first generated scene is the
+anchor; scene 2 is therefore neutral, while scene 3 onward can resist recursive
+exposure/saturation drift. Audio and saved checkpoints remain exact. It costs
+one 39-frame decode and two 39-frame encodes only when a non-neutral correction
+is detected.
+
+In Plan Studio, a scene normally chooses Inherit, Cut, Guide, Hard AV, or Soft
+AV. That single choice writes the matching visual and generated-audio overlap.
+The raw per-scene implementation and separate visual/audio context fields are
+under Advanced boundary controls. Plan-wide raw 0.4 defaults belong to the
+Legacy 0.4 Policy Adapter.
+
+### Scheduled boundary spatial proxy
+
+`context_spatial_proxy` is an optional **per-scene incoming-boundary** setting.
+It is off when absent, so it can be scheduled only where a long chain begins
+to burn in or needs a controlled spatial reset:
+
+```json
+{
+  "id": "scene_4",
+  "continuation_mode": "masked_av",
+  "context_length": 39,
+  "context_spatial_proxy": "latent_5_6"
+}
+```
+
+`rgb_5_6` is shown as **Low-grid 5/6 · Guide** and is available for Guide,
+Tone Carry Guide, and Detail Guide on scenes 2 and later. It reduces the
+complete saved predecessor video latent (for example, 86×48 becomes 72×40),
+VAE-decodes that disposable stream natively at 1152×640, and selects the
+requested delivered RGB tail. Motion Context then restores that tail to
+1376×768 before the normal Guide encode. This preserves the nonlinear
+low-grid VAE decode observed in the source mixed-resolution experiment; it is
+not merely an RGB resize.
+Because it VAE-decodes the predecessor stream once more, Low-grid Guide uses
+more preparation time and peak memory than native Guide. Schedule it only on
+boundaries where the reset is wanted.
+`latent_5_6` is available for AV modes. It downscales and restores only the
+copied video-prefix latent (86×48 becomes 72×40 and returns to 86×48). It does
+not filter the paired audio prefix. Neither mode resizes generated frames,
+saved checkpoints, predecessor state, or assembly output. The fixed recipe is
+stored in the incoming-scene dependency, so enabling it for scene 4 leaves
+scenes 2 and 3 valid but requires scene 4 and its successors to be regenerated.
+
+## Source Timeline wiring
+
+Register picture and sound once. New workflows pass a typed descriptor instead
+of repeating a decoded full-track AUDIO wire:
+
+```text
+Load Video ─┐
+            ├→ Source Timeline ─┬→ Preflight / Plan Studio
+Load Audio ─┘                   └→ Loop Start → Current Shot
+                                                   └→ scene-local source slice
+
+Loop End manifest → Assemble (recovers the timeline descriptor)
+```
+
+Current Shot requests each overlap-aware scene window from the descriptor.
+Loop Start fingerprints the source so changed media cannot silently resume old
+checkpoints. Path-backed video and audio remain lazy; only the active scene is
+decoded. A tensor-only AUDIO input is normalized once into a run-owned file.
+The source must cover the required delivered timeline; Preflight reports the
+exact shortfall and last complete scene before model loading.
+
+The 0.4 Lazy Motion AV Loader fan-out remains accepted as a compatibility route:
+
+```text
+Lazy Motion AV Loader source_video ─┬→ Tagged Motion Ref source_video
+                                    └→ Run Manager asset
+Lazy Motion AV Loader source_audio ─┬→ Loop Start
+                                    ├→ Current Shot
+                                    ├→ Tagged Audio Ref
+                                    └→ Assemble
+Lazy Motion AV Loader skip frames ───→ Tagged Motion Ref skip frames
+```
+
+The native VIDEO remains disk-backed. The loader decodes only the complete
+post-skip audio track, which is still required: Loop Start establishes its
+fingerprint and Current Shot maps exact Plan frame windows onto its sample
+clock for H3 audio-latent alignment. Scene-local paired audio from the tagged
+motion reference does not replace this master track.
+
+For new workflows, Source Timeline performs that registration without decoding
+the complete audio track or requiring the downstream fan-out.
 
 ### Tagged Ref2VA source timeline
 
-Tagged references need a static media path because their fingerprint normally
-returns to Plan. Connecting `Current Shot source_audio_slice` to Tagged Audio
-Ref would close this cycle:
+Current Shot's source slice may feed a standalone Tagged Audio Ref. Keep the
+registry fingerprint that returns to Plan independent of that downstream slice:
 
 ```text
-Plan → Loop Start → Current Shot → Tagged Audio Ref → fingerprint → Plan
+Plan → Loop Start → Current Shot → Tagged Audio Ref → Tagged Ref2VA
+  ↑                                                     │
+  └──────── picture/reference registry fingerprint ─────┘
 ```
 
-Use the Tagged Audio Ref `source_timeline` mode instead:
+The canonical topology is:
 
 ```text
-Load Audio ─┬→ Loop Start
-            ├→ Current Shot
-            └→ Tagged Audio Ref ─┬→ Tagged Ref2VA
-                                 └→ fingerprint → Plan
-
-Current Shot state ─────────────────→ Tagged Ref2VA
+Load Audio → Source Timeline → Loop Start → Current Shot
+                                             ├→ source_audio_slice → Tagged Audio Ref
+                                             └→ state ─────────────→ Tagged Ref2VA
 ```
 
-The Tagged Audio Ref hashes the full source track. Tagged Ref2VA validates it
-against Loop Start and derives the active scene's overlap-aware slice internally.
-Its optional alignment switch changes only that derived reference slice.
+The structured scene dependency records the canonical PCM window, so that
+scene—not unrelated future audio—is invalidated when the source changes. Do not
+return the slice-derived audio fingerprint to Plan, because that would create a
+real graph cycle. Current Shot's optional alignment switch changes only the
+reference slice.
 
 ## Experimental reference-grid alignment
 
@@ -112,21 +307,35 @@ Generated WAV assembly budgets samples from cumulative delivered-video frame
 boundaries, preventing per-scene rounding from accumulating into drift. This
 approach was inspired by **seitanism's**
 [MultiRef implementation](https://github.com/seitanism/ComfyUI-H3-Motion-Context-MultiRef).
+For masked AV, Loop Trim also carries the complete decoded overlap privately
+inside its normal AUDIO output. Segment Save checkpoints it, and the later
+scene owns that interval during combined generated-audio assembly. This keeps
+Soft AV's half-cosine audio release instead of throwing it away at the trim.
+The same ownership rule applies when scene 1 continues an Existing Video
+Context prelude. Legacy checkpoints without the extra tensor keep
+delivered-only assembly.
 
 ## Continuation trimming
 
 Use **MiniMax H3 Contex Loop Trim** after decoding. In head mode it removes the
-repeated visual prefix. With `match_tail=true`, it also truncates or zero-pads
-the decoded audio tail to the exact delivered-frame duration.
+repeated visual prefix. With `match_tail=true`, it time-conforms the small H3
+grid mismatch to the exact delivered-frame duration and carries the
+full AV overlap privately to Segment Save. Connect Trim's AUDIO output directly;
+there is no second overlap-audio socket.
 
-`retain_overlap_frames` exposes an additional visual stream containing part of
-the repeated context for external stitchers. It does not alter the normal clean
-images output or audio.
+`images_with_overlap` exposes an additional visual stream containing the
+retained repeated context selected by the active scene state. In 0.5 chains,
+wire **Current Shot → state** to **Loop Trim → state**. A scene-level
+`video_blend_frames` value controls the boundary entering that scene; blank
+inherits the Plan default and explicit `0` keeps a hard cut. The manual
+`retain_overlap_frames` input and both blend integer outputs are legacy routes.
+This assembly-only setting does not alter diffusion, the normal clean images
+output, or audio.
 
-Both continuation modes return the prefix length as `trim_frames`. In masked
-mode those leading frames are decoded from preserved target-latent rows rather
-than regenerated guide-conditioned rows, but they still overlap the preceding
-scene and must be removed from delivered duration.
+All continuation modes return the prefix length as `trim_frames`. In AV mask
+modes those leading frames come from target-latent rows rather than persistent
+guide-conditioning rows. They still overlap the preceding scene and must be
+removed from delivered duration, including the feathered portion.
 
 ## Measure a join
 

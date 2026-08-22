@@ -330,10 +330,10 @@ assert chain._reference_entry_contract({
 })["timeline_mode"] == "sequential"
 
 sequential_video = chain.torch.arange(
-    500, dtype=chain.torch.float32).reshape(500, 1, 1, 1).expand(-1, 2, 2, 3)
+    700, dtype=chain.torch.float32).reshape(700, 1, 1, 1).expand(-1, 2, 2, 3)
 sequential_audio = {
     "waveform": chain.torch.arange(
-        5000, dtype=chain.torch.float32).reshape(1, 1, 5000),
+        7000, dtype=chain.torch.float32).reshape(1, 1, 7000),
     "sample_rate": 240,
 }
 sequential_schedule = chain.MiniMaxH3ScheduledVideoReference().add(
@@ -402,6 +402,291 @@ assert tagged_summary == (
     "scene 2/3: @look -> <Picture 1>; @voice -> <Audio 1>")
 assert [entry["tag"] for entry in tagged_bindings["pictures"]] == ["look"]
 assert "face" not in tagged_bindings["aliases"]
+
+semantic_compiled, semantic_summary, semantic_bindings = (
+    chain._compile_tagged_reference_prompt(
+        tagged, 1, 1,
+        "Use #face[0.00s], #face[2.50s], and #face[2.50s] while "
+        "@look remains native."))
+assert semantic_compiled == (
+    "Use <Video 1>, <Video 1>, and <Video 1> while <Picture 1> "
+    "remains native.")
+assert len(semantic_bindings["semantic_anchors"]) == 1
+semantic_face = semantic_bindings["semantic_anchors"][0]
+assert semantic_face["tag"] == "face"
+assert semantic_face["label"] == "<Video 1>"
+assert semantic_face["entry"]["value"] is tagged["entries"][0]["value"]
+assert semantic_face["timestamps"] == [
+    chain.Fraction("0.00"), chain.Fraction("2.50")]
+assert "#face[0s,2.5s] -> <Video 1> Qwen-only semantic anchors" in (
+    semantic_summary)
+
+storyboard_compiled, storyboard_summary, storyboard_bindings = (
+    chain._compile_tagged_reference_prompt(
+        tagged, 1, 1,
+        "Use #face[0.00s] then #face[2.50s] while @look remains native.",
+        semantic_anchor_mode="picture_storyboard"))
+assert storyboard_compiled == (
+    "For the target video, around 0 seconds into this scene, <Picture 2> "
+    "is an approximate visual storyboard reference.\n"
+    "For the target video, around 2.5 seconds into this scene, <Picture 2> "
+    "is an approximate visual storyboard reference.\n\n"
+    "Use <Picture 2> then <Picture 2> while <Picture 1> remains native.")
+assert storyboard_bindings["semantic_anchor_mode"] == "picture_storyboard"
+assert storyboard_bindings["semantic_anchors"][0]["label"] == "<Picture 2>"
+assert (
+    "#face[0s,2.5s] -> <Picture 2> Qwen-only approximate storyboard picture"
+    in storyboard_summary)
+chronological_storyboard, _summary, _bindings = (
+    chain._compile_tagged_reference_prompt(
+        tagged, 1, 1,
+        "Use #face[2.50s] after #look[0.25s].",
+        semantic_anchor_mode="picture_storyboard"))
+assert chronological_storyboard.startswith(
+    "For the target video, around 0.25 seconds into this scene, <Picture 2> "
+    "is an approximate visual storyboard reference.\n"
+    "For the target video, around 2.5 seconds into this scene, <Picture 1> "
+    "is an approximate visual storyboard reference.\n\n")
+assert chain._semantic_anchor_specs(
+    "@look #face[0.00s] and #face[2.50]") == [
+        {"tag": "face", "timestamp_seconds": 0.0},
+        {"tag": "face", "timestamp_seconds": 2.5},
+    ]
+assert chain._prompt_reference_tags(
+    "@look #face[2.50s]") == {"look", "face"}
+
+try:
+    chain._compile_tagged_reference_prompt(
+        tagged, 1, 1, "Use #missing[1.00s].")
+except ValueError as exc:
+    assert "unknown semantic anchor #missing" in str(exc)
+else:
+    raise AssertionError("unknown semantic anchor was accepted in strict mode")
+
+soft_semantic, soft_semantic_summary, soft_semantic_bindings = (
+    chain._compile_tagged_reference_prompt(
+        tagged, 1, 1, "Keep #missing[1.00s].", compliance_mode="soft"))
+assert soft_semantic == "Keep #missing[1.00s]."
+assert soft_semantic_bindings["semantic_anchors"] == []
+assert "unknown semantic anchor #missing" in soft_semantic_summary
+
+disabled_semantic, disabled_semantic_summary, disabled_semantic_bindings = (
+    chain._compile_tagged_reference_prompt(
+        tagged, 1, 1, "Keep #face[1.00s].", compliance_mode="disabled"))
+assert disabled_semantic == "Keep #face[1.00s]."
+assert disabled_semantic_bindings["semantic_anchors"] == []
+assert "@tags and #anchors passed unchanged" in disabled_semantic_summary
+
+video_for_semantic = chain.MiniMaxH3TaggedVideoReference().add(
+    chain.torch.zeros((5, 4, 4, 3)), "motion", "", "restart_each_scene")[0]
+try:
+    chain._compile_tagged_reference_prompt(
+        video_for_semantic, 1, 1, "Use #motion[0.00s].")
+except ValueError as exc:
+    assert "must resolve to a Tagged Picture Ref" in str(exc)
+else:
+    raise AssertionError("semantic anchor accepted a tagged video")
+
+
+class FakeSemanticClip:
+    def __init__(self):
+        self.items = None
+        self.prompt = None
+
+    def tokenize(self, prompt, minimax_ref_items=None):
+        self.prompt = prompt
+        self.items = minimax_ref_items
+        return {"tokens": "semantic"}
+
+    def encode_from_tokens_scheduled(self, tokens):
+        assert tokens == {"tokens": "semantic"}
+        return [["semantic-conditioning", {
+            "minimax_token_tags": "semantic-tags",
+            "pooled_output": "semantic-pooled",
+        }]]
+
+
+original_resize = chain._resize
+chain._resize = lambda image, width, height, _crop: chain.torch.zeros(
+    (int(image.shape[0]), int(height), int(width), 3),
+    dtype=image.dtype)
+try:
+    semantic_clip = FakeSemanticClip()
+    base_conditioning = [["native-conditioning", {
+        "minimax_refs": ["native-ref-payload"],
+        "minimax_token_tags": "native-tags",
+    }]]
+    anchor_picture = chain.torch.zeros((1, 64, 32, 3))
+    native_picture = chain.torch.zeros((1, 32, 64, 3))
+    native_video = chain.torch.zeros((5, 32, 64, 3))
+    semantic_result, semantic_status = (
+        chain._replace_conditioning_presentation(
+            base_conditioning, semantic_clip, "compiled prompt", {
+                "version": chain.SEMANTIC_PRESENTATION_VERSION,
+                "width": 64,
+                "height": 32,
+                "length": 22,
+                "ref_image_size": "match",
+                "semantic_anchor_size": "384",
+                "pictures": [native_picture],
+                "videos": [{
+                    "video": native_video,
+                    "paired_audio": True,
+                }],
+                "standalone_audio_count": 1,
+                "anchors": [{
+                    "tag": "face",
+                    "image": anchor_picture,
+                    "timestamps": (
+                        chain.Fraction("0.00"), chain.Fraction("0.75")),
+                }],
+            }))
+    assert semantic_clip.prompt == "compiled prompt"
+    assert [item["type"] for item in semantic_clip.items] == [
+        "image", "audio", "video", "audio", "video"]
+    semantic_video = semantic_clip.items[-1]
+    assert tuple(semantic_video["data"].shape) == (4, 544, 256, 3)
+    assert semantic_video["timestamps"] == [0.0, 0.0, 0.75, 0.75]
+    assert semantic_result[0][0] == "semantic-conditioning"
+    assert semantic_result[0][1]["minimax_refs"] == ["native-ref-payload"]
+    assert semantic_result[0][1]["minimax_token_tags"] == "semantic-tags"
+    assert semantic_status == "2 semantic checkpoints across 1 tagged pictures"
+
+    storyboard_clip = FakeSemanticClip()
+    storyboard_result, storyboard_status = (
+        chain._replace_conditioning_presentation(
+            base_conditioning, storyboard_clip, "storyboard prompt", {
+                "version": chain.SEMANTIC_PRESENTATION_VERSION,
+                "width": 64,
+                "height": 32,
+                "length": 22,
+                "ref_image_size": "match",
+                "semantic_anchor_size": "1024",
+                "semantic_anchor_mode": "picture_storyboard",
+                "pictures": [native_picture],
+                "videos": [{
+                    "video": native_video,
+                    "paired_audio": True,
+                }],
+                "standalone_audio_count": 1,
+                "anchors": [{
+                    "tag": "face",
+                    "image": anchor_picture,
+                    "timestamps": (
+                        chain.Fraction("0.00"), chain.Fraction("0.75")),
+                }],
+            }))
+    assert [item["type"] for item in storyboard_clip.items] == [
+        "image", "audio", "video", "audio", "image"]
+    storyboard_picture = storyboard_clip.items[-1]
+    assert tuple(storyboard_picture["data"].shape) == (1, 1440, 736, 3)
+    assert "timestamps" not in storyboard_picture
+    assert storyboard_result[0][1]["minimax_refs"] == [
+        "native-ref-payload"]
+    assert storyboard_status == (
+        "2 approximate storyboard cues across 1 tagged pictures")
+
+    high_resolution = chain._h3_semantic_anchor_image(
+        anchor_picture, "1280")
+    assert tuple(high_resolution.shape) == (1, 1824, 896, 3)
+
+    try:
+        chain._semantic_presentation_items({
+            "version": chain.SEMANTIC_PRESENTATION_VERSION,
+            "width": 64,
+            "height": 32,
+            "length": 22,
+            "ref_image_size": "match",
+            "semantic_anchor_size": "384",
+            "pictures": [],
+            "videos": [],
+            "standalone_audio_count": 0,
+            "anchors": [{
+                "tag": "face",
+                "image": anchor_picture,
+                "timestamps": (chain.Fraction("1.00"),),
+            }],
+        })
+    except ValueError as exc:
+        assert "scene's 0.917s output duration" in str(exc)
+    else:
+        raise AssertionError("out-of-scene semantic timestamp was accepted")
+finally:
+    chain._resize = original_resize
+
+
+class FakeExpansionNode:
+    def __init__(self, class_type, name):
+        self.class_type = class_type
+        self.name = name
+        self.inputs = {}
+
+    def set_input(self, name, value):
+        self.inputs[name] = value
+
+    def out(self, index):
+        return [self.name, int(index)]
+
+
+class FakeExpansionGraph:
+    def __init__(self):
+        self.nodes = []
+
+    def node(self, class_type, name):
+        node = FakeExpansionNode(class_type, name)
+        self.nodes.append(node)
+        return node
+
+    def finalize(self):
+        return {
+            node.name: {
+                "class_type": node.class_type,
+                "inputs": node.inputs,
+            }
+            for node in self.nodes
+        }
+
+
+original_graph_builder = chain.GraphBuilder
+chain.GraphBuilder = FakeExpansionGraph
+try:
+    semantic_expansion = chain.MiniMaxH3TaggedReferenceToVideo().apply(
+        "clip", "video-vae", "audio-vae", tagged, 1, 1,
+        "Use @look natively and #face[0.00s] semantically.",
+        64, 32, 22, "match", semantic_anchor_size="384")
+    expanded = semantic_expansion["expand"]
+    assert set(expanded) == {"TaggedRef2VA", "SemanticAnchors"}
+    assert expanded["TaggedRef2VA"]["inputs"][
+        "ref_images.ref_image_0"] is tagged["entries"][1]["value"]
+    semantic_inputs = expanded["SemanticAnchors"]["inputs"]
+    assert semantic_inputs["positive"] == ["TaggedRef2VA", 0]
+    assert semantic_inputs["prompt"] == (
+        "Use <Picture 1> natively and <Video 1> semantically.")
+    assert semantic_inputs["presentation"]["anchors"][0]["tag"] == "face"
+    assert semantic_inputs["presentation"]["semantic_anchor_size"] == "384"
+    assert semantic_inputs["presentation"]["semantic_anchor_mode"] == (
+        "timestamped_video")
+    assert semantic_expansion["result"][0] == ["SemanticAnchors", 0]
+    assert semantic_expansion["result"][1] == ["TaggedRef2VA", 1]
+    assert semantic_expansion["result"][4] != tagged["fingerprint"]
+
+    storyboard_expansion = chain.MiniMaxH3TaggedReferenceToVideo().apply(
+        "clip", "video-vae", "audio-vae", tagged, 1, 1,
+        "Use @look natively and #face[0.00s] as a storyboard cue.",
+        64, 32, 22, "match", semantic_anchor_size="1024",
+        semantic_anchor_mode="picture_storyboard")
+    storyboard_inputs = storyboard_expansion["expand"][
+        "SemanticAnchors"]["inputs"]
+    assert storyboard_inputs["presentation"]["semantic_anchor_mode"] == (
+        "picture_storyboard")
+    assert storyboard_inputs["presentation"]["semantic_anchor_size"] == (
+        "1024")
+    assert storyboard_inputs["prompt"].startswith(
+        "For the target video, around 0 seconds into this scene, "
+        "<Picture 2> is an approximate visual storyboard reference.")
+    assert storyboard_expansion["result"][4] != semantic_expansion["result"][4]
+finally:
+    chain.GraphBuilder = original_graph_builder
 
 timeline_audio = {
     "waveform": chain.torch.arange(
@@ -481,8 +766,102 @@ tagged_video_slice, tagged_audio_slice, tagged_detail = (
 assert float(tagged_video_slice[0, 0, 0, 0]) == 221
 assert float(tagged_audio_slice["waveform"][0, 0, 0]) == 2210
 assert tagged_detail.endswith("(origin scene 2)")
+
+tagged_motion_role = chain.MiniMaxH3TaggedMotionReference().add(
+    sequential_video, "performance", "<Subject 1> and <Subject 2>",
+    "the source performer's pose sequence and action timing", "384", "",
+    "restart_each_scene")[0]
+motion_role_prompt = (
+    "subject_definitions:\n"
+    "<Subject 1> is the target character.\n"
+    "<Subject 2> is the target partner.\n\n"
+    "detailed_description:\n"
+    "[Shot 1] <Subject 1> performs @performance.")
+motion_role_compiled, motion_role_summary, motion_role_bindings = (
+    chain._compile_tagged_reference_prompt(
+        tagged_motion_role, 1, 1, motion_role_prompt))
+assert "<Subject 3> is the reusable pose, action, and motion from " \
+       "<Video 1>" in motion_role_compiled
+assert "<Subject 1> performs <Subject 3>." in motion_role_compiled
+assert "without importing the source identity, wardrobe, setting, lighting, " \
+       "or composition" in motion_role_compiled
+assert motion_role_bindings["aliases"]["performance"] == "<Subject 3>"
+assert "@performance -> <Subject 3> motion from <Video 1>" in \
+       motion_role_summary
+motion_role_contract = chain._reference_entry_contract(
+    tagged_motion_role["entries"][0])
+assert motion_role_contract["semantic_role"] == "motion"
+assert motion_role_contract["motion_target"] == "<Subject 1> and <Subject 2>"
+assert motion_role_contract["motion_short_edge"] == "384"
+
+sequential_motion_role = chain.MiniMaxH3TaggedMotionReference().add(
+    sequential_video, "performance", "<Subject 1>",
+    "the source performer's pose sequence and action timing", "source",
+    "performance_audio", "sequential", audio=sequential_audio)[0]
+masked_motion_state = {
+    "index": 2,
+    "plan": {
+        "compatibility": {"continuation_mode": "masked_av"},
+        "shots": [
+            {"raw_frames": 362, "delivered_frames": 362,
+             "generation_start_frame": 0,
+             "prompt": "Begin @performance."},
+            {"raw_frames": 345, "delivered_frames": 306,
+             "generation_start_frame": 323,
+             "prompt": "Continue @performance."},
+        ],
+    },
+}
+masked_motion_video, masked_motion_audio, masked_motion_detail = (
+    chain._scheduled_video_reference_slice(
+        sequential_motion_role["entries"][0], masked_motion_state,
+        2, 2, 345))
+assert tuple(masked_motion_video.shape) == (306, 2, 2, 3)
+assert float(masked_motion_video[0, 0, 0, 0]) == 362
+assert float(masked_motion_video[-1, 0, 0, 0]) == 667
+assert tuple(masked_motion_audio["waveform"].shape) == (1, 1, 3450)
+assert float(masked_motion_audio["waveform"][0, 0, 0]) == 3230
+assert masked_motion_detail == (
+    "@performance sequential delivered video frames 362:668; paired audio "
+    "raw frames 323:668 (origin scene 1)")
+
+guide_motion_state = {
+    **masked_motion_state,
+    "plan": {
+        **masked_motion_state["plan"],
+        "compatibility": {"continuation_mode": "guide"},
+    },
+}
+guide_motion_video, guide_motion_audio, guide_motion_detail = (
+    chain._scheduled_video_reference_slice(
+        sequential_motion_role["entries"][0], guide_motion_state,
+        2, 2, 345))
+assert tuple(guide_motion_video.shape) == (345, 2, 2, 3)
+assert float(guide_motion_video[0, 0, 0, 0]) == 323
+assert float(guide_motion_audio["waveform"][0, 0, 0]) == 3230
+assert guide_motion_detail == (
+    "@performance sequential frames 323:668 (origin scene 1)")
+
+large_motion_video = chain.torch.zeros((5, 512, 640, 3))
+compact_motion = chain.MiniMaxH3TaggedMotionReference().add(
+    large_motion_video, "compact_motion", "<Subject 1>",
+    "coarse full-body motion", "384", "", "restart_each_scene")[0]
+assert tuple(compact_motion["entries"][0]["value"].shape) == (
+    5, 384, 480, 3)
+
 assert "references" in chain.MiniMaxH3TaggedReferenceToVideo.INPUT_TYPES()[
     "required"]
+tagged_optional = chain.MiniMaxH3TaggedReferenceToVideo.INPUT_TYPES()["optional"]
+assert tagged_optional["semantic_anchor_mode"][0] == [
+    "timestamped_video", "picture_storyboard"]
+assert list(tagged_optional).index("semantic_anchor_size") < list(
+    tagged_optional).index("semantic_anchor_mode")
+assert chain.MiniMaxH3TaggedReferenceToVideo.VALIDATE_INPUTS(
+    semantic_anchor_mode="unsupported") == (
+        "Semantic anchor mode must be timestamped_video or "
+        "picture_storyboard; got 'unsupported'.")
+assert tagged_optional["semantic_anchor_size"][0] == [
+    "384", "512", "768", "1024", "1280", "source"]
 assert "reference_schedule" not in (
     chain.MiniMaxH3TaggedReferenceToVideo.INPUT_TYPES()["required"])
 conditioning = object()

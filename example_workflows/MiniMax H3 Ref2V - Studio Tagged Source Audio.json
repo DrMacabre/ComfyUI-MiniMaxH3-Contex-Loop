@@ -1,8 +1,8 @@
 {
   "id": "c0b8422a-84d4-44f8-91ce-31c68a9a119e",
   "revision": 0,
-  "last_node_id": 1952,
-  "last_link_id": 108,
+  "last_node_id": 1956,
+  "last_link_id": 116,
   "nodes": [
     {
       "id": 1,
@@ -28,7 +28,7 @@
           ]
         }
       ],
-      "title": "H3 MODEL — REQUIRED",
+      "title": "Load Diffusion Model — H3 MODEL — REQUIRED",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -63,7 +63,7 @@
           ]
         }
       ],
-      "title": "H3 TEXT ENCODER",
+      "title": "Load CLIP — H3 TEXT ENCODER",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -99,7 +99,7 @@
           ]
         }
       ],
-      "title": "Sampler algorithm",
+      "title": "KSamplerSelect — Sampler algorithm",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -133,7 +133,7 @@
           ]
         }
       ],
-      "title": "H3 Video VAE",
+      "title": "Load VAE — H3 Video VAE",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -168,7 +168,7 @@
           ]
         }
       ],
-      "title": "H3 Audio VAE",
+      "title": "Load VAE — H3 Audio VAE",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -182,7 +182,7 @@
       "id": 1906,
       "type": "Note",
       "pos": [
-        -3008,
+        -3936,
         -1088
       ],
       "size": [
@@ -194,7 +194,7 @@
       "mode": 0,
       "inputs": [],
       "outputs": [],
-      "title": "REF2VA SIX-SECTION PROMPT FORMAT",
+      "title": "Note — REF2VA SIX-SECTION PROMPT FORMAT",
       "properties": {},
       "widgets_values": [
         "REF2VA PROMPT FORMAT — SIX SECTIONS\n\n1. subject_definitions:\n2. summary:\n3. retention_analysis:\n4. detailed_description:\n5. overall_soundscape:\n6. non_diegetic_music:\n\nWrite stable @tags in the Plan. Tagged Ref2VA activates only registered @tags present in the resolved scene prompt and compiles them to native <Picture N> labels; it does not insert definitions for you."
@@ -297,13 +297,19 @@
           "name": "source_audio",
           "shape": 7,
           "type": "AUDIO",
-          "link": 103
+          "link": null
         },
         {
           "name": "external_context",
           "shape": 7,
           "type": "H3_CHAIN_EXTERNAL_CONTEXT",
           "link": null
+        },
+        {
+          "name": "source_timeline",
+          "type": "H3_SOURCE_TIMELINE",
+          "link": 112,
+          "shape": 7
         }
       ],
       "outputs": [
@@ -327,7 +333,7 @@
           "links": null
         }
       ],
-      "title": "LOOP START / RESUME",
+      "title": "MiniMax H3 Contex Loop Start — LOOP START / RESUME",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -436,7 +442,7 @@
           "name": "source_audio",
           "shape": 7,
           "type": "AUDIO",
-          "link": 104
+          "link": null
         }
       ],
       "outputs": [
@@ -448,7 +454,8 @@
             41,
             46,
             77,
-            102
+            102,
+            115
           ]
         },
         {
@@ -525,15 +532,22 @@
         {
           "name": "source_audio_slice",
           "type": "AUDIO",
-          "links": null
+          "links": [
+            100
+          ]
         },
         {
           "name": "status",
           "type": "STRING",
           "links": null
+        },
+        {
+          "name": "video_blend_frames",
+          "type": "INT",
+          "links": null
         }
       ],
-      "title": "CURRENT REF2V SCENE — PROMPT / SEED / TIMING",
+      "title": "MiniMax H3 Contex Loop Current Shot — CURRENT REF2V SCENE — PROMPT / SEED / TIMING",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -541,7 +555,7 @@
         "aux_id": "ethanfel/ComfyUI-MiniMaxH3-Contex-Loop"
       },
       "widgets_values": [
-        false
+        true
       ],
       "color": "#1f1f48",
       "bgcolor": "rgba(24,24,27,.9)"
@@ -570,7 +584,7 @@
           "name": "source_audio",
           "shape": 7,
           "type": "AUDIO",
-          "link": 107
+          "link": null
         }
       ],
       "outputs": [
@@ -580,7 +594,7 @@
           "links": null
         }
       ],
-      "title": "RECOVERY: ASSEMBLE WITHOUT RENDERING",
+      "title": "MiniMax H3 Contex Loop Assemble — RECOVERY: ASSEMBLE WITHOUT RENDERING",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -663,7 +677,7 @@
           ]
         }
       ],
-      "title": "Per-shot noise seed",
+      "title": "RandomNoise — Per-shot noise seed",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -795,7 +809,7 @@
           "links": null
         }
       ],
-      "title": "TAGGED REF2VA — COMPILES @TAGS PER SCENE",
+      "title": "MiniMax H3 Tagged Ref2VA — TAGGED REF2VA — COMPILES @TAGS PER SCENE",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.4.0",
@@ -803,7 +817,7 @@
         "aux_id": "ethanfel/ComfyUI-MiniMaxH3-Contex-Loop"
       },
       "widgets_values": [
-        "subject_definitions:\n@audio_1 is the full source-track audio reference; preserve its exact scene-local timing and performance identity.\n@style_base is the primary visual reference for <Subject 1>, defining the exact Classic Doom 1993 first-person rendering language, the airborne Market Garden battlefield, the paratrooper viewpoint, muted olive-and-brown palette, chunky low-resolution geometry, pixel texture scale, and period military equipment.\n<Subject 1> is the same playable first-person Allied paratrooper viewpoint and coherent 1993 DOS-era game world defined by @style_base. Keep the viewpoint, weapon scale, texture density, palette, and interface-free cinematic presentation consistent.\n\nsummary:\n[reference generation] A continuous first-person descent into a Market Garden village begins in the airborne exterior defined by @style_base and advances toward a damaged stone farmhouse.\n\nretention_analysis:\n<Subject 1> (appears in [Shot 1]): fully_preserved - retain the first-person viewpoint, Classic Doom 1993 rendering language, WWII Market Garden identity, palette, texture scale, weapon-view proportions, and coherent level design defined by @style_base while allowing new camera travel and action.\n@style_base: fully_preserved - use its airborne battlefield, paratrooper silhouettes, landscape layout, olive-and-brown colors, and retro pixel-art treatment as the scene's visual identity.\n\ndetailed_description:\n[Shot 1] Begin in the same first-person paratrooper viewpoint and Classic Doom 1993 visual language as @style_base. The camera descends beneath a canvas parachute over a war-torn Dutch village at dawn. Other Allied parachutes drift at different depths, anti-aircraft bursts expand into coarse pixel smoke, and fields, canals, tiled roofs, and a church tower grow steadily larger below. Keep all movement physically continuous and preserve the reference's low-resolution texture rhythm rather than smoothing it into modern realism.\n\nThe viewpoint swings gently toward a damaged stone farmhouse. Boots strike the muddy ground, the parachute canopy collapses behind the camera, and the same first-person momentum becomes a short sprint between hedgerows. A period weapon rises naturally into the lower frame. The camera reaches a splintered doorway and pushes inside without a cut. End while exterior dawn light remains visible behind and a dark timber corridor is emerging ahead; preserve the forward motion through the boundary.\n\noverall_soundscape:\nWind rush and canvas flutter during descent give way to a heavy landing, muddy footfalls, distant artillery, scattered rifle fire, wood creaks, and a close doorframe scrape. Keep the sound spatial and game-world diegetic.\n\nnon_diegetic_music:\nLow martial drums and a restrained ominous brass pulse build gradually beneath the descent, remaining secondary to the battlefield ambience.",
+        "subject_definitions:\n@audio_1 is the exact current-scene source-track slice; preserve its timing and performance identity.\n@style_base is the primary visual reference for <Subject 1>, defining the exact Classic Doom 1993 first-person rendering language, the airborne Market Garden battlefield, the paratrooper viewpoint, muted olive-and-brown palette, chunky low-resolution geometry, pixel texture scale, and period military equipment.\n<Subject 1> is the same playable first-person Allied paratrooper viewpoint and coherent 1993 DOS-era game world defined by @style_base. Keep the viewpoint, weapon scale, texture density, palette, and interface-free cinematic presentation consistent.\n\nsummary:\n[reference generation] A continuous first-person descent into a Market Garden village begins in the airborne exterior defined by @style_base and advances toward a damaged stone farmhouse.\n\nretention_analysis:\n<Subject 1> (appears in [Shot 1]): fully_preserved - retain the first-person viewpoint, Classic Doom 1993 rendering language, WWII Market Garden identity, palette, texture scale, weapon-view proportions, and coherent level design defined by @style_base while allowing new camera travel and action.\n@style_base: fully_preserved - use its airborne battlefield, paratrooper silhouettes, landscape layout, olive-and-brown colors, and retro pixel-art treatment as the scene's visual identity.\n\ndetailed_description:\n[Shot 1] Begin in the same first-person paratrooper viewpoint and Classic Doom 1993 visual language as @style_base. The camera descends beneath a canvas parachute over a war-torn Dutch village at dawn. Other Allied parachutes drift at different depths, anti-aircraft bursts expand into coarse pixel smoke, and fields, canals, tiled roofs, and a church tower grow steadily larger below. Keep all movement physically continuous and preserve the reference's low-resolution texture rhythm rather than smoothing it into modern realism.\n\nThe viewpoint swings gently toward a damaged stone farmhouse. Boots strike the muddy ground, the parachute canopy collapses behind the camera, and the same first-person momentum becomes a short sprint between hedgerows. A period weapon rises naturally into the lower frame. The camera reaches a splintered doorway and pushes inside without a cut. End while exterior dawn light remains visible behind and a dark timber corridor is emerging ahead; preserve the forward motion through the boundary.\n\noverall_soundscape:\nWind rush and canvas flutter during descent give way to a heavy landing, muddy footfalls, distant artillery, scattered rifle fire, wood creaks, and a close doorframe scrape. Keep the sound spatial and game-world diegetic.\n\nnon_diegetic_music:\nLow martial drums and a restrained ominous brass pulse build gradually beneath the descent, remaining secondary to the battlefield ambience.",
         896,
         672,
         243,
@@ -845,7 +859,7 @@
           ]
         }
       ],
-      "title": "LIGHTX2V TURBO — 8 STEP V1.0",
+      "title": "Load LoRA — LIGHTX2V TURBO — 8 STEP V1.0",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -926,7 +940,7 @@
           ]
         }
       ],
-      "title": "AUTO CONTEXT — clip 1 bypass / continuation",
+      "title": "MiniMax H3 Contex Loop Context — AUTO CONTEXT — clip 1 bypass / continuation",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -1083,7 +1097,7 @@
           ]
         }
       ],
-      "title": "Loop guider",
+      "title": "Basic Guider — Loop guider",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -1129,7 +1143,7 @@
           ]
         }
       ],
-      "title": "Per-shot scheduler steps",
+      "title": "BasicScheduler — Per-shot scheduler steps",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -1199,7 +1213,7 @@
           "links": null
         }
       ],
-      "title": "H3 sampler — SINGLE LOOP BODY",
+      "title": "SamplerCustomAdvanced — H3 sampler — SINGLE LOOP BODY",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -1242,7 +1256,7 @@
           ]
         }
       ],
-      "title": "Decode current clip frames",
+      "title": "VAE Decode — Decode current clip frames",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -1285,7 +1299,7 @@
           ]
         }
       ],
-      "title": "Decode current clip audio",
+      "title": "VAE Decode Audio — Decode current clip audio",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -1334,7 +1348,13 @@
           "widget": {
             "name": "retain_overlap_frames"
           },
-          "link": 80
+          "link": null
+        },
+        {
+          "name": "state",
+          "type": "H3_CHAIN_STATE",
+          "link": 115,
+          "shape": 7
         }
       ],
       "outputs": [
@@ -1367,7 +1387,7 @@
           "links": null
         }
       ],
-      "title": "TRIM 22 CONTEXT FRAMES / RETAIN 5 FOR BLEND",
+      "title": "MiniMax H3 Contex Loop Trim — TRIM CONTEXT / AUTO-RESOLVE SCENE BLEND",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -1440,7 +1460,7 @@
           "links": null
         }
       ],
-      "title": "SAVE DELIVERED + BLEND-READY SEGMENTS",
+      "title": "MiniMax H3 Contex Loop Segment + Checkpoint — SAVE DELIVERED + BLEND-READY SEGMENTS",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -1475,7 +1495,7 @@
           "name": "source_audio",
           "shape": 7,
           "type": "AUDIO",
-          "link": 105
+          "link": null
         }
       ],
       "outputs": [
@@ -1485,7 +1505,7 @@
           "links": null
         }
       ],
-      "title": "FINAL ASSEMBLY — 5-FRAME VISUAL BLEND",
+      "title": "MiniMax H3 Contex Loop Assemble — FINAL ASSEMBLY — 5-FRAME VISUAL BLEND",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -1530,7 +1550,7 @@
           ]
         }
       ],
-      "title": "COMFY KITCHEN ATTENTION",
+      "title": "ModelAttentionBackend — COMFY KITCHEN ATTENTION",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.31.0",
@@ -1564,13 +1584,19 @@
           "name": "source_audio",
           "shape": 7,
           "type": "AUDIO",
-          "link": 106
+          "link": null
         },
         {
           "name": "external_context",
           "shape": 7,
           "type": "H3_CHAIN_EXTERNAL_CONTEXT",
           "link": null
+        },
+        {
+          "name": "source_timeline",
+          "type": "H3_SOURCE_TIMELINE",
+          "link": 114,
+          "shape": 7
         }
       ],
       "outputs": [
@@ -1592,7 +1618,7 @@
           "links": null
         }
       ],
-      "title": "RECOVERY: LOAD ALL SAVED CLIPS",
+      "title": "MiniMax H3 Contex Loop Load Manifest — RECOVERY: LOAD ALL SAVED CLIPS",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -1619,7 +1645,7 @@
       "mode": 0,
       "inputs": [],
       "outputs": [],
-      "title": "RECOVERY / ASSEMBLE LATER",
+      "title": "Note — RECOVERY / ASSEMBLE LATER",
       "properties": {
         "Node name for S&R": "Note"
       },
@@ -1634,7 +1660,7 @@
       "type": "Note",
       "pos": [
         3136,
-        512
+        1312
       ],
       "size": [
         576,
@@ -1645,7 +1671,7 @@
       "mode": 0,
       "inputs": [],
       "outputs": [],
-      "title": "REF2V STUDIO TAGGED — HOW TO USE",
+      "title": "Note — REF2V STUDIO TAGGED — HOW TO USE",
       "properties": {
         "Node name for S&R": "Note"
       },
@@ -1685,7 +1711,7 @@
           "links": null
         }
       ],
-      "title": "@style_base — USED IN BOTH PROMPTS",
+      "title": "Load Image — @style_base — USED IN BOTH PROMPTS",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.31.0",
@@ -1734,7 +1760,7 @@
           "links": null
         }
       ],
-      "title": "@interior — USED IN SCENE 2 PROMPT",
+      "title": "Load Image — @interior — USED IN SCENE 2 PROMPT",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.31.0",
@@ -1799,7 +1825,7 @@
           "links": null
         }
       ],
-      "title": "1 — @style_base / PROMPT ACTIVATED",
+      "title": "MiniMax H3 Tagged Picture Ref — 1 — @style_base / PROMPT ACTIVATED",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.4.0",
@@ -1864,7 +1890,7 @@
           "links": null
         }
       ],
-      "title": "REVIEW GATE — APPROVE / EDIT+RETRY / REROLL / STOP",
+      "title": "MiniMax H3 Contex Loop Review Gate — REVIEW GATE — APPROVE / EDIT+RETRY / REROLL / STOP",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.4.0",
@@ -1949,7 +1975,7 @@
           "links": null
         }
       ],
-      "title": "LOOP END — ADVANCE REF2V SCENE",
+      "title": "MiniMax H3 Contex Loop End — LOOP END — ADVANCE REF2V SCENE",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -1976,7 +2002,7 @@
       "mode": 0,
       "inputs": [],
       "outputs": [],
-      "title": "REF2V PROMPT / IMAGE SOURCE",
+      "title": "Note — REF2V PROMPT / IMAGE SOURCE",
       "properties": {
         "Node name for S&R": "Note"
       },
@@ -2024,7 +2050,9 @@
         {
           "name": "reference_fingerprint",
           "type": "STRING",
-          "links": null
+          "links": [
+            96
+          ]
         },
         {
           "name": "status",
@@ -2032,7 +2060,7 @@
           "links": null
         }
       ],
-      "title": "2 — @interior / PROMPT ACTIVATED",
+      "title": "MiniMax H3 Tagged Picture Ref — 2 — @interior / PROMPT ACTIVATED",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.4.0",
@@ -2065,17 +2093,12 @@
           "name": "AUDIO",
           "type": "AUDIO",
           "links": [
-            100,
-            103,
-            104,
-            105,
-            106,
-            107,
-            108
+            108,
+            111
           ]
         }
       ],
-      "title": "FULL SOURCE TRACK — SELECT AUDIO ≥ 19.333s",
+      "title": "Load Audio — FULL SOURCE TRACK — SELECT AUDIO ≥ 19.333s",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.32.0",
@@ -2130,9 +2153,7 @@
         {
           "name": "reference_fingerprint",
           "type": "STRING",
-          "links": [
-            96
-          ]
+          "links": null
         },
         {
           "name": "status",
@@ -2140,7 +2161,7 @@
           "links": null
         }
       ],
-      "title": "3 — @audio_1 / SOURCE TIMELINE / H3-GRID ALIGNED",
+      "title": "MiniMax H3 Tagged Audio Ref — 3 — @audio_1 / CURRENT SCENE SLICE",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.4.1",
@@ -2149,8 +2170,8 @@
       },
       "widgets_values": [
         "audio_1",
-        "source_timeline",
-        true
+        "standalone",
+        false
       ],
       "color": "#653c4a",
       "bgcolor": "rgba(24,24,27,.9)"
@@ -2160,7 +2181,7 @@
       "type": "MiniMaxH3ChainPlanStudio",
       "pos": [
         384,
-        544
+        1344
       ],
       "size": [
         1536,
@@ -2174,6 +2195,30 @@
           "name": "plan",
           "type": "H3_CHAIN_PLAN",
           "link": 74
+        },
+        {
+          "name": "source_timeline",
+          "type": "H3_SOURCE_TIMELINE",
+          "link": 113,
+          "shape": 7
+        },
+        {
+          "name": "source_audio",
+          "type": "AUDIO",
+          "link": null,
+          "shape": 7
+        },
+        {
+          "name": "tagged_references",
+          "type": "H3_TAGGED_REFERENCES",
+          "link": null,
+          "shape": 7
+        },
+        {
+          "name": "reference_schedule",
+          "type": "H3_REFERENCE_SCHEDULE",
+          "link": null,
+          "shape": 7
         }
       ],
       "outputs": [
@@ -2186,7 +2231,7 @@
           ]
         }
       ],
-      "title": "PLAN STUDIO — TIMELINE / REVISIONS / PREVIEWS",
+      "title": "MiniMax H3 Plan Studio (Experimental) — PLAN STUDIO — TIMELINE / REVISIONS / PREVIEWS",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -2195,7 +2240,11 @@
         "h3_plan_studio_active_scene": 0,
         "h3_plan_studio_view": "scene"
       },
-      "widgets_values": [],
+      "widgets_values": [
+        1,
+        "",
+        true
+      ],
       "color": "#1f1f48",
       "bgcolor": "rgba(24,24,27,.9)"
     },
@@ -2250,7 +2299,7 @@
           ]
         }
       ],
-      "title": "RUN MANAGER — RESTORE PLAN + REFERENCE ASSETS",
+      "title": "MiniMax H3 Run Manager — RUN MANAGER — RESTORE PLAN + REFERENCE ASSETS",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.4.0",
@@ -2276,7 +2325,7 @@
       "type": "MiniMaxH3ChainRichScenePromptEditor",
       "pos": [
         1984,
-        544
+        1344
       ],
       "size": [
         1088,
@@ -2318,7 +2367,7 @@
       "type": "MiniMaxH3ChainPlan",
       "pos": [
         -640,
-        544
+        1344
       ],
       "size": [
         992,
@@ -2341,6 +2390,12 @@
             "name": "generation_fingerprint"
           },
           "link": 96
+        },
+        {
+          "name": "chain_policy",
+          "type": "H3_CHAIN_POLICY",
+          "link": 116,
+          "shape": 7
         }
       ],
       "outputs": [
@@ -2374,12 +2429,10 @@
         {
           "name": "video_blend_frames",
           "type": "INT",
-          "links": [
-            80
-          ]
+          "links": null
         }
       ],
-      "title": "REF2V STUDIO TAGGED SOURCE-AUDIO PLAN",
+      "title": "MiniMax H3 Contex Loop Plan — REF2V STUDIO TAGGED SOURCE-AUDIO PLAN",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -2395,7 +2448,7 @@
         }
       },
       "widgets_values": [
-        "{\n  \"prompt_prefix\": \"\",\n  \"shots\": [\n    {\n      \"id\": \"market_garden_descent\",\n      \"prompt\": \"subject_definitions:\\n@audio_1 is the full source-track audio reference; preserve its exact scene-local timing and performance identity.\\n@style_base is the primary visual reference for <Subject 1>, defining the exact Classic Doom 1993 first-person rendering language, the airborne Market Garden battlefield, the paratrooper viewpoint, muted olive-and-brown palette, chunky low-resolution geometry, pixel texture scale, and period military equipment.\\n<Subject 1> is the same playable first-person Allied paratrooper viewpoint and coherent 1993 DOS-era game world defined by @style_base. Keep the viewpoint, weapon scale, texture density, palette, and interface-free cinematic presentation consistent.\\n\\nsummary:\\n[reference generation] A continuous first-person descent into a Market Garden village begins in the airborne exterior defined by @style_base and advances toward a damaged stone farmhouse.\\n\\nretention_analysis:\\n<Subject 1> (appears in [Shot 1]): fully_preserved - retain the first-person viewpoint, Classic Doom 1993 rendering language, WWII Market Garden identity, palette, texture scale, weapon-view proportions, and coherent level design defined by @style_base while allowing new camera travel and action.\\n@style_base: fully_preserved - use its airborne battlefield, paratrooper silhouettes, landscape layout, olive-and-brown colors, and retro pixel-art treatment as the scene's visual identity.\\n\\ndetailed_description:\\n[Shot 1] Begin in the same first-person paratrooper viewpoint and Classic Doom 1993 visual language as @style_base. The camera descends beneath a canvas parachute over a war-torn Dutch village at dawn. Other Allied parachutes drift at different depths, anti-aircraft bursts expand into coarse pixel smoke, and fields, canals, tiled roofs, and a church tower grow steadily larger below. Keep all movement physically continuous and preserve the reference's low-resolution texture rhythm rather than smoothing it into modern realism.\\n\\nThe viewpoint swings gently toward a damaged stone farmhouse. Boots strike the muddy ground, the parachute canopy collapses behind the camera, and the same first-person momentum becomes a short sprint between hedgerows. A period weapon rises naturally into the lower frame. The camera reaches a splintered doorway and pushes inside without a cut. End while exterior dawn light remains visible behind and a dark timber corridor is emerging ahead; preserve the forward motion through the boundary.\\n\\noverall_soundscape:\\nWind rush and canvas flutter during descent give way to a heavy landing, muddy footfalls, distant artillery, scattered rifle fire, wood creaks, and a close doorframe scrape. Keep the sound spatial and game-world diegetic.\\n\\nnon_diegetic_music:\\nLow martial drums and a restrained ominous brass pulse build gradually beneath the descent, remaining secondary to the battlefield ambience.\",\n      \"length\": 243,\n      \"steps\": 8,\n      \"seed\": \"4201\"\n    },\n    {\n      \"id\": \"farmhouse_interior\",\n      \"prompt\": \"subject_definitions:\\n@audio_1 is the full source-track audio reference; preserve its exact scene-local timing and performance identity.\\n@style_base is the continuity reference for <Subject 1>, preserving the Classic Doom 1993 first-person rendering language, WWII Market Garden palette, pixel texture scale, and Allied paratrooper world established before entry.\\n@interior is the primary environment reference for <Subject 1> in this scene, defining the dark timber-and-stone architecture, corridor proportions, weapon-view scale, hard-edged lighting, and readable retro silhouettes.\\n<Subject 1> is the same playable first-person Allied paratrooper viewpoint and uninterrupted 1993 DOS-era game world defined jointly by @style_base, @interior, and the incoming H3 Motion Context.\\n\\nsummary:\\n[reference generation] The uninterrupted first-person movement continues from the farmhouse threshold into a fortified interior, using @interior for the room language while @style_base preserves the same game world.\\n\\nretention_analysis:\\n<Subject 1> (appears in [Shot 1]): fully_preserved - preserve the exact first-person viewpoint, weapon scale, retro rendering language, WWII identity, palette, texture density, and forward screen geography inherited from the incoming context and both active references.\\n@style_base: reference - retain its dawn exterior colors, pixel-art treatment, and battlefield identity wherever the outside remains visible.\\n@interior: fully_preserved - retain its timber beams, stone walls, deep shadows, corridor scale, weapon-view proportions, and Classic Doom 1993 gameplay readability throughout the interior.\\n\\ndetailed_description:\\n[Shot 1] Continue directly from the incoming H3 Motion Context with the camera already crossing the splintered doorway. Do not reset the stride, weapon, lighting direction, or room geometry. Exterior dawn light associated with @style_base remains briefly visible behind while the interior resolves into the timber beams, grey stone, hard shadows, and first-person weapon scale defined by @interior.\\n\\nThe player advances through a narrow corridor as dust shakes from overhead beams. A side door opens, revealing an enemy silhouette; the viewpoint pivots, fires one short burst, and continues forward without a cut. Muzzle light briefly illuminates coarse stone textures and smoke blocks the far end of the hall before clearing. The route bends down a short stair into a wider command room with a field radio, paper maps without readable text, and a bright exit slit beyond sandbags. Keep the forward motion continuous. End as the camera turns toward that exit and the exterior daylight widens, setting up the next movement without freezing.\\n\\noverall_soundscape:\\nContinue the prior battlefield bed through the doorway, adding enclosed boot echoes, timber strain, gear movement, one short weapon burst, stone debris, a field-radio hiss, and muffled artillery transmitted through the walls.\\n\\nnon_diegetic_music:\\nContinue the restrained martial pulse, adding a low sustained string tone inside the farmhouse and withholding any triumphant resolution.\",\n      \"length\": 243,\n      \"steps\": 8,\n      \"seed\": \"4202\"\n    }\n  ]\n}",
+        "{\n  \"prompt_prefix\": \"\",\n  \"shots\": [\n    {\n      \"id\": \"market_garden_descent\",\n      \"prompt\": \"subject_definitions:\\n@audio_1 is the exact current-scene source-track slice; preserve its timing and performance identity.\\n@style_base is the primary visual reference for <Subject 1>, defining the exact Classic Doom 1993 first-person rendering language, the airborne Market Garden battlefield, the paratrooper viewpoint, muted olive-and-brown palette, chunky low-resolution geometry, pixel texture scale, and period military equipment.\\n<Subject 1> is the same playable first-person Allied paratrooper viewpoint and coherent 1993 DOS-era game world defined by @style_base. Keep the viewpoint, weapon scale, texture density, palette, and interface-free cinematic presentation consistent.\\n\\nsummary:\\n[reference generation] A continuous first-person descent into a Market Garden village begins in the airborne exterior defined by @style_base and advances toward a damaged stone farmhouse.\\n\\nretention_analysis:\\n<Subject 1> (appears in [Shot 1]): fully_preserved - retain the first-person viewpoint, Classic Doom 1993 rendering language, WWII Market Garden identity, palette, texture scale, weapon-view proportions, and coherent level design defined by @style_base while allowing new camera travel and action.\\n@style_base: fully_preserved - use its airborne battlefield, paratrooper silhouettes, landscape layout, olive-and-brown colors, and retro pixel-art treatment as the scene's visual identity.\\n\\ndetailed_description:\\n[Shot 1] Begin in the same first-person paratrooper viewpoint and Classic Doom 1993 visual language as @style_base. The camera descends beneath a canvas parachute over a war-torn Dutch village at dawn. Other Allied parachutes drift at different depths, anti-aircraft bursts expand into coarse pixel smoke, and fields, canals, tiled roofs, and a church tower grow steadily larger below. Keep all movement physically continuous and preserve the reference's low-resolution texture rhythm rather than smoothing it into modern realism.\\n\\nThe viewpoint swings gently toward a damaged stone farmhouse. Boots strike the muddy ground, the parachute canopy collapses behind the camera, and the same first-person momentum becomes a short sprint between hedgerows. A period weapon rises naturally into the lower frame. The camera reaches a splintered doorway and pushes inside without a cut. End while exterior dawn light remains visible behind and a dark timber corridor is emerging ahead; preserve the forward motion through the boundary.\\n\\noverall_soundscape:\\nWind rush and canvas flutter during descent give way to a heavy landing, muddy footfalls, distant artillery, scattered rifle fire, wood creaks, and a close doorframe scrape. Keep the sound spatial and game-world diegetic.\\n\\nnon_diegetic_music:\\nLow martial drums and a restrained ominous brass pulse build gradually beneath the descent, remaining secondary to the battlefield ambience.\",\n      \"length\": 243,\n      \"steps\": 8,\n      \"seed\": \"4201\"\n    },\n    {\n      \"id\": \"farmhouse_interior\",\n      \"prompt\": \"subject_definitions:\\n@audio_1 is the exact current-scene source-track slice; preserve its timing and performance identity.\\n@style_base is the continuity reference for <Subject 1>, preserving the Classic Doom 1993 first-person rendering language, WWII Market Garden palette, pixel texture scale, and Allied paratrooper world established before entry.\\n@interior is the primary environment reference for <Subject 1> in this scene, defining the dark timber-and-stone architecture, corridor proportions, weapon-view scale, hard-edged lighting, and readable retro silhouettes.\\n<Subject 1> is the same playable first-person Allied paratrooper viewpoint and uninterrupted 1993 DOS-era game world defined jointly by @style_base, @interior, and the incoming H3 Motion Context.\\n\\nsummary:\\n[reference generation] The uninterrupted first-person movement continues from the farmhouse threshold into a fortified interior, using @interior for the room language while @style_base preserves the same game world.\\n\\nretention_analysis:\\n<Subject 1> (appears in [Shot 1]): fully_preserved - preserve the exact first-person viewpoint, weapon scale, retro rendering language, WWII identity, palette, texture density, and forward screen geography inherited from the incoming context and both active references.\\n@style_base: reference - retain its dawn exterior colors, pixel-art treatment, and battlefield identity wherever the outside remains visible.\\n@interior: fully_preserved - retain its timber beams, stone walls, deep shadows, corridor scale, weapon-view proportions, and Classic Doom 1993 gameplay readability throughout the interior.\\n\\ndetailed_description:\\n[Shot 1] Continue directly from the incoming H3 Motion Context with the camera already crossing the splintered doorway. Do not reset the stride, weapon, lighting direction, or room geometry. Exterior dawn light associated with @style_base remains briefly visible behind while the interior resolves into the timber beams, grey stone, hard shadows, and first-person weapon scale defined by @interior.\\n\\nThe player advances through a narrow corridor as dust shakes from overhead beams. A side door opens, revealing an enemy silhouette; the viewpoint pivots, fires one short burst, and continues forward without a cut. Muzzle light briefly illuminates coarse stone textures and smoke blocks the far end of the hall before clearing. The route bends down a short stair into a wider command room with a field radio, paper maps without readable text, and a bright exit slit beyond sandbags. Keep the forward motion continuous. End as the camera turns toward that exit and the exterior daylight widens, setting up the next movement without freezing.\\n\\noverall_soundscape:\\nContinue the prior battlefield bed through the doorway, adding enclosed boot echoes, timber strain, gear movement, one short weapon burst, stone debris, a field-radio hiss, and muffled artillery transmitted through the walls.\\n\\nnon_diegetic_music:\\nContinue the restrained martial pulse, adding a low sustained string tone inside the farmhouse and withholding any triumphant resolution.\",\n      \"length\": 243,\n      \"steps\": 8,\n      \"seed\": \"4202\"\n    }\n  ]\n}",
         "ref2v_studio_tagged_source_audio_demo",
         "",
         896,
@@ -2414,6 +2467,101 @@
       ],
       "color": "#1f1f48",
       "bgcolor": "rgba(24,24,27,.9)"
+    },
+    {
+      "id": 1955,
+      "type": "MiniMaxH3SourceTimeline",
+      "pos": [
+        -2176,
+        512
+      ],
+      "size": [
+        352,
+        230
+      ],
+      "flags": {},
+      "order": 48,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "source_video",
+          "shape": 7,
+          "type": "VIDEO",
+          "link": null
+        },
+        {
+          "name": "source_audio",
+          "shape": 7,
+          "type": "AUDIO",
+          "link": 111
+        }
+      ],
+      "outputs": [
+        {
+          "name": "source_timeline",
+          "type": "H3_SOURCE_TIMELINE",
+          "links": [
+            112,
+            113,
+            114
+          ]
+        },
+        {
+          "name": "status",
+          "type": "STRING",
+          "links": null
+        }
+      ],
+      "title": "MiniMax H3 Source Timeline — 0.5 SOURCE TIMELINE — SELECT ONCE",
+      "properties": {
+        "Node name for S&R": "MiniMaxH3SourceTimeline"
+      },
+      "widgets_values": [
+        "",
+        "",
+        "ignore",
+        0
+      ]
+    },
+    {
+      "id": 1956,
+      "type": "MiniMaxH3ChainPolicy",
+      "pos": [
+        -1060,
+        1504
+      ],
+      "size": [
+        340,
+        190
+      ],
+      "flags": {},
+      "order": 49,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "chain_policy",
+          "type": "H3_CHAIN_POLICY",
+          "links": [
+            116
+          ]
+        },
+        {
+          "name": "status",
+          "type": "STRING",
+          "links": null
+        }
+      ],
+      "title": "MiniMax H3 Chain Policy — 0.5 CHAIN POLICY",
+      "properties": {
+        "Node name for S&R": "MiniMaxH3ChainPolicy"
+      },
+      "widgets_values": [
+        "guide",
+        "source",
+        "on",
+        "off"
+      ]
     }
   ],
   "links": [
@@ -2850,14 +2998,6 @@
       "H3_CHAIN_SEGMENT"
     ],
     [
-      80,
-      1700,
-      5,
-      132,
-      3,
-      "INT"
-    ],
-    [
       81,
       132,
       2,
@@ -2955,7 +3095,7 @@
     ],
     [
       96,
-      1952,
+      1948,
       1,
       1700,
       1,
@@ -2971,8 +3111,8 @@
     ],
     [
       100,
-      1951,
-      0,
+      1702,
+      12,
       1952,
       0,
       "AUDIO"
@@ -2994,52 +3134,60 @@
       "H3_CHAIN_STATE"
     ],
     [
-      103,
-      1951,
-      0,
-      1701,
-      1,
-      "AUDIO"
-    ],
-    [
-      104,
-      1951,
-      0,
-      1702,
-      1,
-      "AUDIO"
-    ],
-    [
-      105,
-      1951,
-      0,
-      1706,
-      1,
-      "AUDIO"
-    ],
-    [
-      106,
-      1951,
-      0,
-      1707,
-      1,
-      "AUDIO"
-    ],
-    [
-      107,
-      1951,
-      0,
-      1708,
-      1,
-      "AUDIO"
-    ],
-    [
       108,
       1951,
       0,
       1949,
       3,
       "AUDIO"
+    ],
+    [
+      111,
+      1951,
+      0,
+      1955,
+      1,
+      "AUDIO"
+    ],
+    [
+      112,
+      1955,
+      0,
+      1701,
+      3,
+      "H3_SOURCE_TIMELINE"
+    ],
+    [
+      113,
+      1955,
+      0,
+      1930,
+      1,
+      "H3_SOURCE_TIMELINE"
+    ],
+    [
+      114,
+      1955,
+      0,
+      1707,
+      3,
+      "H3_SOURCE_TIMELINE"
+    ],
+    [
+      115,
+      1702,
+      0,
+      132,
+      4,
+      "H3_CHAIN_STATE"
+    ],
+    [
+      116,
+      1956,
+      0,
+      1700,
+      2,
+      "H3_CHAIN_POLICY"
     ]
   ],
   "groups": [
@@ -3048,9 +3196,9 @@
       "title": "H3 MODEL STACK",
       "bounding": [
         -2112,
-        -1024,
+        -1536,
         2200,
-        650
+        1162
       ],
       "color": "#3f789e",
       "flags": {}
@@ -3062,7 +3210,7 @@
         -448,
         -352,
         5792,
-        800
+        1568
       ],
       "color": "#744c8c",
       "flags": {}
@@ -3095,10 +3243,10 @@
       "id": 6,
       "title": "REF2V — PLAN STUDIO + RICH PROMPT EDITOR",
       "bounding": [
-        -672,
-        480,
-        3764,
-        1392
+        -1152,
+        1280,
+        4244,
+        1472
       ],
       "color": "#3f789e",
       "flags": {}
@@ -3110,7 +3258,7 @@
         -2656,
         -352,
         1544,
-        864
+        1152
       ],
       "color": "#744c8c",
       "flags": {}
@@ -3122,9 +3270,21 @@
         -1088,
         -352,
         608,
-        688
+        720
       ],
       "color": "#432f66",
+      "flags": {}
+    },
+    {
+      "id": 9,
+      "title": "WORKFLOW GUIDE",
+      "bounding": [
+        -4000,
+        -1152,
+        864,
+        1280
+      ],
+      "color": "#2f596b",
       "flags": {}
     }
   ],

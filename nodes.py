@@ -37,6 +37,13 @@ import folder_paths
 import node_helpers
 import torch
 
+from .av_timing import (
+    AUDIO_TRIM_FRAMES_KEY,
+    AUDIO_WITH_OVERLAP_FRAMES_KEY,
+    AUDIO_WITH_OVERLAP_WAVEFORM_KEY,
+    conform_waveform_length,
+)
+
 try:
     from safetensors.torch import load_file as _st_load, save_file as _st_save
 except ImportError:  # ComfyUI always ships safetensors; belt and braces
@@ -83,9 +90,9 @@ def _activate_inline_patches():
         return "native"
     if not _legacy_core_warning_emitted:
         _LOG.warning(
-            "MiniMax H3 Contex Loop 0.4: this ComfyUI build does not include "
+            "MiniMax H3 Contex Loop 0.5: this ComfyUI build does not include "
             "the native H3 Add Guide API merged in Comfy-Org/ComfyUI PR "
-            "#15439. Update ComfyUI for the supported 0.4 path. Falling back "
+            "#15439. Update ComfyUI for the supported 0.5 path. Falling back "
             "to legacy compatibility patches for this session; they are more "
             "likely to conflict with other H3 extensions.")
         _legacy_core_warning_emitted = True
@@ -147,6 +154,13 @@ def _prepare_native_guide_conditioning(conditioning):
 VIDEO_RUN_GRID = (
     243, 226, 209, 192, 175, 158, 141, 124,
     107, 90, 73, 56, 39, 22, 5, 1,
+)
+# These video-VAE runs also end on an integer 40 Hz audio-latent tick at
+# H3's native 24 fps. Masked AV continuation must use this stricter subset so
+# picture and sound protect exactly the same physical interval.
+AV_RUN_GRID = tuple(
+    frames for frames in VIDEO_RUN_GRID
+    if (frames * int(AUDIO_HZ)) % FPS == 0
 )
 
 
@@ -274,6 +288,41 @@ def _audio_tail_from_latent(latent, a_frames):
     return tail, rt, float(overhang)
 
 
+def _video_guide_tail_from_latent(latent, frames, target_video):
+    """Slice a phase-aligned generated-video tail for Guide conditioning.
+
+    Full H3 clips and native context runs of 5/22/39/... frames both contain
+    2 mod 5 temporal steps.  Their difference therefore begins on phase zero
+    of H3's 1/4/4/4/4 frame-per-token cycle, so the tail can be repositioned
+    at the start of a new Guide timeline without a VAE round trip.
+    """
+    source = _video_from_latent(latent)
+    frames = int(frames)
+    steps = next((value for value in range(1, int(source.shape[2]) + 1)
+                  if _pixel_frames(value) == frames), None)
+    if steps is None:
+        raise ValueError(
+            "h3_motion_context: %d Guide frames do not map to an exact H3 "
+            "video-latent run." % frames)
+    if (int(source.shape[2]) - steps) % 5:
+        raise ValueError(
+            "h3_motion_context: the saved video latent's temporal phase does "
+            "not align with a %d-frame Guide tail." % frames)
+    source_geometry = (
+        int(source.shape[1]), int(source.shape[3]), int(source.shape[4]))
+    target_geometry = (
+        int(target_video.shape[1]), int(target_video.shape[3]),
+        int(target_video.shape[4]))
+    if source_geometry != target_geometry:
+        raise ValueError(
+            "h3_motion_context: saved/target video latent geometry differs: "
+            "%s vs %s." % (tuple(source.shape), tuple(target_video.shape)))
+    tail = source[:1, :, -steps:].clone()
+    if hasattr(tail, "to") and hasattr(target_video, "device"):
+        tail = tail.to(target_video.device, target_video.dtype)
+    return tail
+
+
 class MiniMaxH3MotionContext:
     @classmethod
     def INPUT_TYPES(cls):
@@ -359,6 +408,13 @@ class MiniMaxH3MotionContext:
                     "tooltip": "Audio of the previous clip. The tail matching the "
                                "pinned frames is encoded and pinned alongside "
                                "them. Ignored when context_latent is wired."}),
+                "video_context_latent": ("LATENT", {
+                    "tooltip": "Previous clip's sampler-output H3 latent. "
+                               "When supplied in video encode mode, its "
+                               "phase-aligned video tail becomes the Guide "
+                               "block directly, avoiding RGB decode and VAE "
+                               "re-encode. Incompatible or imported context "
+                               "falls back to context_frames."}),
             },
         }
 
@@ -380,7 +436,7 @@ class MiniMaxH3MotionContext:
     def apply(self, conditioning, vae, latent, context_frames, context_length,
               encode_mode, anchor_mode, crop, audio_context_length=22,
               audio_mode="timeline", context_latent=None, audio_vae=None,
-              context_audio=None):
+              context_audio=None, video_context_latent=None):
         guide_api = _activate_inline_patches()
         native_guides = guide_api == "native"
 
@@ -423,13 +479,27 @@ class MiniMaxH3MotionContext:
         blocks = []
         offsets = []
         span = 0
-        if n > 0:
+        direct_video = None
+        if (n > 0 and encode_mode == "video"
+                and video_context_latent is not None):
+            try:
+                direct_video = _video_guide_tail_from_latent(
+                    video_context_latent, n, video)
+            except ValueError as exc:
+                _LOG.warning(
+                    "h3_motion_context: latent Guide could not reuse the "
+                    "saved video tail (%s); falling back to decoded RGB + "
+                    "video VAE.", exc)
+
+        if n > 0 and direct_video is None:
             # the LAST n frames of the incoming clip become the pinned run
             tail = _resize(context_frames[available - n:], width, height, crop)
 
         if n > 0 and encode_mode == "video":
-            # one call; the VAE reads the batch axis as time and compresses
-            enc = vae.encode(tail)
+            # Direct generated-latent Guide avoids a lossy VAE round trip.
+            # Imported/incompatible context retains the original RGB path.
+            enc = (direct_video if direct_video is not None
+                   else vae.encode(tail))
             if getattr(enc, "ndim", 0) != 5:
                 raise ValueError(
                     "h3_motion_context: video-mode encode returned shape %s, "
@@ -457,6 +527,11 @@ class MiniMaxH3MotionContext:
             else:
                 blocks = [enc[:, :, k:k + 1] for k in range(steps)]
             span = covered
+            if direct_video is not None:
+                _LOG.info(
+                    "h3_motion_context: latent Guide reused %d frames / %d "
+                    "video steps directly from the previous sampled latent",
+                    n, steps)
         elif n > 0:
             for i in range(n):
                 blocks.append(vae.encode(tail[i:i + 1]))
@@ -632,8 +707,8 @@ class MiniMaxH3LoopTrim:
     ComfyUI rounds the required audio steps to the nearest integer, so some
     valid H3 lengths decode about 8.3 ms long (124 frames) and others about
     8.3 ms short (260 frames). Either error accumulates down a chain. Match
-    Tail truncates excess samples or zero-pads a short decode so every
-    delivered stream is exactly frames/fps long.
+    Tail time-conforms these small grid mismatches so every delivered stream
+    is exactly frames/fps long without inserting a silence tail.
     """
 
     @classmethod
@@ -661,18 +736,22 @@ class MiniMaxH3LoopTrim:
                                "Create Video."}),
                 "match_tail": ("BOOLEAN", {
                     "default": True,
-                    "tooltip": "Truncate or zero-pad audio so its duration "
-                               "equals frames/fps exactly. H3 rounds its 40 Hz "
-                               "audio grid to the nearest step, producing about "
-                               "8ms of excess or shortage on some lengths."}),
+                    "tooltip": "Time-conform small H3 audio-grid mismatches so "
+                               "duration equals frames/fps exactly without a "
+                               "silence tail. H3's rounded 40 Hz grid can differ "
+                               "from picture duration by about 8ms."}),
                 "retain_overlap_frames": ("INT", {
                     "default": 0, "min": 0, "max": 4096,
-                    "tooltip": "Optional visual-only overlap for an external "
-                               "stitcher. 0 keeps the normal hard-trim output "
-                               "only. A positive value makes the extra image "
-                               "output retain up to that many of the final "
-                               "repeated context frames. Audio always removes "
-                               "the complete overlap."}),
+                    "tooltip": "Legacy/manual visual overlap for an external "
+                               "stitcher. In a 0.5 chain, connect Current "
+                               "Shot's state output below and this integer is "
+                               "ignored; Loop Trim then resolves the exact "
+                               "per-scene blend from the Plan automatically."}),
+                "state": ("H3_CHAIN_STATE", {
+                    "tooltip": "Recommended 0.5 chain route: connect Current "
+                               "Shot's state output. Loop Trim reads the active "
+                               "scene's resolved blend directly, so a Plan "
+                               "default can never override a per-scene value."}),
             },
         }
 
@@ -682,7 +761,9 @@ class MiniMaxH3LoopTrim:
     OUTPUT_TOOLTIPS = (
         "Delivered frames with the repeated leading context removed.",
         "Audio trimmed by the same duration and, when match_tail is enabled, "
-        "fitted exactly to the delivered image duration.",
+        "fitted exactly to the delivered image duration. The same AUDIO value "
+        "privately carries the full decoded overlap to Segment Save so AV "
+        "audio feathers survive final assembly; no extra wire is needed.",
         "Optional blend-ready image stream. When overlap_frames is positive, "
         "this retains only the final requested part of the repeated visual "
         "context before the delivered frames. Audio remains fully trimmed.",
@@ -692,10 +773,12 @@ class MiniMaxH3LoopTrim:
     FUNCTION = "trim"
     CATEGORY = "conditioning/minimax/contex_loop"
     DESCRIPTION = ("Remove the leading pinned frames from a decoded H3 clip, "
-                   "trimming picture and sound by the same duration.")
+                   "trimming picture and sound by the same duration. In 0.5 "
+                   "chains, Current Shot state also resolves the scene blend "
+                   "without a separate default-versus-scene integer wire.")
 
     def trim(self, images, trim_frames, audio=None, fps=24.0, match_tail=True,
-             retain_overlap_frames=0):
+             retain_overlap_frames=0, state=None):
         n = max(0, int(trim_frames))
         total = int(images.shape[0])
         if n >= total:
@@ -703,7 +786,70 @@ class MiniMaxH3LoopTrim:
                 "h3_motion_context: asked to trim %d frames from a %d frame clip"
                 % (n, total))
         out_images = images[n:] if n else images
-        retained = min(n, max(0, int(retain_overlap_frames)))
+        requested_retained = max(0, int(retain_overlap_frames))
+        if state is not None:
+            if not isinstance(state, dict):
+                raise ValueError(
+                    "h3_motion_context: Loop Trim state is not a chain state.")
+            plan = state.get("plan")
+            if not isinstance(plan, dict):
+                raise ValueError(
+                    "h3_motion_context: Loop Trim state has no Plan.")
+            try:
+                index = int(state["index"])
+                shot = plan["shots"][index - 1]
+                compatibility = plan["compatibility"]
+            except (KeyError, IndexError, TypeError, ValueError) as exc:
+                raise ValueError(
+                    "h3_motion_context: Loop Trim state has no valid current "
+                    "scene.") from exc
+            configured = shot.get("video_blend_frames")
+            if configured is None or (
+                    isinstance(configured, str) and not configured.strip()):
+                configured = compatibility.get("video_blend_frames", 0)
+            if isinstance(configured, bool) or (
+                    isinstance(configured, float)
+                    and not configured.is_integer()):
+                raise ValueError(
+                    "h3_motion_context: current scene blend must be a whole "
+                    "number of frames.")
+            try:
+                requested_retained = int(configured)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "h3_motion_context: current scene blend must be a whole "
+                    "number of frames.") from exc
+            if requested_retained < 0:
+                raise ValueError(
+                    "h3_motion_context: current scene blend cannot be "
+                    "negative.")
+            # Match Segment Save's effective-blend contract.  A Plan can carry
+            # a non-zero default into scene 1 even though scene 1 has no
+            # repeated prefix; similarly, runtime trimming remains the final
+            # authority if a decoder returns less overlap than configured.
+            # Missing raw/delivered fields are allowed for legacy states and
+            # tests, where trim_frames is the only available overlap count.
+            raw_frames = shot.get("raw_frames")
+            delivered_frames = shot.get("delivered_frames")
+            if raw_frames is None or delivered_frames is None:
+                repeated_frames = n
+            else:
+                try:
+                    repeated_frames = max(
+                        0, int(raw_frames) - int(delivered_frames))
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(
+                        "h3_motion_context: current scene has invalid raw or "
+                        "delivered frame counts.") from exc
+            requested_retained = min(
+                requested_retained, n, repeated_frames)
+            manual = max(0, int(retain_overlap_frames))
+            if manual != requested_retained:
+                _LOG.info(
+                    "h3_motion_context: Loop Trim resolved scene %d blend "
+                    "from chain state (%d frames); legacy/manual value %d "
+                    "was ignored", index, requested_retained, manual)
+        retained = min(n, requested_retained)
         overlap_images = images[n - retained:] if retained else out_images
 
         out_audio = audio
@@ -718,26 +864,34 @@ class MiniMaxH3LoopTrim:
                     "h3_motion_context: trimming %.3fs from %.3fs of audio would "
                     "leave nothing. Check that fps matches the clip."
                     % (seconds, length / sr))
-            waveform = waveform[..., cut:]
-
             if match_tail:
+                full_want = int(round(total / float(fps) * sr))
+                if length != full_want:
+                    waveform = conform_waveform_length(
+                        waveform, full_want,
+                        "h3_motion_context: decoded %d-frame full audio" %
+                        total)
+                full_waveform = waveform
+                waveform = full_waveform[..., cut:]
                 frames_left = total - n
                 want = int(round(frames_left / float(fps) * sr))
                 have = int(waveform.shape[-1])
-                if have > want:
-                    over = have - want
-                    waveform = waveform[..., :want]
-                    _LOG.info("h3_motion_context: tail trimmed %d samples "
-                              "(%.2fms) so audio matches %d frames exactly",
-                              over, over / sr * 1000.0, frames_left)
-                elif have < want:
-                    missing = want - have
-                    waveform = torch.nn.functional.pad(waveform, (0, missing))
-                    _LOG.info("h3_motion_context: tail padded %d zero samples "
-                              "(%.2fms) so audio matches %d frames exactly",
-                              missing, missing / sr * 1000.0, frames_left)
+                if have != want:
+                    waveform = conform_waveform_length(
+                        waveform, want,
+                        "h3_motion_context: decoded %d-frame audio" %
+                        frames_left)
+            else:
+                full_waveform = None
+                waveform = waveform[..., cut:]
 
             out_audio = {"waveform": waveform, "sample_rate": sr}
+            if full_waveform is not None:
+                out_audio.update({
+                    AUDIO_WITH_OVERLAP_WAVEFORM_KEY: full_waveform,
+                    AUDIO_WITH_OVERLAP_FRAMES_KEY: total,
+                    AUDIO_TRIM_FRAMES_KEY: n,
+                })
             _LOG.info("h3_motion_context: %d frames / %.4fs picture, %.4fs sound, "
                       "drift %.2fms",
                       total - n, (total - n) / float(fps),

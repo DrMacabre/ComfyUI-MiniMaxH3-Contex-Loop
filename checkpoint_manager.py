@@ -27,6 +27,7 @@ _ARTIFACT_KINDS = {
     "blend_segment": "Blend-ready video",
     "revision_metadata": "Revision metadata",
     "review_preview": "Review preview",
+    "active_pointer": "Active scene pointer",
 }
 _RUN_LOCKS: dict[tuple[str, str], threading.RLock] = {}
 _RUN_LOCKS_GUARD = threading.Lock()
@@ -381,6 +382,28 @@ class CheckpointGraphManager:
             })
         return artifacts
 
+    def _active_pointer_artifact(
+            self, scan: dict[str, Any], record: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Describe the mutable pointer removed by an active-tip rollback."""
+        path = os.path.realpath(os.path.join(
+            scan["checkpoint_dir"], "clip_%04d.json" % record["scene"]))
+        if not self._inside(scan["checkpoint_dir"], path):
+            raise ValueError("Active checkpoint pointer escapes its run directory.")
+        exists = os.path.isfile(path)
+        stat_result = os.stat(path) if exists else None
+        return {
+            "kind": "active_pointer",
+            "label": _ARTIFACT_KINDS["active_pointer"],
+            "path": os.path.relpath(path, self.output_root),
+            "exists": exists,
+            "size_bytes": int(stat_result.st_size) if stat_result else 0,
+            "shared": False,
+            "owned": True,
+            "_path": path,
+            "_mtime_ns": int(stat_result.st_mtime_ns) if stat_result else 0,
+        }
+
     @staticmethod
     def _descendant_keys(records: dict[tuple[int, str], dict[str, Any]],
                          start: tuple[int, str]) -> list[tuple[int, str]]:
@@ -562,13 +585,25 @@ class CheckpointGraphManager:
             dependents.sort(key=lambda item: (
                 not item["leaf"], -int(item["scene"]), item["revision"]))
             blockers = []
-            if record["active"]:
-                blockers.append("This is the active revision for scene %d." % scene_number)
+            later_active = sorted(
+                item["scene"] for item in scan["records"].values()
+                if item["active"] and item["scene"] > scene_number)
             if dependents:
                 blockers.append(
                     "%d later checkpoint revision%s depend%s on it." %
                     (len(dependents), "" if len(dependents) == 1 else "s",
                      "s" if len(dependents) == 1 else ""))
+            if record["active"] and dependents:
+                blockers.append(
+                    "This active revision can only be rolled back after its "
+                    "later revisions are deleted.")
+            elif record["active"] and later_active:
+                blockers.append(
+                    "A later active scene pointer exists at scene %d." %
+                    later_active[-1])
+            rollback = bool(record["active"] and not blockers)
+            if rollback:
+                artifacts.append(self._active_pointer_artifact(scan, record))
             public_files = [{key: value for key, value in item.items()
                              if not key.startswith("_")} for item in artifacts]
             snapshot = _fingerprint({
@@ -576,6 +611,7 @@ class CheckpointGraphManager:
                 "scene": scene_number,
                 "revision": token,
                 "active": record["active"],
+                "rollback": rollback,
                 "dependents": [(item["scene"], item["revision"])
                                for item in dependents],
                 "files": [(item["path"], item["exists"], item["size_bytes"],
@@ -590,6 +626,8 @@ class CheckpointGraphManager:
                 "scene_id": record["scene_id"],
                 "revision": token,
                 "active": record["active"],
+                "rollback": rollback,
+                "rollback_to_scene": scene_number - 1 if rollback else None,
                 "allowed": not blockers,
                 "blockers": blockers,
                 "dependents": dependents,
@@ -624,7 +662,10 @@ class CheckpointGraphManager:
             scan = self._scan(run)
             key = (int(scene), str(revision).strip().lower())
             record = scan["records"][key]
-            artifacts = [item for item in self._artifacts(scan, record)
+            managed = self._artifacts(scan, record)
+            if preview["rollback"]:
+                managed.append(self._active_pointer_artifact(scan, record))
+            artifacts = [item for item in managed
                          if item["owned"] and item["exists"]]
             transaction = uuid.uuid4().hex
             staged = []
@@ -654,8 +695,18 @@ class CheckpointGraphManager:
                 "run_name": run,
                 "scene": int(scene),
                 "revision": str(revision).strip().lower(),
+                "rollback": bool(preview["rollback"]),
+                "rollback_to_scene": preview["rollback_to_scene"],
                 "deleted_files": len(staged) - len(failed),
                 "reclaimed_bytes": reclaimed,
-                "message": "Deleted scene %d revision %s." %
-                           (int(scene), str(revision)[:8]),
+                "message": (
+                    ("Rolled the active chain back through scene %d and " %
+                     (int(scene) - 1) if int(scene) > 1 else
+                     "Rolled the active chain back to no saved scenes and ") +
+                    "deleted scene %d revision %s." %
+                    (int(scene), str(revision)[:8])
+                    if preview["rollback"] else
+                    "Deleted scene %d revision %s." %
+                    (int(scene), str(revision)[:8])
+                ),
             }
