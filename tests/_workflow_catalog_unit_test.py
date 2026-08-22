@@ -173,6 +173,29 @@ def validate_links(workflow):
                 assert link_id in links
 
 
+def validate_no_node_overlap(workflow):
+    """Release examples keep every visible node rectangle disjoint."""
+    rectangles = []
+    for item in workflow["nodes"]:
+        position = item.get("pos")
+        size = item.get("size")
+        if not (isinstance(position, list) and isinstance(size, list)
+                and len(position) >= 2 and len(size) >= 2):
+            continue
+        rectangles.append((
+            item.get("type"), item.get("id"),
+            float(position[0]), float(position[1]),
+            float(size[0]), float(size[1]),
+        ))
+    for index, first in enumerate(rectangles):
+        _, _, ax, ay, aw, ah = first
+        for second in rectangles[index + 1:]:
+            _, _, bx, by, bw, bh = second
+            overlaps = (ax < bx + bw and bx < ax + aw
+                        and ay < by + bh and by < ay + ah)
+            assert not overlaps, (first[:2], second[:2])
+
+
 def validate_crab_extension(path, expected_shots, tagged):
     workflow = load(path)
     validate_links(workflow)
@@ -762,6 +785,7 @@ def validate_sequential_motion_ref(path):
 def validate_deferred_h3_upscale(path):
     workflow = load(path)
     validate_links(workflow)
+    validate_no_node_overlap(workflow)
     node_types = {item.get("type") for item in workflow["nodes"]}
     required = {
         "MiniMaxH3ChainCheckpointManager",
@@ -782,6 +806,7 @@ def validate_deferred_h3_upscale(path):
     assert "MiniMaxH3ChainContext" not in node_types
 
     manager = node(workflow, "MiniMaxH3ChainCheckpointManager")
+    assert manager["size"][0] >= 1200 and manager["size"][1] >= 1000
     adapter = node(workflow, "MiniMaxH3ChainUpscaleAdapter")
     current = node(workflow, "MiniMaxH3ChainUpscaleCurrent")
     combined = node(workflow, "MiniMaxH3LatentUpscaleCombined")
@@ -844,6 +869,7 @@ def validate_deferred_h3_upscale(path):
 def validate_seedvr2_full_chain(path):
     workflow = load(path)
     validate_links(workflow)
+    validate_no_node_overlap(workflow)
     node_types = {item.get("type") for item in workflow["nodes"]}
     assert {
         "MiniMaxH3ChainCheckpointManager",
@@ -862,6 +888,8 @@ def validate_seedvr2_full_chain(path):
     manager = node(workflow, "MiniMaxH3ChainCheckpointManager")
     adapter = node(workflow, "MiniMaxH3ChainLatentVideoAdapter")
     direct = node(workflow, "SeedVR2DirectVideoUpscaler")
+    assert manager["size"][0] >= 1200 and manager["size"][1] >= 1000
+    assert direct["size"][0] >= 600 and direct["size"][1] >= 700
     saver = node(workflow, "SaveVideo")
     assert socket(manager["outputs"], "selected_manifest")["links"] == [
         socket(adapter["inputs"], "manifest")["link"]]

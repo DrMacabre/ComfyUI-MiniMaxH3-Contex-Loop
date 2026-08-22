@@ -6,12 +6,12 @@
       "id": 2,
       "type": "MiniMaxH3ChainCheckpointManager",
       "pos": [
-        -950,
-        400
+        -1920,
+        416
       ],
       "size": [
-        520,
-        520
+        1376,
+        1088
       ],
       "flags": {},
       "order": 1,
@@ -39,12 +39,12 @@
       "id": 3,
       "type": "MiniMaxH3ChainUpscaleAdapter",
       "pos": [
-        -350,
-        400
+        -448,
+        416
       ],
       "size": [
-        520,
-        430
+        544,
+        448
       ],
       "flags": {},
       "order": 2,
@@ -100,12 +100,12 @@
       "id": 4,
       "type": "MiniMaxH3ChainUpscaleCurrent",
       "pos": [
-        250,
-        400
+        416,
+        -320
       ],
       "size": [
-        520,
-        650
+        544,
+        672
       ],
       "flags": {},
       "order": 3,
@@ -222,8 +222,8 @@
       "id": 5,
       "type": "UNETLoader",
       "pos": [
-        -1850,
-        -600
+        -1824,
+        -384
       ],
       "size": [
         352,
@@ -257,8 +257,8 @@
       "id": 6,
       "type": "ModelAttentionBackend",
       "pos": [
-        -1450,
-        -600
+        -1408,
+        -384
       ],
       "size": [
         288,
@@ -297,8 +297,8 @@
       "id": 7,
       "type": "LoraLoaderModelOnly",
       "pos": [
-        -1100,
-        -600
+        -1056,
+        -384
       ],
       "size": [
         288,
@@ -338,8 +338,8 @@
       "id": 8,
       "type": "MiniMaxH3SigmaShift",
       "pos": [
-        -750,
-        -600
+        -704,
+        -384
       ],
       "size": [
         320,
@@ -381,8 +381,8 @@
       "id": 9,
       "type": "CLIPLoader",
       "pos": [
-        -1850,
-        -400
+        -1824,
+        -160
       ],
       "size": [
         352,
@@ -417,8 +417,8 @@
       "id": 10,
       "type": "VAELoader",
       "pos": [
-        -1850,
-        -220
+        -1824,
+        0
       ],
       "size": [
         352,
@@ -451,12 +451,12 @@
       "id": 11,
       "type": "MiniMaxH3ChainUpscaleReferenceConditioning",
       "pos": [
-        900,
-        400
+        1024,
+        128
       ],
       "size": [
-        520,
-        300
+        544,
+        320
       ],
       "flags": {},
       "order": 10,
@@ -519,8 +519,8 @@
       "id": 12,
       "type": "RandomNoise",
       "pos": [
-        900,
-        -80
+        1056,
+        -128
       ],
       "size": [
         288,
@@ -563,12 +563,12 @@
       "id": 13,
       "type": "MiniMaxH3Pass2StaggeredScheduler",
       "pos": [
-        900,
-        -300
+        1056,
+        -544
       ],
       "size": [
-        460,
-        300
+        480,
+        320
       ],
       "flags": {},
       "order": 12,
@@ -607,8 +607,8 @@
       "id": 14,
       "type": "MiniMaxH3LatentUpscaleCombined",
       "pos": [
-        1500,
-        150
+        1600,
+        -160
       ],
       "size": [
         620,
@@ -694,8 +694,8 @@
       "id": 15,
       "type": "BasicGuider",
       "pos": [
-        2200,
-        150
+        2368,
+        32
       ],
       "size": [
         288,
@@ -737,12 +737,12 @@
       "id": 16,
       "type": "DisableNoise",
       "pos": [
-        2200,
-        -80
+        2336,
+        -128
       ],
       "size": [
-        300,
-        80
+        320,
+        96
       ],
       "flags": {},
       "order": 15,
@@ -768,8 +768,8 @@
       "id": 17,
       "type": "KSamplerSelect",
       "pos": [
-        2200,
-        -300
+        2368,
+        -288
       ],
       "size": [
         288,
@@ -802,12 +802,12 @@
       "id": 18,
       "type": "SamplerCustomAdvanced",
       "pos": [
-        2600,
-        100
+        2816,
+        -32
       ],
       "size": [
-        380,
-        520
+        384,
+        544
       ],
       "flags": {},
       "order": 17,
@@ -867,8 +867,8 @@
       "id": 19,
       "type": "VAEDecode",
       "pos": [
-        3050,
-        150
+        3264,
+        -32
       ],
       "size": [
         256,
@@ -911,12 +911,12 @@
       "id": 20,
       "type": "MiniMaxH3ChainUpscaleSegmentSave",
       "pos": [
-        3450,
-        100
+        3648,
+        -32
       ],
       "size": [
-        430,
-        300
+        448,
+        320
       ],
       "flags": {},
       "order": 19,
@@ -964,12 +964,12 @@
       "id": 21,
       "type": "MiniMaxH3ChainUpscaleLoopEnd",
       "pos": [
-        3950,
-        100
+        4224,
+        -64
       ],
       "size": [
-        430,
-        360
+        448,
+        384
       ],
       "flags": {},
       "order": 20,
@@ -1037,12 +1037,12 @@
       "id": 22,
       "type": "MiniMaxH3ChainUpscaleMerge",
       "pos": [
-        4450,
-        100
+        4896,
+        -32
       ],
       "size": [
-        470,
-        300
+        992,
+        672
       ],
       "flags": {},
       "order": 21,
@@ -1088,12 +1088,12 @@
       "id": 23,
       "type": "Note",
       "pos": [
-        -1850,
-        850
+        -2688,
+        -96
       ],
       "size": [
-        1350,
-        620
+        704,
+        1344
       ],
       "flags": {},
       "order": 22,
@@ -1113,12 +1113,12 @@
       "id": 24,
       "type": "Note",
       "pos": [
-        1500,
-        750
+        416,
+        768
       ],
       "size": [
-        1200,
-        540
+        2016,
+        544
       ],
       "flags": {},
       "order": 23,
@@ -1410,10 +1410,10 @@
       "id": 2,
       "title": "H3 PASS-2 MODEL STACK",
       "bounding": [
-        -1920,
-        -680,
-        1600,
-        720
+        -1888,
+        -448,
+        2112,
+        704
       ],
       "color": "#3f789e",
       "flags": {}
@@ -1422,10 +1422,10 @@
       "id": 3,
       "title": "LEARNED H3 2x UPSCALE LOOP",
       "bounding": [
-        200,
-        -380,
-        4200,
-        1140
+        352,
+        -608,
+        4640,
+        1312
       ],
       "color": "#744c8c",
       "flags": {}
@@ -1434,10 +1434,10 @@
       "id": 4,
       "title": "UPSCALED FINAL",
       "bounding": [
-        4400,
-        20,
-        600,
-        420
+        4800,
+        -128,
+        1184,
+        800
       ],
       "color": "#2f6b3f",
       "flags": {}
@@ -1446,10 +1446,10 @@
   "config": {},
   "extra": {
     "ds": {
-      "scale": 0.55,
+      "scale": 0.28477414223819925,
       "offset": [
-        2050,
-        820
+        4563.2104520143885,
+        1478.146283125673
       ]
     },
     "frontendVersion": "1.48.7",

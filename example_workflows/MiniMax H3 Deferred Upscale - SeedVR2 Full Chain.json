@@ -7,8 +7,8 @@
     {
       "id": 2,
       "type": "MiniMaxH3ChainCheckpointManager",
-      "pos": [-1040, 100],
-      "size": [520, 520],
+      "pos": [-1920, 64],
+      "size": [1376, 1088],
       "flags": {},
       "order": 0,
       "mode": 0,
@@ -25,8 +25,8 @@
     {
       "id": 3,
       "type": "VAELoader",
-      "pos": [-1020, -110],
-      "size": [400, 96],
+      "pos": [-1824, -192],
+      "size": [416, 96],
       "flags": {},
       "order": 1,
       "mode": 0,
@@ -43,8 +43,8 @@
     {
       "id": 4,
       "type": "MiniMaxH3ChainLatentVideoAdapter",
-      "pos": [-400, 100],
-      "size": [500, 430],
+      "pos": [-448, 64],
+      "size": [544, 448],
       "flags": {},
       "order": 4,
       "mode": 0,
@@ -67,8 +67,8 @@
     {
       "id": 5,
       "type": "SeedVR2LoadDiTModel",
-      "pos": [-380, 650],
-      "size": [340, 260],
+      "pos": [-448, -960],
+      "size": [448, 352],
       "flags": {},
       "order": 2,
       "mode": 0,
@@ -87,8 +87,8 @@
     {
       "id": 6,
       "type": "SeedVR2LoadVAEModel",
-      "pos": [20, 650],
-      "size": [350, 360],
+      "pos": [64, -960],
+      "size": [448, 448],
       "flags": {},
       "order": 3,
       "mode": 0,
@@ -107,8 +107,8 @@
     {
       "id": 7,
       "type": "SeedVR2DirectVideoUpscaler",
-      "pos": [320, 100],
-      "size": [470, 650],
+      "pos": [640, 64],
+      "size": [640, 768],
       "flags": {},
       "order": 5,
       "mode": 0,
@@ -130,8 +130,8 @@
     {
       "id": 8,
       "type": "SaveVideo",
-      "pos": [1030, 100],
-      "size": [350, 290],
+      "pos": [1408, 64],
+      "size": [448, 320],
       "flags": {},
       "order": 6,
       "mode": 0,
@@ -148,8 +148,8 @@
     {
       "id": 9,
       "type": "Note",
-      "pos": [850, 450],
-      "size": [560, 500],
+      "pos": [1408, 480],
+      "size": [896, 640],
       "flags": {},
       "order": 7,
       "mode": 0,
@@ -168,13 +168,13 @@
     [6, 7, 0, 8, 0, "VIDEO"]
   ],
   "groups": [
-    {"id": 1, "title": "SELECT + DECODE ONE CONTINUOUS H3 BRANCH", "bounding": [-1080, -170, 1230, 760], "color": "#3f789e", "font_size": 22, "flags": {}},
-    {"id": 2, "title": "SEEDVR2 MODELS", "bounding": [-430, 600, 850, 460], "color": "#8a6f3d", "font_size": 22, "flags": {}},
-    {"id": 3, "title": "WHOLE-VIDEO UPSCALE + FINAL SAVE", "bounding": [270, 40, 1160, 970], "color": "#557a55", "font_size": 22, "flags": {}}
+    {"id": 1, "title": "SELECT + DECODE ONE CONTINUOUS H3 BRANCH", "bounding": [-1984, -256, 2144, 1472], "color": "#3f789e", "font_size": 22, "flags": {}},
+    {"id": 2, "title": "SEEDVR2 MODELS", "bounding": [-512, -1024, 1088, 576], "color": "#8a6f3d", "font_size": 22, "flags": {}},
+    {"id": 3, "title": "WHOLE-VIDEO UPSCALE + FINAL SAVE", "bounding": [576, 0, 1792, 1184], "color": "#557a55", "font_size": 22, "flags": {}}
   ],
   "config": {},
   "extra": {
-    "ds": {"scale": 0.8, "offset": [960, 420]},
+    "ds": {"scale": 0.32, "offset": [2100, 1100]},
     "comfyui_mcp": {"workflow_uuid": "8f724112-a6d7-44df-8854-b9964169c07e"}
   },
   "version": 0.4
