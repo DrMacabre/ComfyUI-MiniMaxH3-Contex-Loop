@@ -40,6 +40,7 @@ const ADVANCED_OUTPUTS = Object.freeze({
 const ALWAYS_ADVANCED_WIDGETS = Object.freeze({
     MiniMaxH3ChainPlanStudio: ["verify_resume_history"],
     MiniMaxH3ChainPreflight: ["verify_resume_history"],
+    MiniMaxH3ChainUpscaleAdapter: ["recipe_json"],
 });
 
 export function nodeType(node) {

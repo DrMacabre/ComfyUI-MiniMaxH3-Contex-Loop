@@ -4,6 +4,10 @@ Newest first. This file keeps release history out of the onboarding README.
 
 ## Unreleased — Deferred checkpoint upscaling
 
+- Hid the Upscale Adapter's provenance-only `recipe_json` in the default
+  presentation. It remains serialized for resume validation and can be edited
+  through **Show advanced H3 controls**.
+
 - Fixed Checkpoint Manager branch clicks so the selected lineage is committed
   through the hidden Comfy widget callback and immediately available to
   `selected_manifest`. Branch headers now select their final revision, and

@@ -121,6 +121,20 @@ assert.equal(currentPresentation.hiddenInputs.has("source_audio"), true);
 assert.equal(currentPresentation.hiddenOutputs.has("source_audio_slice"), false,
     "source reference is on, so its output stays available");
 
+const upscaleAdapter = node(25, "MiniMaxH3ChainUpscaleAdapter", [], [], [
+    ["recipe_json", '{"upscaler":"LBH 3D"}'],
+]);
+assert.equal(
+    presentationForNode(upscaleAdapter, false).hiddenWidgets.has("recipe_json"),
+    true,
+    "upscale recipe provenance is hidden in the compact view",
+);
+assert.equal(
+    presentationForNode(upscaleAdapter, true).hiddenWidgets.has("recipe_json"),
+    false,
+    "advanced disclosure keeps the recipe editable",
+);
+
 const linkedStatus = node(6, "MiniMaxH3ChainSegmentSave", [], [
     ["segment", null], ["status", [22]],
 ]);
