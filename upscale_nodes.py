@@ -325,6 +325,10 @@ def _sync_h3_conditioning(conditioning: Any, scale_x: float,
             effective_motion_mode = str(metadata.get(
                 "_h3_upscale_motion_ref_mode") or
                 "exclude_video_keep_audio")
+        picture_policy = str(metadata.get(
+            "_h3_upscale_ref_image_size") or "")
+        pictures_already_target_sized = bool(metadata.get(
+            "_h3_upscale_picture_refs_target_sized", False))
         refs = metadata.get("minimax_refs")
         if refs is not None:
             _unused, policy_refs = chain._h3_motion_reference_policy(
@@ -337,6 +341,16 @@ def _sync_h3_conditioning(conditioning: Any, scale_x: float,
                     if effective_motion_mode == "keep_video_native":
                         synced_refs.append(copied)
                         continue
+                # Core H3's ``max`` picture policy is deliberately independent
+                # of the generation canvas: the same source picture must keep
+                # the same capped reference latent at 1 MP, 2 MP, and pass 2.
+                # Likewise, a ``match`` picture rebuilt from its cache-v2 RGB
+                # master at the target canvas must not be scaled a second time.
+                if kind == "image" and (
+                        picture_policy == "max" or
+                        pictures_already_target_sized):
+                    synced_refs.append(copied)
+                    continue
                 if kind != "audio" and copied.get("latent") is not None:
                     latent = _sync_visual_latent(
                         copied["latent"], scale_x, scale_y, method)
@@ -361,8 +375,10 @@ def _sync_h3_conditioning(conditioning: Any, scale_x: float,
     return output
 
 
-def _mark_h3_upscale_motion_policy(conditioning: Any, mode: str) -> Any:
-    """Attach the cache/Qwen motion policy for the later sync node."""
+def _mark_h3_upscale_motion_policy(
+        conditioning: Any, mode: str, ref_image_size: str | None = None,
+        picture_refs_target_sized: bool = False) -> Any:
+    """Attach cache policies needed by the later conditioning-sync node."""
     output = []
     for entry in conditioning:
         if (not isinstance(entry, (list, tuple)) or len(entry) < 2
@@ -371,6 +387,10 @@ def _mark_h3_upscale_motion_policy(conditioning: Any, mode: str) -> Any:
             continue
         metadata = entry[1].copy()
         metadata["_h3_upscale_motion_ref_mode"] = str(mode)
+        if ref_image_size in ("match", "max"):
+            metadata["_h3_upscale_ref_image_size"] = str(ref_image_size)
+            metadata["_h3_upscale_picture_refs_target_sized"] = bool(
+                picture_refs_target_sized)
         output.append([entry[0], metadata])
     return output
 
@@ -844,8 +864,12 @@ class MiniMaxH3ChainUpscaleReferenceConditioning:
             else:
                 conditioning = chain._conditioning_from_reference_cache(
                     clip, cached, custom_prompt or None, motion_ref_mode)
+            ref_image_size = str(cached.get("ref_image_size") or "match")
             conditioning = _mark_h3_upscale_motion_policy(
-                conditioning, motion_ref_mode)
+                conditioning, motion_ref_mode, ref_image_size,
+                picture_refs_target_sized=bool(
+                    target_detail is not None and
+                    target_detail.get("policy") == "match"))
             compiled = (custom_prompt or
                         str(cached.get("compiled_prompt") or prompt))
             status = (
@@ -866,6 +890,8 @@ class MiniMaxH3ChainUpscaleReferenceConditioning:
                         target_detail["master_rebuilds"],
                         target_detail["fallback_rebuilds"],
                         target_detail["preserved_blocks"]))
+            if ref_image_size == "max":
+                status += "; max pictures keep cached geometry"
             if custom_prompt:
                 status += "; custom pass-2 prompt override"
             status += "; motion refs=%s" % motion_ref_mode
@@ -906,11 +932,13 @@ class H3ConditioningSyncFromLatents:
                                "X/Y scale drives the conditioning resize."}),
                 "positive": ("CONDITIONING", {
                     "tooltip": "Original H3 conditioning containing minimax_refs "
-                               "and/or minimax_keyframes."}),
+                               "and/or minimax_keyframes. Cached max pictures "
+                               "remain at their core-defined geometry."}),
                 "method": (CONDITIONING_SYNC_METHODS, {
                     "default": "bilinear",
-                    "tooltip": "Spatial interpolation used for visual reference "
-                               "and keyframe latents. Time and audio are unchanged."}),
+                    "tooltip": "Spatial interpolation used for match-sized "
+                               "picture refs, eligible video refs, and keyframe "
+                               "latents. Max pictures, time, and audio are unchanged."}),
                 "motion_ref_mode": (CONDITIONING_SYNC_MOTION_MODES, {
                     "default": "conditioning_policy",
                     "tooltip": "conditioning_policy automatically follows "
@@ -941,9 +969,10 @@ class H3ConditioningSyncFromLatents:
     CATEGORY = "conditioning/minimax/contex_loop/upscale"
     DESCRIPTION = (
         "Synchronize H3 pass-2 conditioning from the original and upscaled "
-        "latents. Resizes picture refs and keyframes, filters or retains motion "
-        "refs according to the conditioner policy (or an explicit override), "
-        "updates reference H/W metadata, and leaves text, time, and audio "
+        "latents. Resizes match-sized picture refs and keyframes while keeping "
+        "Core H3 max-sized pictures invariant, filters or retains motion refs "
+        "according to the conditioner policy (or an explicit override), "
+        "updates changed H/W metadata, and leaves text, time, and audio "
         "conditioning untouched. Build a new Guider from the returned output.")
 
     def sync(self, original_latent, upscaled_latent, positive,
