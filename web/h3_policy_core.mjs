@@ -35,6 +35,11 @@ export const TRANSITION_PRESETS = Object.freeze({
         continuationMode: "drift_control_av", contextLength: 39,
         label: "Drift-Control AV", description: "Experimental schedule-matched mask",
     }),
+    color_drift_av: Object.freeze({
+        continuationMode: "color_stable_drift_av", contextLength: 39,
+        label: "Color-Stable Drift AV",
+        description: "Drift-Control plus tapered scene-one latent color delta",
+    }),
     hard_av: Object.freeze({
         continuationMode: "masked_av", contextLength: 39,
         label: "Hard AV", description: "Protected 39-frame AV prefix",
@@ -54,7 +59,7 @@ export const TRANSITION_PRESETS = Object.freeze({
 // audio_feather_av spelling is a read-only migration alias for soft_av.
 export const ADVANCED_TRANSITION_PRESETS = Object.freeze([
     "cut", "guide", "tone_guide", "latent_guide", "detail_guide",
-    "detail_av", "drift_av", "hard_av", "soft_av",
+    "detail_av", "drift_av", "color_drift_av", "hard_av", "soft_av",
 ]);
 
 export const LEGACY_AUDIO_POLICIES = Object.freeze({

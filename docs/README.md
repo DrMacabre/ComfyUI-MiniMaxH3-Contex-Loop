@@ -6,6 +6,7 @@ Choose the guide that matches the task in front of you.
 |---|---|
 | [Scene authoring](SCENE_AUTHORING.md) | Plan JSON, the visual editors, prompt history, seeds, timing, and scene ranges |
 | [Scheduled references](SCHEDULED_REFERENCES.md) | Per-scene image/video/audio references, aliases, compliance, preview, and fingerprints |
+| [Reference Video Fade](REFERENCE_VIDEO_FADE.md) | Experimental denoising-time control of native Ref2VA video influence |
 | [Audio and continuity](AUDIO_AND_CONTINUITY.md) | Source tracks, generated audio, 15.070-second reference alignment, trimming, and seam analysis |
 | [Runs, review, and recovery](RUNS_AND_RECOVERY.md) | Review Gate, retries, Checkpoint Manager branches and cleanup, Run Manager assets, resume, assembly, whole-chain SeedVR2 finishing, and PNG export |
 | [Advanced workflows](ADVANCED_WORKFLOWS.md) | Existing-video extension, performance re-filming, long context, and last-frame targets |

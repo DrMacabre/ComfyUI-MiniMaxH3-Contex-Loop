@@ -104,10 +104,10 @@ the completed predecessor.
 
 The normal selector intentionally exposes only those four tested choices.
 Advanced Policy Override selects named semantic recipes including
-`tone_guide`, `latent_guide`, `detail_guide`, `detail_av`, and `drift_av` while
-preserving the upstream audio intent. The Legacy 0.4 Policy Adapter owns raw
-implementation, visual-context, and audio-context values, including the old
-dual-stream `feathered_av` implementation.
+`tone_guide`, `latent_guide`, `detail_guide`, `detail_av`, `drift_av`, and
+`color_drift_av` while preserving the upstream audio intent. The Legacy 0.4
+Policy Adapter owns raw implementation, visual-context, and audio-context
+values, including the old dual-stream `feathered_av` implementation.
 `latent_guide` requires video encode mode and at least five positive context
 frames. `tapered_guide` accepts the listed Guide context lengths; only the
 22-frame preset has published validation, so other lengths remain
@@ -130,6 +130,19 @@ video steps, and tapers the final four `.75/.50/.25/.00`. Chain Context's MODEL
 output couples the sampler-side inpaint blend to H3's per-row timestep mask;
 using only one of those paths would give the model a mislabeled prefix. The
 recipe is dependency-hashed and initially validated at 20 steps.
+
+Color-Stable Drift AV keeps that exact mask/sampler behavior and adds a
+video-only scene-one color anchor to the disposable copied prefix. It measures
+the retained RGB tail of the first generated scene and the current predecessor,
+decodes the 12-step prefix, and computes
+`E(weakly graded decode) - E(original decode)`. Only that delta is added to the
+sampled prefix, so ordinary VAE round-trip bias is cancelled instead of
+replacing the sampled latent with a re-encode. A 3x3 latent low-pass limits the
+change to broad tone/chroma, and a full-prefix smoothstep keeps the oldest
+overlap step exact while reaching the bounded correction beside the generated
+future. Brightness is capped at six code values, saturation at six percent,
+and both use half the measured correction. The predecessor checkpoint and
+audio latent are never modified. The complete recipe is dependency-hashed.
 
 When a workflow splits sigmas and switches H3 models, Chain Context receives
 the original unsplit schedule but no MODEL. Each raw model passes through its

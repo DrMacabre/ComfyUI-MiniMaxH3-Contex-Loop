@@ -217,7 +217,7 @@ alternate muxing graphs.
 
 ### Deferred H3 upscale child runs
 
-Select the final scene of the complete branch you want in Checkpoint Manager,
+Select the right-hand generated tip you want in Checkpoint Manager,
 then connect its **selected_manifest** output to **MiniMax H3 Checkpoint Upscale
 Adapter**. The manager verifies the immutable lineage and embeds recovery-only
 compatibility and Source Timeline metadata directly. No source Plan, Chain
@@ -235,11 +235,11 @@ Segment + Checkpoint and falls back to the terminal sampler latent in older
 checkpoints. It exposes the joint H3 AV latent as well as separate video and
 audio latents:
 
-- Tr1dae/Mamad8 combined-style nodes can consume `source_latent` directly.
-- Video-only LBH-style nodes consume `source_video_latent`; recombine their
-  result with `source_audio_latent` before an H3 refinement pass when that graph
-  expects joint AV. Preserve the parent audio unless intentional audio
-  regeneration is part of the recipe.
+- Combined-style nodes can consume `source_latent` directly.
+- Video-only LBH nodes consume `source_video_latent`. **MiniMax H3 Pass-2 AV
+  Prepare** recombines their output with `source_audio_latent`, performs
+  NestedTensor-safe CONST re-noise on video only, and locks the saved audio
+  with a zero denoise mask.
 - LTX 2.5 is a decoded-video V2V path, not an H3-latent path. Decode the H3
   source latent, run the LTX refinement/upscale graph, and send its raw frame
   batch to Upscale Segment Save.
@@ -248,11 +248,33 @@ For H3 pass-2 conditioning, **Upscale Reference Conditioning** first reads the
 exact cache descriptor recorded on the selected source revision. Tagged and
 Scheduled Ref2VA create that cache automatically: native H3 reference latents
 remain in safetensors while compact Qwen presentation frames allow the saved
-compiled prompt to be tokenized again. Thus the child graph needs no reference
-registry or original picture/video/audio connections. Older revisions without
-a descriptor can discover a matching cache by `generation_fingerprint`, or
-use the node's `text_only` fallback. Select `error` when the second pass must
-not proceed without cached Ref2VA conditioning.
+compiled prompt to be tokenized again. **H3 Conditioning Sync From Latents**
+then compares the original scene video latent with the actual LBH output. It
+applies the exact horizontal and vertical scale to picture `minimax_refs` and
+`minimax_keyframes`, updates reference H/W metadata, and deliberately leaves
+text, temporal positions, and audio conditioning untouched. Upscale Reference
+Conditioning's default `exclude_video_keep_audio` policy removes both the Qwen
+motion-video presentation and native motion-video latent because the pass-2
+source latent already contains the generated motion; audio paired with a video
+reference is converted to an audio-only reference. `keep_video_native` and
+`resize_video` remain available for comparison, and the sync node follows the
+selected conditioning policy automatically. Build sampler 2's new
+Guider from the returned conditioning rather than reusing the original Guider.
+Thus the child graph needs no reference registry or original picture/video/audio
+connections. Both cache versions retain the encoded native reference blocks
+used by sync; cache v2 additionally keeps original picture masters for
+workflows that choose target-resolution VAE re-encoding instead.
+
+Upscale Reference Conditioning encodes the exact saved compiled prompt by
+default. Its optional `prompt_override` is encoded instead when supplied, so a
+user can provide a short appearance/detail-only pass-2 prompt without repeating
+the source scene's motion or camera instructions. Automatic natural-language
+motion stripping is intentionally avoided because it cannot reliably separate
+action from identity, framing, or continuity clauses. The bundled LBH workflow
+therefore supplies a neutral preservation/detail override; clear that widget to
+A/B against the original compiled prompt.
+Revisions without a cache can use `text_only`; select `error` when the second
+pass must not proceed without Ref2VA conditioning.
 
 Segment Save adopts each verified cache object into
 `output/h3_chains/<run_name>/reference_cache/` and records only that run-local
@@ -287,9 +309,16 @@ output/h3_chains/<run_name>/upscaled/<profile>/
 `save_latent` defaults off. Segment Save still writes a small verified
 safetensors checkpoint containing the assembly audio, so the child run remains
 resumable and mergeable without duplicating the much larger HQ sampler latent.
-Enable it only when you want to reopen/refine the HQ latent itself. The
-transient `upscaled_latent` connection on Loop End remains usable for scene
-continuity whether or not persistence is enabled.
+When the following source scene uses Drift-Control AV, that checkpoint also
+contains only the preceding scene's 12-step HQ video tail. Pass-2 AV Prepare
+splices this tail into scene 2+'s prefix, gives it zero added noise and a zero
+denoise mask, and refines only the new video region. This compact context is
+enough for exact interruption-safe HQ continuation without enabling full
+latent saving. Older child checkpoints without the tail safely protect their
+independently upscaled source prefix and report that fallback in node status.
+Enable full latent saving only when you want to reopen/refine the HQ latent
+itself. The transient `upscaled_latent` connection on Loop End remains usable
+for scene continuity whether or not persistence is enabled.
 
 For new parent renders, connect SamplerCustomAdvanced `denoised_output` to
 Segment + Checkpoint's optional `denoised_latent` input. Existing checkpoints
@@ -401,6 +430,36 @@ still receives the one H.264 encode required by any pixel-space crossfade.
 Each scheduled value must not exceed that incoming scene's repeated context.
 For example, a chain whose first join has five context frames and later joins
 have thirty-nine can use `5,30`; requesting thirty at the first join is rejected.
+
+### Optional scene-one color stabilization
+
+Set Assemble's `color_stabilization` to `scene_1_anchor` to counter gradual
+exposure or saturation drift in a completed chain. Assembly measures a
+center-weighted sample of the first generated scene, then fits only a weak,
+bounded luma/saturation correction for each later scene. A correction is capped
+at six code values of luma and six percent of saturation, at half the measured
+strength.
+
+The exact join inherits the preceding scene's accepted correction. Starting
+after the retained overlap, that correction moves smoothly to the next scene's
+target over 72 frames. Consequently the option cannot introduce a new grade
+step at the boundary and does not change motion, timing, or audio. A prelude is
+not used as the reference: the first generated scene remains the anchor.
+
+This is an assembly grade, not diffusion conditioning. It does not change
+checkpoints or future continuation input. It is disabled by default. Enabling
+it uses the same single pixel-processing encode as a visual blend; on a hard-cut
+assembly it replaces the otherwise lossless stream copy with one encode.
+
+For an experimental correction that can influence later generation instead of
+only the final MP4, choose **Color-Stable Drift AV** through Advanced Policy or
+on a scene's incoming transition. It applies a bounded scene-one correction to
+the disposable copied video latent as a VAE delta, tapering from zero to full
+strength across the 39-frame context. Scene 1 remains the anchor, scene 2 is
+neutral, and scene 3 onward can receive a corrected predecessor tail. It does
+not alter the saved predecessor checkpoint or audio. Because this changes
+generation conditioning, it is recorded in the incoming-boundary dependency
+and is intentionally separate from this assembly-only option.
 
 Enable `copy_to_output` to keep the canonical final in the run folder and also
 publish an MP4 into the regular ComfyUI output tree. `output_subfolder` is

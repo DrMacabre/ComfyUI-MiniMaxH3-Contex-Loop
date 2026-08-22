@@ -29,6 +29,12 @@ UPSCALE_STATE_TYPE = "H3_CHAIN_UPSCALE_STATE"
 UPSCALE_SEGMENT_TYPE = "H3_CHAIN_UPSCALE_SEGMENT"
 UPSCALE_MANIFEST_TYPE = "H3_CHAIN_UPSCALE_MANIFEST"
 UPSCALE_BACKENDS = ("h3_latent", "ltx_2_5", "custom")
+CONDITIONING_SYNC_METHODS = (
+    "nearest", "nearest-exact", "bilinear", "bicubic")
+MOTION_REFERENCE_MODES = (
+    "exclude_video_keep_audio", "keep_video_native", "resize_video")
+CONDITIONING_SYNC_MOTION_MODES = (
+    "conditioning_policy",) + MOTION_REFERENCE_MODES
 
 
 def _profile_dir(run_name: str, profile: str) -> str:
@@ -125,6 +131,81 @@ def _source_segment(state: dict[str, Any], index: int | None = None
     return source
 
 
+def _source_continuation_mode(state: dict[str, Any],
+                              index: int | None = None) -> str:
+    source = _source_segment(state, index)
+    compatibility = state["source_manifest"].get("compatibility") or {}
+    return str(source.get("continuation_mode") or
+               compatibility.get("continuation_mode") or "guide")
+
+
+def _drift_prefix_steps(state: dict[str, Any],
+                        index: int | None = None) -> int:
+    """Return the exact H3 latent prefix span for a Drift-Control scene."""
+    source = _source_segment(state, index)
+    mode = _source_continuation_mode(state, index)
+    if mode not in chain.DRIFT_CONTROL_CONTINUATION_MODES:
+        return 0
+    trim = int(source.get("raw_frames", 0)) - int(
+        source.get("delivered_frames", 0))
+    if trim <= 0:
+        return 0
+    expected_frames = int(chain.DRIFT_CONTROL_AV_RECIPE["context_frames"])
+    if trim != expected_frames:
+        raise ValueError(
+            "H3 upscale Drift-Control scene %d has a %d-frame prefix; "
+            "recipe %s requires %d." % (
+                int(source.get("index", index or 0)), trim,
+                chain.DRIFT_CONTROL_AV_RECIPE["version"], expected_frames))
+    return int(chain.DRIFT_CONTROL_AV_RECIPE["video_steps"])
+
+
+def _video_stream_from_latent(latent: Any, label: str) -> Any:
+    if not isinstance(latent, dict) or "samples" not in latent:
+        raise ValueError("%s must be a LATENT with samples." % label)
+    samples = latent["samples"]
+    streams = ([samples]
+               if chain.torch is not None and chain.torch.is_tensor(samples)
+               else chain._streams_from_latent(latent))
+    for stream in streams:
+        if (getattr(stream, "ndim", 0) == 5
+                and int(stream.shape[1]) == 24):
+            return stream
+    raise ValueError("%s has no [B,24,T,H,W] H3 video stream." % label)
+
+
+def _drift_continuation_video(video: Any, state: Any
+                              ) -> tuple[Any, int, str]:
+    """Splice the prior HQ tail into a Drift-Control pass-2 prefix."""
+    if not isinstance(state, dict):
+        return video, 0, "open video"
+    prefix_steps = _drift_prefix_steps(state)
+    if prefix_steps <= 0:
+        return video, 0, "open video"
+    if int(video.shape[2]) <= prefix_steps:
+        raise ValueError(
+            "H3 upscale Drift-Control prefix uses %d/%d latent steps; no "
+            "future remains to refine." % (prefix_steps, int(video.shape[2])))
+    previous = state.get("previous_latent")
+    if previous is None:
+        return video, prefix_steps, (
+            "source prefix protected (prior HQ context unavailable)")
+    prior = _video_stream_from_latent(previous, "Previous upscaled latent")
+    if int(prior.shape[2]) < prefix_steps:
+        raise ValueError(
+            "Previous upscaled latent has %d video steps; Drift-Control needs "
+            "%d." % (int(prior.shape[2]), prefix_steps))
+    if (int(prior.shape[0]) != int(video.shape[0]) or
+            tuple(prior.shape[-2:]) != tuple(video.shape[-2:])):
+        raise ValueError(
+            "Previous/current HQ video geometry differs: %s vs %s." % (
+                tuple(prior.shape), tuple(video.shape)))
+    output = video.clone()
+    output[:, :, :prefix_steps] = prior[:, :, -prefix_steps:].to(
+        device=video.device, dtype=video.dtype)
+    return output, prefix_steps, "previous HQ latent tail spliced and protected"
+
+
 def _load_source_tensors(source: dict[str, Any]) -> dict[str, Any]:
     if chain._st_load is None:
         raise RuntimeError("safetensors is required for deferred H3 upscaling.")
@@ -161,6 +242,151 @@ def _packed_samples(streams: list[Any]) -> Any:
     return streams
 
 
+def _single_latent_tensor(latent: Any, label: str) -> Any:
+    if not isinstance(latent, dict) or "samples" not in latent:
+        raise ValueError("%s must be a LATENT with samples." % label)
+    samples = latent["samples"]
+    if chain.torch is not None and chain.torch.is_tensor(samples):
+        return samples
+    streams = chain._streams_from_latent(latent)
+    if len(streams) != 1:
+        raise ValueError("%s must contain exactly one latent stream." % label)
+    return streams[0]
+
+
+def _target_video_geometry(latent: Any) -> tuple[Any, int, int]:
+    video = _single_latent_tensor(latent, "Pass-2 video latent")
+    if getattr(video, "ndim", 0) != 5 or int(video.shape[1]) != 24:
+        raise ValueError(
+            "Pass-2 video latent must be [B,24,T,H,W], got %s." %
+            (tuple(getattr(video, "shape", ())),))
+    return video, int(video.shape[-1]) * 16, int(video.shape[-2]) * 16
+
+
+def _sync_visual_latent(value: Any, scale_x: float, scale_y: float,
+                        method: str) -> Any:
+    """Resize one H3 visual conditioning latent without changing time."""
+    if chain.torch is None or not chain.torch.is_tensor(value):
+        raise TypeError(
+            "H3 visual conditioning must contain PyTorch tensors, got %r." %
+            type(value))
+    if value.ndim not in (4, 5):
+        raise ValueError(
+            "H3 visual conditioning latent must be 4D or 5D, got %s." %
+            (tuple(value.shape),))
+    source_height, source_width = int(value.shape[-2]), int(value.shape[-1])
+    target_height = max(2, int(round(source_height * float(scale_y))))
+    target_width = max(2, int(round(source_width * float(scale_x))))
+    # H3 patchifies visual conditioning on a 2x2 latent grid without padding.
+    target_height = (target_height + 1) // 2 * 2
+    target_width = (target_width + 1) // 2 * 2
+    if (target_height, target_width) == (source_height, source_width):
+        return value
+
+    dtype = value.dtype
+    work = value
+    if value.device.type == "cpu" and dtype in (
+            chain.torch.float16, chain.torch.bfloat16):
+        work = value.float()
+    if value.ndim == 5:
+        batch, channels, frames = work.shape[:3]
+        work = work.permute(0, 2, 1, 3, 4).reshape(
+            batch * frames, channels, source_height, source_width)
+    options = {}
+    if method in ("bilinear", "bicubic"):
+        options["align_corners"] = False
+    resized = chain.torch.nn.functional.interpolate(
+        work, size=(target_height, target_width), mode=method, **options)
+    if value.ndim == 5:
+        resized = resized.reshape(
+            batch, frames, channels, target_height, target_width
+        ).permute(0, 2, 1, 3, 4).contiguous()
+    return resized.to(dtype=dtype)
+
+
+def _sync_h3_conditioning(conditioning: Any, scale_x: float,
+                          scale_y: float, method: str,
+                          motion_ref_mode: str) -> Any:
+    """Clone CONDITIONING and apply the pass-2 reference policy."""
+    if conditioning is None:
+        return None
+    output = []
+    for entry in conditioning:
+        if not isinstance(entry, (list, tuple)) or len(entry) < 2:
+            output.append(entry)
+            continue
+        embedding, metadata = entry[0], entry[1]
+        if not isinstance(metadata, dict):
+            output.append(entry)
+            continue
+        synced = metadata.copy()
+        effective_motion_mode = motion_ref_mode
+        if motion_ref_mode == "conditioning_policy":
+            effective_motion_mode = str(metadata.get(
+                "_h3_upscale_motion_ref_mode") or
+                "exclude_video_keep_audio")
+        refs = metadata.get("minimax_refs")
+        if refs is not None:
+            _unused, policy_refs = chain._h3_motion_reference_policy(
+                [], refs, effective_motion_mode)
+            synced_refs = []
+            for block in policy_refs:
+                copied = dict(block)
+                kind = copied.get("kind")
+                if kind in ("video", "video_audio"):
+                    if effective_motion_mode == "keep_video_native":
+                        synced_refs.append(copied)
+                        continue
+                if kind != "audio" and copied.get("latent") is not None:
+                    latent = _sync_visual_latent(
+                        copied["latent"], scale_x, scale_y, method)
+                    copied["latent"] = latent
+                    copied["latent_h"] = int(latent.shape[-2])
+                    copied["latent_w"] = int(latent.shape[-1])
+                    if latent.ndim == 5 and "latent_t" in copied:
+                        copied["latent_t"] = int(latent.shape[2])
+                synced_refs.append(copied)
+            synced["minimax_refs"] = synced_refs
+        keyframes = metadata.get("minimax_keyframes")
+        if keyframes is not None:
+            synced_keyframes = []
+            for keyframe in keyframes:
+                copied = dict(keyframe)
+                if copied.get("latent") is not None:
+                    copied["latent"] = _sync_visual_latent(
+                        copied["latent"], scale_x, scale_y, method)
+                synced_keyframes.append(copied)
+            synced["minimax_keyframes"] = synced_keyframes
+        output.append([embedding, synced])
+    return output
+
+
+def _mark_h3_upscale_motion_policy(conditioning: Any, mode: str) -> Any:
+    """Attach the cache/Qwen motion policy for the later sync node."""
+    output = []
+    for entry in conditioning:
+        if (not isinstance(entry, (list, tuple)) or len(entry) < 2
+                or not isinstance(entry[1], dict)):
+            output.append(entry)
+            continue
+        metadata = entry[1].copy()
+        metadata["_h3_upscale_motion_ref_mode"] = str(mode)
+        output.append([entry[0], metadata])
+    return output
+
+
+def _sample_members(samples: Any) -> tuple[list[Any], bool]:
+    if chain.torch is not None and chain.torch.is_tensor(samples):
+        return [samples], False
+    if hasattr(samples, "unbind"):
+        members = list(samples.unbind())
+        if members:
+            return members, True
+    if isinstance(samples, (list, tuple)):
+        return list(samples), len(samples) > 1
+    raise TypeError("Unsupported MiniMax H3 latent container %r." % type(samples))
+
+
 def _cpu_latent(latent: dict[str, Any] | None) -> dict[str, Any] | None:
     if latent is None:
         return None
@@ -186,6 +412,60 @@ def _latent_checkpoint_tensors(latent: dict[str, Any]) -> tuple[dict[str, Any], 
                 "single")
     return ({"upscaled_stream_%d" % index: chain._tensor_cpu_clone(value)
              for index, value in enumerate(streams)}, "multi")
+
+
+def _next_drift_context_steps(state: dict[str, Any], index: int) -> int:
+    total = len(state["source_manifest"].get("segments") or ())
+    if int(index) >= total:
+        return 0
+    return _drift_prefix_steps(state, int(index) + 1)
+
+
+def _upscaled_context_tensor(latent: Any, steps: int) -> Any:
+    video = _video_stream_from_latent(latent, "Final upscaled latent")
+    count = int(steps)
+    if count < 1 or int(video.shape[2]) < count:
+        raise ValueError(
+            "Final upscaled video has %d steps; cannot retain %d-step "
+            "continuation context." % (int(video.shape[2]), count))
+    return chain._tensor_cpu_clone(video[:, :, -count:])
+
+
+def _load_previous_upscaled_context(
+        state: dict[str, Any], start_clip: int) -> tuple[dict[str, Any] | None,
+                                                        str]:
+    """Restore the prior HQ video tail for a resumed Drift-Control scene."""
+    steps = _drift_prefix_steps(state, int(start_clip))
+    if steps <= 0 or int(start_clip) <= 1:
+        return None, "no resumed Drift-Control context required"
+    segments = state.get("segments") or []
+    if not segments:
+        return None, "prior HQ context unavailable"
+    prior_segment = segments[-1]
+    checkpoint = chain._absolute_output_path(prior_segment["checkpoint"])
+    tensors = chain._st_load(checkpoint)
+    video = tensors.get("upscaled_video_context")
+    route = "compact saved HQ context"
+    if video is None:
+        video = tensors.get("upscaled_video")
+        route = "saved full HQ video latent fallback"
+    if video is None:
+        candidate = tensors.get("upscaled_samples")
+        if (getattr(candidate, "ndim", 0) == 5
+                and int(candidate.shape[1]) == 24):
+            video = candidate
+            route = "saved single HQ video latent fallback"
+    if video is None:
+        return None, (
+            "prior checkpoint predates compact HQ context; source prefix "
+            "will be protected")
+    if int(video.shape[2]) < steps:
+        raise ValueError(
+            "Upscale scene %d checkpoint contains %d context steps; scene %d "
+            "requires %d." % (int(start_clip) - 1, int(video.shape[2]),
+                               int(start_clip), steps))
+    context = chain._tensor_cpu_clone(video[:, :, -steps:])
+    return {"samples": context}, route
 
 
 def _load_upscale_prefix(state: dict[str, Any], start_clip: int
@@ -306,8 +586,9 @@ class MiniMaxH3ChainUpscaleAdapter:
                 "save_latent": ("BOOLEAN", {
                     "default": False,
                     "tooltip": "Persist the HQ sampler latent in each child "
-                               "checkpoint. Off still saves a tiny assembly/audio "
-                               "checkpoint for standalone merge and resume."}),
+                               "checkpoint. Off still saves assembly/audio and "
+                               "any compact Drift-Control context needed for "
+                               "standalone merge and resume."}),
                 "segment_crf": ("INT", {
                     "default": 18, "min": 0, "max": 51,
                     "tooltip": "H.264 quality for persisted HQ scene segments."}),
@@ -361,6 +642,10 @@ class MiniMaxH3ChainUpscaleAdapter:
                 "previous_latent": None,
             }
             state["segments"] = _load_upscale_prefix(state, start)
+            previous_latent, context_status = _load_previous_upscaled_context(
+                state, start)
+            state["previous_latent"] = previous_latent
+            state["previous_context_status"] = context_status
         else:
             state = dict(initial_state)
             manifest = state["source_manifest"]
@@ -375,6 +660,9 @@ class MiniMaxH3ChainUpscaleAdapter:
                    state["profile_config"]["backend"],
                    "saved" if state["profile_config"]["save_latent"]
                    else "not saved"))
+        context_status = str(state.get("previous_context_status") or "")
+        if context_status:
+            status += "; %s" % context_status
         return ("h3_upscale", state, manifest, status)
 
 
@@ -468,6 +756,28 @@ class MiniMaxH3ChainUpscaleReferenceConditioning:
                     "tooltip": "text_only keeps non-reference and older runs "
                                "usable when no matching cache exists. error "
                                "requires the exact automatic Ref2VA cache."}),
+                "motion_ref_mode": (MOTION_REFERENCE_MODES, {
+                    "default": "exclude_video_keep_audio",
+                    "tooltip": "Pass-2 motion-reference policy. The default "
+                               "removes both native video-ref latents and their "
+                               "Qwen presentation, while keeping paired audio."}),
+            },
+            "optional": {
+                "target_video_latent": ("LATENT", {
+                    "tooltip": "Actual 24-channel pass-2 video latent. When "
+                               "connected with video_vae, match-sized picture "
+                               "refs and their Qwen presentation are rebuilt "
+                               "for its exact H3 canvas."}),
+                "video_vae": ("VAE", {
+                    "tooltip": "Original MiniMax H3 video VAE used to "
+                               "re-encode match-sized picture references at "
+                               "the pass-2 canvas. Never use the audio VAE."}),
+                "prompt_override": ("STRING", {
+                    "default": "", "multiline": True,
+                    "tooltip": "Optional pass-2 text prompt. Blank reuses the "
+                               "exact compiled generation prompt. Use a concise "
+                               "appearance/detail prompt to avoid repeating "
+                               "source motion or camera instructions."}),
             },
         }
 
@@ -475,21 +785,31 @@ class MiniMaxH3ChainUpscaleReferenceConditioning:
     RETURN_NAMES = (
         "positive", "compiled_prompt", "reference_cache_used", "status")
     OUTPUT_TOOLTIPS = (
-        "Pass-2 H3 conditioning rebuilt from cached native Ref2VA latents, or "
-        "text-only conditioning under the selected fallback policy.",
-        "Exact cached prompt after @tag compilation, or the saved source prompt.",
+        "Pass-2 H3 conditioning rebuilt from cached Ref2VA media. With a "
+        "target latent and video VAE, match pictures are re-encoded at the "
+        "actual pass-2 canvas. Motion video follows motion_ref_mode.",
+        "Prompt actually encoded for pass 2: custom override, exact cached "
+        "compiled prompt, or saved source prompt.",
         "True when native reference blocks and Qwen presentation were restored.",
         "Scene-local cache lookup result and fingerprint summary.",
     )
     FUNCTION = "condition"
     CATEGORY = "conditioning/minimax/contex_loop/upscale"
     DESCRIPTION = (
-        "Automatically restore the exact scene-local H3 reference payload "
-        "saved during source Ref2VA generation. No Plan, reference registry, "
-        "source audio, or original image/video wires are needed in the "
-        "deferred upscale workflow.")
+        "Automatically restore a scene-local H3 reference payload and, when "
+        "given the upscaled video latent plus H3 video VAE, rebuild all "
+        "resolution-dependent pass-2 picture conditioning. The motion policy "
+        "filters both Qwen presentation and native H3 reference blocks. No "
+        "Plan, registry, source audio, or original reference wires are required.")
 
-    def condition(self, state, clip, missing_cache="text_only"):
+    def condition(self, state, clip, missing_cache="text_only",
+                  target_video_latent=None, video_vae=None,
+                  prompt_override="",
+                  motion_ref_mode="exclude_video_keep_audio"):
+        if (target_video_latent is None) != (video_vae is None):
+            raise ValueError(
+                "Target-resolution H3 conditioning needs both "
+                "target_video_latent and video_vae.")
         source = _source_segment(state)
         manifest = state["source_manifest"]
         compatibility = manifest.get("compatibility") or {}
@@ -498,6 +818,10 @@ class MiniMaxH3ChainUpscaleReferenceConditioning:
         scene = int(state["index"])
         scene_count = len(manifest["segments"])
         prompt = str(source.get("prompt") or "")
+        custom_prompt = str(prompt_override or "").strip()
+        if motion_ref_mode not in MOTION_REFERENCE_MODES:
+            raise ValueError(
+                "Unknown H3 motion reference mode %r." % motion_ref_mode)
         width = int(compatibility.get("width", 0))
         height = int(compatibility.get("height", 0))
         length = int(source.get("raw_frames", 0))
@@ -509,15 +833,42 @@ class MiniMaxH3ChainUpscaleReferenceConditioning:
                       fingerprint, scene, scene_count, prompt, width, height,
                       length))
         if cached is not None:
-            conditioning = chain._conditioning_from_reference_cache(
-                clip, cached)
-            compiled = str(cached.get("compiled_prompt") or prompt)
+            target_detail = None
+            if target_video_latent is not None:
+                _video, target_width, target_height = _target_video_geometry(
+                    target_video_latent)
+                conditioning, target_detail = (
+                    chain._conditioning_from_reference_cache_target(
+                        clip, video_vae, cached, target_width, target_height,
+                        custom_prompt or None, motion_ref_mode))
+            else:
+                conditioning = chain._conditioning_from_reference_cache(
+                    clip, cached, custom_prompt or None, motion_ref_mode)
+            conditioning = _mark_h3_upscale_motion_policy(
+                conditioning, motion_ref_mode)
+            compiled = (custom_prompt or
+                        str(cached.get("compiled_prompt") or prompt))
             status = (
                 "scene %d/%d restored Ref2VA cache %s (%d blocks, %d "
                 "presentation items)" % (
                     scene, scene_count, str(cached.get("signature") or "")[:12],
                     len(cached.get("reference_blocks") or ()),
                     len(cached.get("presentation") or ())))
+            if target_detail is not None:
+                status += (
+                    "; pass-2 %dx%d policy=%s: rebuilt %d match pictures "
+                    "(%d source masters, %d V1 fallbacks), preserved %d "
+                    "native blocks" % (
+                        target_detail["target_width"],
+                        target_detail["target_height"],
+                        target_detail["policy"],
+                        target_detail["rebuilt_images"],
+                        target_detail["master_rebuilds"],
+                        target_detail["fallback_rebuilds"],
+                        target_detail["preserved_blocks"]))
+            if custom_prompt:
+                status += "; custom pass-2 prompt override"
+            status += "; motion refs=%s" % motion_ref_mode
             return conditioning, compiled, True, status
         if str(missing_cache) == "error":
             raise FileNotFoundError(
@@ -525,15 +876,244 @@ class MiniMaxH3ChainUpscaleReferenceConditioning:
                 "This branch may predate reference caching; render that source "
                 "scene once with Tagged/Scheduled Ref2VA cache_for_upscale "
                 "enabled, or choose text_only." % scene)
-        tokens = clip.tokenize(prompt)
+        compiled = custom_prompt or prompt
+        tokens = clip.tokenize(compiled)
         conditioning = clip.encode_from_tokens_scheduled(tokens)
+        conditioning = _mark_h3_upscale_motion_policy(
+            conditioning, motion_ref_mode)
         status = (
             "scene %d/%d has no matching Ref2VA cache; rebuilt text-only "
             "conditioning%s" % (
                 scene, scene_count,
                 " (generation fingerprint %s)" % fingerprint[:12]
                 if fingerprint else ""))
-        return conditioning, prompt, False, status
+        if custom_prompt:
+            status += "; custom pass-2 prompt override"
+        status += "; motion refs=%s" % motion_ref_mode
+        return conditioning, compiled, False, status
+
+
+class H3ConditioningSyncFromLatents:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "original_latent": ("LATENT", {
+                    "tooltip": "Original-resolution 24-channel H3 video latent "
+                               "whose conditioning will be synchronized."}),
+                "upscaled_latent": ("LATENT", {
+                    "tooltip": "Upscaled 24-channel H3 video latent. Its exact "
+                               "X/Y scale drives the conditioning resize."}),
+                "positive": ("CONDITIONING", {
+                    "tooltip": "Original H3 conditioning containing minimax_refs "
+                               "and/or minimax_keyframes."}),
+                "method": (CONDITIONING_SYNC_METHODS, {
+                    "default": "bilinear",
+                    "tooltip": "Spatial interpolation used for visual reference "
+                               "and keyframe latents. Time and audio are unchanged."}),
+                "motion_ref_mode": (CONDITIONING_SYNC_MOTION_MODES, {
+                    "default": "conditioning_policy",
+                    "tooltip": "conditioning_policy automatically follows "
+                               "Upscale Reference Conditioning. Explicit modes "
+                               "are available for standalone/A-B use."}),
+            },
+            "optional": {
+                "negative": ("CONDITIONING", {
+                    "tooltip": "Optional negative conditioning. Use the returned "
+                               "negative when rebuilding a CFG Guider."}),
+            },
+        }
+
+    RETURN_TYPES = (
+        "CONDITIONING", "CONDITIONING", "INT", "INT", "FLOAT", "FLOAT")
+    RETURN_NAMES = (
+        "positive", "negative", "width", "height", "scale_x", "scale_y")
+    OUTPUT_TOOLTIPS = (
+        "Positive conditioning with visual refs/keyframes synchronized to the "
+        "upscaled latent.",
+        "Negative conditioning synchronized by the same scale, when connected.",
+        "Upscaled video width in pixels.",
+        "Upscaled video height in pixels.",
+        "Exact horizontal latent scale.",
+        "Exact vertical latent scale.",
+    )
+    FUNCTION = "sync"
+    CATEGORY = "conditioning/minimax/contex_loop/upscale"
+    DESCRIPTION = (
+        "Synchronize H3 pass-2 conditioning from the original and upscaled "
+        "latents. Resizes picture refs and keyframes, filters or retains motion "
+        "refs according to the conditioner policy (or an explicit override), "
+        "updates reference H/W metadata, and leaves text, time, and audio "
+        "conditioning untouched. Build a new Guider from the returned output.")
+
+    def sync(self, original_latent, upscaled_latent, positive,
+             method="bilinear",
+             motion_ref_mode="conditioning_policy", negative=None):
+        original, _source_width, _source_height = _target_video_geometry(
+            original_latent)
+        upscaled, width, height = _target_video_geometry(upscaled_latent)
+        if tuple(original.shape[:3]) != tuple(upscaled.shape[:3]):
+            raise ValueError(
+                "H3 conditioning sync requires matching batch/channel/time; "
+                "original %s vs upscaled %s." %
+                (tuple(original.shape[:3]), tuple(upscaled.shape[:3])))
+        if method not in CONDITIONING_SYNC_METHODS:
+            raise ValueError("Unknown H3 conditioning sync method %r." % method)
+        if motion_ref_mode not in CONDITIONING_SYNC_MOTION_MODES:
+            raise ValueError(
+                "Unknown H3 motion reference mode %r." % motion_ref_mode)
+        scale_x = int(upscaled.shape[-1]) / float(original.shape[-1])
+        scale_y = int(upscaled.shape[-2]) / float(original.shape[-2])
+        return (
+            _sync_h3_conditioning(
+                positive, scale_x, scale_y, method, motion_ref_mode),
+            _sync_h3_conditioning(
+                negative, scale_x, scale_y, method, motion_ref_mode),
+            width, height, scale_x, scale_y,
+        )
+
+
+class MiniMaxH3ChainPass2Prepare:
+    """Rejoin LBH's video-only result with clean audio and CONST re-noise."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "upscaled_video": ("LATENT", {
+                    "tooltip": "24-channel clean H3 video latent emitted by "
+                               "LBH's 2D/3D latent upscaler."}),
+                "source_audio": ("LATENT", {
+                    "tooltip": "Untouched 32-channel audio latent from H3 "
+                               "Upscale Current Scene."}),
+                "model": ("MODEL", {
+                    "tooltip": "The exact pass-2 H3 model after LoRA and "
+                               "sigma-shift patches."}),
+                "noise": ("NOISE", {
+                    "tooltip": "Pass-2 random noise. Only the video member is "
+                               "generated; audio stays at the saved x0."}),
+                "sigmas": ("SIGMAS", {
+                    "tooltip": "Pass-2 sigma schedule. Its first sigma is "
+                               "used for NestedTensor-safe CONST re-noise."}),
+            },
+            "optional": {
+                "state": (UPSCALE_STATE_TYPE, {
+                    "tooltip": "Current Upscale state. When the source scene "
+                               "uses Drift-Control AV, its previous HQ latent "
+                               "tail replaces and protects the pass-2 prefix."}),
+            },
+        }
+
+    RETURN_TYPES = ("LATENT", "INT", "INT", "STRING")
+    RETURN_NAMES = ("latent", "width", "height", "status")
+    OUTPUT_TOOLTIPS = (
+        "Joint H3 AV latent ready for Sampler Custom Advanced with Disable "
+        "Noise; video is re-noised and audio is masked clean.",
+        "Exact output pixel width inferred from the upscaled latent.",
+        "Exact output pixel height inferred from the upscaled latent.",
+        "Verified stream geometry, audio lock, and sigma start.",
+    )
+    FUNCTION = "prepare"
+    CATEGORY = "conditioning/minimax/contex_loop/upscale"
+    DESCRIPTION = (
+        "Adapt a video-only learned upscale into a joint MiniMax H3 pass-2 "
+        "latent. Rejoins the saved audio, applies MiniMax CONST re-noise to "
+        "the open video region only, protects a Drift-Control AV prefix from "
+        "the previous HQ latent when available, inverse-scales for Disable "
+        "Noise sampling, and locks audio so pass 2 cannot rewrite speech.")
+
+    def prepare(self, upscaled_video, source_audio, model, noise, sigmas,
+                state=None):
+        if chain.torch is None:
+            raise RuntimeError("PyTorch is required for H3 pass-2 preparation.")
+        video, width, height = _target_video_geometry(upscaled_video)
+        video, prefix_steps, continuation_route = _drift_continuation_video(
+            video, state)
+        audio = _single_latent_tensor(source_audio, "Source audio latent")
+        if getattr(audio, "ndim", 0) != 4 or int(audio.shape[1]) != 32:
+            raise ValueError(
+                "Source audio latent must be [B,32,2,T], got %s." %
+                (tuple(getattr(audio, "shape", ())),))
+        if int(video.shape[0]) != int(audio.shape[0]):
+            raise ValueError(
+                "Upscaled video/audio batch sizes differ: %d vs %d." %
+                (int(video.shape[0]), int(audio.shape[0])))
+        sigma_count = int(getattr(sigmas, "numel", lambda: len(sigmas))())
+        if sigma_count < 1:
+            raise ValueError("Pass-2 sigma schedule is empty.")
+
+        joint = {"samples": _packed_samples([video, audio])}
+        generated = noise.generate_noise({"samples": video})
+        generated_members, _generated_nested = _sample_members(generated)
+        if len(generated_members) != 1:
+            raise ValueError(
+                "Pass-2 noise source returned %d video streams; expected 1." %
+                len(generated_members))
+        video_noise = generated_members[0]
+        if tuple(video_noise.shape) != tuple(video.shape):
+            raise ValueError(
+                "Pass-2 video noise shape %s does not match latent %s." %
+                (tuple(video_noise.shape), tuple(video.shape)))
+        if prefix_steps:
+            video_noise = video_noise.clone()
+            video_noise[:, :, :prefix_steps] = 0
+        joint_noise = _packed_samples([
+            video_noise, chain.torch.zeros_like(audio)])
+
+        process_in = model.get_model_object("process_latent_in")
+        process_out = model.get_model_object("process_latent_out")
+        model_sampling = model.get_model_object("model_sampling")
+        processed = process_in(joint["samples"])
+        latent_members, latent_nested = _sample_members(processed)
+        noise_members, noise_nested = _sample_members(joint_noise)
+        if len(latent_members) != 2 or len(noise_members) != 2:
+            raise ValueError(
+                "MiniMax pass-2 AV preparation expected two joint streams.")
+        sigma_start = sigmas[0]
+        mixed_members = []
+        for latent_member, noise_member in zip(
+                latent_members, noise_members):
+            mixed = model_sampling.noise_scaling(
+                sigma_start, noise_member, latent_member)
+            inverse = getattr(model_sampling, "inverse_noise_scaling", None)
+            if callable(inverse):
+                mixed = inverse(sigma_start, mixed)
+            mixed_members.append(mixed)
+        mixed = _packed_samples(mixed_members)
+        # Preserve the real Comfy NestedTensor container even if a test double
+        # returned list-like members from process_latent_in.
+        if not (latent_nested or noise_nested) and _ComfyNestedTensor is None:
+            mixed = mixed_members
+        output_samples = process_out(mixed)
+        output_members, _ = _sample_members(output_samples)
+        output_samples = _packed_samples([
+            chain.torch.nan_to_num(member, nan=0.0, posinf=0.0, neginf=0.0)
+            for member in output_members])
+
+        output_video, output_audio = output_members[:2]
+        video_mask = chain.torch.ones(
+            (output_video.shape[0], 1, output_video.shape[2],
+             output_video.shape[3], output_video.shape[4]),
+            device=output_video.device, dtype=chain.torch.float32)
+        if prefix_steps:
+            video_mask[:, :, :prefix_steps] = 0
+        audio_mask = chain.torch.zeros(
+            (output_audio.shape[0], 1, output_audio.shape[2],
+             output_audio.shape[3]),
+            device=output_audio.device, dtype=chain.torch.float32)
+        result = {
+            "samples": output_samples,
+            "noise_mask": _packed_samples([video_mask, audio_mask]),
+        }
+        sigma_value = float(sigma_start.detach().cpu().item()) if hasattr(
+            sigma_start, "detach") else float(sigma_start)
+        status = (
+            "prepared H3 pass 2 at %dx%d: video %s, audio %s locked, "
+            "sigma_start=%.6g; %s%s" % (
+                width, height, tuple(video.shape), tuple(audio.shape),
+                sigma_value, continuation_route,
+                " (%d latent steps)" % prefix_steps if prefix_steps else ""))
+        return result, width, height, status
 
 
 class MiniMaxH3ChainUpscaleSegmentSave:
@@ -549,8 +1129,9 @@ class MiniMaxH3ChainUpscaleSegmentSave:
             },
             "optional": {
                 "upscaled_latent": ("LATENT", {
-                    "tooltip": "Final HQ latent. Required only when the Adapter's "
-                               "save_latent option is enabled."}),
+                    "tooltip": "Final HQ latent. Required when save_latent is "
+                               "enabled and whenever a following Drift-Control "
+                               "scene needs its compact HQ context tail."}),
             },
         }
 
@@ -564,7 +1145,9 @@ class MiniMaxH3ChainUpscaleSegmentSave:
     OUTPUT_NODE = True
     CATEGORY = "conditioning/minimax/contex_loop/upscale"
     DESCRIPTION = ("Persist one trimmed HQ scene plus a self-contained assembly "
-                   "checkpoint; optionally retain its large HQ latent.")
+                   "checkpoint; always retain the small HQ tail needed by a "
+                   "following Drift-Control scene and optionally retain the "
+                   "complete large HQ latent.")
 
     @classmethod
     def IS_CHANGED(cls, *args, **kwargs):
@@ -596,10 +1179,16 @@ class MiniMaxH3ChainUpscaleSegmentSave:
                     (index, width, height, int(first["width"]), int(first["height"])))
 
         save_latent = bool(state["profile_config"]["save_latent"])
+        context_steps = _next_drift_context_steps(state, index)
         if save_latent and upscaled_latent is None:
             raise ValueError(
                 "Upscale profile enables save_latent, but scene %d received no HQ latent."
                 % index)
+        if context_steps and upscaled_latent is None:
+            raise ValueError(
+                "Upscale scene %d precedes a Drift-Control AV scene and must "
+                "receive the final HQ latent so its %d-step context tail can "
+                "be resumed." % (index, context_steps))
         source_tensors = _load_source_tensors(source)
         tensors = {"upscale_marker": chain.torch.tensor([index])}
         sample_rate = int(source.get("sample_rate", 0))
@@ -611,6 +1200,9 @@ class MiniMaxH3ChainUpscaleSegmentSave:
             latent_tensors, latent_layout = _latent_checkpoint_tensors(
                 upscaled_latent)
             tensors.update(latent_tensors)
+        if context_steps:
+            tensors["upscaled_video_context"] = _upscaled_context_tensor(
+                upscaled_latent, context_steps)
 
         paths = _profile_paths(state["run_name"], state["profile"], index)
         for key in ("segment", "checkpoint", "metadata", "prompt", "audio"):
@@ -651,6 +1243,7 @@ class MiniMaxH3ChainUpscaleSegmentSave:
                     source.get("checkpoint_sha256") or ""),
                 "latent_layout": latent_layout,
                 "latent_saved": "true" if save_latent else "false",
+                "context_steps": str(context_steps),
                 "sample_rate": str(sample_rate),
             })
             os.replace(checkpoint_tmp, checkpoint_path)
@@ -674,6 +1267,7 @@ class MiniMaxH3ChainUpscaleSegmentSave:
                 "sample_rate": sample_rate,
                 "latent_saved": save_latent,
                 "latent_layout": latent_layout,
+                "context_steps": context_steps,
                 "source_revision": str(source.get("revision") or ""),
                 "source_checkpoint": str(source.get("checkpoint") or ""),
                 "source_checkpoint_sha256": str(
@@ -732,6 +1326,8 @@ class MiniMaxH3ChainUpscaleSegmentSave:
         status = ("saved HQ scene %d/%d at %dx%d; latent %s -> %s" %
                   (index, len(state["source_manifest"]["segments"]), width,
                    height, "saved" if save_latent else "omitted", segment_path))
+        if context_steps:
+            status += "; retained %d-step Drift-Control HQ tail" % context_steps
         return {
             "ui": {"text": [status],
                    "images": [chain._video_output_item(segment_path)],
@@ -891,6 +1487,9 @@ class MiniMaxH3ChainUpscaleLoopEnd:
                 delivered_images[-context_length:]) if context_length else
                 chain._tensor_cpu_clone(delivered_images[:0]),
             "previous_latent": _cpu_latent(upscaled_latent),
+            "previous_context_status": (
+                "live previous HQ latent" if upscaled_latent is not None
+                else "previous HQ latent unavailable"),
         })
         if index < int(state["end_clip"]):
             return self._recurse(flow, next_state, dynprompt, unique_id)
@@ -1061,6 +1660,8 @@ UPSCALE_NODE_CLASS_MAPPINGS = {
     "MiniMaxH3ChainUpscaleCurrent": MiniMaxH3ChainUpscaleCurrent,
     "MiniMaxH3ChainUpscaleReferenceConditioning": (
         MiniMaxH3ChainUpscaleReferenceConditioning),
+    "H3ConditioningSyncFromLatents": H3ConditioningSyncFromLatents,
+    "MiniMaxH3ChainPass2Prepare": MiniMaxH3ChainPass2Prepare,
     "MiniMaxH3ChainUpscaleSegmentSave": MiniMaxH3ChainUpscaleSegmentSave,
     "MiniMaxH3ChainUpscaleLoopEnd": MiniMaxH3ChainUpscaleLoopEnd,
     "MiniMaxH3ChainUpscaleMerge": MiniMaxH3ChainUpscaleMerge,
@@ -1071,6 +1672,8 @@ UPSCALE_NODE_DISPLAY_NAME_MAPPINGS = {
     "MiniMaxH3ChainUpscaleCurrent": "MiniMax H3 Upscale Current Scene",
     "MiniMaxH3ChainUpscaleReferenceConditioning": (
         "MiniMax H3 Upscale Reference Conditioning"),
+    "H3ConditioningSyncFromLatents": "H3 Conditioning Sync From Latents",
+    "MiniMaxH3ChainPass2Prepare": "MiniMax H3 Pass-2 AV Prepare",
     "MiniMaxH3ChainUpscaleSegmentSave": "MiniMax H3 Upscale Segment Save",
     "MiniMaxH3ChainUpscaleLoopEnd": "MiniMax H3 Upscale Loop End",
     "MiniMaxH3ChainUpscaleMerge": "MiniMax H3 Upscale Merger",

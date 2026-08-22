@@ -17,6 +17,15 @@ Newest first. This file keeps release history out of the onboarding README.
   behind the existing **Show advanced H3 controls** action; Plan and Plan
   Studio retain their click-to-open raw boundary controls, and Studio's
   experimental cut-window diagnostic follows that disclosure.
+- Added an opt-in **Reference Video Fade** MODEL patch for native H3 Ref2VA
+  video blocks. It keeps the complete 24 fps reference at full early
+  influence, then applies a full-schedule half-cosine attention-value fade
+  without touching still refs, Qwen presentation, reference audio,
+  continuation guides, or target streams. Split samplers can share the
+  original unsplit sigma schedule, and existing SolAttn/Comfy Kitchen
+  attention overrides remain chained. This complements rather than replaces
+  Color-Stable Drift AV: one controls external native video references, while
+  the other controls the previous-scene continuation prefix.
 - Added a whole-branch SeedVR2 route: Checkpoint Manager → Full-Chain Latent
   Video Adapter → SeedVR2 Direct. It decodes the immutable H3 video latents,
   resolves scene overlap blends before upscaling, and exposes one continuous
@@ -25,9 +34,9 @@ Newest first. This file keeps release history out of the onboarding README.
   cache under `upscaled/seedvr2/source/`. The decoder retains its native
   temporal chunks while ordinary RAM holds only the boundary window; saved
   source/generated audio is embedded automatically for the SeedVR2 pass.
-- Added the standalone whole-chain SeedVR2 workflow and corrected the learned
-  H3 2x example to load the 24-channel H3 video VAE rather than the
-  incompatible 32-channel audio VAE.
+- Added the standalone whole-chain SeedVR2 workflow and the LBH 3D H3 latent
+  workflow with video-only learned upscale, locked source audio, and a
+  conservative two-step 0.24 refinement pass.
 - Added a backend-neutral recursive upscale child run: Checkpoint Manager
   selected manifest → Upscale Adapter → Current Scene → H3/LTX/custom backend →
   Segment Save → Loop End → Merger. Each profile is isolated under the parent
@@ -40,11 +49,13 @@ Newest first. This file keeps release history out of the onboarding README.
   self-contained assembly/audio checkpoint is still written for reliable
   resume and final merge.
 - Checkpoint Manager now serializes its selected immutable lineage and emits a
-  verified complete manifest. The standalone upscale workflow therefore needs
+  verified generated-tip manifest, including partial runs whose later planned
+  scenes do not exist yet. The standalone upscale workflow therefore needs
   no source Plan, Chain Policy, or live Source Timeline connection.
-- Added a standalone 0.5 learned-H3 2x workflow that rebuilds scene
-  conditioning, runs a Tr1dae staggered pass-2 loop, and merges the isolated
-  child profile.
+- Added cache-v2 pass-2 conditioning: original picture masters are retained so
+  `match` image refs and their Qwen presentation can be rebuilt at the exact
+  LBH target canvas. V1 caches remain readable; max/video/audio refs preserve
+  their native geometry instead of being blindly scaled.
 
 ## v0.5.5 — Modern editable-install metadata
 

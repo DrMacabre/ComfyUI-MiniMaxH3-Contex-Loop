@@ -8,7 +8,7 @@ export const MAX_SEED = 18446744073709551615n;
 export const CONTINUATION_MODES = Object.freeze([
     "guide", "tone_carry_guide", "latent_guide", "tapered_guide",
     "masked_av", "tapered_av", "feathered_av", "audio_feathered_av",
-    "drift_control_av",
+    "drift_control_av", "color_stable_drift_av",
 ]);
 export const CONTEXT_SPATIAL_PROXY_MODES = Object.freeze([
     "off", "rgb_5_6", "latent_5_6",
@@ -617,6 +617,7 @@ export function calculatePlanTiming(plan, settings = {}) {
             if (sceneContext > 0 && [
                 "masked_av", "tapered_av", "feathered_av",
                 "audio_feathered_av", "drift_control_av",
+                "color_stable_drift_av",
             ].includes(
                 continuationMode,
             )) {
@@ -636,9 +637,11 @@ export function calculatePlanTiming(plan, settings = {}) {
                         "Detail AV currently requires exactly 39 context frames.",
                     );
                 }
-                if (continuationMode === "drift_control_av" && sceneContext !== 39) {
+                if (["drift_control_av", "color_stable_drift_av"].includes(
+                    continuationMode,
+                ) && sceneContext !== 39) {
                     rowErrors.push(
-                        "Drift-Control AV currently requires exactly 39 context frames.",
+                        "Drift-Control AV and Color-Stable Drift AV currently require exactly 39 context frames.",
                     );
                 }
             }
@@ -679,6 +682,7 @@ export function calculatePlanTiming(plan, settings = {}) {
             if (contextSpatialProxy === "latent_5_6" && ![
                 "masked_av", "tapered_av", "feathered_av",
                 "audio_feathered_av", "drift_control_av",
+                "color_stable_drift_av",
             ].includes(continuationMode)) {
                 rowErrors.push(
                     "Latent 5/6 boundary proxy requires an AV continuation mode.",
@@ -723,6 +727,7 @@ export function calculatePlanTiming(plan, settings = {}) {
             audioContextLength: [
                 "masked_av", "tapered_av", "feathered_av",
                 "audio_feathered_av", "drift_control_av",
+                "color_stable_drift_av",
             ].includes(
                 continuationMode,
             )

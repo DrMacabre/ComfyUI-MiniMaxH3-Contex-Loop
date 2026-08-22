@@ -86,7 +86,7 @@ advanced_inputs = advanced.INPUT_TYPES()["required"]
 assert advanced_inputs["chain_policy"][0] == chain.CHAIN_POLICY_TYPE
 assert tuple(advanced_inputs["incoming_transition"][0]) == (
     "cut", "guide", "tone_guide", "latent_guide", "detail_guide",
-    "detail_av", "drift_av", "hard_av", "soft_av")
+    "detail_av", "drift_av", "color_drift_av", "hard_av", "soft_av")
 drift, drift_status = advanced.apply(combined, "drift_av")
 assert drift["audio_policy"] == combined["audio_policy"]
 assert drift["transition_policy"] == chain._contract_transition_policy(
@@ -96,6 +96,11 @@ assert "advanced override" in drift_status
 assert "audio preserved" in drift_status
 locked_drift = advanced.apply(locked, "drift_av")[0]
 assert locked_drift["audio_policy"] == locked["audio_policy"]
+color_drift, color_status = advanced.apply(combined, "color_drift_av")
+assert color_drift["transition_policy"][
+    "continuation_mode"] == "color_stable_drift_av"
+assert color_drift["audio_policy"] == combined["audio_policy"]
+assert "Color-Stable Drift AV" in color_status
 
 combined_plan = make_plan(combined=combined)
 assert "chain_policy" not in combined_plan["compatibility"]

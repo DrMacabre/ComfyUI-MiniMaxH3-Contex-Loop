@@ -54,6 +54,8 @@ def main():
         "MiniMaxH3ChainUpscaleAdapter",
         "MiniMaxH3ChainUpscaleCurrent",
         "MiniMaxH3ChainUpscaleReferenceConditioning",
+        "H3ConditioningSyncFromLatents",
+        "MiniMaxH3ChainPass2Prepare",
         "MiniMaxH3ChainUpscaleSegmentSave",
         "MiniMaxH3ChainUpscaleLoopEnd",
         "MiniMaxH3ChainUpscaleMerge",
@@ -183,12 +185,14 @@ def main():
                 "deferred upscale test", "<Picture 1> test"),
             width=32, height=32, length=5, ref_image_size="match",
             vae=FakeVideoVAE(), audio_vae=None,
-            pictures=[torch.ones((1, 32, 32, 3))], videos=[], audios=[])
+            pictures=[torch.ones((1, 64, 128, 3))], videos=[], audios=[])
         assert "reference cache saved" in cache_status
         cache_metadata = chain._find_reference_cache(
             "unit-test", 1, 2, source["prompt"], 32, 32, 5)
         cache_descriptor = chain._reference_cache_descriptor(cache_metadata)
         assert cache_descriptor is not None
+        assert cache_metadata["format"] == "h3_reference_cache_v2"
+        assert len(cache_metadata["source_images"]) == 1
         assert chain._load_reference_cache_descriptor(
             cache_descriptor)["signature"] == cache_metadata["signature"]
         cached_source = chain.MiniMaxH3ChainSegmentSave().save(
@@ -260,6 +264,271 @@ def main():
         assert len(cached_refs) == 1
         assert cached_refs[0]["kind"] == "image"
         assert torch.all(cached_refs[0]["latent"] == 0.625)
+        assert cached_conditioning[0][0][1][
+            "_h3_upscale_motion_ref_mode"] == "exclude_video_keep_audio"
+        override_conditioning = (
+            upscale.MiniMaxH3ChainUpscaleReferenceConditioning().condition(
+                cached_upscale_state, FakeClip(), "error",
+                prompt_override="Preserve identity and fine detail."))
+        assert override_conditioning[1] == "Preserve identity and fine detail."
+        assert override_conditioning[0][0][1]["tokens"]["prompt"] == (
+            "Preserve identity and fine detail.")
+        assert "custom pass-2 prompt override" in override_conditioning[3]
+
+        target_video = {
+            "samples": torch.zeros((1, 24, 2, 4, 4), dtype=torch.float32)}
+        target_conditioning = (
+            upscale.MiniMaxH3ChainUpscaleReferenceConditioning().condition(
+                cached_upscale_state, FakeClip(), "error",
+                target_video, FakeVideoVAE()))
+        target_refs = target_conditioning[0][0][1]["minimax_refs"]
+        assert tuple(target_refs[0]["latent"].shape[-2:]) == (2, 6)
+        target_presentation = target_conditioning[0][0][1]["tokens"][
+            "presentation"]
+        assert tuple(target_presentation[0]["data"].shape[1:3]) == (32, 96)
+        assert "pass-2 64x64 policy=match" in target_conditioning[3]
+        assert "1 source masters" in target_conditioning[3]
+
+        legacy_cache = dict(chain._load_reference_cache_descriptor(
+            migrated_cache))
+        legacy_cache["format"] = "h3_reference_cache_v1"
+        legacy_cache.pop("source_images", None)
+        legacy_cache["presentation"] = [
+            {key: value for key, value in item.items() if key != "role"}
+            for item in legacy_cache["presentation"]]
+        assert chain._reference_cache_descriptor(legacy_cache) is not None
+        legacy_conditioning, legacy_detail = (
+            chain._conditioning_from_reference_cache_target(
+                FakeClip(), FakeVideoVAE(), legacy_cache, 64, 64))
+        assert legacy_detail["master_rebuilds"] == 0
+        assert legacy_detail["fallback_rebuilds"] == 1
+        legacy_refs = legacy_conditioning[0][1]["minimax_refs"]
+        assert tuple(legacy_refs[0]["latent"].shape[-2:]) == (4, 4)
+
+        max_cache = dict(chain._load_reference_cache_descriptor(
+            migrated_cache))
+        max_cache["ref_image_size"] = "max"
+        max_conditioning, max_detail = (
+            chain._conditioning_from_reference_cache_target(
+                FakeClip(), FakeVideoVAE(), max_cache, 64, 64))
+        max_refs = max_conditioning[0][1]["minimax_refs"]
+        assert max_detail["rebuilt_images"] == 0
+        assert tuple(max_refs[0]["latent"].shape[-2:]) == (2, 2)
+
+        sync_positive = [[torch.zeros((1, 1, 4)), {
+            "minimax_refs": [{
+                "kind": "image",
+                "latent_h": 2,
+                "latent_w": 3,
+                "latent": torch.arange(
+                    1 * 24 * 1 * 2 * 3, dtype=torch.float32).reshape(
+                        1, 24, 1, 2, 3),
+            }, {
+                "kind": "video_audio",
+                "latent_t": 2,
+                "latent_h": 4,
+                "latent_w": 5,
+                "ref_audio_t": 2,
+                "latent": torch.zeros((1, 24, 2, 4, 5)),
+                "audio_latent": torch.ones((1, 32, 2, 9)),
+            }, {
+                "kind": "audio",
+                "ref_audio_t": 2,
+                "audio_latent": torch.ones((1, 32, 2, 9)),
+            }],
+            "minimax_keyframes": [{
+                "resolved_frame_index": 0,
+                "latent": torch.zeros((1, 24, 1, 2, 2)),
+                "audio_latent": torch.ones((1, 32, 2, 9)),
+            }],
+            "unchanged": "metadata",
+        }]]
+        synced = upscale.H3ConditioningSyncFromLatents().sync(
+            {"samples": torch.zeros((1, 24, 2, 2, 2))},
+            {"samples": torch.zeros((1, 24, 2, 4, 6))},
+            sync_positive, "bilinear")
+        synced_meta = synced[0][0][1]
+        assert synced[1] is None
+        assert synced[2:] == (96, 64, 3.0, 2.0)
+        assert tuple(synced_meta["minimax_refs"][0]["latent"].shape) == (
+            1, 24, 1, 4, 10)
+        assert synced_meta["minimax_refs"][0]["latent_h"] == 4
+        assert synced_meta["minimax_refs"][0]["latent_w"] == 10
+        assert synced_meta["minimax_refs"][1]["kind"] == "audio"
+        assert "latent" not in synced_meta["minimax_refs"][1]
+        assert "latent_t" not in synced_meta["minimax_refs"][1]
+        assert "latent_h" not in synced_meta["minimax_refs"][1]
+        assert "latent_w" not in synced_meta["minimax_refs"][1]
+        assert tuple(synced_meta["minimax_refs"][1][
+            "audio_latent"].shape) == (1, 32, 2, 9)
+        assert "latent" not in synced_meta["minimax_refs"][2]
+        assert tuple(synced_meta["minimax_keyframes"][0][
+            "latent"].shape) == (1, 24, 1, 4, 6)
+        assert tuple(synced_meta["minimax_keyframes"][0][
+            "audio_latent"].shape) == (1, 32, 2, 9)
+        assert synced_meta["unchanged"] == "metadata"
+        assert tuple(sync_positive[0][1]["minimax_refs"][0][
+            "latent"].shape) == (1, 24, 1, 2, 3)
+
+        filtered_presentation, filtered_blocks = (
+            chain._h3_motion_reference_policy([{
+                "type": "image", "role": "native_picture",
+            }, {
+                "type": "video", "role": "native_video",
+            }, {
+                "type": "audio", "role": "native_audio",
+            }, {
+                "type": "video", "role": "native_video",
+            }, {
+                "type": "video", "role": "semantic_presentation",
+            }], [{
+                "kind": "video_audio", "latent": torch.zeros(1),
+                "latent_t": 2, "latent_h": 4, "latent_w": 5,
+                "ref_audio_t": 2, "audio_latent": torch.ones(1),
+            }, {
+                "kind": "video", "latent": torch.zeros(1),
+                "latent_t": 2, "latent_h": 4, "latent_w": 5,
+                "ref_audio_t": 0, "audio_latent": None,
+            }, {
+                "kind": "image", "latent": torch.zeros(1),
+            }], "exclude_video_keep_audio"))
+        assert [item["type"] for item in filtered_presentation] == [
+            "image", "audio", "video"]
+        assert [block["kind"] for block in filtered_blocks] == [
+            "audio", "image"]
+        assert "latent" not in filtered_blocks[0]
+
+        native_motion = upscale.H3ConditioningSyncFromLatents().sync(
+            {"samples": torch.zeros((1, 24, 2, 2, 2))},
+            {"samples": torch.zeros((1, 24, 2, 4, 6))},
+            sync_positive, "bilinear", "keep_video_native")[0][0][1]
+        assert tuple(native_motion["minimax_refs"][1]["latent"].shape) == (
+            1, 24, 2, 4, 5)
+
+        resized_motion = upscale.H3ConditioningSyncFromLatents().sync(
+            {"samples": torch.zeros((1, 24, 2, 2, 2))},
+            {"samples": torch.zeros((1, 24, 2, 4, 6))},
+            sync_positive, "bilinear", "resize_video")[0][0][1]
+        assert tuple(resized_motion["minimax_refs"][1]["latent"].shape) == (
+            1, 24, 2, 8, 16)
+        assert resized_motion["minimax_refs"][1]["latent_t"] == 2
+
+        class FakeSampling:
+            @staticmethod
+            def noise_scaling(sigma, generated, latent):
+                return latent + sigma * generated
+
+            @staticmethod
+            def inverse_noise_scaling(_sigma, mixed):
+                return mixed
+
+        class FakeModel:
+            objects = {
+                "model_sampling": FakeSampling(),
+                "process_latent_in": lambda samples: samples,
+                "process_latent_out": lambda samples: samples,
+            }
+
+            def get_model_object(self, name):
+                return self.objects[name]
+
+        class FakeNoise:
+            @staticmethod
+            def generate_noise(latent):
+                return torch.ones_like(latent["samples"])
+
+        prepared = upscale.MiniMaxH3ChainPass2Prepare().prepare(
+            {"samples": torch.ones(
+                (1, 24, 2, 4, 6), dtype=torch.float32)},
+            current[3], FakeModel(), FakeNoise(),
+            torch.tensor([0.24, 0.0], dtype=torch.float32))
+        prepared_streams = chain._streams_from_latent(prepared[0])
+        prepared_masks = chain._streams_from_latent({
+            "samples": prepared[0]["noise_mask"]})
+        assert prepared[1:3] == (96, 64)
+        assert torch.allclose(
+            prepared_streams[0], torch.full_like(prepared_streams[0], 1.24))
+        assert torch.all(prepared_streams[1] == 0.75)
+        assert torch.all(prepared_masks[0] == 1)
+        assert torch.all(prepared_masks[1] == 0)
+        assert "audio" in prepared[3] and "locked" in prepared[3]
+
+        drift_manifest = json.loads(json.dumps(source_manifest))
+        drift_manifest["segments"][1].update({
+            "raw_frames": 44,
+            "delivered_frames": 5,
+            "continuation_mode": "drift_control_av",
+            "context_length": 39,
+        })
+        previous_hq_video = torch.arange(
+            16, dtype=torch.float32).view(1, 1, 16, 1, 1).expand(
+                1, 24, 16, 4, 4).clone()
+        previous_hq = {"samples": [
+            previous_hq_video,
+            torch.full((1, 32, 2, 9), 0.75, dtype=torch.float32),
+        ]}
+        drift_save_state = {
+            **upscale_state,
+            "profile": "drift-quality",
+            "source_manifest": drift_manifest,
+            "source_manifest_hash": upscale._source_hash(drift_manifest),
+            "segments": [],
+        }
+        drift_saved = upscale.MiniMaxH3ChainUpscaleSegmentSave().save(
+            drift_save_state,
+            torch.zeros((5, 64, 64, 3), dtype=torch.float32),
+            previous_hq)["result"][0]
+        assert not drift_saved["latent_saved"]
+        assert drift_saved["context_steps"] == 12
+        drift_checkpoint = pathlib.Path(
+            chain._absolute_output_path(drift_saved["checkpoint"]))
+        with safe_open(drift_checkpoint, framework="pt", device="cpu") as saved:
+            assert "upscaled_video_context" in saved.keys()
+            assert "upscaled_video" not in saved.keys()
+            assert tuple(saved.get_tensor(
+                "upscaled_video_context").shape) == (1, 24, 12, 4, 4)
+
+        resumed_drift_state = {
+            **drift_save_state,
+            "index": 2,
+            "segments": [drift_saved],
+            "previous_latent": None,
+        }
+        restored_context, restored_route = (
+            upscale._load_previous_upscaled_context(
+                resumed_drift_state, 2))
+        assert "compact saved HQ context" in restored_route
+        resumed_drift_state["previous_latent"] = restored_context
+        drift_prepared = upscale.MiniMaxH3ChainPass2Prepare().prepare(
+            {"samples": torch.ones(
+                (1, 24, 16, 4, 4), dtype=torch.float32)},
+            current[3], FakeModel(), FakeNoise(),
+            torch.tensor([0.24, 0.0], dtype=torch.float32),
+            resumed_drift_state)
+        drift_streams = chain._streams_from_latent(drift_prepared[0])
+        drift_masks = chain._streams_from_latent({
+            "samples": drift_prepared[0]["noise_mask"]})
+        assert torch.allclose(
+            drift_streams[0][:, :, :12], previous_hq_video[:, :, -12:])
+        assert torch.allclose(
+            drift_streams[0][:, :, 12:],
+            torch.full_like(drift_streams[0][:, :, 12:], 1.24))
+        assert torch.all(drift_masks[0][:, :, :12] == 0)
+        assert torch.all(drift_masks[0][:, :, 12:] == 1)
+        assert "previous HQ latent tail spliced and protected" in (
+            drift_prepared[3])
+        fallback_state = {**resumed_drift_state, "previous_latent": None}
+        fallback_prepared = upscale.MiniMaxH3ChainPass2Prepare().prepare(
+            {"samples": torch.ones(
+                (1, 24, 16, 4, 4), dtype=torch.float32)},
+            current[3], FakeModel(), FakeNoise(),
+            torch.tensor([0.24, 0.0], dtype=torch.float32), fallback_state)
+        fallback_streams = chain._streams_from_latent(fallback_prepared[0])
+        fallback_masks = chain._streams_from_latent({
+            "samples": fallback_prepared[0]["noise_mask"]})
+        assert torch.all(fallback_streams[0][:, :, :12] == 1)
+        assert torch.all(fallback_masks[0][:, :, :12] == 0)
+        assert "source prefix protected" in fallback_prepared[3]
 
         hq_images = torch.zeros((5, 64, 64, 3), dtype=torch.float32)
         saved_result = upscale.MiniMaxH3ChainUpscaleSegmentSave().save(

@@ -66,6 +66,9 @@ assert.deepEqual(compactBoundary, {
 applySceneTransitionPreset(compactBoundary, "inherit");
 assert.deepEqual(compactBoundary, {});
 assert.equal(transitionPresetLabel("soft_av"), "Soft AV");
+assert.equal(
+    transitionPresetLabel("color_drift_av"), "Color-Stable Drift AV",
+);
 
 assert.equal(AUTO_SCENE_COLORS.length, 12);
 assert.deepEqual(
@@ -74,6 +77,7 @@ assert.deepEqual(
         "guide", "tone_carry_guide", "latent_guide", "tapered_guide",
         "masked_av", "tapered_av", "feathered_av",
         "audio_feathered_av", "drift_control_av",
+        "color_stable_drift_av",
     ],
 );
 assert.equal(H3_CONTEXT_LENGTHS.at(-1), 243);
@@ -352,7 +356,44 @@ assert.match(calculatePlanTiming(driftControlPlan, {
     anchorMode: "head",
     continuationMode: "guide",
     defaultDurationSeconds: 5,
-}).errors.join("\n"), /Drift-Control AV currently requires exactly 39/);
+}).errors.join("\n"), /Drift-Control AV.*require exactly 39/);
+
+const colorDriftPlan = parsePlanJson(JSON.stringify({
+    shots: [
+        {id: "one", prompt: "Opening."},
+        {id: "two", prompt: "Continue.",
+            continuation_mode: "color_stable_drift_av"},
+    ],
+}));
+const colorDriftTiming = calculatePlanTiming(colorDriftPlan, {
+    contextLength: 39,
+    encodeMode: "video",
+    anchorMode: "head",
+    continuationMode: "guide",
+    defaultDurationSeconds: 5,
+});
+assert.deepEqual(colorDriftTiming.errors, []);
+assert.equal(colorDriftTiming.shots[1].audioContextLength, 39);
+const colorDriftProxyTiming = calculatePlanTiming({shots: [
+    {id: "one", prompt: "Opening."},
+    {id: "two", prompt: "Continue.",
+        continuation_mode: "color_stable_drift_av",
+        context_spatial_proxy: "latent_5_6"},
+]}, {
+    contextLength: 39,
+    encodeMode: "video",
+    anchorMode: "head",
+    continuationMode: "guide",
+    defaultDurationSeconds: 5,
+});
+assert.deepEqual(colorDriftProxyTiming.errors, []);
+assert.match(calculatePlanTiming(colorDriftPlan, {
+    contextLength: 90,
+    encodeMode: "video",
+    anchorMode: "head",
+    continuationMode: "guide",
+    defaultDurationSeconds: 5,
+}).errors.join("\n"), /Color-Stable Drift AV currently require exactly 39/);
 
 const latentGuideTiming = calculatePlanTiming({shots: [
     {id: "one", prompt: "Opening."},

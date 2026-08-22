@@ -104,6 +104,7 @@ from .contracts_v05 import (
     CONTINUATION_POLICIES,
     DETAIL_AV_RECIPE,
     DRIFT_CONTROL_AV_RECIPE,
+    LATENT_COLOR_CARRY_RECIPE,
     DEPENDENCY_SCOPES,
     FINAL_AUDIO_POLICIES,
     GENERATED_CONTINUITY_POLICIES,
@@ -142,6 +143,11 @@ BOUNDARY_TONE_MATCH_CONTEXT_FRAMES = 8
 BOUNDARY_TONE_MATCH_SEARCH_FRAMES = 4
 BOUNDARY_TONE_MATCH_MIN_JUMP = 1.25
 BOUNDARY_TONE_MATCH_MAX_SHIFT = 6.0
+ASSEMBLY_COLOR_STABILIZATION_MODES = ("off", "scene_1_anchor")
+ASSEMBLY_COLOR_STABILIZATION_RAMP_FRAMES = 72
+ASSEMBLY_COLOR_STABILIZATION_STRENGTH = 0.5
+ASSEMBLY_COLOR_STABILIZATION_MAX_LUMA_SHIFT = 6.0
+ASSEMBLY_COLOR_STABILIZATION_MAX_SATURATION_CHANGE = 0.06
 MASKED_AUDIO_CONTRACT = "raw_source_window_v2"
 PLAN_STUDIO_PREVIEW_TTL_SECONDS = 6 * 60 * 60
 PLAN_STUDIO_PREVIEW_MAX_SESSIONS = 32
@@ -156,15 +162,19 @@ AUDIO_MODES = ("source_track", "generated_audio", "source_plus_timeline")
 CONTINUATION_MODES = (
     "guide", "tone_carry_guide", "latent_guide", "tapered_guide",
     "masked_av", "tapered_av", "feathered_av", "audio_feathered_av",
-    "drift_control_av")
+    "drift_control_av", "color_stable_drift_av")
 LOOP_MEMORY_POLICIES = ("off", "unload_models", "fresh_scene")
 GUIDE_CONTINUATION_MODES = frozenset((
     "guide", "tone_carry_guide", "latent_guide", "tapered_guide"))
 MASKED_CONTINUATION_MODES = frozenset((
     "masked_av", "tapered_av", "feathered_av", "audio_feathered_av",
-    "drift_control_av"))
+    "drift_control_av", "color_stable_drift_av"))
 DISPOSABLE_PREFIX_CONTINUATION_MODES = frozenset((
-    "tapered_av", "drift_control_av"))
+    "tapered_av", "drift_control_av", "color_stable_drift_av"))
+DRIFT_CONTROL_CONTINUATION_MODES = frozenset((
+    "drift_control_av", "color_stable_drift_av"))
+LATENT_COLOR_CARRY_CONTINUATION_MODES = frozenset((
+    "color_stable_drift_av",))
 RGB_PROXY_GUIDE_MODES = frozenset((
     "guide", "tone_carry_guide", "tapered_guide"))
 REFERENCE_AUDIO_TIMELINE_MODES = ("standalone", "source_timeline")
@@ -332,7 +342,7 @@ def _resolved_transition_policy(value: Any) -> dict[str, Any]:
     preset = "legacy"
     for candidate in (
             "cut", "guide", "tone_guide", "latent_guide", "detail_guide",
-            "detail_av", "drift_av", "hard_av", "soft_av",
+            "detail_av", "drift_av", "color_drift_av", "hard_av", "soft_av",
             "audio_feather_av"):
         resolved = _contract_transition_policy(candidate)
         if (resolved["continuation_mode"] == mode and
@@ -366,6 +376,7 @@ def _transition_policy_display(value: Any) -> str:
         "detail_guide": "Detail Guide",
         "detail_av": "Detail AV",
         "drift_av": "Drift-Control AV",
+        "color_drift_av": "Color-Stable Drift AV",
         "hard_av": "Hard AV",
         "soft_av": "Soft AV",
         "audio_feather_av": "Audio Feather AV (legacy alias)",
@@ -381,6 +392,7 @@ def _transition_policy_display(value: Any) -> str:
         "feathered_av": "Feathered AV",
         "audio_feathered_av": "Audio-Feathered AV",
         "drift_control_av": "Drift-Control AV",
+        "color_stable_drift_av": "Color-Stable Drift AV",
     }
     preset = str(policy["preset"])
     implementation = str(policy["continuation_mode"])
@@ -3040,7 +3052,13 @@ def _replace_conditioning_presentation(
     return merged, status
 
 
-REFERENCE_CACHE_FORMAT = "h3_reference_cache_v1"
+REFERENCE_CACHE_FORMAT = "h3_reference_cache_v2"
+REFERENCE_CACHE_LEGACY_FORMATS = frozenset(("h3_reference_cache_v1",))
+
+
+def _is_reference_cache_format(value: Any) -> bool:
+    return str(value or "") in (
+        {REFERENCE_CACHE_FORMAT} | REFERENCE_CACHE_LEGACY_FORMATS)
 
 
 def _reference_cache_signature(
@@ -3130,16 +3148,23 @@ def _h3_reference_cache_payload(
         videos: list[dict[str, Any]], audios: list[Any], width: int,
         height: int, length: int, ref_image_size: str,
         semantic_presentation: Any = None
-        ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[Any]]:
     """Encode the stock H3 Ref2VA payload before target-layout packing."""
     frame_count = _h3_aligned_frame_count(length)
     presentation_items: list[dict[str, Any]] = []
     reference_blocks: list[dict[str, Any]] = []
+    # V2 keeps one RGB master per native picture.  The compact V1 payload was
+    # sufficient to reproduce pass 1, but a larger pass-2 ``match`` canvas
+    # needs the pre-resize picture to avoid enlarging the low-resolution Qwen
+    # presentation frame.
+    source_images: list[Any] = []
     for image in pictures:
         resized = _h3_picture_presentation(
             image, width, height, ref_image_size)
         latent = vae.encode(resized)
-        presentation_items.append({"type": "image", "data": resized})
+        presentation_items.append({
+            "type": "image", "data": resized, "role": "native_picture"})
+        source_images.append(image[:1, ..., :3])
         reference_blocks.append({
             "kind": "image",
             "latent_h": int(resized.shape[1]) // 16,
@@ -3173,11 +3198,12 @@ def _h3_reference_cache_payload(
         if paired_audio is not None:
             audio_latent, audio_ticks = _h3_encode_reference_audio(
                 audio_vae, paired_audio)
-            presentation_items.append({"type": "audio"})
+            presentation_items.append({"type": "audio", "role": "native_audio"})
         sample_indices = list(range(0, usable, FPS // 2))
         presentation_items.append({
             "type": "video",
             "data": frames[sample_indices],
+            "role": "native_video",
             "timestamps": [index / 2.0 for index in range(
                 len(sample_indices))],
         })
@@ -3193,7 +3219,7 @@ def _h3_reference_cache_payload(
     for audio in audios:
         audio_latent, audio_ticks = _h3_encode_reference_audio(
             audio_vae, audio)
-        presentation_items.append({"type": "audio"})
+        presentation_items.append({"type": "audio", "role": "native_audio"})
         reference_blocks.append({
             "kind": "audio",
             "ref_audio_t": audio_ticks,
@@ -3202,7 +3228,15 @@ def _h3_reference_cache_payload(
     if semantic_presentation is not None:
         presentation_items, _status = _semantic_presentation_items(
             semantic_presentation)
-    return presentation_items, reference_blocks
+        # Native pictures are always emitted first by
+        # _semantic_presentation_items; later image/video entries may be
+        # Qwen-only semantic anchors and must keep their configured size.
+        native_pictures = len(pictures)
+        for index, item in enumerate(presentation_items):
+            item["role"] = (
+                "native_picture" if index < native_pictures
+                else "semantic_presentation")
+    return presentation_items, reference_blocks, source_images
 
 
 def _cache_reference_scene(
@@ -3222,13 +3256,15 @@ def _cache_reference_scene(
     paths = _reference_cache_paths(fingerprint, scene, signature)
     if _reference_cache_existing(paths, signature):
         return "reference cache reused %s" % signature[:12]
-    presentation, blocks = _h3_reference_cache_payload(
+    presentation, blocks, source_images = _h3_reference_cache_payload(
         vae, audio_vae, pictures, videos, audios, width, height, length,
         ref_image_size, semantic_presentation)
     tensors: dict[str, Any] = {}
     public_presentation = []
     for index, item in enumerate(presentation):
         record = {"type": str(item["type"])}
+        if item.get("role"):
+            record["role"] = str(item["role"])
         if "timestamps" in item:
             record["timestamps"] = [float(value) for value in item["timestamps"]]
         data = item.get("data")
@@ -3239,6 +3275,13 @@ def _cache_reference_scene(
                     torch.uint8).contiguous()
             record["data_tensor"] = key
         public_presentation.append(record)
+    public_source_images = []
+    for index, image in enumerate(source_images):
+        key = "source_image_%03d" % index
+        tensors[key] = torch.clamp(
+            image.detach().cpu().float(), 0.0, 1.0).mul(255).round().to(
+                torch.uint8).contiguous()
+        public_source_images.append({"data_tensor": key})
     public_blocks = []
     for index, block in enumerate(blocks):
         record = {key: value for key, value in block.items()
@@ -3275,6 +3318,7 @@ def _cache_reference_scene(
         "ref_image_size": str(ref_image_size),
         "presentation_contract": presentation_contract,
         "presentation": public_presentation,
+        "source_images": public_source_images,
         "reference_blocks": public_blocks,
         "metadata": _relative_output_path(paths["metadata"]),
         "tensors": _relative_output_path(paths["tensors"]),
@@ -3287,8 +3331,8 @@ def _cache_reference_scene(
 
 
 def _reference_cache_descriptor(metadata: Any) -> dict[str, Any] | None:
-    if not isinstance(metadata, dict) or metadata.get(
-            "format") != REFERENCE_CACHE_FORMAT:
+    if not isinstance(metadata, dict) or not _is_reference_cache_format(
+            metadata.get("format")):
         return None
     required = ("signature", "reference_fingerprint", "metadata", "tensors",
                 "tensors_sha256")
@@ -3438,7 +3482,7 @@ def _find_reference_cache(
             metadata = _read_json(path)
         except (OSError, ValueError, json.JSONDecodeError):
             continue
-        if (metadata.get("format") != REFERENCE_CACHE_FORMAT
+        if (not _is_reference_cache_format(metadata.get("format"))
                 or metadata.get("reference_fingerprint") != str(fingerprint)
                 or int(metadata.get("scene", -1)) != int(scene)
                 or int(metadata.get("scene_count", -1)) != int(scene_count)
@@ -3454,8 +3498,9 @@ def _find_reference_cache(
     return max(candidates, key=lambda item: item[0])[1]
 
 
-def _conditioning_from_reference_cache(clip: Any,
-                                       metadata: dict[str, Any]) -> Any:
+def _reference_payload_from_cache(
+        metadata: dict[str, Any]
+        ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[Any]]:
     if _st_load is None or torch is None:
         raise RuntimeError(
             "safetensors and torch are required to load H3 reference cache.")
@@ -3467,7 +3512,10 @@ def _conditioning_from_reference_cache(clip: Any,
     tensors = _st_load(tensor_path)
     presentation = []
     for record in metadata.get("presentation", ()):
-        item = {"type": str(record["type"])}
+        item = {
+            "type": str(record["type"]),
+            "role": str(record.get("role") or ""),
+        }
         if "timestamps" in record:
             item["timestamps"] = [float(value) for value in record["timestamps"]]
         key = record.get("data_tensor")
@@ -3477,6 +3525,13 @@ def _conditioning_from_reference_cache(clip: Any,
                     "H3 reference cache is missing presentation tensor %s." % key)
             item["data"] = tensors[key].float().div(255.0)
         presentation.append(item)
+    source_images = []
+    for record in metadata.get("source_images", ()):
+        key = record.get("data_tensor") if isinstance(record, dict) else None
+        if not key or key not in tensors:
+            raise ValueError(
+                "H3 reference cache is missing source image tensor %s." % key)
+        source_images.append(tensors[key].float().div(255.0))
     blocks = []
     for record in metadata.get("reference_blocks", ()):
         block = {key: value for key, value in record.items()
@@ -3492,8 +3547,192 @@ def _conditioning_from_reference_cache(clip: Any,
             elif field == "audio_latent" and block.get("kind") == "video":
                 block[field] = None
         blocks.append(block)
-    prompt = str(metadata.get("compiled_prompt") or "")
-    tokens = clip.tokenize(prompt, minimax_ref_items=presentation)
+    return presentation, blocks, source_images
+
+
+_H3_MOTION_REFERENCE_MODES = frozenset((
+    "exclude_video_keep_audio", "keep_video_native", "resize_video"))
+
+
+def _h3_motion_reference_policy(
+        presentation: list[dict[str, Any]], blocks: list[dict[str, Any]],
+        mode: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Apply one upscale motion-ref policy to Qwen items and H3 blocks."""
+    mode = str(mode)
+    if mode not in _H3_MOTION_REFERENCE_MODES:
+        raise ValueError("Unknown H3 motion reference mode %r." % mode)
+    copied_presentation = [dict(item) for item in presentation]
+    copied_blocks = [dict(block) for block in blocks]
+    if mode != "exclude_video_keep_audio":
+        return copied_presentation, copied_blocks
+
+    # Native motion presentations precede any Qwen-only semantic video
+    # anchors. Remove exactly one video item per native H3 video block.
+    native_video_count = sum(
+        block.get("kind") in ("video", "video_audio")
+        for block in copied_blocks)
+    filtered_presentation = []
+    for item in copied_presentation:
+        if native_video_count and item.get("type") == "video":
+            native_video_count -= 1
+            continue
+        filtered_presentation.append(item)
+
+    filtered_blocks = []
+    for block in copied_blocks:
+        kind = block.get("kind")
+        if kind not in ("video", "video_audio"):
+            filtered_blocks.append(block)
+            continue
+        audio = block.get("audio_latent")
+        ticks = int(block.get("ref_audio_t") or 0)
+        if kind != "video_audio" or audio is None or ticks <= 0:
+            continue
+        for key in ("latent", "latent_t", "latent_h", "latent_w"):
+            block.pop(key, None)
+        block["kind"] = "audio"
+        block["ref_audio_t"] = ticks
+        filtered_blocks.append(block)
+    return filtered_presentation, filtered_blocks
+
+
+def _conditioning_from_reference_cache_target(
+        clip: Any, vae: Any, metadata: dict[str, Any],
+        target_width: int, target_height: int,
+        prompt_override: str | None = None,
+        motion_ref_mode: str = "resize_video") -> tuple[Any, dict[str, Any]]:
+    """Rebuild cached Ref2VA conditioning for an actual pass-2 canvas.
+
+    Only native picture references using Core H3's ``match`` policy are tied
+    to generation area.  ``max`` pictures, video-reference canvases, audio,
+    and Qwen-only semantic anchors retain their original geometry.  V2 caches
+    keep the original picture master; V1 caches safely fall back to their
+    pass-1 presentation frame.
+    """
+    target_width, target_height = int(target_width), int(target_height)
+    if target_width < 32 or target_height < 32:
+        raise ValueError("Pass-2 conditioning target must be at least 32x32.")
+    if not callable(getattr(vae, "encode", None)):
+        raise ValueError(
+            "Pass-2 target conditioning requires the MiniMax H3 video VAE.")
+    presentation, blocks, source_images = _reference_payload_from_cache(
+        metadata)
+    presentation, blocks = _h3_motion_reference_policy(
+        presentation, blocks, motion_ref_mode)
+    policy = str(metadata.get("ref_image_size") or "match")
+    rebuilt = 0
+    master_rebuilds = 0
+    fallback_rebuilds = 0
+    if policy == "match":
+        image_blocks = [
+            block for block in blocks if block.get("kind") == "image"]
+        marked = [
+            index for index, item in enumerate(presentation)
+            if item.get("type") == "image"
+            and item.get("role") == "native_picture"]
+        if len(marked) < len(image_blocks):
+            # V1 did not persist roles. Native pictures were serialized before
+            # videos/audio and before any semantic-anchor presentation.
+            marked = [
+                index for index, item in enumerate(presentation)
+                if item.get("type") == "image"][:len(image_blocks)]
+        if len(marked) < len(image_blocks):
+            raise ValueError(
+                "H3 reference cache has %d native image blocks but only %d "
+                "matching Qwen pictures." % (len(image_blocks), len(marked)))
+        for index, block in enumerate(image_blocks):
+            presentation_item = presentation[marked[index]]
+            has_master = index < len(source_images)
+            master = (source_images[index] if has_master
+                      else presentation_item.get("data"))
+            if master is None:
+                raise ValueError(
+                    "H3 reference cache image %d has no reusable picture." %
+                    (index + 1))
+            if has_master:
+                resized = _h3_picture_presentation(
+                    master, target_width, target_height, "match")
+            else:
+                # V1 contains only the pass-1 presentation frame. Approximate
+                # the missing source master by scaling that frame with the
+                # output-area ratio, matching the community conditioning-sync
+                # approach while keeping H/W on Core H3's 32px grid.
+                source_width = max(1, int(metadata.get("width", 0)))
+                source_height = max(1, int(metadata.get("height", 0)))
+                area_scale = math.sqrt(
+                    (target_width * target_height) /
+                    float(source_width * source_height))
+                fallback_width = max(
+                    32, round(int(master.shape[2]) * area_scale / 32) * 32)
+                fallback_height = max(
+                    32, round(int(master.shape[1]) * area_scale / 32) * 32)
+                resized = _resize(
+                    master[:1], fallback_width, fallback_height, "disabled")
+            latent = vae.encode(resized)
+            block["latent"] = latent
+            block["latent_h"] = int(latent.shape[-2])
+            block["latent_w"] = int(latent.shape[-1])
+            presentation_item["data"] = resized
+            rebuilt += 1
+            if has_master:
+                master_rebuilds += 1
+            else:
+                fallback_rebuilds += 1
+    elif policy != "max":
+        raise ValueError(
+            "Cached H3 ref_image_size must be match or max, got %r." % policy)
+
+    prompt = (str(metadata.get("compiled_prompt") or "")
+              if prompt_override is None else str(prompt_override))
+    clip_presentation = []
+    for item in presentation:
+        public = {"type": item["type"]}
+        if "timestamps" in item:
+            public["timestamps"] = item["timestamps"]
+        if "data" in item:
+            public["data"] = item["data"]
+        clip_presentation.append(public)
+    tokens = clip.tokenize(prompt, minimax_ref_items=clip_presentation)
+    conditioning = clip.encode_from_tokens_scheduled(tokens)
+    if blocks:
+        try:
+            import node_helpers
+        except ImportError as exc:
+            raise RuntimeError(
+                "H3 reference cache conditioning requires ComfyUI node_helpers.") from exc
+        conditioning = node_helpers.conditioning_set_values(
+            conditioning, {"minimax_refs": blocks})
+    return conditioning, {
+        "policy": policy,
+        "target_width": target_width,
+        "target_height": target_height,
+        "rebuilt_images": rebuilt,
+        "master_rebuilds": master_rebuilds,
+        "fallback_rebuilds": fallback_rebuilds,
+        "preserved_blocks": len(blocks) - rebuilt,
+    }
+
+
+def _conditioning_from_reference_cache(clip: Any,
+                                       metadata: dict[str, Any],
+                                       prompt_override: str | None = None,
+                                       motion_ref_mode: str = "resize_video"
+                                       ) -> Any:
+    presentation, blocks, _source_images = _reference_payload_from_cache(
+        metadata)
+    presentation, blocks = _h3_motion_reference_policy(
+        presentation, blocks, motion_ref_mode)
+    prompt = (str(metadata.get("compiled_prompt") or "")
+              if prompt_override is None else str(prompt_override))
+    clip_presentation = []
+    for item in presentation:
+        public = {"type": item["type"]}
+        if "timestamps" in item:
+            public["timestamps"] = item["timestamps"]
+        if "data" in item:
+            public["data"] = item["data"]
+        clip_presentation.append(public)
+    tokens = clip.tokenize(prompt, minimax_ref_items=clip_presentation)
     conditioning = clip.encode_from_tokens_scheduled(tokens)
     if blocks:
         try:
@@ -3979,9 +4218,12 @@ def _scene_dependency_record(
     if transition == "tapered_av":
         scopes["incoming_boundary"]["detail_av_recipe"] = dict(
             DETAIL_AV_RECIPE)
-    if transition == "drift_control_av":
+    if transition in DRIFT_CONTROL_CONTINUATION_MODES:
         scopes["incoming_boundary"]["drift_control_av_recipe"] = dict(
             DRIFT_CONTROL_AV_RECIPE)
+    if transition in LATENT_COLOR_CARRY_CONTINUATION_MODES:
+        scopes["incoming_boundary"]["latent_color_carry_recipe"] = dict(
+            LATENT_COLOR_CARRY_RECIPE)
     fingerprints = {scope: _fingerprint(scopes[scope])
                     for scope in DEPENDENCY_SCOPES}
     generation_hash = _fingerprint({
@@ -4739,12 +4981,12 @@ def _normalize_plan(
                     "H3 Detail AV currently requires exactly %d context "
                     "frames (shot %d)." %
                     (int(DETAIL_AV_RECIPE["context_frames"]), index))
-            if (shot_continuation_mode == "drift_control_av" and
+            if (shot_continuation_mode in DRIFT_CONTROL_CONTINUATION_MODES and
                     shot_context_length != int(
                         DRIFT_CONTROL_AV_RECIPE["context_frames"])):
                 raise ValueError(
-                    "H3 Drift-Control AV currently requires exactly %d "
-                    "context frames (shot %d)." %
+                    "H3 Drift-Control AV and Color-Stable Drift AV currently "
+                    "require exactly %d context frames (shot %d)." %
                     (int(DRIFT_CONTROL_AV_RECIPE["context_frames"]), index))
         if (shot_context_length and
                 shot_continuation_mode == "latent_guide"):
@@ -5618,6 +5860,73 @@ def _compact_latent(latent: dict[str, Any]) -> dict[str, Any]:
                         _tensor_cpu_clone(parts[1])]}
 
 
+def _plan_uses_latent_color_carry(plan: dict[str, Any]) -> bool:
+    compatibility = plan.get("compatibility") or {}
+    fallback = str(compatibility.get("continuation_mode", "guide"))
+    return any(
+        migrate_continuation_mode(shot.get("continuation_mode", fallback))
+        in LATENT_COLOR_CARRY_CONTINUATION_MODES
+        for shot in (plan.get("shots") or ()))
+
+
+def _segment_latent_color_stats(
+    segment: dict[str, Any],
+) -> dict[str, Any]:
+    """Return saved tail-color stats, recovering old checkpoints lazily."""
+    existing = segment.get("latent_color_stats")
+    if isinstance(existing, dict):
+        return existing
+    if _st_load is None:
+        raise RuntimeError(
+            "H3 latent color carry needs safetensors to recover an older "
+            "scene anchor.")
+    checkpoint_value = segment.get("checkpoint")
+    if not isinstance(checkpoint_value, str):
+        raise ValueError(
+            "H3 latent color carry scene %d has no checkpoint path." %
+            int(segment.get("index", 0)))
+    checkpoint = _absolute_output_path(checkpoint_value)
+    tensors = _st_load(checkpoint)
+    frames = tensors.get("context_frames")
+    if (not torch.is_tensor(frames) or frames.ndim != 4
+            or int(frames.shape[0]) < 1):
+        raise ValueError(
+            "H3 latent color carry scene %d checkpoint has no retained RGB "
+            "tail. Regenerate that scene once with the current node version."
+            % int(segment.get("index", 0)))
+    from .latent_color_carry import tensor_scene_color_stats
+
+    stats = tensor_scene_color_stats(frames)
+    # This mutates only the in-memory resume record. Existing on-disk metadata
+    # remains immutable and will gain the field if the scene is regenerated.
+    segment["latent_color_stats"] = stats
+    _LOG.info(
+        "H3 latent color carry recovered scene %d tail statistics from its "
+        "saved checkpoint; no scene was regenerated.",
+        int(segment.get("index", 0)))
+    return stats
+
+
+def _state_latent_color_carry(
+    state: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Resolve first-generated-scene anchor and current predecessor stats."""
+    segments = state.get("segments")
+    if not isinstance(segments, list) or not segments:
+        return None
+    anchor_segment = segments[0]
+    current_segment = segments[-1]
+    if not isinstance(anchor_segment, dict) or not isinstance(
+            current_segment, dict):
+        raise ValueError("H3 latent color carry has malformed scene history.")
+    return {
+        "anchor_stats": _segment_latent_color_stats(anchor_segment),
+        "current_stats": _segment_latent_color_stats(current_segment),
+        "anchor_scene": int(anchor_segment.get("index", 1)),
+        "source_scene": int(current_segment.get("index", 0)),
+    }
+
+
 def _detail_av_clean_blend_prefix(
         state: dict[str, Any], images_with_overlap: Any,
         blend_frames: int) -> Any:
@@ -5738,6 +6047,7 @@ def _public_segment(value: dict[str, Any]) -> dict[str, Any]:
         "audio_context_length", "context_spatial_proxy",
         "guide_tone_carry",
         "guide_tone_input_applied",
+        "latent_color_stats",
         "resolved_context_length",
         "resolved_audio_context_length",
         "sample_rate", "segment_sha256",
@@ -7920,11 +8230,13 @@ class MiniMaxH3ScheduledReferenceToVideo:
                                "real execution errors."}),
                 "cache_for_upscale": ("BOOLEAN", {
                     "default": True,
-                    "tooltip": "Automatically save the active scene's compact "
-                               "native H3 reference latents and Qwen preview "
-                               "frames. Deferred upscale workflows discover "
-                               "them from the checkpoint fingerprint without "
-                               "reconnecting the original reference media."}),
+                    "tooltip": "Automatically save the active scene's native "
+                               "H3 reference latents, compact Qwen preview "
+                               "frames, and original picture masters needed "
+                               "for target-resolution pass-2 conditioning. "
+                               "Deferred upscale discovers them from the "
+                               "checkpoint fingerprint without reconnecting "
+                               "the original reference media."}),
             },
         }
 
@@ -8152,10 +8464,11 @@ class MiniMaxH3TaggedReferenceToVideo:
                                "Neither mode creates a VAE reference."}),
             "cache_for_upscale": ("BOOLEAN", {
                 "default": True,
-                "tooltip": "Automatically save compact native H3 reference "
-                           "latents and Qwen presentation frames for this "
-                           "scene. Deferred upscale discovers the cache from "
-                           "the source checkpoint fingerprint."}),
+                "tooltip": "Automatically save native H3 reference latents, "
+                           "compact Qwen presentation frames, and original "
+                           "picture masters for target-resolution pass 2. "
+                           "Deferred upscale discovers the cache from the "
+                           "source checkpoint fingerprint."}),
         }
         return {"required": ordered, "optional": optional}
 
@@ -8688,8 +9001,11 @@ class MiniMaxH3AdvancedPolicy:
                         "default": "drift_av",
                         "tooltip": "Semantic incoming-boundary recipe. "
                                    "Tone, Latent, Detail, and Drift-Control "
-                                   "choices expose experimental behavior "
-                                   "without mixing it with legacy 0.4 audio "
+                                   "choices expose experimental behavior. "
+                                   "Color-Stable Drift adds a tapered "
+                                   "scene-one VAE delta to the copied video "
+                                   "prefix while leaving audio untouched. It "
+                                   "does not mix with legacy 0.4 audio "
                                    "settings. The recipe also supplies its "
                                    "matching generated-audio context length."}),
             },
@@ -8706,8 +9022,9 @@ class MiniMaxH3AdvancedPolicy:
     CATEGORY = "conditioning/minimax/contex_loop/policies"
     DESCRIPTION = (
         "Layer a named advanced incoming-transition recipe onto an existing "
-        "Chain Policy. This is the normal route for Tone, Latent, Detail, or "
-        "Drift-Control continuation. It never replaces Final audio, Source "
+        "Chain Policy. This is the normal route for Tone, Latent, Detail, "
+        "Drift-Control, or Color-Stable Drift continuation. It never "
+        "replaces Final audio, Source "
         "reference, Generated continuity, or Lock source audio. Chain another "
         "policy layer after it when a later override must win."
     )
@@ -8806,7 +9123,8 @@ class MiniMaxH3Legacy04PolicyAdapter:
         matched_preset = None
         for candidate in (
                 "cut", "guide", "tone_guide", "latent_guide",
-                "detail_guide", "detail_av", "drift_av", "hard_av", "soft_av",
+                "detail_guide", "detail_av", "drift_av", "color_drift_av",
+                "hard_av", "soft_av",
                 "audio_feather_av"):
             resolved = _contract_transition_policy(candidate)
             if (resolved["continuation_mode"] == mode and
@@ -8895,7 +9213,7 @@ class MiniMaxH3ChainPlan:
                                "previous-scene video frames used to "
                                "continue motion. Use 22 for guide mode and 39 "
                                "for masked_av, tapered_av, feathered_av, or "
-                               "audio_feathered_av/drift_control_av so the AV "
+                               "audio_feathered_av/Drift AV so the AV "
                                "clocks meet exactly. "
                                "A scene's Advanced selector can override this; "
                                "blank inherits it and 0 starts a visually new scene. "
@@ -10723,7 +11041,8 @@ class MiniMaxH3ChainContext:
                                "may be left disconnected only when neither "
                                "behavior is active."}),
                 "model": ("MODEL", {
-                    "tooltip": "Required only by Drift-Control AV. Connect "
+                    "tooltip": "Required by Drift-Control AV and Color-Stable "
+                               "Drift AV. Connect "
                                "one MiniMax H3 MODEL here for a single-model "
                                "sampler. For a sigma split that switches "
                                "models, leave this disconnected, connect the "
@@ -10733,7 +11052,7 @@ class MiniMaxH3ChainContext:
                                "through unchanged."}),
                 "drift_sigmas": ("SIGMAS", {
                     "tooltip": "Optional original FULL sigma schedule before "
-                               "any split. Connect it for Drift-Control AV "
+                               "any split. Connect it for either Drift AV "
                                "when sampling is divided across stages so "
                                "both model branches use one canonical "
                                "next-sigma schedule. This also selects the "
@@ -10758,7 +11077,8 @@ class MiniMaxH3ChainContext:
         "Guide/Cut modes. AV mask modes additionally preserve the selected "
         "video prefix. Wire this output to the sampler so Plan can switch "
         "safely.",
-        "H3 MODEL patched only while Drift-Control AV is active; otherwise "
+        "H3 MODEL patched only while either Drift-Control AV mode is active; "
+        "otherwise "
         "the optional input MODEL passes through unchanged. This is None on "
         "the external sigma-split route, where each raw model instead passes "
         "through its own Drift-Control Model Patch.",
@@ -10767,7 +11087,8 @@ class MiniMaxH3ChainContext:
     CATEGORY = "conditioning/minimax/contex_loop"
     DESCRIPTION = ("Apply each scene's inherited or overridden RGB guide, "
                    "tone-carry RGB guide, latent guide, masked AV, full AV "
-                   "latent taper, schedule-matched drift control, feather, or "
+                   "latent taper, schedule-matched drift control, scene-one "
+                   "latent color carry, feather, or "
                    "audio-only "
                    "AV feather, "
                    "including "
@@ -10813,8 +11134,8 @@ class MiniMaxH3ChainContext:
             drift_required = any(
                 candidate.get(
                     "continuation_mode",
-                    cfg.get("continuation_mode", "guide")) ==
-                "drift_control_av"
+                    cfg.get("continuation_mode", "guide")) in
+                DRIFT_CONTROL_CONTINUATION_MODES
                 and _shot_context_length(
                     candidate, int(cfg["context_length"])) > 0
                 for candidate in plan["shots"])
@@ -10850,6 +11171,11 @@ class MiniMaxH3ChainContext:
             from .masked_context import apply_masked_prefix
 
             previous_latent = state.get("previous_latent")
+            latent_color_carry = (
+                _state_latent_color_carry(state)
+                if continuation_mode in LATENT_COLOR_CARRY_CONTINUATION_MODES
+                and previous_latent is not None
+                else None)
             preserve_audio_prefix = (
                 _audio_policy_uses_generated_continuity(cfg)
                 and not source_audio_locked
@@ -10874,9 +11200,10 @@ class MiniMaxH3ChainContext:
                 detail_video_taper=(continuation_mode == "tapered_av"),
                 detail_video_seed=detail_video_seed,
                 context_spatial_proxy=context_spatial_proxy,
+                latent_color_carry=latent_color_carry,
             )
             out_model = model
-            if continuation_mode == "drift_control_av":
+            if continuation_mode in DRIFT_CONTROL_CONTINUATION_MODES:
                 if trim != int(DRIFT_CONTROL_AV_RECIPE["context_frames"]):
                     raise RuntimeError(
                         "H3 Drift-Control AV expected a %d-frame prefix, got "
@@ -10891,9 +11218,13 @@ class MiniMaxH3ChainContext:
                     DRIFT_CONTROL_AV_RECIPE["validated_steps"])
                 if int(shot["steps"]) != validated_steps:
                     _LOG.warning(
-                        "H3 Drift-Control AV scene %d uses %d steps; the "
+                        "H3 %s scene %d uses %d steps; the "
                         "initial validated baseline is %d steps. This run is "
                         "experimental.",
+                        ("Color-Stable Drift AV"
+                         if continuation_mode in
+                         LATENT_COLOR_CARRY_CONTINUATION_MODES
+                         else "Drift-Control AV"),
                         index, int(shot["steps"]), validated_steps)
                 prefix_steps = int(DRIFT_CONTROL_AV_RECIPE["video_steps"])
                 out_latent = mark_drift_control_latent(
@@ -11020,7 +11351,8 @@ class MiniMaxH3DriftControlModelPatch:
     CATEGORY = "conditioning/minimax/contex_loop"
     DESCRIPTION = (
         "Lightweight inline patch for sigma-split workflows that switch H3 "
-        "models. It stores the small full sigma tuple plus a non-copying "
+        "models. It also serves Color-Stable Drift AV. It stores the small "
+        "full sigma tuple plus a non-copying "
         "reference to Chain Context's clean latent, and clones ModelPatcher "
         "metadata; it does not duplicate or jointly load model weights or "
         "latent data. Leave Chain Context's MODEL input disconnected, connect "
@@ -11039,7 +11371,7 @@ class MiniMaxH3DriftControlModelPatch:
         context_length = _shot_context_length(
             shot, int(cfg.get("context_length", 0)))
         active = (
-            continuation_mode == "drift_control_av"
+            continuation_mode in DRIFT_CONTROL_CONTINUATION_MODES
             and context_length > 0
             and (index > 1 or bool(state.get("external_context")))
         )
@@ -11207,6 +11539,15 @@ class MiniMaxH3ChainSegmentSave:
         context_length = min(_plan_context_storage_length(plan), actual_frames)
         context_frames = _tensor_cpu_clone(
             images[:0] if context_length == 0 else images[-context_length:])
+        latent_color_stats = None
+        if _plan_uses_latent_color_carry(plan):
+            if int(context_frames.shape[0]) < 1:
+                raise ValueError(
+                    "H3 Color-Stable Drift AV requires at least one retained "
+                    "RGB context frame in every generated scene checkpoint.")
+            from .latent_color_carry import tensor_scene_color_stats
+
+            latent_color_stats = tensor_scene_color_stats(context_frames)
         parts = compact["samples"]
         tensors = {
             "context_frames": context_frames,
@@ -11429,6 +11770,8 @@ class MiniMaxH3ChainSegmentSave:
                 segment["guide_tone_input_applied"] = True
             if guide_tone_carry is not None:
                 segment["guide_tone_carry"] = guide_tone_carry
+            if latent_color_stats is not None:
+                segment["latent_color_stats"] = latent_color_stats
             # These are dependencies on a preceding saved scene. Imported
             # context used to begin scene 1 is tracked separately by 0.5's
             # scene dependency contract.
@@ -13346,6 +13689,7 @@ def _blend_video_records(
     blend_schedule: Any = "plan",
     video_vae: Any = None,
     temporary_paths: list[str] | None = None,
+    force_records: bool = False,
 ) -> list[dict[str, Any]]:
     """Resolve scheduled joins and their disk-backed overlap continuations."""
     configured = int(
@@ -13370,13 +13714,14 @@ def _blend_video_records(
     else:
         schedule = _scheduled_blend_frames(
             blend_schedule, boundary_count, configured)
-    if not any(schedule):
+    if not any(schedule) and not bool(force_records):
         return []
     records: list[dict[str, Any]] = []
     has_predecessor = prelude is not None
     boundary_index = 0
     if prelude is not None:
         records.append({
+            "kind": "prelude",
             "path": _absolute_output_path(prelude["video"]),
             "input_frames": int(prelude["frame_count"]),
             "delivered_frames": int(prelude["frame_count"]),
@@ -13423,6 +13768,8 @@ def _blend_video_records(
         if not os.path.isfile(path):
             raise FileNotFoundError("H3 chain blend input is missing: %s" % path)
         records.append({
+            "kind": "segment",
+            "scene_index": int(item.get("index", len(records) + 1)),
             "path": path,
             "input_frames": delivered + expected_blend,
             "delivered_frames": delivered,
@@ -13438,7 +13785,8 @@ def _blend_video_records(
         has_predecessor = True
     if not records:
         raise ValueError("H3 chain blend assembly has no video inputs.")
-    return records if any(int(item["blend_frames"]) for item in records) else []
+    return (records if bool(force_records) or any(
+        int(item["blend_frames"]) for item in records) else [])
 
 
 def _boundary_luma(array: Any, stride: int = 1) -> Any:
@@ -13693,6 +14041,225 @@ def _auto_boundary_tone_match_records(
     return prepared
 
 
+def _scene_color_frame_stats(array: Any) -> tuple[Any, Any]:
+    """Return center-weighted luma and saturation percentiles for one frame."""
+    if np is None:
+        raise RuntimeError("H3 scene color stabilization requires NumPy.")
+    if not isinstance(array, np.ndarray) or array.ndim != 3 or array.shape[-1] < 3:
+        raise ValueError(
+            "H3 scene color stabilization expected an RGB frame; got %r." %
+            (getattr(array, "shape", None),))
+    height, width = int(array.shape[0]), int(array.shape[1])
+    y0, y1 = int(height * 0.12), max(int(height * 0.92), 1)
+    x0, x1 = int(width * 0.20), max(int(width * 0.80), 1)
+    sample = array[y0:y1:4, x0:x1:4, :3].astype(np.float32, copy=False)
+    if not int(sample.size):
+        sample = array[::4, ::4, :3].astype(np.float32, copy=False)
+    luma = (sample[..., 0] * 0.2126 + sample[..., 1] * 0.7152 +
+            sample[..., 2] * 0.0722)
+    maximum = np.max(sample, axis=-1)
+    minimum = np.min(sample, axis=-1)
+    saturation = np.divide(
+        maximum - minimum, np.maximum(maximum, 1.0),
+        out=np.zeros_like(maximum), where=maximum > 0.0) * 255.0
+    valid = (luma >= 20.0) & (luma <= 235.0)
+    if int(np.count_nonzero(valid)) >= 64:
+        luma = luma[valid]
+        saturation = saturation[valid]
+    return (
+        np.percentile(luma, (10.0, 50.0, 90.0)).astype(np.float64),
+        np.percentile(saturation, (25.0, 50.0, 75.0)).astype(np.float64),
+    )
+
+
+def _record_scene_color_stats(record: dict[str, Any]) -> dict[str, Any]:
+    """Measure a bounded number of interior frames from one assembly record."""
+    if av is None or np is None:
+        raise RuntimeError(
+            "H3 scene color stabilization requires PyAV and NumPy.")
+    skip = max(0, int(record.get("skip_frames", 0)))
+    count = int(record.get("input_frames", 0))
+    blend = max(0, int(record.get("blend_frames", 0)))
+    delivered = max(1, int(record.get("delivered_frames", count - blend)))
+    margin = min(24, max(2, delivered // 10))
+    start = min(count - 1, blend + margin)
+    stop = max(start + 1, count - margin)
+    step = max(1, (stop - start) // 24)
+    luma_rows = []
+    saturation_rows = []
+    tone_prefix_luts = [
+        _boundary_tone_lut(match)
+        for match in (record.get("tone_match_prefix") or [])
+        if isinstance(match, dict)
+    ]
+    tone_match = record.get("tone_match")
+    tone_start = (int(tone_match["start_frame"])
+                  if isinstance(tone_match, dict) else None)
+    tone_lut = (_boundary_tone_lut(tone_match)
+                if isinstance(tone_match, dict) else None)
+    local_index = -skip
+    for array in _decode_rgb_frames(record["path"]):
+        if local_index >= count:
+            break
+        if (local_index >= start and local_index < stop and
+                (local_index - start) % step == 0):
+            for prefix_lut in tone_prefix_luts:
+                array = prefix_lut[array]
+            if (tone_lut is not None and tone_start is not None and
+                    local_index >= tone_start):
+                array = tone_lut[array]
+            luma, saturation = _scene_color_frame_stats(array)
+            luma_rows.append(luma)
+            saturation_rows.append(saturation)
+        local_index += 1
+    if not luma_rows:
+        raise ValueError(
+            "H3 scene color stabilization could not sample delivered frames "
+            "from %s." % record["path"])
+    return {
+        "luma_percentiles": np.median(
+            np.stack(luma_rows, axis=0), axis=0).tolist(),
+        "saturation_percentiles": np.median(
+            np.stack(saturation_rows, axis=0), axis=0).tolist(),
+        "sampled_frames": len(luma_rows),
+    }
+
+
+def _coherent_color_delta(values: Any, minimum: float) -> float:
+    values = np.asarray(values, dtype=np.float64)
+    positive = values[values > 0.0]
+    negative = values[values < 0.0]
+    selected = positive if len(positive) >= 2 else (
+        negative if len(negative) >= 2 else np.asarray([], dtype=np.float64))
+    if not len(selected):
+        return 0.0
+    value = float(np.median(selected))
+    return value if abs(value) >= float(minimum) else 0.0
+
+
+def _scene_color_transform(
+    anchor: dict[str, Any],
+    current: dict[str, Any],
+) -> tuple[float, float]:
+    """Fit a deliberately weak exposure/saturation transform to scene one."""
+    target_luma = np.asarray(anchor["luma_percentiles"], dtype=np.float64)
+    source_luma = np.asarray(current["luma_percentiles"], dtype=np.float64)
+    luma_shift = _coherent_color_delta(target_luma - source_luma, 1.0)
+    luma_shift = float(np.clip(
+        luma_shift * ASSEMBLY_COLOR_STABILIZATION_STRENGTH,
+        -ASSEMBLY_COLOR_STABILIZATION_MAX_LUMA_SHIFT,
+        ASSEMBLY_COLOR_STABILIZATION_MAX_LUMA_SHIFT))
+
+    target_sat = np.asarray(
+        anchor["saturation_percentiles"], dtype=np.float64)
+    source_sat = np.asarray(
+        current["saturation_percentiles"], dtype=np.float64)
+    ratios = np.divide(
+        target_sat, np.maximum(source_sat, 1.0),
+        out=np.ones_like(target_sat), where=source_sat > 0.0)
+    saturation_delta = _coherent_color_delta(ratios - 1.0, 0.02)
+    saturation = 1.0 + (
+        saturation_delta * ASSEMBLY_COLOR_STABILIZATION_STRENGTH)
+    saturation = float(np.clip(
+        saturation,
+        1.0 - ASSEMBLY_COLOR_STABILIZATION_MAX_SATURATION_CHANGE,
+        1.0 + ASSEMBLY_COLOR_STABILIZATION_MAX_SATURATION_CHANGE))
+    return luma_shift / 255.0, saturation
+
+
+def _auto_scene_color_stabilization_records(
+    records: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Anchor later scenes to scene one's color without changing a seam.
+
+    Each new record enters with its predecessor's accepted transform. The
+    transform then moves toward that scene's conservative scene-one match over
+    three seconds. This keeps the exact join unchanged and avoids a hard grade
+    step while preventing slow exposure/saturation drift from accumulating.
+    """
+    prepared = [dict(record) for record in records]
+    anchor_index = next(
+        (index for index, record in enumerate(prepared)
+         if str(record.get("kind") or "segment") == "segment"),
+        None)
+    if anchor_index is None or anchor_index + 1 >= len(prepared):
+        return prepared
+    anchor = _record_scene_color_stats(prepared[anchor_index])
+    previous_brightness = 0.0
+    previous_saturation = 1.0
+    for record_index in range(anchor_index + 1, len(prepared)):
+        record = prepared[record_index]
+        if str(record.get("kind") or "segment") != "segment":
+            continue
+        stats = _record_scene_color_stats(record)
+        brightness, saturation = _scene_color_transform(anchor, stats)
+        ramp = min(
+            ASSEMBLY_COLOR_STABILIZATION_RAMP_FRAMES,
+            max(1, int(record.get("delivered_frames", 1))))
+        record["scene_color_stabilization"] = {
+            "version": "h3_scene_1_color_anchor_v1",
+            "start_frame": max(0, int(record.get("blend_frames", 0))),
+            "ramp_frames": int(ramp),
+            "previous_brightness": float(previous_brightness),
+            "brightness": float(brightness),
+            "previous_saturation": float(previous_saturation),
+            "saturation": float(saturation),
+            "anchor": anchor,
+            "source": stats,
+        }
+        previous_brightness = brightness
+        previous_saturation = saturation
+        _LOG.info(
+            "H3 scene-one color anchor scene %d: brightness %+.4f, "
+            "saturation %.4f, ramp %d frames.",
+            int(record.get("scene_index", record_index + 1)),
+            brightness, saturation, ramp)
+    return prepared
+
+
+def _ffmpeg_scene_color_filter(schedule: dict[str, Any]) -> str:
+    start = int(schedule["start_frame"])
+    ramp = max(1, int(schedule["ramp_frames"]))
+    progress = "clip((n-%d)/%d\\,0\\,1)" % (start, ramp)
+    previous_brightness = float(schedule["previous_brightness"])
+    brightness_delta = float(
+        schedule["brightness"]) - previous_brightness
+    previous_saturation = float(schedule["previous_saturation"])
+    saturation_delta = float(
+        schedule["saturation"]) - previous_saturation
+    # FFmpeg's hue filter evaluates b/s per frame while operating directly on
+    # the existing YUV planes. Its brightness unit spans one tenth of the
+    # normalized RGB range, so multiply our normalized code-value offset by
+    # ten. Unlike eq, hue's identity path stays neutral on H3's untagged
+    # yuv420p segments instead of switching to a range-sensitive LUT.
+    brightness = "10*(%.9f+(%.9f)*%s)" % (
+        previous_brightness, brightness_delta, progress)
+    saturation = "%.9f+(%.9f)*%s" % (
+        previous_saturation, saturation_delta, progress)
+    return "hue=b='%s':s='%s'" % (brightness, saturation)
+
+
+def _apply_scene_color_stabilization(
+    array: Any,
+    schedule: dict[str, Any],
+    frame_index: int,
+) -> Any:
+    start = int(schedule["start_frame"])
+    ramp = max(1, int(schedule["ramp_frames"]))
+    progress = float(np.clip((int(frame_index) - start) / float(ramp), 0.0, 1.0))
+    brightness = float(schedule["previous_brightness"]) + progress * (
+        float(schedule["brightness"]) -
+        float(schedule["previous_brightness"]))
+    saturation = float(schedule["previous_saturation"]) + progress * (
+        float(schedule["saturation"]) -
+        float(schedule["previous_saturation"]))
+    rgb = array[..., :3].astype(np.float32, copy=False) / 255.0
+    luma = (rgb[..., 0:1] * 0.2126 + rgb[..., 1:2] * 0.7152 +
+            rgb[..., 2:3] * 0.0722)
+    adjusted = luma + saturation * (rgb - luma) + brightness
+    return np.clip(adjusted * 255.0, 0.0, 255.0).round().astype(np.uint8)
+
+
 def _ffmpeg_boundary_tone_filter(match: dict[str, Any]) -> str:
     points = " ".join(
         "%.6f/%.6f" % (float(x), float(y))
@@ -13748,6 +14315,9 @@ def _ffmpeg_blend_video(
         tone_match = records[index].get("tone_match")
         if isinstance(tone_match, dict):
             operations += "," + _ffmpeg_boundary_tone_filter(tone_match)
+        color_schedule = records[index].get("scene_color_stabilization")
+        if isinstance(color_schedule, dict):
+            operations += "," + _ffmpeg_scene_color_filter(color_schedule)
         filters.append("[%d:v]%s[v%d]" % (index, operations, index))
     previous = "v0"
     cumulative = int(records[0]["delivered_frames"])
@@ -13857,6 +14427,7 @@ def _pyav_blend_video(
                           if isinstance(tone_match, dict) else None)
             tone_lut = (_boundary_tone_lut(tone_match)
                         if isinstance(tone_match, dict) else None)
+            color_schedule = record.get("scene_color_stabilization")
             next_blend = (int(records[record_index + 1]["blend_frames"])
                           if record_index + 1 < len(records) else 0)
             seen = 0
@@ -13867,6 +14438,9 @@ def _pyav_blend_video(
                 if (tone_lut is not None and tone_start is not None and
                         int(frame_index) >= tone_start):
                     array = tone_lut[array]
+                if isinstance(color_schedule, dict):
+                    array = _apply_scene_color_stabilization(
+                        array, color_schedule, frame_index)
                 return array
 
             for _ in range(int(record.get("skip_frames", 0))):
@@ -14955,6 +15529,17 @@ class MiniMaxH3ChainAssemble:
                                "Accepted corrections are carried through "
                                "later overlaps so they do not create a new "
                                "seam. This never reruns diffusion."}),
+                "color_stabilization": (ASSEMBLY_COLOR_STABILIZATION_MODES, {
+                    "default": "off",
+                    "tooltip": "Optional assembly-only temporal grade. "
+                               "scene_1_anchor measures the first scene as a "
+                               "fixed color reference, applies no new change "
+                               "at a join, then gently ramps a capped "
+                               "exposure/saturation correction over 72 "
+                               "frames. It uses one assembly encode, never "
+                               "blends pixels for color, and does not affect "
+                               "motion or audio sync. Off preserves the "
+                               "existing stream-copy/blend behavior."}),
                 "source_audio": ("AUDIO", {
                     "tooltip": "Full original source track. Required when "
                                "audio_source resolves to source; it is trimmed "
@@ -14982,7 +15567,10 @@ class MiniMaxH3ChainAssemble:
     OUTPUT_NODE = True
     CATEGORY = "conditioning/minimax/contex_loop"
     DESCRIPTION = ("Stream-copy saved H3 segments into one MP4 and mux either "
-                   "the original source track or checkpointed generated audio.")
+                   "the original source track or checkpointed generated audio. "
+                   "Optional assembly filters can blend joins, remove a small "
+                   "boundary tone step, or stabilize later scene color to "
+                   "scene one without rerunning diffusion.")
 
     @classmethod
     def IS_CHANGED(cls, *args, **kwargs):
@@ -14992,7 +15580,8 @@ class MiniMaxH3ChainAssemble:
                  source_audio=None, overwrite_existing=False,
                  copy_to_output=False, output_subfolder="",
                  source_timeline=None, blend_schedule="plan",
-                 blend_video_vae=None, boundary_tone_match="off"):
+                 blend_video_vae=None, boundary_tone_match="off",
+                 color_stabilization="off"):
         segments = _validate_manifest(manifest)
         prelude = _validate_prelude(manifest)
         tone_match_mode = str(
@@ -15002,6 +15591,13 @@ class MiniMaxH3ChainAssemble:
             raise ValueError(
                 "H3 Chain Assemble boundary_tone_match must be off or auto; "
                 "got %r." % boundary_tone_match)
+        color_stabilization_mode = str(
+            color_stabilization if color_stabilization is not None
+            else "off").strip().lower()
+        if color_stabilization_mode not in ASSEMBLY_COLOR_STABILIZATION_MODES:
+            raise ValueError(
+                "H3 Chain Assemble color_stabilization must be off or "
+                "scene_1_anchor; got %r." % color_stabilization)
         selected = audio_source
         if selected == "plan":
             selected = _audio_policy_final(manifest)
@@ -15115,11 +15711,19 @@ class MiniMaxH3ChainAssemble:
                 manifest, segments, prelude,
                 blend_schedule=blend_schedule,
                 video_vae=blend_video_vae,
-                temporary_paths=scheduled_blend_temps)
+                temporary_paths=scheduled_blend_temps,
+                force_records=color_stabilization_mode != "off")
             if tone_match_mode == "auto" and blend_records:
                 blend_records = _auto_boundary_tone_match_records(
                     blend_records)
+            if (color_stabilization_mode == "scene_1_anchor" and
+                    blend_records):
+                blend_records = _auto_scene_color_stabilization_records(
+                    blend_records)
             blend_enabled = bool(blend_records)
+            has_visual_blends = any(
+                int(record.get("blend_frames", 0))
+                for record in blend_records)
             media_metadata = _manifest_media_metadata(manifest)
             if blend_enabled:
                 _write_ffmetadata(metadata_tmp, media_metadata)
@@ -15130,11 +15734,15 @@ class MiniMaxH3ChainAssemble:
                             total_output_frames,
                             int(manifest["compatibility"].get(
                                 "segment_crf", 18)))
-                        backend = "ffmpeg cumulative linear blend"
+                        backend = ("ffmpeg cumulative linear blend"
+                                   if has_visual_blends else
+                                   "ffmpeg temporal color stabilization")
                     except Exception as exc:
                         if av is None:
                             raise
-                        backend = "PyAV cumulative linear blend fallback"
+                        backend = ("PyAV cumulative linear blend fallback"
+                                   if has_visual_blends else
+                                   "PyAV temporal color stabilization fallback")
                         _LOG.warning(
                             "H3 Chain ffmpeg blending failed; retrying with "
                             "the built-in PyAV fallback: %s", exc)
@@ -15145,7 +15753,9 @@ class MiniMaxH3ChainAssemble:
                             int(manifest["compatibility"].get(
                                 "segment_crf", 18)))
                 else:
-                    backend = "PyAV cumulative linear blend fallback"
+                    backend = ("PyAV cumulative linear blend fallback"
+                               if has_visual_blends else
+                               "PyAV temporal color stabilization fallback")
                     _LOG.warning(
                         "H3 Chain usable ffmpeg executable unavailable; "
                         "blending with "
@@ -15228,9 +15838,12 @@ class MiniMaxH3ChainAssemble:
             if tone_match_mode == "auto" and matched_boundaries else
             ("; auto tone match found no coherent step"
              if tone_match_mode == "auto" else ""))
-        status = "assembled %d generated clips%s with %s%s%s -> %s%s%s" % (
+        color_status = (
+            "; scene-one temporal color anchor"
+            if color_stabilization_mode == "scene_1_anchor" else "")
+        status = "assembled %d generated clips%s with %s%s%s%s -> %s%s%s" % (
             len(segments), " + existing-video prelude" if prelude else "",
-            backend, blend_status, tone_status, final_path,
+            backend, blend_status, tone_status, color_status, final_path,
             sidecar_status, copy_status)
         _LOG.info("H3 Chain %s", status)
         published_video = output_copy or final_path
