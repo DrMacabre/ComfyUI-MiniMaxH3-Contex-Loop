@@ -4,6 +4,11 @@ Newest first. This file keeps release history out of the onboarding README.
 
 ## Unreleased — Deferred checkpoint upscaling
 
+- Simplified the default 0.5 control surface without removing functionality.
+  Experimental transition recipes and source-audio grid alignment now stay
+  behind the existing **Show advanced H3 controls** action; Plan and Plan
+  Studio retain their click-to-open raw boundary controls, and Studio's
+  experimental cut-window diagnostic follows that disclosure.
 - Added a whole-branch SeedVR2 route: Checkpoint Manager → Full-Chain Latent
   Video Adapter → SeedVR2 Direct. It decodes the immutable H3 video latents,
   resolves scene overlap blends before upscaling, and exposes one continuous

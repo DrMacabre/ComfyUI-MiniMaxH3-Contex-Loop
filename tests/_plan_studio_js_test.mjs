@@ -138,6 +138,8 @@ assert.match(source, /state\.active = state\.plan\.shots\.length - 1/);
 assert.match(source, /field\("Incoming transition", incomingTransition\)/);
 assert.match(source, /field\("Final assembly crossfade frames", blendFrames\)/);
 assert.match(source, /Advanced boundary controls/);
+assert.match(source, /experimentalCutMarker\.hidden = !advanced\.open/);
+assert.match(source, /advanced\.addEventListener\("toggle", refreshExperimentalMarkers\)/);
 assert.match(source, /field\("Implementation", continuation\)/);
 assert.match(source, /applySceneTransitionPreset/);
 assert.match(source, /field\("Boundary spatial proxy", spatialProxy\)/);

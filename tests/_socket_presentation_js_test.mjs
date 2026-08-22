@@ -118,8 +118,32 @@ current.graph = start.graph;
 start.graph.links[12] = {origin_id: 3, target_id: 5};
 const currentPresentation = presentationForNode(current, false);
 assert.equal(currentPresentation.hiddenInputs.has("source_audio"), true);
+assert.equal(currentPresentation.hiddenWidgets.has("align_audio_reference"), true,
+    "experimental audio-grid alignment stays behind advanced disclosure");
 assert.equal(currentPresentation.hiddenOutputs.has("source_audio_slice"), false,
     "source reference is on, so its output stays available");
+assert.equal(
+    presentationForNode(current, true).hiddenWidgets.has("align_audio_reference"),
+    false,
+);
+
+const advancedPolicy = node(18, ADVANCED_POLICY_NODE, [
+    ["chain_policy", null],
+], [["chain_policy", null], ["status", null]], [
+    ["incoming_transition", "tone_guide"],
+]);
+assert.equal(
+    presentationForNode(advancedPolicy, false).hiddenWidgets.has(
+        "incoming_transition"),
+    true,
+    "experimental transition recipes stay hidden in the compact view",
+);
+assert.equal(
+    presentationForNode(advancedPolicy, true).hiddenWidgets.has(
+        "incoming_transition"),
+    false,
+    "advanced disclosure restores the experimental recipe selector",
+);
 
 const linkedStatus = node(6, "MiniMaxH3ChainSegmentSave", [], [
     ["segment", null], ["status", [22]],

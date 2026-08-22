@@ -81,6 +81,14 @@ def validate_v05_topology(workflow):
     """Maintained recursive examples teach the 0.5 semantic graph."""
     plan = node(workflow, "MiniMaxH3ChainPlan")
     policy = node(workflow, "MiniMaxH3ChainPolicy")
+    # Maintained examples must open on the compact surface. Advanced and
+    # experimental controls remain available, but only after an explicit user
+    # disclosure instead of being serialized open in the shipped graph.
+    for item in workflow["nodes"]:
+        assert not item.get("properties", {}).get(
+            "h3_show_advanced_sockets"), item.get("type")
+    plan_layout = plan.get("properties", {}).get("h3_chain_plan_layout", {})
+    assert not isinstance(plan_layout, dict) or not plan_layout.get("advanced")
     assert not [item for item in workflow["nodes"] if item.get("type") in {
         "MiniMaxH3AudioPolicy", "MiniMaxH3TransitionPolicy",
         "MiniMaxH3Legacy04PolicyAdapter",

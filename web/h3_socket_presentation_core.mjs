@@ -38,6 +38,12 @@ const ADVANCED_OUTPUTS = Object.freeze({
 });
 
 const ALWAYS_ADVANCED_WIDGETS = Object.freeze({
+    // These controls opt into experimental generation behavior. Keep their
+    // serialized widgets and backend positions intact, but require the same
+    // explicit "Show advanced H3 controls" action used by compatibility and
+    // diagnostic surfaces elsewhere in the 0.5 graph.
+    MiniMaxH3AdvancedPolicy: ["incoming_transition"],
+    MiniMaxH3ChainCurrent: ["align_audio_reference"],
     MiniMaxH3ChainPlanStudio: ["verify_resume_history"],
     MiniMaxH3ChainPreflight: ["verify_resume_history"],
 });

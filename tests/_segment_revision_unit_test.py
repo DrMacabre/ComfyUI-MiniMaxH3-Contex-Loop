@@ -85,6 +85,8 @@ def main():
                 "audio_context_length": 2,
                 "continuation_mode": "masked_av",
                 "video_blend_frames": 2,
+                "width": 960,
+                "height": 544,
             },
             "shots": [{
                 "id": "scene_one",

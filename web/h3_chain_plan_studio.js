@@ -854,6 +854,7 @@ function mount(node) {
             row.rawFrames, row.contextLength, row.continuationMode,
         );
         const gridMarkers = element("span", "h3studio-grid-markers");
+        let experimentalCutMarker = null;
         const rawGrid = element(
             "span",
             `h3studio-grid-marker ${grid.raw.onGrid
@@ -884,6 +885,7 @@ function mount(node) {
             );
             cut.title = "Experimental only: nearest reported four-frame 17n−3 cut window for generated-to-real joins. This does not change or validate the Plan.";
             gridMarkers.append(cut);
+            experimentalCutMarker = cut;
         }
         head.append(gridMarkers);
 
@@ -1106,6 +1108,13 @@ function mount(node) {
         advanced.append(element(
             "summary", "", "Advanced boundary controls",
         ));
+        const refreshExperimentalMarkers = () => {
+            if (experimentalCutMarker) {
+                experimentalCutMarker.hidden = !advanced.open;
+            }
+        };
+        advanced.addEventListener("toggle", refreshExperimentalMarkers);
+        refreshExperimentalMarkers();
         const advancedGrid = element("div", "h3studio-advanced-grid");
         advancedGrid.append(
             field("Visual / audio context", contextPair),
