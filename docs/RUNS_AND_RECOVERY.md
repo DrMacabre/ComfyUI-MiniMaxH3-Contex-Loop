@@ -268,6 +268,19 @@ connections. Both cache versions retain the encoded native reference blocks
 used by sync; cache v2 additionally keeps original picture masters for
 workflows that choose target-resolution VAE re-encoding instead.
 
+When pass 2 should use a different reference set, insert **Upscale Reference +
+Prompt Override** on the normal `H3_TAGGED_REFERENCES` line and connect its
+`references` and `prompt_override` outputs to **Upscale Reference
+Conditioning**. An explicit registry replaces, rather than ambiguously merging
+with, the compiled cache. The node can remove comma-separated tags without
+renumbering references by hand; the conditioning node recompiles the resulting
+prompt, Qwen presentation, and native blocks together. Leave its reference
+input unconnected to retain the automatic cache route. Connected picture/video
+refs require the original H3 video VAE, while activated standalone or paired
+audio additionally requires the H3 audio VAE. No Plan or Source Timeline is
+introduced; sequential/source-timeline live refs should be converted to a
+scene-local restart/standalone reference before use in deferred upscale.
+
 Upscale Reference Conditioning encodes the exact saved compiled prompt by
 default. Its optional `prompt_override` is encoded instead when supplied, so a
 user can provide a short appearance/detail-only pass-2 prompt without repeating

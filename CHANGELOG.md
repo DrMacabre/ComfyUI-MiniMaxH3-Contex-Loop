@@ -4,6 +4,11 @@ Newest first. This file keeps release history out of the onboarding README.
 
 ## Unreleased — Deferred checkpoint upscaling
 
+- Added an inline **Upscale Reference + Prompt Override** on the existing
+  `H3_TAGGED_REFERENCES` line. Connected Tagged refs replace the automatic
+  cache for pass 2, optional tag filtering can remove unwanted refs, and the
+  paired prompt output recompiles their native/Qwen conditioning coherently.
+  Blank reference input keeps automatic cache restore active.
 - Fixed deferred H3 conditioning sync enlarging `max` picture-reference
   latents with the output canvas. Max refs now retain their Core H3 capped
   geometry, while `match` refs remain canvas-aware and cache-v2 masters that
