@@ -3,6 +3,7 @@ import {api} from "/scripts/api.js";
 import {
     H3_CONTEXT_LENGTHS,
     MAX_SHOTS,
+    SCENE_LORA_ROUTES,
     automaticSceneColor,
     calculatePlanTiming,
     derivedSceneSeed,
@@ -18,6 +19,7 @@ import {
     safeShotId,
     sceneContextLength,
     sceneContinuationMode,
+    sceneLoRARoute,
     sceneVideoBlendFrames,
     setShotLengthMode,
     setSharedPrompt,
@@ -533,7 +535,7 @@ function mountEditor(node) {
             if (!card) continue;
             const label = card.querySelector(".h3c-timing");
             if (label) {
-                label.textContent = `${row.rawFrames || "—"} raw / ${row.deliveredFrames || "—"} delivered · ${formatClock(row.deliveredSeconds)}`;
+                label.textContent = `${row.rawFrames || "—"} raw / ${row.deliveredFrames || "—"} delivered · ${formatClock(row.deliveredSeconds)}${row.loraRoute === "base" ? "" : ` · LoRA ${row.loraRoute.toUpperCase()}`}`;
                 label.title = row.errors.join("\n") ||
                     `Generation starts at delivered frame ${row.generationStartFrame}. ` +
                     `The incoming assembly boundary blends ${row.videoBlendFrames} frame(s).`;
@@ -854,6 +856,23 @@ function mountEditor(node) {
         state.seedRefreshers.push(refreshSeedStatus);
         void refreshSeedStatus();
 
+        const loraRoute = element("select", "h3c-lora-route");
+        for (const route of SCENE_LORA_ROUTES) {
+            const label = route === "base"
+                ? "Base model" : `LoRA ${route.toUpperCase()}`;
+            const option = element("option", "", label);
+            option.value = route;
+            loraRoute.append(option);
+        }
+        loraRoute.value = sceneLoRARoute(shot);
+        loraRoute.title = "Select the Base or A-D MODEL branch on MiniMax H3 Scene LoRA Scheduler. The scheduler routes models already patched by ordinary ComfyUI LoRA loaders; it does not load a LoRA itself.";
+        loraRoute.addEventListener("change", () => {
+            if (loraRoute.value === "base") delete shot.lora_route;
+            else shot.lora_route = loraRoute.value;
+            sceneLoRARoute(shot);
+            syncPlan();
+        });
+
         const advanced = element("div", "h3c-advanced-fields");
         const steps = numberInput(shot.steps ?? "", {min: "1", max: "10000", step: "1"});
         steps.placeholder = String(state.plan.defaults?.steps ?? widgetValue(node, "default_steps", 20));
@@ -1110,6 +1129,7 @@ function mountEditor(node) {
             field("Scene prompt (optional with shared prompt)", prompt),
             promptTools(prompt, index + 1),
             field("Scene seed", seedControl),
+            field("Scene LoRA route", loraRoute),
             boundary,
             audioFields,
             advanced,

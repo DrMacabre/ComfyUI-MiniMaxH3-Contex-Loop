@@ -63,6 +63,7 @@ H3_CONTEXT_LENGTHS = (
     141, 158, 175, 192, 209, 226, 243,
 )
 CONTINUATION_MODES = tuple(CONTINUATION_POLICIES)
+SCENE_LORA_ROUTES = ("base", "a", "b", "c", "d")
 
 
 def _safe_name(value: Any, fallback: str = "") -> str:
@@ -200,6 +201,9 @@ def _editor_plan(archive: dict[str, Any]) -> dict[str, Any]:
         if (isinstance(audio_context, int) and not isinstance(audio_context, bool)
                 and 0 <= audio_context <= 240):
             value["audio_context_length"] = audio_context
+        lora_route = str(shot.get("lora_route") or "").strip().lower()
+        if lora_route in SCENE_LORA_ROUTES and lora_route != "base":
+            value["lora_route"] = lora_route
         shots.append(value)
     return {
         "prompt_prefix": archive.get("prompt_prefix", ""),

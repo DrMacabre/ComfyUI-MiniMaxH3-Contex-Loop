@@ -85,6 +85,8 @@ def main():
             },
             "compatibility": {
                 "audio_mode": "source_track",
+                "width": 64,
+                "height": 64,
                 "context_length": 2,
                 "audio_context_length": 2,
                 "continuation_mode": "masked_av",
@@ -102,6 +104,7 @@ def main():
                 "raw_frames": 7,
                 "delivered_frames": 5,
                 "generation_start_frame": 0,
+                "lora_route": "c",
             }],
         }
         state = {"plan": plan, "index": 1}
@@ -147,6 +150,12 @@ def main():
         assert first["branch_id"] == first["revision"]
         assert first["resolved_context_length"] == 0
         assert first["resolved_audio_context_length"] == 0
+        assert first["lora_route"] == "c"
+        assert chain._public_segment(first)["lora_route"] == "c"
+        assert chain._checkpoint_plan_revision(first)["lora_route"] == "c"
+        checkpoint_metadata = json.loads(
+            first_paths["checkpoint"].read_text(encoding="utf-8"))
+        assert checkpoint_metadata["lora_route"] == "c"
         with wave.open(str(first_paths["generated_audio"]), "rb") as audio_file:
             assert audio_file.getnchannels() == 2
             assert audio_file.getframerate() == 8000

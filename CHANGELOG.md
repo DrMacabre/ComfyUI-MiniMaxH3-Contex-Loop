@@ -30,6 +30,14 @@ Newest first. This file keeps release history out of the onboarding README.
 
 ## v0.5.11 — Plan Studio transport hardening
 
+- Added **MiniMax H3 Scene LoRA Scheduler**, a lazy per-scene MODEL router
+  that deliberately does not load or patch LoRAs. Plan and Plan Studio expose
+  Base plus LoRA A-D on every scene; each branch comes from ordinary ComfyUI
+  LoRA loaders and may contain a stack or strength variant. Only the selected
+  input is evaluated. Route choices are saved as Plan/revision provenance but
+  deliberately excluded from checkpoint/resume verification, and Base remains
+  absent from serialization for compatibility with existing plans.
+
 - The bundled LBH 3D deferred-upscale workflow now leaves the pass-2 prompt
   override blank, preserving the exact compiled scene prompt by default. The
   former neutral replacement text remains available in the How To Run note

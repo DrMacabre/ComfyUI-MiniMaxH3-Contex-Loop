@@ -148,7 +148,71 @@ assert chain.CHAIN_NODE_DISPLAY_NAME_MAPPINGS[
     "MiniMaxH3Legacy04PolicyAdapter"] == (
         "MiniMax H3 Legacy 0.4 Policy Adapter")
 
+lora_plan = chain._normalize_plan(
+    json.dumps({"shots": [
+        {"id": "base", "prompt": "Base scene.", "length": 73,
+         "lora_route": "base"},
+        {"id": "hero", "prompt": "Hero scene.", "length": 73,
+         "lora_route": "A"},
+    ]}),
+    "lora-route-test", 64, 64, 22, "video", "head", "disabled",
+    "generated_audio", 22, 3.0, 8, 7, 18, "model-stack", 0,
+    "guide")
+assert "lora_route" not in lora_plan["shots"][0]
+assert lora_plan["shots"][1]["lora_route"] == "a"
+assert chain._effective_editor_plan(lora_plan)["shots"][1][
+    "lora_route"] == "a"
+assert chain._shot_lora_route(lora_plan["shots"][0]) == "base"
+try:
+    chain._shot_lora_route({"lora_route": "hero"})
+except ValueError as exc:
+    assert "base" in str(exc) and "a" in str(exc)
+else:
+    raise AssertionError("unknown scene LoRA route was accepted")
+try:
+    chain._normalize_plan(
+        json.dumps({"shots": [{
+            "id": "invalid", "prompt": "Invalid route.", "length": 73,
+            "lora_route": "hero",
+        }]}),
+        "invalid-lora-route-test", 64, 64, 22, "video", "head",
+        "disabled", "generated_audio", 22, 3.0, 8, 7, 18,
+        "model-stack", 0, "guide")
+except ValueError as exc:
+    assert "Shot 1" in str(exc) and "LoRA route" in str(exc)
+else:
+    raise AssertionError("Plan accepted an unknown scene LoRA route")
+
+scheduler = chain.MiniMaxH3ChainLoRAScheduler()
+scheduler_inputs = scheduler.INPUT_TYPES()
+assert scheduler_inputs["required"]["base_model"][1]["lazy"] is True
+assert scheduler_inputs["optional"]["lora_a"][1]["lazy"] is True
+base_state = {"index": 1, "plan": lora_plan}
+hero_state = {"index": 2, "plan": lora_plan}
+base_model = object()
+hero_model = object()
+assert scheduler.check_lazy_status(base_state, None) == ["base_model"]
+assert scheduler.check_lazy_status(
+    hero_state, None, lora_a=None) == ["lora_a"]
+assert scheduler.check_lazy_status(
+    hero_state, None, lora_a=hero_model) == []
+assert scheduler.select(base_state, base_model)[0] is base_model
+selected, selected_status = scheduler.select(
+    hero_state, None, lora_a=hero_model)
+assert selected is hero_model
+assert "scene 2" in selected_status and "LoRA A" in selected_status
+try:
+    scheduler.select(hero_state, None)
+except ValueError as exc:
+    assert "lora_a input is not connected" in str(exc)
+else:
+    raise AssertionError("unconnected selected LoRA route was accepted")
+assert chain.CHAIN_NODE_CLASS_MAPPINGS[
+    "MiniMaxH3ChainLoRAScheduler"] is chain.MiniMaxH3ChainLoRAScheduler
+assert chain.CHAIN_NODE_DISPLAY_NAME_MAPPINGS[
+    "MiniMaxH3ChainLoRAScheduler"] == "MiniMax H3 Scene LoRA Scheduler"
+
 print(
-    "compact chain policy: primary semantic choices, one-wire Plan input, "
-    "composable advanced transitions, canonical compatibility records, and "
-    "one-output 0.4 legacy adapter pass")
+    "compact chain policy and lazy scene LoRA routing: primary semantic "
+    "choices, one-wire Plan input, canonical compatibility, and existing-"
+    "loader MODEL selection pass")
