@@ -4,6 +4,28 @@ Newest first. This file keeps release history out of the onboarding README.
 
 ## Unreleased — Deferred checkpoint upscaling
 
+- Added an opt-in **Guide Late Reveal** research MODEL patch. During an active
+  Guide-family continuation, it replaces H3's static near-clean visual
+  predecessor condition with a coherent late-reveal schedule. The recommended
+  first A/B, `matched`, follows the target's current `t = 1 - sigma` exactly,
+  keeping condition content and its timestep label synchronized throughout
+  denoising. Experimental `next_step` follows the next lower endpoint of the
+  original full sigma schedule, remaining nearly noise-only during early
+  composition while reaching a clean Guide on the final model call. Chain
+  Context marks only its own
+  video Guide records, so the hash-gated selective scope leaves character,
+  authored-keyframe, and Ref2VA visual rows at their original strength. The
+  all-visual public-wrapper scope remains available as a diagnostic. Both use
+  absolute sigma; `next_step` accepts the unsplit schedule so switched/split
+  model branches cannot reset progress. The selective path uses a normal
+  diffusion wrapper when the proposed native ComfyUI per-condition contract is
+  detected; current reviewed core retains the hash-gated compatibility
+  forward, while unknown core changes still fail closed. A secondary
+  `dependent_latent` noise backend reproduces the latent-space draw, temporal
+  extent, seed restart, slice, and patch order used by public H3 runtimes only
+  for recursive Chain Context rows; `comfy_rows` remains the recommended first
+  A/B and preserves current ComfyUI behavior exactly.
+
 - Expanded Chain Context's Guide-only `visual_cond_noise_aug` diagnostic to
   the complete `0.000`–`1.000` range. A `0.000` test now preserves the packed
   condition layout while replacing its visual latent content with seeded

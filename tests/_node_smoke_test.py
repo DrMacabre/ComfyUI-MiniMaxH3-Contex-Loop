@@ -178,6 +178,8 @@ def main():
     assert pkg.NODE_CLASS_MAPPINGS
     assert "MiniMaxH3ContexLoopSeamProbe" in pkg.NODE_CLASS_MAPPINGS
     assert "MiniMaxH3MotionContextSeamProbe" not in pkg.NODE_CLASS_MAPPINGS
+    assert "MiniMaxH3VisualContextLateRevealModelPatch" in (
+        pkg.NODE_CLASS_MAPPINGS)
     assert mm.PackedLayout.__init__ is stock_layout_init
     assert MiniMaxH3.extra_conds is stock_extra_conds
     assert not patch_layout.is_applied()
@@ -352,6 +354,7 @@ def main():
 
     kfs = captured["minimax_keyframes"]
     assert len(kfs) == 7, len(kfs)
+    assert all(kf.get("h3_chain_context_visual") is True for kf in kfs)
     idx = [kf[nodes.MC_KEY] for kf in kfs]
     assert idx == [0, 1, 5, 9, 13, 17, 18], idx
     assert captured["minimax_frame_count"] == frames
@@ -382,6 +385,8 @@ def main():
     direct_keyframes = direct_out[0][1]["minimax_keyframes"]
     assert direct_trim == 22
     assert len(direct_keyframes) == 7
+    assert all(kf.get("h3_chain_context_visual") is True
+               for kf in direct_keyframes)
     assert [value[nodes.MC_KEY] for value in direct_keyframes] == idx
     assert [float(value["latent"].a[0, 0, 0, 0, 0])
             for value in direct_keyframes] == list(range(30, 37))

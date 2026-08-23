@@ -156,6 +156,45 @@ scene. AV prefixes are target latent rows rather than Guide rows, so the
 control is deliberately ignored by AV modes. Keep it at `0.999` outside
 controlled comparisons.
 
+For the next discriminating test, **MiniMax H3 Guide Late Reveal (Research)**
+accepts the H3 MODEL and Current Shot state. `matched` changes the same core
+value at every diffusion call to `clamp(1 - sigma, 0.000, 0.999)`. The
+recommended first A/B uses this exact target match. Experimental `next_step`
+uses the next lower endpoint in the original full sigma schedule instead. On
+H3's shifted 20-step simple schedule it is still only about `0.009` clean at
+evaluation 2, but reaches `0.999` on the final model call instead of stopping
+near `0.613`. Unlike static content corruption, H3 always receives condition
+content and a condition timestep describing the same mixture. The seeded
+condition noise is stable across calls, so the Guide is revealed along one
+coherent trajectory instead of being freshly randomized. Scene 1, Cut, and AV
+transitions pass through unchanged. Place one instance on each switched model
+branch and route each MODEL output through its associated sampler stages.
+`matched` and `custom` do not require `full_sigmas`; `next_step` requires the
+same original unsplit scheduler output on every model branch.
+
+Keep `noise_backend=comfy_rows` for the first A/B. It preserves ComfyUI's
+existing packed-row noise draw exactly and changes only the recursive
+condition's mixture and timestep schedule. If that removes the early color
+shift but continuity is too weak, `dependent_latent` is a separate parity test:
+for Chain Context rows only, it draws seeded noise in latent shape at temporal
+length `target_T + visual_condition_count`, slices the condition prefix, and
+then patchifies, matching the reviewed RunningHub and DiffSynth runtimes.
+Authored keyframes and Ref2VA rows still use ComfyUI's original path.
+
+Keep `scope=chain_context_only` for the useful experiment. Chain Context marks
+only the predecessor video Guide records that it creates; a source-hash-gated
+compatibility forward assigns those records the dynamic content and timestep
+while native character, authored-keyframe, and Ref2VA rows retain their
+original strength. `all_visual_conditions` is the earlier public-wrapper
+diagnostic and intentionally weakens every visual condition in the payload.
+The selective implementation refuses unknown ComfyUI H3 forwards or competing
+object patches rather than guessing at changed packed-segment semantics.
+
+This remains a research control, not a new default. The selective compatibility
+path copies current H3 forward structure because ComfyUI's public API still has
+only one scalar for the complete visual payload. The maintainable production
+solution is equivalent per-condition support in core.
+
 Drift-Control AV v1 is also fixed to 39 frames. Its sigma rule, 8+4 temporal
 taper, mask quantization, audio behavior, and validated-step baseline enter the
 incoming-boundary dependency fingerprint. Changing the mode or recipe therefore

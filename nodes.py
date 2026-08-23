@@ -565,6 +565,13 @@ class MiniMaxH3MotionContext:
                 keyframes.append({
                     "resolved_frame_index": p,
                     "latent": blk,
+                    # Private payload marker consumed by the optional
+                    # sigma-matched Guide scheduler.  ComfyUI preserves
+                    # unknown keyframe fields in minimax_payload, so this
+                    # distinguishes recursive predecessor context from
+                    # identity/keyframe/reference visual conditions without
+                    # changing stock H3 layout semantics.
+                    "h3_chain_context_visual": True,
                 })
             else:
                 keyframes.append({
@@ -573,6 +580,7 @@ class MiniMaxH3MotionContext:
                     "resolved_frame_index": 0,
                     MC_KEY: p,
                     "latent": blk,
+                    "h3_chain_context_visual": True,
                 })
 
         ref_audio_t = 0

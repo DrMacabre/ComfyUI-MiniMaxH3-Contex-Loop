@@ -134,6 +134,33 @@ and audio guides plus native keyframe/reference payload merging in ComfyUI.
 This repository does not copy its node implementation; it detects the exposed
 core layout API and emits compatible guide records from Loop Context.
 
+## T8 MiniMax H3 per-keyframe augmentation
+
+The Guide Late Reveal research node's hash-gated selective H3 forward adapts
+the per-condition visual-row augmentation and packed-segment timestep planning
+approach from
+[comfyui-minimax-h3-audio-T8](https://github.com/T8mars/comfyui-minimax-h3-audio-T8)
+by **T8mars**. This integration marks only recursive Chain Context keyframes,
+derives their strength from the current absolute sigma, preserves current
+ComfyUI row-mask/attention/prefetch behavior, and refuses unvalidated H3
+forward implementations or competing object patches. The referenced revision
+is `801726185ad5926586af5b2abbb170a78a48cb58` (2026-08-23), GPL-3.0.
+
+The optional `dependent_latent` condition-noise backend is an independent local
+adaptation of the public H3 runtime ordering documented by
+[HM-RunningHub/ComfyUI_RH_MinMaxH3](https://github.com/HM-RunningHub/ComfyUI_RH_MinMaxH3/blob/main/minimax_h3_nodes/runtime/sampler_core.py)
+and
+[modelscope/DiffSynth-Studio](https://github.com/modelscope/DiffSynth-Studio/blob/main/diffsynth/pipelines/minimax_h3_audio_video.py),
+with the same dependent-noise policy independently confirmed in
+[SGLang](https://github.com/sgl-project/sglang/blob/main/python/sglang/multimodal_gen/runtime/pipelines_core/stages/model_specific_stages/minimax_h3/condition_noise.py):
+restart a seeded CPU generator for every visual condition, draw latent noise at
+`target_T + visual_condition_count`, slice the condition temporal prefix, then
+patchify. It applies only to marked recursive Chain Context rows; no source
+file or node is vendored. Reviewed revisions are
+`d6c5f7b0d4e03936ac4a9834be63ecc6b5637dad` and
+`fed7b18fac2ed4cb802796eec91970e7659bccde`, plus SGLang revision
+`59cdc9de7d15540e2b8ba8ba63e6b61f5a30b2a1` (2026-08-23), all Apache-2.0.
+
 ## MiniMax H3 Chained Character Swap
 
 The opt-in `tapered_guide` continuation adapts the tapered chroma-noise context

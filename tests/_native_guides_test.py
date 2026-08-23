@@ -332,7 +332,9 @@ def main():
     assert all(nodes.MC_KEY not in value for value in keyframes)
     assert keyframes[0]["resolved_frame_index"] == 0
     assert tuple(keyframes[0]["latent"].shape)[2] == 7
+    assert keyframes[0]["h3_chain_context_visual"] is True
     assert keyframes[1].get("latent") is None
+    assert "h3_chain_context_visual" not in keyframes[1]
     assert tuple(keyframes[1]["audio_latent"].shape)[-1] == 37
     assert abs(keyframes[1]["resolved_frame_index"]) < 1e-6
 
@@ -372,8 +374,10 @@ def main():
     assert anchored_trim == 22
     assert len(anchored_keyframes) == 3
     assert anchored_keyframes[0]["latent"] is last_anchor
+    assert "h3_chain_context_visual" not in anchored_keyframes[0]
     assert anchored_keyframes[0]["resolved_frame_index"] == frame_count - 1
     assert all(nodes.MC_KEY not in value for value in anchored_keyframes)
+    assert anchored_keyframes[1]["h3_chain_context_visual"] is True
     assert first_anchor not in [value.get("latent")
                                 for value in anchored_keyframes]
     anchored_layout = mm.PackedLayout(
