@@ -30,6 +30,10 @@ Newest first. This file keeps release history out of the onboarding README.
   extent, seed restart, slice, and patch order used by public H3 runtimes only
   for recursive Chain Context rows; `comfy_rows` remains the recommended first
   A/B and preserves current ComfyUI behavior exactly.
+  Added a split-safe `manual` preset for exact per-step experiments. It reads
+  clean fractions such as `0, 0.999` against the original unsplit sigma
+  schedule and holds the final supplied value for all remaining steps, rather
+  than relying on a model-call counter.
 
 - Expanded Chain Context's Guide-only `visual_cond_noise_aug` diagnostic to
   the complete `0.000`–`1.000` range. A `0.000` test now preserves the packed

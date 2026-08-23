@@ -46,6 +46,64 @@ assert next_runtime.last_basis_sigma == 0.0
 assert next_runtime.endpoint_aug_summary() == (
     "3 calls: [0.004, 0.009, 0.999]")
 
+assert schedule.parse_manual_schedule("0, .25;\n1") == (0.0, 0.25, 1.0)
+for invalid_manual in ("", "0, nope", "-0.1", "1.1", "nan", [False]):
+    try:
+        schedule.parse_manual_schedule(invalid_manual)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError(
+            "invalid manual schedule was accepted: %r" % invalid_manual)
+
+manual_sigmas = torch.tensor([1.0, 0.9, 0.8, 0.7, 0.0])
+assert schedule.schedule_step_index(1.0, manual_sigmas) == 0
+assert schedule.schedule_step_index(0.95, manual_sigmas) == 0
+assert schedule.schedule_step_index(0.9, manual_sigmas) == 1
+assert schedule.schedule_step_index(0.85, manual_sigmas) == 1
+assert schedule.schedule_step_index(0.0, manual_sigmas) == 3
+manual_runtime = schedule._VisualContextScheduleState(
+    0.0,
+    0.999,
+    mode="manual",
+    full_sigmas=manual_sigmas,
+    manual_schedule="0, 0.999",
+)
+assert manual_runtime.aug_for_sigma(1.0) == 0.0
+assert manual_runtime.aug_for_sigma(0.95) == 0.0
+assert manual_runtime.aug_for_sigma(0.9) == 0.999
+assert manual_runtime.aug_for_sigma(0.85) == 0.999
+assert manual_runtime.aug_for_sigma(0.7) == 0.999
+assert manual_runtime.endpoint_aug_summary() == (
+    "manual values [0.000, 0.999] over 4 sampler steps; final value "
+    "holds after entry 2")
+
+for manual_kwargs in (
+    {"full_sigmas": None, "manual_schedule": "0, 0.999"},
+    {"full_sigmas": manual_sigmas, "manual_schedule": ""},
+    {"full_sigmas": manual_sigmas, "manual_schedule": "0, .2, .4, .6, .8"},
+):
+    try:
+        schedule._VisualContextScheduleState(
+            0.0, 0.999, mode="manual", **manual_kwargs)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError(
+            "manual mode accepted incomplete configuration: %r"
+            % manual_kwargs)
+
+# Both sides of a model/sigma split resolve the same absolute manual index.
+manual_values = "0, .2, .4, .6"
+manual_high = schedule._VisualContextScheduleState(
+    0.0, 0.999, mode="manual", full_sigmas=manual_sigmas,
+    manual_schedule=manual_values)
+manual_low = schedule._VisualContextScheduleState(
+    0.0, 0.999, mode="manual", full_sigmas=manual_sigmas,
+    manual_schedule=manual_values)
+assert manual_high.aug_for_sigma(0.8) == 0.4
+assert manual_low.aug_for_sigma(0.7) == 0.6
+
 # Separate model objects on opposite sides of a sigma split resolve against
 # the same unsplit schedule instead of restarting their local progress.
 split_schedule = torch.tensor([1.0, 0.9, 0.8, 0.7, 0.0])
@@ -762,8 +820,10 @@ assert [int(row) for _start, _stop, row in mods] == [1, 0, 3, 3, 2, 0]
 node = schedule.MiniMaxH3VisualContextLateRevealModelPatch()
 node_inputs = node.INPUT_TYPES()
 assert node_inputs["required"]["preset"][0] == [
-    "off", "matched", "next_step", "custom"]
+    "off", "matched", "next_step", "manual", "custom"]
 assert node_inputs["required"]["preset"][1]["default"] == "matched"
+assert node_inputs["required"]["manual_schedule"][1]["default"] == (
+    "0.000, 0.999")
 assert node_inputs["required"]["noise_backend"][0] == [
     "comfy_rows", "dependent_latent"]
 assert node_inputs["required"]["noise_backend"][1]["default"] == (
@@ -771,29 +831,49 @@ assert node_inputs["required"]["noise_backend"][1]["default"] == (
 try:
     node.patch(
         source, chain_state(1), "next_step", "chain_context_only",
-        "comfy_rows", 0.0, 0.999)
+        "comfy_rows", "0, 0.999", 0.0, 0.999)
 except ValueError as exc:
     assert "full_sigmas" in str(exc)
 else:
     raise AssertionError("scene 1 did not preflight missing full_sigmas")
+try:
+    node.patch(
+        source, chain_state(1), "manual", "chain_context_only",
+        "comfy_rows", "0, 0.999", 0.0, 0.999)
+except ValueError as exc:
+    assert "full_sigmas" in str(exc)
+else:
+    raise AssertionError(
+        "scene 1 did not preflight manual missing full_sigmas")
 assert node.patch(
     source, chain_state(1), "matched", "chain_context_only",
-    "comfy_rows", 0.0, 0.999)[0] is source
+    "comfy_rows", "0, 0.999", 0.0, 0.999)[0] is source
 assert node.patch(
     source, chain_state(2, mode="masked_av", context_length=39),
     "matched", "chain_context_only", "comfy_rows",
-    0.0, 0.999)[0] is source
+    "0, 0.999", 0.0, 0.999)[0] is source
 assert node.patch(
     source, chain_state(2), "off", "chain_context_only",
-    "comfy_rows", 0.0, 0.999)[0] is source
+    "comfy_rows", "0, 0.999", 0.0, 0.999)[0] is source
 assert node.patch(
     source, chain_state(2), "matched", "all_visual_conditions",
-    "comfy_rows", 0.3, 0.4)[0] is not source
+    "comfy_rows", "0, 0.999", 0.3, 0.4)[0] is not source
+
+manual_model = node.patch(
+    source, chain_state(2), "manual", "all_visual_conditions",
+    "comfy_rows", "0, 0.999", 0.0, 0.999,
+    full_sigmas=manual_sigmas)[0]
+manual_metadata = manual_model.model_options[schedule._MODEL_OPTION_MARKER]
+assert manual_metadata["mode"] == "manual"
+assert manual_metadata["manual_schedule"] == [0.0, 0.999]
+manual_state = manual_model.model_options[schedule._STATE_MARKER]
+assert manual_state.aug_for_sigma(1.0) == 0.0
+assert manual_state.aug_for_sigma(0.9) == 0.999
 
 try:
     node.patch(
         source, chain_state(2), "matched", "all_visual_conditions",
-        "dependent_latent", 0.0, 0.999)
+        "dependent_latent", "0, 0.999", 0.0, 0.999)
 except ValueError as exc:
     assert "selective to Chain Context" in str(exc)
 else:

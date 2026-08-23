@@ -172,6 +172,13 @@ branch and route each MODEL output through its associated sampler stages.
 `matched` and `custom` do not require `full_sigmas`; `next_step` requires the
 same original unsplit scheduler output on every model branch.
 
+The `manual` preset also requires that original `full_sigmas` connection. Its
+text input accepts clean fractions separated by commas, semicolons, spaces, or
+newlines. Values are indexed by absolute scheduler step, so they remain stable
+with solver sub-evaluations and split model branches. A short list holds its
+last value: `0, 0.999` gives the recursive Guide pure seeded noise on step 1,
+then the stock near-clean `0.999` mixture on step 2 and every later step.
+
 Keep `noise_backend=comfy_rows` for the first A/B. It preserves ComfyUI's
 existing packed-row noise draw exactly and changes only the recursive
 condition's mixture and timestep schedule. If that removes the early color

@@ -229,6 +229,15 @@ too weak. Content mixture and condition timestep remain matched to each other
 inside both presets, but only `matched` is also aligned exactly with the target
 timestep.
 
+The `manual` preset is for discontinuous causal probes rather than a proposed
+production trajectory. It accepts exact clean fractions indexed by the
+original unsplit sigma schedule and holds the last supplied value for all
+remaining steps. For example, `0, 0.999` makes the recursive Guide pure seeded
+noise on scheduler step 1, then restores the stock near-clean mixture and
+timestep pin on step 2 and every later step. `full_sigmas` is mandatory, so
+the mapping remains absolute across split model branches and does not drift
+when a solver performs extra evaluations inside one step.
+
 This differs from simply inserting Guide at the end. The model sees low-SNR
 structure while establishing the new scene, then receives increasingly precise
 identity/pose/seam evidence while details form. A post-sampling reinsertion can

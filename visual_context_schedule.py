@@ -37,6 +37,7 @@ import logging
 import hashlib
 import inspect
 import math
+import re
 import types
 from typing import Any, Iterable
 
@@ -131,6 +132,72 @@ def next_schedule_sigma(current_sigma: float, sigmas: Any) -> float:
         if high > current > low:
             return low
     return schedule[-1]
+
+
+def parse_manual_schedule(value: Any) -> tuple[float, ...]:
+    """Parse a compact list of exact visual-condition clean fractions."""
+    if isinstance(value, str):
+        raw_values = [
+            item for item in re.split(r"[,;\s]+", value.strip()) if item
+        ]
+    elif isinstance(value, Iterable):
+        raw_values = list(value)
+    else:
+        raw_values = [value]
+    if not raw_values:
+        raise ValueError(
+            "h3_visual_context_schedule: manual_schedule must contain at "
+            "least one value in [0, 1].")
+    parsed = []
+    for index, raw_value in enumerate(raw_values):
+        if isinstance(raw_value, bool):
+            raise ValueError(
+                "h3_visual_context_schedule: manual_schedule value %d must "
+                "be a number in [0, 1]." % (index + 1))
+        try:
+            number = float(raw_value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "h3_visual_context_schedule: manual_schedule value %d (%r) "
+                "is not a number." % (index + 1, raw_value)) from exc
+        if not math.isfinite(number) or not 0.0 <= number <= 1.0:
+            raise ValueError(
+                "h3_visual_context_schedule: manual_schedule value %d "
+                "must be finite and in [0, 1], got %r."
+                % (index + 1, raw_value))
+        parsed.append(number)
+    return tuple(parsed)
+
+
+def schedule_step_index(current_sigma: float, sigmas: Any) -> int:
+    """Map an absolute sigma to its enclosing full-schedule step.
+
+    A solver evaluation strictly inside ``(sigma[i+1], sigma[i])`` remains
+    part of step ``i``.  An evaluation exactly at ``sigma[i+1]`` begins the
+    next step.  This makes a manual schedule deterministic for multi-eval
+    solvers and across separately patched split-sigma model branches.
+    """
+    schedule = _schedule_values(sigmas)
+    if len(schedule) < 2:
+        raise ValueError(
+            "h3_visual_context_schedule: a manual schedule requires "
+            "full_sigmas with at least two finite non-negative levels.")
+    current = float(current_sigma)
+    if not math.isfinite(current):
+        raise ValueError(
+            "h3_visual_context_schedule: sigma must be finite.")
+    if current >= schedule[0] or math.isclose(
+            current, schedule[0], rel_tol=1e-5, abs_tol=1e-6):
+        return 0
+    final_step = len(schedule) - 2
+    for index, (high, low) in enumerate(zip(schedule, schedule[1:])):
+        if math.isclose(current, high, rel_tol=1e-5, abs_tol=1e-6):
+            return min(index, final_step)
+        if math.isclose(current, low, rel_tol=1e-5, abs_tol=1e-6):
+            return min(index + 1, final_step)
+        if high > current > low:
+            return min(index, final_step)
+    return final_step
 
 
 def _active_guide_context(state: Any) -> bool:
@@ -680,20 +747,31 @@ class _VisualContextScheduleState:
         mode: str = "matched",
         full_sigmas: Any = None,
         noise_backend: str = "comfy_rows",
+        manual_schedule: Any = None,
     ):
         scheduled_visual_condition_aug(1.0, floor, ceiling)
         self.floor = float(floor)
         self.ceiling = float(ceiling)
         self.mode = str(mode)
-        if self.mode not in {"matched", "next_step"}:
+        if self.mode not in {"matched", "next_step", "manual"}:
             raise ValueError(
-                "h3_visual_context_schedule: mode must be matched or "
-                "next_step.")
+                "h3_visual_context_schedule: mode must be matched, "
+                "next_step, or manual.")
         self.full_sigmas = _schedule_values(full_sigmas)
-        if self.mode == "next_step" and len(self.full_sigmas) < 2:
+        if self.mode in {"next_step", "manual"} and len(
+                self.full_sigmas) < 2:
             raise ValueError(
-                "h3_visual_context_schedule: next_step requires the "
-                "original full_sigmas input.")
+                "h3_visual_context_schedule: %s requires the original "
+                "full_sigmas input." % self.mode)
+        self.manual_schedule = (
+            parse_manual_schedule(manual_schedule)
+            if self.mode == "manual" else ())
+        if (self.mode == "manual"
+                and len(self.manual_schedule) > len(self.full_sigmas) - 1):
+            raise ValueError(
+                "h3_visual_context_schedule: manual_schedule contains %d "
+                "values but full_sigmas defines only %d sampler steps."
+                % (len(self.manual_schedule), len(self.full_sigmas) - 1))
         self.noise_backend = str(noise_backend)
         if self.noise_backend not in _NOISE_BACKENDS:
             raise ValueError(
@@ -706,6 +784,16 @@ class _VisualContextScheduleState:
         self._reported_active = False
 
     def endpoint_aug_summary(self) -> str:
+        if self.mode == "manual":
+            return (
+                "manual values [%s] over %d sampler steps; final value "
+                "holds after entry %d"
+                % (
+                    ", ".join("%.3f" % value
+                              for value in self.manual_schedule),
+                    len(self.full_sigmas) - 1,
+                    len(self.manual_schedule),
+                ))
         if self.mode != "next_step":
             return "dynamic current-step schedule"
         values = [
@@ -718,6 +806,14 @@ class _VisualContextScheduleState:
 
     def aug_for_sigma(self, sigma: float) -> float:
         basis_sigma = float(sigma)
+        if self.mode == "manual":
+            step_index = schedule_step_index(
+                basis_sigma, self.full_sigmas)
+            self.last_sigma = float(sigma)
+            self.last_basis_sigma = basis_sigma
+            self.last_aug = self.manual_schedule[min(
+                step_index, len(self.manual_schedule) - 1)]
+            return self.last_aug
         if self.mode == "next_step":
             basis_sigma = next_schedule_sigma(
                 basis_sigma, self.full_sigmas)
@@ -773,7 +869,7 @@ class _VisualContextScheduleState:
             if not self._reported_active:
                 _LOG.info(
                     "H3 Guide Late Reveal active: visual conditions use %s "
-                    "t=1-sigma, floor %.3f, ceiling %.3f; current "
+                    "schedule, floor %.3f, ceiling %.3f; current "
                     "ComfyUI applies the schedule to every visual condition "
                     "row in this continuation payload; %s",
                     self.mode, self.floor, self.ceiling,
@@ -847,6 +943,7 @@ def install_visual_context_schedule_model(
     mode: str = "matched",
     full_sigmas: Any = None,
     noise_backend: str = "comfy_rows",
+    manual_schedule: Any = None,
 ):
     """Clone an H3 model and install the per-call Guide schedule."""
     scheduled_visual_condition_aug(1.0, floor, ceiling)
@@ -889,6 +986,7 @@ def install_visual_context_schedule_model(
         mode=mode,
         full_sigmas=full_sigmas,
         noise_backend=noise_backend_value,
+        manual_schedule=manual_schedule,
     )
     backend = "global_payload_wrapper"
     if scope_value == "all_visual_conditions":
@@ -1002,7 +1100,7 @@ def install_visual_context_schedule_model(
                     _LOG.info(
                         "H3 Guide Late Reveal selective compatibility active: "
                         "%d Chain Context visual block(s) follow %s "
-                        "t=1-sigma, floor %.3f, ceiling %.3f; %d other visual "
+                        "schedule, floor %.3f, ceiling %.3f; %d other visual "
                         "reference block(s) retain their original strength; %s",
                         sum(flags), runtime.mode, runtime.floor,
                         runtime.ceiling, len(flags) - sum(flags),
@@ -1030,12 +1128,16 @@ def install_visual_context_schedule_model(
                 types.MethodType(_patched_forward, diffusion_model))
             backend = "compat_forward"
     options[_MODEL_OPTION_MARKER] = {
-        "version": 5,
+        "version": 6,
         "floor": float(floor),
         "ceiling": float(ceiling),
-        "rule": "clamp(max(1-basis_sigma,floor),ceiling)",
+        "rule": (
+            "manual_full_sigma_step_hold_last"
+            if runtime.mode == "manual"
+            else "clamp(max(1-basis_sigma,floor),ceiling)"),
         "mode": runtime.mode,
         "full_sigma_count": len(runtime.full_sigmas),
+        "manual_schedule": list(runtime.manual_schedule),
         "scope": scope_value,
         "backend": backend,
         "noise_backend": runtime.noise_backend,
@@ -1057,7 +1159,7 @@ class MiniMaxH3VisualContextLateRevealModelPatch:
                                "transitions pass through unchanged; only an "
                                "active Guide-family continuation is patched."}),
                 "preset": ([
-                    "off", "matched", "next_step", "custom",
+                    "off", "matched", "next_step", "manual", "custom",
                 ], {
                     "default": "matched",
                     "tooltip": "matched (recommended first A/B): noise and "
@@ -1066,6 +1168,9 @@ class MiniMaxH3VisualContextLateRevealModelPatch:
                                "uses the next full-schedule endpoint and "
                                "reaches a clean Guide on the final model "
                                "call; connect full_sigmas. off is unchanged. "
+                               "manual reads one exact clean fraction per "
+                               "full-schedule step and holds its final value; "
+                               "connect full_sigmas. "
                                "custom uses exact matching with expert floor "
                                "and ceiling."}),
                 "scope": ([
@@ -1091,6 +1196,16 @@ class MiniMaxH3VisualContextLateRevealModelPatch:
                                "ports' dependent target-length latent noise "
                                "before patchification; other references stay "
                                "unchanged."}),
+                "manual_schedule": ("STRING", {
+                    "default": "0.000, 0.999",
+                    "multiline": False,
+                    "tooltip": "Manual preset only. Comma, semicolon, space, "
+                               "or newline-separated clean fractions in "
+                               "[0,1], indexed by the original full sigma "
+                               "schedule. If fewer values than sampler steps "
+                               "are supplied, the final value holds. Example "
+                               "'0, 0.999' means first step 0 and every later "
+                               "step 0.999. Connect full_sigmas."}),
                 "custom_floor": ("FLOAT", {
                     "default": 0.000, "min": 0.000, "max": 1.000,
                     "step": 0.001, "round": 0.001,
@@ -1106,9 +1221,10 @@ class MiniMaxH3VisualContextLateRevealModelPatch:
             },
             "optional": {
                 "full_sigmas": ("SIGMAS", {
-                    "tooltip": "Required by next_step. Connect the original "
-                               "unsplit scheduler output so both split-sigma "
-                               "sampler stages share one absolute schedule."}),
+                    "tooltip": "Required by next_step and manual. Connect "
+                               "the original unsplit scheduler output so both "
+                               "split-sigma sampler stages share one absolute "
+                               "schedule."}),
             },
         }
 
@@ -1124,6 +1240,8 @@ class MiniMaxH3VisualContextLateRevealModelPatch:
         "Research patch for recursive Guide color/texture drift. At each H3 "
         "model call it noises predecessor context to the target's current or "
         "next full-schedule timestep, then reveals it as sampling progresses. "
+        "A manual preset accepts exact per-step clean fractions and holds its "
+        "last value. "
         "It is cheap and split-sigma safe. The recommended selective scope "
         "leaves character, authored keyframe, and Ref2VA rows unchanged; the "
         "all-visual scope is retained as a diagnostic. It does not modify an "
@@ -1138,6 +1256,7 @@ class MiniMaxH3VisualContextLateRevealModelPatch:
         preset,
         scope,
         noise_backend,
+        manual_schedule,
         custom_floor,
         custom_ceiling,
         full_sigmas=None,
@@ -1149,6 +1268,8 @@ class MiniMaxH3VisualContextLateRevealModelPatch:
             floor, ceiling, mode = 0.0, 0.999, "next_step"
         elif preset_value == "matched":
             floor, ceiling, mode = 0.0, 0.999, "matched"
+        elif preset_value == "manual":
+            floor, ceiling, mode = 0.0, 0.999, "manual"
         elif preset_value == "custom":
             floor, ceiling, mode = (
                 float(custom_floor), float(custom_ceiling), "matched")
@@ -1164,13 +1285,15 @@ class MiniMaxH3VisualContextLateRevealModelPatch:
             mode=mode,
             full_sigmas=full_sigmas,
             noise_backend=noise_backend,
+            manual_schedule=manual_schedule,
         )
         if not _active_guide_context(state):
             return (model,)
         return (install_visual_context_schedule_model(
             model, floor=floor, ceiling=ceiling, scope=scope,
             mode=mode, full_sigmas=full_sigmas,
-            noise_backend=noise_backend),)
+            noise_backend=noise_backend,
+            manual_schedule=manual_schedule),)
 
 
 NODE_CLASS_MAPPINGS = {
