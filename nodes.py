@@ -336,6 +336,87 @@ def _video_guide_tail_from_latent(latent, frames, target_video):
     return tail
 
 
+def _append_future_end_anchor(
+        conditioning, latent, prefix_frames,
+        visual_cond_noise_aug=VISUAL_COND_NOISE_AUG_DEFAULT):
+    """Append one clean Guide from the end of an AV-preserved prefix.
+
+    ``latent`` is the sampler-ready AV target returned by masked-prefix
+    preparation.  Reading the anchor back from that target is intentional:
+    it preserves the exact spatial proxy, latent colour carry, dtype, and
+    device used by the AV prefix instead of rebuilding a subtly different
+    condition from decoded RGB or the unprocessed predecessor latent.
+
+    The Guide is placed at the first frame *after* the target timeline.  It is
+    therefore a conditioning row only: it never enters the decoded output,
+    changes the target mask, or contributes to Loop Trim.
+    """
+    guide_api = _activate_inline_patches()
+    native_guides = guide_api == "native"
+    visual_cond_noise_aug = _validate_visual_cond_noise_aug(
+        visual_cond_noise_aug)
+
+    video = _video_from_latent(latent)
+    frame_count = _pixel_frames(int(video.shape[2]))
+    prefix_frames = int(prefix_frames)
+    if prefix_frames < 1:
+        raise ValueError(
+            "h3_motion_context: future_end_anchor requires a positive AV "
+            "prefix.")
+    prefix_steps = next(
+        (steps for steps in range(1, int(video.shape[2]) + 1)
+         if _pixel_frames(steps) == prefix_frames),
+        None,
+    )
+    if prefix_steps is None:
+        raise ValueError(
+            "h3_motion_context: AV prefix of %d frames does not map to an "
+            "exact H3 video-latent run." % prefix_frames)
+    if prefix_steps >= int(video.shape[2]):
+        raise ValueError(
+            "h3_motion_context: future_end_anchor cannot use an AV prefix "
+            "that consumes the complete target timeline.")
+
+    # Use the final prepared prefix step, including any AV-only proxy/tone
+    # treatment, but present it as one phase-zero Guide step beyond the target.
+    suffix_latent = video[:1, :, prefix_steps - 1:prefix_steps].clone()
+    suffix = {
+        "resolved_frame_index": frame_count,
+        "latent": suffix_latent,
+        "h3_chain_future_end_anchor": True,
+    }
+    if not native_guides:
+        suffix[MC_KEY] = frame_count
+
+    out = []
+    for embedding, extra in conditioning:
+        metadata = extra.copy()
+        prior_frame_count = metadata.get("minimax_frame_count")
+        if (prior_frame_count is not None
+                and int(prior_frame_count) != frame_count):
+            raise ValueError(
+                "h3_motion_context: the conditioning carries keyframes "
+                "resolved for a %d frame clip, but the AV target is %d "
+                "frames." % (int(prior_frame_count), frame_count))
+        keyframes = list(metadata.get("minimax_keyframes") or [])
+        metadata["minimax_keyframes"] = keyframes + [suffix]
+        # ComfyUI currently exposes one augmentation value for every visual
+        # row in a conditioning payload. AV's preserved prefix is in the
+        # target latent and is unaffected, while this makes the new suffix a
+        # stock-clean Guide (and keeps any ordinary stock guides at baseline).
+        metadata["minimax_visual_cond_noise_aug"] = visual_cond_noise_aug
+        if not native_guides:
+            metadata["minimax_frame_count"] = frame_count
+        out.append([embedding, metadata])
+
+    _LOG.info(
+        "h3_motion_context: AV future anchor reused prepared prefix latent "
+        "step %d/%d as one clean Guide at frame %d; target mask, output "
+        "length, and trim unchanged",
+        prefix_steps, int(video.shape[2]), frame_count)
+    return out
+
+
 class MiniMaxH3MotionContext:
     @classmethod
     def INPUT_TYPES(cls):

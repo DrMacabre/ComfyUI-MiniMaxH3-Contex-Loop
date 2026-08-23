@@ -239,11 +239,15 @@ the mapping remains absolute across split model branches and does not drift
 when a solver performs extra evaluations inside one step.
 
 The optional Chain Context `future_end_anchor` probe tests a more selective
-way to retain composition without restoring the complete prefix to `0.999`.
-It reuses only the predecessor context's final latent step as one stock-clean
-visual condition at the first temporal position after the target. The normal
-recursive prefix is unchanged and remains the only visual condition controlled
-by Guide Late Reveal, so it may stay `matched` or use a weak/manual schedule.
+way to retain composition without restoring the complete Guide prefix to
+`0.999`. It reuses only the predecessor context's final prepared latent step
+as one stock-clean visual condition at the first temporal position after the
+target. In Guide modes, the normal recursive prefix is unchanged and remains
+the only visual condition controlled by Guide Late Reveal, so it may stay
+`matched` or use a weak/manual schedule. In AV modes, the preserved prefix
+remains entirely inside the masked target latent; the suffix is copied after
+AV preparation from that exact prefix, including spatial-proxy or latent-colour
+treatment, then added through the Guide system without changing the AV mask.
 Condition rows are not decoded target frames; this future suffix therefore
 does not change raw or delivered scene length and requires no extra trim. It is
 not colour-only, so it may preserve background/camera geometry while also
@@ -251,6 +255,19 @@ pulling the ending pose toward the predecessor. Keep Chain Context's base
 `visual_cond_noise_aug=0.999` and Late Reveal's selective
 `scope=chain_context_only`; `all_visual_conditions` or a weakened base value
 would schedule/weaken the suffix too.
+
+To retain the suffix only during early composition, use the renamed **Visual
+Context Schedule (Research)** node with `preset=manual`,
+`scope=future_anchor_only`, and connect the original unsplit `full_sigmas`.
+`manual_schedule=0.999, 0.999, 0` keeps the suffix stock-clean for sampler
+steps one and two, then replaces its content with the same stable seeded noise
+and target-matched timestep on step three and every later step. A gentler
+handoff can use `0.999, 0.999, 0.5, 0`. The conditioning rows are deliberately
+not physically removed: keeping the packed layout fixed avoids changing row
+positions, attention layout, or split-sampler caches in the middle of a run.
+This scope targets only `h3_chain_future_end_anchor`; the recursive Guide
+prefix, authored keyframes, Ref2VA media, and an AV preserved prefix are
+unchanged.
 
 This differs from simply inserting Guide at the end. The model sees low-SNR
 structure while establishing the new scene, then receives increasingly precise
@@ -262,7 +279,7 @@ hide one boundary but cannot prevent palette feedback during generation.
 1. Use the same predecessor checkpoint, target prompt, seed, scheduler, steps,
    model, references, and Guide context as the known red run.
 2. Restore Chain Context `visual_cond_noise_aug` to `0.999`.
-3. Route the H3 model through **MiniMax H3 Guide Late Reveal (Research)** with
+3. Route the H3 model through **MiniMax H3 Visual Context Schedule (Research)** with
    Current Shot state, preset `matched`, scope `chain_context_only`, and noise
    backend `comfy_rows`, then route its MODEL output into every sampler stage.
    `matched` does not need `full_sigmas`. With switched models, use one patched
@@ -319,11 +336,13 @@ hide one boundary but cannot prevent palette feedback during generation.
 ## AV interpretation
 
 An AV prefix is not a `cond` segment. It occupies target-video rows and uses a
-denoise mask, so the Guide Late Reveal node correctly leaves AV modes alone.
-A hard AV prefix is near-clean at early sampling and can produce the same
-feedback class. Drift-Control AV is the corresponding target-row experiment:
-it presents most carried rows at the next scheduler level and tapers the seam
-end to clean while keeping H3's per-row timestep label synchronized.
+denoise mask, so the Visual Context Schedule node cannot schedule that prefix.
+Its `future_anchor_only` scope can nevertheless schedule the separate suffix
+Guide now optionally attached to AV. A hard AV prefix is near-clean at early
+sampling and can produce the same feedback class. Drift-Control AV is the
+corresponding target-row experiment: it presents most carried rows at the next
+scheduler level and tapers the seam end to clean while keeping H3's per-row
+timestep label synchronized.
 
 ## Long-term core fix
 

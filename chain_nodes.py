@@ -11105,17 +11105,16 @@ class MiniMaxH3ChainContext:
                                "and is ignored by AV transition modes."}),
                 "future_end_anchor": ("BOOLEAN", {
                     "default": False,
-                    "tooltip": "Guide-only research option. Reuse the final "
-                               "predecessor context latent as one clean Guide "
-                               "immediately after the target timeline. It "
-                               "does not change the prefix, scene length, or "
-                               "Loop Trim. This may retain background/camera "
-                               "composition while Guide Late Reveal keeps the "
-                               "multi-frame prefix weak or sigma-matched. Keep "
-                               "visual_cond_noise_aug at 0.999 and Late "
-                               "Reveal scope at chain_context_only so this "
-                               "suffix remains clean. It may pull the ending "
-                               "pose backward."}),
+                    "tooltip": "Guide/AV research option. Reuse the final "
+                               "prepared predecessor-context latent step as "
+                               "one clean Guide immediately after the target "
+                               "timeline. In AV modes, the ordinary prefix "
+                               "remains inside the masked target latent while "
+                               "this separate suffix uses the exact prepared "
+                               "AV prefix geometry. It does not change the "
+                               "mask, scene length, or Loop Trim. This may "
+                               "retain background/camera composition but can "
+                               "pull the ending pose backward."}),
             }
         }
 
@@ -11228,10 +11227,6 @@ class MiniMaxH3ChainContext:
         previous_frames = _previous_context_frames(
             state, vae, context_length)
         if continuation_mode in MASKED_CONTINUATION_MODES:
-            if bool(future_end_anchor):
-                _LOG.warning(
-                    "H3 Chain future_end_anchor is a Guide-only experiment "
-                    "and is ignored by %s.", continuation_mode)
             if (abs(float(visual_cond_noise_aug)
                     - VISUAL_COND_NOISE_AUG_DEFAULT) > 5e-7):
                 _LOG.warning(
@@ -11273,6 +11268,18 @@ class MiniMaxH3ChainContext:
                 context_spatial_proxy=context_spatial_proxy,
                 latent_color_carry=latent_color_carry,
             )
+            if bool(future_end_anchor):
+                # Keep this experimental dependency local so lightweight
+                # plan/archive consumers can import Chain Nodes without
+                # needing to construct the full conditioning helper surface.
+                from .nodes import _append_future_end_anchor
+
+                out_conditioning = _append_future_end_anchor(
+                    out_conditioning,
+                    out_latent,
+                    trim,
+                    visual_cond_noise_aug=VISUAL_COND_NOISE_AUG_DEFAULT,
+                )
             out_model = model
             if continuation_mode in DRIFT_CONTROL_CONTINUATION_MODES:
                 if trim != int(DRIFT_CONTROL_AV_RECIPE["context_frames"]):

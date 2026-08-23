@@ -9,12 +9,20 @@ Newest first. This file keeps release history out of the onboarding README.
   former neutral replacement text remains available in the How To Run note
   for explicit copy/paste comparisons.
 
-- Added an opt-in `future_end_anchor` Guide experiment. It reuses the
-  predecessor context's final latent step as one stock-clean visual condition
-  immediately after the target timeline. The normal prefix, output length,
-  and Loop Trim stay unchanged. This tests whether one background/camera cue
-  can preserve composition while the multi-frame prefix remains weak or
-  sigma-matched instead of jumping back to `0.999` after step one.
+- Added an opt-in `future_end_anchor` Guide/AV experiment. It reuses the
+  predecessor context's final prepared latent step as one stock-clean visual
+  condition immediately after the target timeline. In AV modes the preserved
+  prefix remains in the masked target latent and the suffix is copied from
+  that already-prepared prefix, including its exact proxy/tone treatment.
+  The normal prefix, mask, output length, and Loop Trim stay unchanged. This
+  tests whether one background/camera cue can suppress one-sided composition
+  and colour drift without restoring the complete Guide prefix to `0.999`.
+  The Visual Context Schedule patch now has a selective
+  `future_anchor_only` scope. A manual full-sigma schedule such as
+  `0.999, 0.999, 0` keeps the suffix clean for composition-setting steps one
+  and two, then replaces only that suffix with timestep-matched stable noise;
+  the packed layout stays fixed and split sampler branches share one absolute
+  cutoff.
 
 - Added an opt-in **Guide Late Reveal** research MODEL patch. During an active
   Guide-family continuation, it replaces H3's static near-clean visual
@@ -41,6 +49,9 @@ Newest first. This file keeps release history out of the onboarding README.
   clean fractions such as `0, 0.999` against the original unsplit sigma
   schedule and holds the final supplied value for all remaining steps, rather
   than relying on a model-call counter.
+  Selective scheduling can target either the recursive Guide prefix or the
+  separately marked future suffix anchor; the latter also activates for AV
+  continuation modes without modifying their preserved latent prefix.
 
 - Expanded Chain Context's Guide-only `visual_cond_noise_aug` diagnostic to
   the complete `0.000`–`1.000` range. A `0.000` test now preserves the packed

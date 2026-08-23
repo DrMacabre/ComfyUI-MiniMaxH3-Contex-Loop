@@ -156,7 +156,7 @@ scene. AV prefixes are target latent rows rather than Guide rows, so the
 control is deliberately ignored by AV modes. Keep it at `0.999` outside
 controlled comparisons.
 
-For the next discriminating test, **MiniMax H3 Guide Late Reveal (Research)**
+For the next discriminating test, **MiniMax H3 Visual Context Schedule (Research)**
 accepts the H3 MODEL and Current Shot state. `matched` changes the same core
 value at every diffusion call to `clamp(1 - sigma, 0.000, 0.999)`. The
 recommended first A/B uses this exact target match. Experimental `next_step`

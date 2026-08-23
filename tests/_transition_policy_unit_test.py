@@ -26,6 +26,21 @@ sys.modules[PACKAGE] = package
 
 shared_nodes = types.ModuleType(PACKAGE + ".nodes")
 shared_nodes.MiniMaxH3MotionContext = object
+future_anchor_calls = []
+
+
+def append_future_end_anchor_stub(
+        conditioning, latent, prefix_frames, visual_cond_noise_aug=0.999):
+    future_anchor_calls.append({
+        "conditioning": conditioning,
+        "latent": latent,
+        "prefix_frames": prefix_frames,
+        "visual_cond_noise_aug": visual_cond_noise_aug,
+    })
+    return "future-anchor-conditioning"
+
+
+shared_nodes._append_future_end_anchor = append_future_end_anchor_stub
 shared_nodes._claim_inline_patch_ownership = lambda: "test patch owner"
 shared_nodes._prepare_native_guide_conditioning = lambda value: value
 shared_nodes._resize = lambda *args: None
@@ -501,6 +516,25 @@ try:
         1, 16, 12, 2, 2)
     assert second_result[4] == ("patched-model", "h3-model", 12)
     assert drift_calls[-1] == ("h3-model", 12, full_sigmas)
+
+    anchored_second_result = chain.MiniMaxH3ChainContext().apply(
+        state=second_state,
+        conditioning="stock-conditioning",
+        vae=object(),
+        latent="target-latent",
+        model="h3-model",
+        drift_sigmas=full_sigmas,
+        future_end_anchor=True,
+    )
+    assert anchored_second_result[:3] == (
+        "future-anchor-conditioning", 39, True)
+    assert future_anchor_calls[-1]["conditioning"] == "drift-conditioning"
+    # Drift-Control adds private schedule metadata after the anchor is read,
+    # but both routes retain the exact same prepared nested samples.
+    assert (future_anchor_calls[-1]["latent"]["samples"]
+            is anchored_second_result[3]["samples"])
+    assert future_anchor_calls[-1]["prefix_frames"] == 39
+    assert future_anchor_calls[-1]["visual_cond_noise_aug"] == 0.999
 
     split_second_result = chain.MiniMaxH3ChainContext().apply(
         state=second_state,

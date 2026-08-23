@@ -160,6 +160,14 @@ assert schedule._active_guide_context(chain_state(2, mode="latent_guide"))
 assert not schedule._active_guide_context(
     chain_state(2, mode="drift_control_av", context_length=39))
 assert not schedule._active_guide_context(chain_state(2, context_length=0))
+assert schedule._active_schedule_context(
+    chain_state(2, mode="drift_control_av", context_length=39),
+    "future_anchor_only",
+)
+assert not schedule._active_schedule_context(
+    chain_state(2, mode="drift_control_av", context_length=0),
+    "future_anchor_only",
+)
 
 
 # ComfyUI packs visual conditions as keyframe latents first, then reference
@@ -182,12 +190,21 @@ selective_payload = {
 }
 assert schedule._context_visual_flags(selective_payload) == [
     True, False, False]
+assert schedule._marked_visual_flags(
+    selective_payload, schedule._FUTURE_ANCHOR_KEYFRAME_MARKER) == [
+        False, True, False]
 assert schedule._selective_visual_augs(
     selective_payload, 0.004, 0.999) == [0.004, 0.875, 0.875]
 clean_suffix_payload = copy.deepcopy(selective_payload)
 clean_suffix_payload["visual_cond_noise_aug"] = 0.999
 assert schedule._selective_visual_augs(
     clean_suffix_payload, 0.0, 0.999) == [0.0, 0.999, 0.999]
+assert schedule._selective_visual_augs(
+    clean_suffix_payload,
+    0.0,
+    0.999,
+    selection_flags=[False, True, False],
+) == [0.999, 0.0, 0.999]
 
 # Dynamic calls must traverse one coherent forward-noise trajectory. H3
 # restarts the same seeded CPU generator for a condition on every call; it
@@ -540,6 +557,27 @@ runtime = selective_model.model_options[schedule._STATE_MARKER]
 assert abs(runtime.last_sigma - 0.996) < 1e-6
 assert abs(runtime.last_aug - 0.004) < 1e-6
 
+future_selective_model = schedule.install_visual_context_schedule_model(
+    SelectiveFakeModel(),
+    0.0,
+    0.999,
+    scope="future_anchor_only",
+    mode="manual",
+    full_sigmas=manual_sigmas,
+    manual_schedule="0.999, 0.999, 0",
+)
+future_selective_runtime = future_selective_model.model_options[
+    schedule._STATE_MARKER]
+assert future_selective_runtime.selection_marker == (
+    schedule._FUTURE_ANCHOR_KEYFRAME_MARKER)
+assert future_selective_runtime.selection_flags(selective_payload) == [
+    False, True, False]
+assert future_selective_runtime.aug_for_sigma(1.0) == 0.999
+assert future_selective_runtime.aug_for_sigma(0.9) == 0.999
+assert future_selective_runtime.aug_for_sigma(0.8) == 0.0
+assert future_selective_model.model_options[
+    schedule._MODEL_OPTION_MARKER]["version"] == 7
+
 
 # A future ComfyUI core that consumes per-condition augmentation values in
 # both row construction and timestep assignment uses only the public wrapper;
@@ -610,6 +648,35 @@ native_augs = native_capture["minimax_payload"]["visual_cond_noise_augs"]
 assert abs(native_augs[0] - 0.004) < 1e-6
 assert native_augs[1:] == [0.8, 0.7]
 assert native_payload["visual_cond_noise_augs"] == [0.9, 0.8, 0.7]
+
+future_native_model = schedule.install_visual_context_schedule_model(
+    NativeFakeModel(),
+    0.0,
+    0.999,
+    scope="future_anchor_only",
+    mode="manual",
+    full_sigmas=manual_sigmas,
+    manual_schedule="0.999, 0.999, 0",
+)
+future_native_wrapper = future_native_model.wrappers[0][2]
+future_native_capture = {}
+
+
+def future_native_executor(*args, **kwargs):
+    future_native_capture.update(kwargs)
+    return "future-native-wrapper"
+
+
+assert future_native_wrapper(
+    future_native_executor,
+    "x",
+    torch.tensor([800.0]),
+    "context",
+    transformer_options={},
+    minimax_payload=native_payload,
+) == "future-native-wrapper"
+assert future_native_capture["minimax_payload"][
+    "visual_cond_noise_augs"] == [0.9, 0.0, 0.7]
 
 bad_native_payload = copy.copy(native_payload)
 bad_native_payload["visual_cond_noise_augs"] = [0.9]
@@ -827,6 +894,8 @@ node_inputs = node.INPUT_TYPES()
 assert node_inputs["required"]["preset"][0] == [
     "off", "matched", "next_step", "manual", "custom"]
 assert node_inputs["required"]["preset"][1]["default"] == "matched"
+assert node_inputs["required"]["scope"][0] == [
+    "chain_context_only", "future_anchor_only", "all_visual_conditions"]
 assert node_inputs["required"]["manual_schedule"][1]["default"] == (
     "0.000, 0.999")
 assert node_inputs["required"]["noise_backend"][0] == [
@@ -857,6 +926,19 @@ assert node.patch(
     source, chain_state(2, mode="masked_av", context_length=39),
     "matched", "chain_context_only", "comfy_rows",
     "0, 0.999", 0.0, 0.999)[0] is source
+future_av_model = node.patch(
+    SelectiveFakeModel(),
+    chain_state(2, mode="masked_av", context_length=39),
+    "manual",
+    "future_anchor_only",
+    "comfy_rows",
+    "0.999, 0.999, 0",
+    0.0,
+    0.999,
+    full_sigmas=manual_sigmas,
+)[0]
+assert future_av_model.model_options[
+    schedule._MODEL_OPTION_MARKER]["scope"] == "future_anchor_only"
 assert node.patch(
     source, chain_state(2), "off", "chain_context_only",
     "comfy_rows", "0, 0.999", 0.0, 0.999)[0] is source
@@ -880,7 +962,7 @@ try:
         source, chain_state(2), "matched", "all_visual_conditions",
         "dependent_latent", "0, 0.999", 0.0, 0.999)
 except ValueError as exc:
-    assert "selective to Chain Context" in str(exc)
+    assert "requires a selective scope" in str(exc)
 else:
     raise AssertionError("dependent latent noise accepted all-visual scope")
 

@@ -50,6 +50,7 @@ _WRAPPER_KEY = "h3_context_loop_visual_context_late_reveal"
 _MODEL_OPTION_MARKER = "h3_context_loop_visual_context_late_reveal_recipe"
 _STATE_MARKER = "h3_context_loop_visual_context_late_reveal_state"
 _CONTEXT_KEYFRAME_MARKER = "h3_chain_context_visual"
+_FUTURE_ANCHOR_KEYFRAME_MARKER = "h3_chain_future_end_anchor"
 _SELECTIVE_FORWARD_MARKER = "_h3_context_selective_schedule_version"
 _SELECTIVE_FORWARD_VERSION = 1
 _CORE_VISUAL_AUGS_KEY = "visual_cond_noise_augs"
@@ -64,6 +65,14 @@ _GUIDE_MODES = frozenset((
     "tone_carry_guide",
     "latent_guide",
     "tapered_guide",
+))
+_AV_MODES = frozenset((
+    "masked_av",
+    "tapered_av",
+    "feathered_av",
+    "audio_feathered_av",
+    "drift_control_av",
+    "color_stable_drift_av",
 ))
 
 
@@ -200,8 +209,11 @@ def schedule_step_index(current_sigma: float, sigmas: Any) -> int:
     return final_step
 
 
-def _active_guide_context(state: Any) -> bool:
-    """Resolve whether this loop iteration actually carries visual Guide."""
+def _active_schedule_context(
+    state: Any,
+    scope: str = "chain_context_only",
+) -> bool:
+    """Resolve whether this scene can contain the selected visual rows."""
     if not isinstance(state, dict):
         return False
     try:
@@ -221,17 +233,27 @@ def _active_guide_context(state: Any) -> bool:
         compatibility.get("continuation_mode", "guide"),
     ))
     has_predecessor = index > 1 or bool(state.get("external_context"))
+    accepted_modes = (
+        _GUIDE_MODES | _AV_MODES
+        if str(scope) == "future_anchor_only"
+        else _GUIDE_MODES
+    )
     return (
         has_predecessor
         and context_length > 0
-        and continuation_mode in _GUIDE_MODES
+        and continuation_mode in accepted_modes
     )
 
 
-def _context_visual_flags(payload: dict) -> list[bool]:
-    """Return flags in ComfyUI's exact cond_video_latents packing order."""
+def _active_guide_context(state: Any) -> bool:
+    """Backward-compatible helper for the original Guide-only scope."""
+    return _active_schedule_context(state, "chain_context_only")
+
+
+def _marked_visual_flags(payload: dict, marker: str) -> list[bool]:
+    """Return marker flags in ComfyUI's cond-video packing order."""
     flags = [
-        bool(keyframe.get(_CONTEXT_KEYFRAME_MARKER, False))
+        bool(keyframe.get(marker, False))
         for keyframe in (payload.get("keyframes") or ())
         if keyframe.get("latent") is not None
     ]
@@ -245,23 +267,34 @@ def _context_visual_flags(payload: dict) -> list[bool]:
     latents = list(payload.get("cond_video_latents") or ())
     if len(flags) != len(latents):
         raise RuntimeError(
-            "H3 Guide Late Reveal payload order changed: found %d visual "
+            "H3 visual schedule payload order changed: found %d visual "
             "condition records for %d packed latents. Update the ComfyUI "
             "compatibility implementation before sampling."
             % (len(flags), len(latents)))
     return flags
 
 
+def _context_visual_flags(payload: dict) -> list[bool]:
+    """Return recursive-prefix flags (the original selective scope)."""
+    return _marked_visual_flags(payload, _CONTEXT_KEYFRAME_MARKER)
+
+
 def _selective_visual_augs(
     payload: dict,
     scheduled_aug: float,
     default_aug: float,
+    selection_flags: Any = None,
 ) -> list[float]:
-    """Keep ordinary refs strong while scheduling only Chain Context rows."""
+    """Keep ordinary refs strong while scheduling selected visual rows."""
     base_aug = float(payload.get("visual_cond_noise_aug", default_aug))
+    flags = (
+        _context_visual_flags(payload)
+        if selection_flags is None
+        else [bool(value) for value in selection_flags]
+    )
     return [
         float(scheduled_aug) if is_context else base_aug
-        for is_context in _context_visual_flags(payload)
+        for is_context in flags
     ]
 
 
@@ -518,9 +551,13 @@ def _selective_context_forward(
         sigma_v, shift_v, shift_a))
 
     scheduled_aug = runtime.aug_for_sigma(sigma_value)
-    context_flags = _context_visual_flags(payload)
+    context_flags = runtime.selection_flags(payload)
     visual_augs = _selective_visual_augs(
-        payload, scheduled_aug, h3m.VISUAL_COND_TIMESTEP)
+        payload,
+        scheduled_aug,
+        h3m.VISUAL_COND_TIMESTEP,
+        selection_flags=context_flags,
+    )
     audio_aug = float(payload.get(
         "audio_cond_noise_aug", h3m.AUDIO_COND_TIMESTEP))
     segment_times = _segment_timestep_plan(
@@ -748,6 +785,8 @@ class _VisualContextScheduleState:
         full_sigmas: Any = None,
         noise_backend: str = "comfy_rows",
         manual_schedule: Any = None,
+        selection_marker: str = _CONTEXT_KEYFRAME_MARKER,
+        selection_label: str = "Chain Context prefix",
     ):
         scheduled_visual_condition_aug(1.0, floor, ceiling)
         self.floor = float(floor)
@@ -777,11 +816,16 @@ class _VisualContextScheduleState:
             raise ValueError(
                 "h3_visual_context_schedule: noise_backend must be one of "
                 "%s." % sorted(_NOISE_BACKENDS))
+        self.selection_marker = str(selection_marker)
+        self.selection_label = str(selection_label)
         self.last_sigma: float | None = None
         self.last_basis_sigma: float | None = None
         self.last_aug: float | None = None
         self.model_calls = 0
         self._reported_active = False
+
+    def selection_flags(self, payload: dict) -> list[bool]:
+        return _marked_visual_flags(payload, self.selection_marker)
 
     def endpoint_aug_summary(self) -> str:
         if self.mode == "manual":
@@ -896,7 +940,7 @@ class _VisualContextScheduleState:
             transformer_options, dict) else {}
         payload = minimax_payload
         if isinstance(payload, dict):
-            flags = _context_visual_flags(payload)
+            flags = self.selection_flags(payload)
             if any(flags):
                 timestep_value = float(
                     torch.as_tensor(timestep).detach().float().reshape(-1)[0])
@@ -923,9 +967,10 @@ class _VisualContextScheduleState:
                 if not self._reported_active:
                     _LOG.info(
                         "H3 Guide Late Reveal using native per-condition "
-                        "core API: %d Chain Context block(s) scheduled, %d "
+                        "core API: %d %s block(s) scheduled, %d "
                         "other visual block(s) unchanged; %s",
-                        sum(flags), len(flags) - sum(flags),
+                        sum(flags), self.selection_label,
+                        len(flags) - sum(flags),
                         self.endpoint_aug_summary())
                     self._reported_active = True
                 self.report_model_call()
@@ -949,9 +994,10 @@ def install_visual_context_schedule_model(
     scheduled_visual_condition_aug(1.0, floor, ceiling)
     scope_value = str(scope)
     if scope_value not in {
-            "chain_context_only", "all_visual_conditions"}:
+            "chain_context_only", "future_anchor_only",
+            "all_visual_conditions"}:
         raise ValueError(
-            "Unknown H3 Guide Late Reveal scope %r." % scope_value)
+            "Unknown H3 visual context schedule scope %r." % scope_value)
     noise_backend_value = str(noise_backend)
     if noise_backend_value not in _NOISE_BACKENDS:
         raise ValueError(
@@ -960,8 +1006,9 @@ def install_visual_context_schedule_model(
     if (scope_value == "all_visual_conditions"
             and noise_backend_value != "comfy_rows"):
         raise ValueError(
-            "dependent_latent noise is selective to Chain Context. Use "
-            "scope=chain_context_only or noise_backend=comfy_rows.")
+            "dependent_latent noise requires a selective scope. Use "
+            "scope=chain_context_only, scope=future_anchor_only, or "
+            "noise_backend=comfy_rows.")
     if model is None or not callable(getattr(model, "clone", None)):
         raise ValueError(
             "H3 Guide Late Reveal requires a ComfyUI MODEL input.")
@@ -980,6 +1027,16 @@ def install_visual_context_schedule_model(
         raise ValueError(
             "H3 Guide Late Reveal is already installed on this MODEL. Use "
             "one instance per model branch.")
+    selection_marker = (
+        _FUTURE_ANCHOR_KEYFRAME_MARKER
+        if scope_value == "future_anchor_only"
+        else _CONTEXT_KEYFRAME_MARKER
+    )
+    selection_label = (
+        "future-anchor"
+        if scope_value == "future_anchor_only"
+        else "Chain Context prefix"
+    )
     runtime = _VisualContextScheduleState(
         floor,
         ceiling,
@@ -987,6 +1044,8 @@ def install_visual_context_schedule_model(
         full_sigmas=full_sigmas,
         noise_backend=noise_backend_value,
         manual_schedule=manual_schedule,
+        selection_marker=selection_marker,
+        selection_label=selection_label,
     )
     backend = "global_payload_wrapper"
     if scope_value == "all_visual_conditions":
@@ -1093,16 +1152,17 @@ def install_visual_context_schedule_model(
 
             def _patched_forward(_self, *args, **kwargs):
                 payload = kwargs.get("minimax_payload") or {}
-                flags = _context_visual_flags(payload)
+                flags = runtime.selection_flags(payload)
                 if not any(flags):
                     return original_forward(*args, **kwargs)
                 if not runtime._reported_active:
                     _LOG.info(
                         "H3 Guide Late Reveal selective compatibility active: "
-                        "%d Chain Context visual block(s) follow %s "
+                        "%d %s visual block(s) follow %s "
                         "schedule, floor %.3f, ceiling %.3f; %d other visual "
                         "reference block(s) retain their original strength; %s",
-                        sum(flags), runtime.mode, runtime.floor,
+                        sum(flags), runtime.selection_label, runtime.mode,
+                        runtime.floor,
                         runtime.ceiling, len(flags) - sum(flags),
                         runtime.endpoint_aug_summary())
                     _LOG.info(
@@ -1128,7 +1188,7 @@ def install_visual_context_schedule_model(
                 types.MethodType(_patched_forward, diffusion_model))
             backend = "compat_forward"
     options[_MODEL_OPTION_MARKER] = {
-        "version": 6,
+        "version": 7,
         "floor": float(floor),
         "ceiling": float(ceiling),
         "rule": (
@@ -1139,6 +1199,7 @@ def install_visual_context_schedule_model(
         "full_sigma_count": len(runtime.full_sigmas),
         "manual_schedule": list(runtime.manual_schedule),
         "scope": scope_value,
+        "selection_marker": runtime.selection_marker,
         "backend": backend,
         "noise_backend": runtime.noise_backend,
     }
@@ -1155,9 +1216,10 @@ class MiniMaxH3VisualContextLateRevealModelPatch:
                     "tooltip": "MiniMax H3 AV MODEL. Route the output through "
                                "every sampler stage."}),
                 "state": ("H3_CHAIN_STATE", {
-                    "tooltip": "Current Shot state. Scene 1, Cut, and AV "
-                               "transitions pass through unchanged; only an "
-                               "active Guide-family continuation is patched."}),
+                    "tooltip": "Current Shot state. Scene 1 and Cut pass "
+                               "through unchanged. Prefix scopes activate on "
+                               "Guide continuations; future_anchor_only also "
+                               "activates on AV continuations."}),
                 "preset": ([
                     "off", "matched", "next_step", "manual", "custom",
                 ], {
@@ -1175,6 +1237,7 @@ class MiniMaxH3VisualContextLateRevealModelPatch:
                                "and ceiling."}),
                 "scope": ([
                     "chain_context_only",
+                    "future_anchor_only",
                     "all_visual_conditions",
                 ], {
                     "default": "chain_context_only",
@@ -1182,6 +1245,11 @@ class MiniMaxH3VisualContextLateRevealModelPatch:
                                "only predecessor Guide blocks created by "
                                "Chain Context; identity, keyframes, and "
                                "Ref2VA media stay at their original strength. "
+                               "future_anchor_only: schedule only the marked "
+                               "one-frame suffix created by Chain Context; "
+                               "this works with Guide and AV. For a two-step "
+                               "composition anchor, use manual preset, "
+                               "'0.999, 0.999, 0', and full_sigmas. "
                                "all_visual_conditions: diagnostic mode that "
                                "also schedules every other visual reference."}),
                 "noise_backend": ([
@@ -1231,21 +1299,22 @@ class MiniMaxH3VisualContextLateRevealModelPatch:
     RETURN_TYPES = ("MODEL",)
     RETURN_NAMES = ("model",)
     OUTPUT_TOOLTIPS = (
-        "H3 MODEL with a sigma-matched late-reveal schedule only during "
-        "Guide-family continuation scenes.",
+        "H3 MODEL with a sigma-indexed schedule for the selected recursive "
+        "Guide prefix, future suffix anchor, or all visual conditions.",
     )
     FUNCTION = "patch"
     CATEGORY = "conditioning/minimax/contex_loop/experimental"
     DESCRIPTION = (
-        "Research patch for recursive Guide color/texture drift. At each H3 "
-        "model call it noises predecessor context to the target's current or "
-        "next full-schedule timestep, then reveals it as sampling progresses. "
+        "Research patch for recursive visual-context drift. At each H3 model "
+        "call it schedules either the predecessor Guide prefix, the separate "
+        "future suffix anchor, or all visual conditions. "
         "A manual preset accepts exact per-step clean fractions and holds its "
         "last value. "
         "It is cheap and split-sigma safe. The recommended selective scope "
         "leaves character, authored keyframe, and Ref2VA rows unchanged; the "
         "all-visual scope is retained as a diagnostic. It does not modify an "
-        "AV prefix. The default noise backend retains ComfyUI exactly; an "
+        "AV prefix; future_anchor_only schedules only its separate Guide "
+        "suffix. The default noise backend retains ComfyUI exactly; an "
         "optional secondary backend reproduces public H3 latent-noise order."
     )
 
@@ -1287,7 +1356,7 @@ class MiniMaxH3VisualContextLateRevealModelPatch:
             noise_backend=noise_backend,
             manual_schedule=manual_schedule,
         )
-        if not _active_guide_context(state):
+        if not _active_schedule_context(state, scope):
             return (model,)
         return (install_visual_context_schedule_model(
             model, floor=floor, ceiling=ceiling, scope=scope,
@@ -1303,5 +1372,5 @@ NODE_CLASS_MAPPINGS = {
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "MiniMaxH3VisualContextLateRevealModelPatch": (
-        "MiniMax H3 Guide Late Reveal (Research)"),
+        "MiniMax H3 Visual Context Schedule (Research)"),
 }

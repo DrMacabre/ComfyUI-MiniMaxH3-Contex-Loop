@@ -366,6 +366,34 @@ def main():
     assert abs(float(suffix_layout.position_ids[suffix_segments[1], 0])
                - (suffix_origin + FRAME_RESCALE * frame_count)) < 1e-9
 
+    # AV continuation keeps its prefix in the sampler target, then appends
+    # the same final prepared prefix step as a separate clean suffix Guide.
+    # The latent itself remains byte-for-byte untouched by this helper.
+    av_target_video = np.zeros(
+        (1, 16, latent_t, height, width), dtype=np.float64)
+    av_target_video[:, :, 11:12] = 7.0
+    av_target = {"samples": Nested([
+        T(av_target_video),
+        T(np.zeros((1, 32, 2, audio_t))),
+    ])}
+    av_video_before = av_target["samples"].parts[0].a.copy()
+    av_suffix_output = nodes._append_future_end_anchor(
+        [["conditioning", {"minimax_refs": refs}]],
+        av_target,
+        39,
+    )
+    assert np.array_equal(av_target["samples"].parts[0].a, av_video_before)
+    av_suffix_metadata = av_suffix_output[0][1]
+    assert av_suffix_metadata["minimax_visual_cond_noise_aug"] == 0.999
+    av_suffix = av_suffix_metadata["minimax_keyframes"][0]
+    assert av_suffix["resolved_frame_index"] == frame_count
+    assert av_suffix["h3_chain_future_end_anchor"] is True
+    assert "h3_chain_context_visual" not in av_suffix
+    assert tuple(av_suffix["latent"].shape) == (
+        1, 16, 1, height, width)
+    assert np.all(av_suffix["latent"].a == 7.0)
+    assert nodes.MC_KEY not in av_suffix
+
     audio_only_output, audio_only_trim = nodes.MiniMaxH3MotionContext().apply(
         conditioning=[["conditioning", {"minimax_refs": refs}]],
         vae=VAE(), latent=target, context_frames=context[:0], context_length=0,
