@@ -104,8 +104,9 @@ sync node follows that policy automatically. A new Guider is built from the
 returned conditioning for sampler 2. Leave the conditioner's prompt override
 blank to reuse the exact compiled scene prompt, or provide an
 appearance/detail-only prompt to avoid repeating motion/camera instructions
-during pass 2. The bundled workflow supplies a neutral preservation/detail
-override by default; clear it to compare against the original compiled prompt.
+during pass 2. The bundled workflow leaves this override blank so the exact
+compiled scene prompt remains the default. Its How To Run note keeps a neutral
+preservation/detail replacement prompt for an explicit copy/paste comparison.
 
 The included Comfy Kitchen attention override is bypassed intentionally. At
 large target canvases, Sage prequantized attention can exceed its int32 tensor-stride

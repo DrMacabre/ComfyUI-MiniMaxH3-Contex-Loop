@@ -4,6 +4,11 @@ Newest first. This file keeps release history out of the onboarding README.
 
 ## Unreleased — Deferred checkpoint upscaling
 
+- The bundled LBH 3D deferred-upscale workflow now leaves the pass-2 prompt
+  override blank, preserving the exact compiled scene prompt by default. The
+  former neutral replacement text remains available in the How To Run note
+  for explicit copy/paste comparisons.
+
 - Added an opt-in **Guide Late Reveal** research MODEL patch. During an active
   Guide-family continuation, it replaces H3's static near-clean visual
   predecessor condition with a coherent late-reveal schedule. The recommended
