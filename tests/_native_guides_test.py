@@ -394,6 +394,25 @@ def main():
     assert np.all(av_suffix["latent"].a == 7.0)
     assert nodes.MC_KEY not in av_suffix
 
+    # A precomputed boundary registry supplies its own one-step endpoint
+    # latent rather than copying the predecessor prefix. It occupies the same
+    # post-target Guide position and is explicitly marked for diagnostics.
+    explicit_anchor = T(np.full(
+        (1, 16, 1, height, width), 11.0, dtype=np.float64))
+    explicit_output = nodes._append_explicit_future_end_anchor(
+        [["conditioning", {"minimax_refs": refs}]],
+        av_target,
+        explicit_anchor,
+    )
+    explicit_suffix = explicit_output[0][1]["minimax_keyframes"][0]
+    assert explicit_suffix["resolved_frame_index"] == frame_count
+    assert explicit_suffix["h3_chain_future_end_anchor"] is True
+    assert explicit_suffix["h3_chain_boundary_anchor"] is True
+    assert tuple(explicit_suffix["latent"].shape) == (
+        1, 16, 1, height, width)
+    assert np.all(explicit_suffix["latent"].a == 11.0)
+    assert nodes.MC_KEY not in explicit_suffix
+
     audio_only_output, audio_only_trim = nodes.MiniMaxH3MotionContext().apply(
         conditioning=[["conditioning", {"minimax_refs": refs}]],
         vae=VAE(), latent=target, context_frames=context[:0], context_length=0,

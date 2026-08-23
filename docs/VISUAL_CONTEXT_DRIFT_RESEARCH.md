@@ -274,6 +274,44 @@ structure while establishing the new scene, then receives increasingly precise
 identity/pose/seam evidence while details form. A post-sampling reinsertion can
 hide one boundary but cannot prevent palette feedback during generation.
 
+## Joint boundary-anchor prepass
+
+The optional **Joint Boundary Anchor Prepass** tests a different hypothesis:
+future composition is more stable when every planned endpoint is established
+inside one H3 sample instead of being invented independently by four scene
+runs. It derives each endpoint from the Plan's cumulative delivered-frame
+timeline and lazily packs a short synchronized source reel:
+
+```text
+5 establishment frames + 17 endpoint frames per scene
+4 scenes = 73 RGB frames = 22 H3 video-latent steps
+endpoint latent steps = 6, 11, 16, 21
+```
+
+The prepass does not discard motion or sound. It replaces the ordinary
+scene-by-scene motion-reference clock with exact 17-frame endpoint windows and
+packs the matching audio samples on the same 24 fps reel. Identity,
+environment, lighting, lens, and color references remain available through
+their existing prompt tags. The reel is sampled once; **Extract Joint Boundary
+Anchors** then slices one video-latent step per endpoint directly from the
+sampled latent. There is no VAE decode/re-encode. Generated transition frames
+and generated prepass audio are discarded.
+
+Connecting the resulting registry to **Chain Context** adds the current
+scene's precomputed endpoint as a native Guide immediately after that scene's
+target timeline. It works on scene 1 and continuation scenes and takes priority
+over the legacy copied-prefix `future_end_anchor` toggle. The ordinary scene
+conditioning, source motion/audio windows, transition mode, target mask,
+length, and Loop Trim remain unchanged. A changed Plan timing contract,
+Source Timeline, resolution, or latent geometry is rejected instead of using
+a stale anchor.
+
+This remains an explicit research branch. It spends one additional short H3
+sample up front and can overconstrain endpoint pose or camera if the prepass
+prompt is too literal. Its purpose is to determine whether jointly generated
+future composition prevents the progressive color/background feedback that a
+copied predecessor suffix cannot solve.
+
 ## Minimal live test
 
 1. Use the same predecessor checkpoint, target prompt, seed, scheduler, steps,

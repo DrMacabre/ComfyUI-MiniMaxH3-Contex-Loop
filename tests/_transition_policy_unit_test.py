@@ -27,6 +27,7 @@ sys.modules[PACKAGE] = package
 shared_nodes = types.ModuleType(PACKAGE + ".nodes")
 shared_nodes.MiniMaxH3MotionContext = object
 future_anchor_calls = []
+explicit_anchor_calls = []
 
 
 def append_future_end_anchor_stub(
@@ -41,6 +42,22 @@ def append_future_end_anchor_stub(
 
 
 shared_nodes._append_future_end_anchor = append_future_end_anchor_stub
+
+
+def append_explicit_future_end_anchor_stub(
+        conditioning, latent, anchor_latent,
+        visual_cond_noise_aug=0.999):
+    explicit_anchor_calls.append({
+        "conditioning": conditioning,
+        "latent": latent,
+        "anchor_latent": anchor_latent,
+        "visual_cond_noise_aug": visual_cond_noise_aug,
+    })
+    return "explicit-boundary-conditioning"
+
+
+shared_nodes._append_explicit_future_end_anchor = (
+    append_explicit_future_end_anchor_stub)
 shared_nodes._claim_inline_patch_ownership = lambda: "test patch owner"
 shared_nodes._prepare_native_guide_conditioning = lambda value: value
 shared_nodes._resize = lambda *args: None
@@ -298,6 +315,28 @@ assert visual_aug_schema[1]["step"] == 0.001
 assert context_optional["future_end_anchor"][0] == "BOOLEAN"
 assert context_optional["future_end_anchor"][1]["default"] is False
 assert list(context_optional)[-1] == "future_end_anchor"
+assert context_optional["boundary_anchors"][0] == chain.BOUNDARY_ANCHORS_TYPE
+
+# A precomputed scene endpoint is valid on scene 1 as well as continuation
+# scenes and takes priority over the legacy copied-prefix toggle.
+original_anchor_selector = chain._boundary_anchor_for_state
+chain._boundary_anchor_for_state = lambda registry, state, latent: "anchor-1"
+try:
+    scene_one_plan = make_plan()
+    scene_one_result = chain.MiniMaxH3ChainContext().apply(
+        state={"index": 1, "plan": scene_one_plan, "segments": []},
+        conditioning="stock-conditioning",
+        vae=object(),
+        latent="target-latent",
+        boundary_anchors={"kind": "test-registry"},
+        future_end_anchor=True,
+    )
+finally:
+    chain._boundary_anchor_for_state = original_anchor_selector
+assert scene_one_result == (
+    "explicit-boundary-conditioning", 0, False, "target-latent", None)
+assert explicit_anchor_calls[-1]["anchor_latent"] == "anchor-1"
+assert explicit_anchor_calls[-1]["latent"] == "target-latent"
 
 
 class CapturingMotionContext:

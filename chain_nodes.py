@@ -206,9 +206,14 @@ AUDIO_POLICY_TYPE = "H3_AUDIO_POLICY"
 TRANSITION_POLICY_TYPE = "H3_TRANSITION_POLICY"
 CHAIN_POLICY_TYPE = "H3_CHAIN_POLICY"
 PREFLIGHT_TYPE = "H3_PREFLIGHT_REPORT"
+BOUNDARY_ANCHOR_PREPASS_TYPE = "H3_BOUNDARY_ANCHOR_PREPASS"
+BOUNDARY_ANCHORS_TYPE = "H3_BOUNDARY_ANCHORS"
 REFERENCE_SCHEDULE_VERSION = 1
 LAZY_MOTION_SOURCE_VERSION = 3
 SEMANTIC_PRESENTATION_VERSION = 1
+BOUNDARY_ANCHOR_VERSION = 1
+BOUNDARY_ANCHOR_LEAD_FRAMES = 5
+BOUNDARY_ANCHOR_SLOT_FRAMES = 17
 
 _PENDING_REVIEWS: dict[str, dict[str, Any]] = {}
 _PENDING_FINAL_REVIEW_PREVIEWS: dict[
@@ -8369,6 +8374,575 @@ class MiniMaxH3ScheduledReferenceToVideo:
         }
 
 
+def _boundary_anchor_timeline_contract(plan: Any) -> list[dict[str, Any]]:
+    if (not isinstance(plan, dict) or
+            int(plan.get("version", -1)) != PLAN_VERSION or
+            not isinstance(plan.get("shots"), list) or
+            not plan["shots"]):
+        raise ValueError(
+            "Boundary Anchor Prepass requires a current H3 Chain Plan.")
+    contract = []
+    for expected_index, shot in enumerate(plan["shots"], 1):
+        if not isinstance(shot, dict):
+            raise ValueError(
+                "Boundary Anchor Prepass found an invalid scene entry.")
+        index = int(shot.get("index", expected_index))
+        if index != expected_index:
+            raise ValueError(
+                "Boundary Anchor Prepass requires consecutive Plan scenes.")
+        record = {
+            "index": index,
+            "id": str(shot.get("id") or "clip_%04d" % index),
+            "raw_frames": int(shot.get("raw_frames", 0)),
+            "delivered_frames": int(shot.get("delivered_frames", 0)),
+            "generation_start_frame": int(
+                shot.get("generation_start_frame", 0)),
+        }
+        if record["raw_frames"] < 5 or record["delivered_frames"] < 1:
+            raise ValueError(
+                "Boundary Anchor Prepass scene %d has no usable frame "
+                "timeline." % index)
+        contract.append(record)
+    return contract
+
+
+def _boundary_anchor_pixel_frames(video_steps: Any) -> int:
+    """Convert an H3 video-latent length back to its valid RGB length."""
+    steps = int(video_steps)
+    if steps < 2 or (steps - 2) % 5:
+        raise ValueError(
+            "Boundary Anchor latent has %d video steps, not an H3 5n+2 "
+            "temporal length." % steps)
+    return 5 + 17 * ((steps - 2) // 5)
+
+
+def _boundary_anchor_video_from_latent(latent: Any) -> Any:
+    video = _streams_from_latent(latent)[0]
+    if getattr(video, "ndim", 0) == 4:
+        video = video.unsqueeze(0)
+    if getattr(video, "ndim", 0) != 5:
+        raise ValueError(
+            "Boundary Anchor requires an H3 video latent [B,C,T,H,W].")
+    return video
+
+
+def _make_boundary_anchor_prepass(
+        plan: Any, source_timeline: Any) -> dict[str, Any]:
+    source = _validate_source_timeline(
+        source_timeline, require_runtime=True)
+    if source.get("video") is None:
+        raise ValueError(
+            "Boundary Anchor Prepass requires video on Source Timeline.")
+    timeline_contract = _boundary_anchor_timeline_contract(plan)
+    source_frames = int(source["extent"]["frame_count"])
+    cumulative = 0
+    slots = []
+    for shot in timeline_contract:
+        cumulative += int(shot["delivered_frames"])
+        endpoint = cumulative
+        start = endpoint - BOUNDARY_ANCHOR_SLOT_FRAMES
+        if start < 0:
+            raise ValueError(
+                "Boundary Anchor Prepass scene %d ends at source frame %d; "
+                "at least %d frames are required before each endpoint." %
+                (shot["index"], endpoint,
+                 BOUNDARY_ANCHOR_SLOT_FRAMES))
+        if endpoint > source_frames:
+            raise ValueError(
+                "Boundary Anchor Prepass scene %d ends at source frame %d, "
+                "beyond the Source Timeline's %d frames." %
+                (shot["index"], endpoint, source_frames))
+        # Five establishment frames followed by five latent steps per
+        # 17-frame scene slot. The final step of every slot is phase 1, the
+        # same temporal phase as the final step of every valid H3 context run.
+        latent_step = 6 + (int(shot["index"]) - 1) * 5
+        slots.append({
+            "scene": int(shot["index"]),
+            "scene_id": shot["id"],
+            "source_start": start,
+            "source_end": endpoint,
+            "source_endpoint_frame": endpoint - 1,
+            "latent_step": latent_step,
+        })
+    first_start = int(slots[0]["source_start"])
+    lead_start = first_start - BOUNDARY_ANCHOR_LEAD_FRAMES
+    if lead_start < 0:
+        raise ValueError(
+            "Boundary Anchor Prepass needs %d establishment frames before "
+            "scene 1's %d-frame endpoint window." %
+            (BOUNDARY_ANCHOR_LEAD_FRAMES,
+             BOUNDARY_ANCHOR_SLOT_FRAMES))
+    reference_windows = [{
+        "kind": "lead",
+        "scene": 1,
+        "source_start": lead_start,
+        "source_end": first_start,
+    }]
+    reference_windows.extend({
+        "kind": "endpoint",
+        "scene": int(slot["scene"]),
+        "source_start": int(slot["source_start"]),
+        "source_end": int(slot["source_end"]),
+    } for slot in slots)
+    output_length = (
+        BOUNDARY_ANCHOR_LEAD_FRAMES +
+        BOUNDARY_ANCHOR_SLOT_FRAMES * len(slots))
+    _validate_h3_length(output_length, "Boundary Anchor Prepass length")
+    expected_steps = 2 + 5 * len(slots)
+    if _boundary_anchor_pixel_frames(expected_steps) != output_length:
+        raise RuntimeError(
+            "Boundary Anchor Prepass latent-grid formula is out of date.")
+    layout = {
+        "version": BOUNDARY_ANCHOR_VERSION,
+        "kind": "boundary_anchor_prepass",
+        "plan_hash": str(plan.get("plan_hash") or ""),
+        "base_plan_hash": str(
+            plan.get("base_plan_hash") or plan.get("plan_hash") or ""),
+        "source_timeline_fingerprint": str(
+            source["fingerprints"]["timeline"]),
+        "scene_count": len(slots),
+        "output_length": output_length,
+        "expected_video_steps": expected_steps,
+        "timeline_contract": timeline_contract,
+        "reference_windows": reference_windows,
+        "slots": slots,
+    }
+    layout["fingerprint"] = _fingerprint(layout)
+    return layout
+
+
+def _validate_boundary_anchor_prepass(value: Any) -> dict[str, Any]:
+    if (not isinstance(value, dict) or
+            value.get("version") != BOUNDARY_ANCHOR_VERSION or
+            value.get("kind") != "boundary_anchor_prepass" or
+            not isinstance(value.get("slots"), list) or
+            not isinstance(value.get("timeline_contract"), list)):
+        raise ValueError(
+            "Boundary Anchor layout must come from MiniMax H3 Boundary "
+            "Anchor Prepass.")
+    expected = str(value.get("fingerprint") or "")
+    contract = {key: item for key, item in value.items()
+                if key != "fingerprint"}
+    if not expected or _fingerprint(contract) != expected:
+        raise ValueError(
+            "Boundary Anchor Prepass layout changed after it was created.")
+    return value
+
+
+def _decode_boundary_anchor_reel(
+        layout: dict[str, Any], source_timeline: Any,
+        reference_short_edge: Any) -> Any:
+    prepared = _source_timeline_with_motion_short_edge(
+        source_timeline, reference_short_edge)
+    frames = []
+    shape = None
+    for window in layout["reference_windows"]:
+        part = _source_timeline_scene_video(
+            prepared, int(window["source_start"]),
+            int(window["source_end"]))
+        if (torch is None or not torch.is_tensor(part) or part.ndim != 4
+                or int(part.shape[-1]) < 3):
+            raise ValueError(
+                "Boundary Anchor Prepass decoded an invalid video window.")
+        current_shape = tuple(int(value) for value in part.shape[1:])
+        if shape is None:
+            shape = current_shape
+        elif current_shape != shape:
+            raise ValueError(
+                "Boundary Anchor Prepass source windows changed geometry: "
+                "%s vs %s." % (shape, current_shape))
+        frames.append(part[..., :3])
+    reel = torch.cat(frames, dim=0).contiguous()
+    if int(reel.shape[0]) != int(layout["output_length"]):
+        raise RuntimeError(
+            "Boundary Anchor Prepass assembled %d frames; expected %d." %
+            (int(reel.shape[0]), int(layout["output_length"])))
+    return reel
+
+
+def _decode_boundary_anchor_audio_reel(
+        layout: dict[str, Any], source_timeline: Any) -> Any:
+    source = _validate_source_timeline(
+        source_timeline, require_runtime=True)
+    if source["audio"]["kind"] == "none":
+        return None
+    parts = []
+    sample_rate = None
+    channels = None
+    for window in layout["reference_windows"]:
+        start = int(window["source_start"])
+        end = int(window["source_end"])
+        audio = _source_timeline_scene_audio(source, start, end)
+        waveform, current_rate = _audio_waveform_3d(
+            audio, "Boundary Anchor Prepass source audio")
+        if sample_rate is None:
+            sample_rate = int(current_rate)
+            channels = int(waveform.shape[1])
+        samples = int(round(
+            (end - start) / float(FPS) * int(sample_rate)))
+        normalized = _resample_audio_exact(
+            audio, int(sample_rate), samples, int(channels),
+            "Boundary Anchor Prepass source audio")
+        parts.append(normalized["waveform"])
+    return {
+        "waveform": torch.cat(parts, dim=-1).contiguous(),
+        "sample_rate": int(sample_rate),
+    }
+
+
+def _boundary_anchor_references(
+        references: Any, reel: Any, reel_audio: Any, tag: Any,
+        target_subject: Any, motion_description: Any,
+        reference_short_edge: Any) -> dict[str, Any]:
+    target, description, short_edge = _motion_reference_fields(
+        target_subject, motion_description, reference_short_edge)
+    video_hash = _tensor_fingerprint(reel)
+    audio_hash = (
+        _audio_fingerprint(reel_audio) if reel_audio is not None else "")
+    result = _append_tagged_reference(
+        references, kind="video", tag=tag, value=reel,
+        content_hash=video_hash, audio=reel_audio,
+        audio_tag=("%s_audio" % str(tag) if reel_audio is not None else ""),
+        audio_hash=audio_hash, compliance_mode="strict",
+        timeline_mode="restart_each_scene",
+        paired_audio_policy=("embedded" if reel_audio is not None else "off"))
+    return _decorate_motion_reference(
+        result, target, description, short_edge)
+
+
+def _validate_boundary_anchors(value: Any) -> dict[str, Any]:
+    if (not isinstance(value, dict) or
+            value.get("version") != BOUNDARY_ANCHOR_VERSION or
+            value.get("kind") != "boundary_anchors" or
+            not isinstance(value.get("anchors"), list) or
+            not isinstance(value.get("timeline_contract"), list)):
+        raise ValueError(
+            "Boundary Anchors must come from MiniMax H3 Extract Boundary "
+            "Anchors.")
+    if len(value["anchors"]) != int(value.get("scene_count", -1)):
+        raise ValueError("Boundary Anchor registry has an invalid scene count.")
+    anchor_hashes = [_tensor_fingerprint(item) for item in value["anchors"]]
+    expected_fingerprint = _fingerprint({
+        "prepass_fingerprint": str(value.get("prepass_fingerprint") or ""),
+        "anchor_hashes": anchor_hashes,
+    })
+    if str(value.get("fingerprint") or "") != expected_fingerprint:
+        raise ValueError(
+            "Boundary Anchor registry or one of its latent steps changed "
+            "after extraction. Regenerate the joint anchor prepass.")
+    return value
+
+
+def _boundary_anchor_for_state(
+        value: Any, state: Any, target_latent: Any) -> Any:
+    registry = _validate_boundary_anchors(value)
+    if not isinstance(state, dict) or not isinstance(state.get("plan"), dict):
+        raise ValueError(
+            "Boundary Anchors require Current Shot chain state.")
+    plan = state["plan"]
+    current_contract = _boundary_anchor_timeline_contract(plan)
+    if current_contract != registry["timeline_contract"]:
+        raise ValueError(
+            "Boundary Anchors were generated for different scene lengths or "
+            "overlap timing. Regenerate the joint anchor prepass.")
+    expected_base = str(registry.get("base_plan_hash") or "")
+    current_base = str(
+        plan.get("base_plan_hash") or plan.get("plan_hash") or "")
+    if expected_base and current_base != expected_base:
+        raise ValueError(
+            "Boundary Anchors were generated from a different Chain Plan.")
+    expected_timeline = str(
+        registry.get("source_timeline_fingerprint") or "")
+    runtime_timeline = state.get("source_timeline")
+    if _is_source_timeline(runtime_timeline):
+        current_timeline = str(
+            runtime_timeline["fingerprints"].get("timeline") or "")
+    else:
+        current_timeline = str(
+            plan.get("compatibility", {}).get(
+                "source_timeline_fingerprint") or "")
+    if expected_timeline and current_timeline != expected_timeline:
+        raise ValueError(
+            "Boundary Anchors were generated from a different Source "
+            "Timeline.")
+    index = int(state.get("index", 0))
+    if index < 1 or index > len(registry["anchors"]):
+        raise ValueError(
+            "Boundary Anchor registry has no anchor for scene %d." % index)
+    anchor = registry["anchors"][index - 1]
+    target_video = _boundary_anchor_video_from_latent(target_latent)
+    if (not torch.is_tensor(anchor) or anchor.ndim != 5 or
+            int(anchor.shape[0]) != 1 or int(anchor.shape[2]) != 1):
+        raise ValueError(
+            "Boundary Anchor scene %d has an invalid latent shape." % index)
+    anchor_geometry = (
+        int(anchor.shape[1]), int(anchor.shape[3]), int(anchor.shape[4]))
+    target_geometry = (
+        int(target_video.shape[1]), int(target_video.shape[3]),
+        int(target_video.shape[4]))
+    if anchor_geometry != target_geometry:
+        raise ValueError(
+            "Boundary Anchor scene %d geometry %s does not match the current "
+            "target %s. Generate the prepass at the Plan resolution." %
+            (index, anchor_geometry, target_geometry))
+    return anchor
+
+
+class MiniMaxH3BoundaryAnchorPrepass:
+    """Build one synchronized endpoint reel and native Ref2VA target."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "plan": (PLAN_TYPE, {
+                    "tooltip": "Restored runtime Plan. In Studio workflows, "
+                               "connect Run Manager's plan output."}),
+                "source_timeline": (SOURCE_TIMELINE_TYPE, {
+                    "tooltip": "The same restored Source Timeline used by "
+                               "Loop Start. Exact endpoint motion and audio "
+                               "windows are decoded lazily."}),
+                "clip": ("CLIP", {
+                    "tooltip": "The H3 text encoder used by the ordinary "
+                               "Tagged Ref2VA stage."}),
+                "vae": ("VAE", {
+                    "tooltip": "The ordinary H3 video VAE."}),
+                "audio_vae": ("VAE", {
+                    "tooltip": "The ordinary H3 audio VAE."}),
+                "references": (TAGGED_REFERENCE_TYPE, {
+                    "tooltip": "Your existing Tagged reference registry. "
+                               "The prepass adds a temporary synchronized "
+                               "@boundary_reel reference without changing "
+                               "the main scene registry."}),
+                "prompt": ("STRING", {
+                    "default": (
+                        "subject_definitions:\n"
+                        "@boundary_reel supplies the synchronized endpoint "
+                        "poses and timing for one shared visual world.\n\n"
+                        "summary:\n[reference generation + audio reference] "
+                        "Generate one continuous visual calibration reel in "
+                        "which every endpoint remains in the same environment, "
+                        "lighting, lens, camera geometry, and color response.\n\n"
+                        "retention_analysis:\n@boundary_reel: "
+                        "attribute_transfer - transfer only endpoint pose, "
+                        "body mechanics, facial timing, and cadence while "
+                        "preserving one coherent target identity and world.\n\n"
+                        "detailed_description:\n[Shot 1] Present the endpoint "
+                        "windows in their supplied chronological order as one "
+                        "continuous target-world calibration reel. Preserve "
+                        "the same background, camera, lighting, identity, "
+                        "wardrobe, texture, and color across every window; "
+                        "follow the synchronized motion and audio evidence "
+                        "without introducing cuts or a new environment.\n\n"
+                        "overall_soundscape:\nUse the paired boundary audio "
+                        "only as synchronized performance evidence.\n\n"
+                        "non_diegetic_music:\nN/A"),
+                    "multiline": True,
+                    "dynamicPrompts": True,
+                    "tooltip": "Editable six-section Ref2VA prompt for the "
+                               "joint prepass. Mention @boundary_reel and any "
+                               "identity/environment tags that must remain "
+                               "consistent. Do not mention the original "
+                               "sequential motion/audio tags: their exact "
+                               "endpoint windows are already repacked here."}),
+                "target_subject": ("STRING", {
+                    "default": "<Subject 1>",
+                    "tooltip": "Existing target Subject label(s) that perform "
+                               "the synchronized boundary reel."}),
+                "motion_description": ("STRING", {
+                    "default": (
+                        "the synchronized endpoint poses, body mechanics, "
+                        "facial timing, contact timing, and movement cadence"),
+                    "multiline": True,
+                    "tooltip": "Transferable endpoint action evidence only; "
+                               "exclude source identity and environment."}),
+                "reference_short_edge": (
+                    list(MOTION_REFERENCE_SHORT_EDGES), {
+                        "default": "384",
+                        "tooltip": "Lazy decode size for the short endpoint "
+                                   "reel. It never changes Source Timeline "
+                                   "identity or the full-resolution sampled "
+                                   "anchor latent."}),
+                "ref_image_size": (["match", "max"], {
+                    "default": "max",
+                    "tooltip": "Same native Ref2VA picture-reference policy "
+                               "used by your main scene conditioning."}),
+            },
+            "optional": {
+                "reference_policy": (list(REFERENCE_COMPLIANCE_MODES), {
+                    "default": "strict",
+                    "tooltip": "Tagged Ref2VA reference validation policy."}),
+            },
+        }
+
+    RETURN_TYPES = (
+        "CONDITIONING", "LATENT", BOUNDARY_ANCHOR_PREPASS_TYPE,
+        "IMAGE", "AUDIO", "STRING", "STRING")
+    RETURN_NAMES = (
+        "positive", "latent", "prepass_layout", "reference_reel",
+        "reference_audio", "compiled_prompt", "status")
+    OUTPUT_TOOLTIPS = (
+        "Joint prepass conditioning for a separate sampler branch.",
+        "Empty H3 AV latent sized to the joint endpoint reel.",
+        "Immutable scene/endpoint layout for Extract Boundary Anchors.",
+        "The lazily decoded 5 + 17×scene motion-reference reel.",
+        "Audio windows repacked on exactly the same reel timeline, or None "
+        "when Source Timeline is silent.",
+        "Exact compiled Ref2VA prompt.",
+        "Scene count, reel length, endpoint positions, and audio status.",
+    )
+    FUNCTION = "prepare"
+    CATEGORY = "conditioning/minimax/contex_loop/research"
+    DESCRIPTION = (
+        "Prepare one short, jointly sampled boundary reel for the whole Plan. "
+        "Each scene contributes its exact final 17 source frames and matching "
+        "audio; all endpoints are generated together so identity, background, "
+        "camera, lighting, and color can share one visual context.")
+
+    def prepare(
+            self, plan, source_timeline, clip, vae, audio_vae, references,
+            prompt, target_subject, motion_description,
+            reference_short_edge="384", ref_image_size="max",
+            reference_policy="strict"):
+        if GraphBuilder is None:
+            raise RuntimeError(
+                "Boundary Anchor Prepass requires ComfyUI GraphBuilder.")
+        layout = _make_boundary_anchor_prepass(plan, source_timeline)
+        reel = _decode_boundary_anchor_reel(
+            layout, source_timeline, reference_short_edge)
+        reel_audio = _decode_boundary_anchor_audio_reel(
+            layout, source_timeline)
+        tag = "boundary_reel"
+        if tag not in _prompt_reference_tags(prompt):
+            raise ValueError(
+                "Boundary Anchor Prepass prompt must mention @boundary_reel "
+                "so the synchronized endpoint reel is active.")
+        prepared_references = _boundary_anchor_references(
+            references, reel, reel_audio, tag, target_subject,
+            motion_description, reference_short_edge)
+        layout = dict(layout)
+        layout["reference_fingerprint"] = str(
+            prepared_references["fingerprint"])
+        layout["fingerprint"] = _fingerprint({
+            key: value for key, value in layout.items()
+            if key != "fingerprint"
+        })
+        graph = GraphBuilder()
+        ref2va = graph.node(
+            "MiniMaxH3TaggedReferenceToVideo", "BoundaryAnchorRef2VA")
+        for key, value in (
+                ("clip", clip), ("vae", vae), ("audio_vae", audio_vae),
+                ("references", prepared_references), ("clip_index", 1),
+                ("clip_count", 1), ("prompt", str(prompt)),
+                ("width", int(plan["compatibility"]["width"])),
+                ("height", int(plan["compatibility"]["height"])),
+                ("length", int(layout["output_length"])),
+                ("ref_image_size", str(ref_image_size)),
+                ("reference_policy", str(reference_policy)),
+                ("semantic_anchor_size", "512"),
+                ("semantic_anchor_mode", "timestamped_video"),
+                ("cache_for_upscale", False)):
+            ref2va.set_input(key, value)
+        endpoints = ", ".join(
+            "%d→%d" % (int(item["scene"]),
+                         int(item["source_endpoint_frame"]))
+            for item in layout["slots"])
+        status = (
+            "%d jointly sampled boundary anchors; %d-frame reel; source "
+            "endpoint frames %s; paired audio %s" %
+            (int(layout["scene_count"]), int(layout["output_length"]),
+             endpoints, "on" if reel_audio is not None else "off"))
+        return {
+            "result": (
+                ref2va.out(0), ref2va.out(1), layout, reel, reel_audio,
+                ref2va.out(2), status),
+            "expand": graph.finalize(),
+        }
+
+
+class MiniMaxH3ExtractBoundaryAnchors:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "sampled_latent": ("LATENT", {
+                    "tooltip": "Final sampler output from the separate joint "
+                               "Boundary Anchor Prepass branch."}),
+                "prepass_layout": (BOUNDARY_ANCHOR_PREPASS_TYPE, {
+                    "tooltip": "Matching immutable layout from Boundary "
+                               "Anchor Prepass."}),
+            },
+        }
+
+    RETURN_TYPES = (BOUNDARY_ANCHORS_TYPE, "STRING")
+    RETURN_NAMES = ("boundary_anchors", "status")
+    OUTPUT_TOOLTIPS = (
+        "Scene-indexed one-step video latents for Chain Context. No VAE "
+        "decode or re-encode occurs.",
+        "Extracted latent indices and registry fingerprint.",
+    )
+    FUNCTION = "extract"
+    CATEGORY = "conditioning/minimax/contex_loop/research"
+    DESCRIPTION = (
+        "Slice each scene's final endpoint step directly from one jointly "
+        "sampled H3 latent. Transition steps and the generated audio stream "
+        "are discarded; only the original latent video steps are registered.")
+
+    def extract(self, sampled_latent, prepass_layout):
+        layout = _validate_boundary_anchor_prepass(prepass_layout)
+        video = _boundary_anchor_video_from_latent(sampled_latent)
+        expected_steps = int(layout["expected_video_steps"])
+        if int(video.shape[2]) != expected_steps:
+            raise ValueError(
+                "Boundary Anchor sample contains %d video steps; expected %d "
+                "for the %d-frame prepass. Connect the matching final sampler "
+                "output, not a scene-loop latent." %
+                (int(video.shape[2]), expected_steps,
+                 int(layout["output_length"])))
+        if (_boundary_anchor_pixel_frames(int(video.shape[2])) !=
+                int(layout["output_length"])):
+            raise RuntimeError(
+                "Boundary Anchor sample no longer matches H3's temporal grid.")
+        anchors = []
+        anchor_hashes = []
+        for slot in layout["slots"]:
+            step = int(slot["latent_step"])
+            if step < 0 or step >= int(video.shape[2]) or step % 5 != 1:
+                raise RuntimeError(
+                    "Boundary Anchor scene %d has invalid latent step %d." %
+                    (int(slot["scene"]), step))
+            # The registry survives every recursive scene. Keep only four
+            # tiny CPU steps instead of pinning the joint sampler's device
+            # tensor; Chain Context moves the selected step to its target.
+            anchor = _tensor_cpu_clone(video[:1, :, step:step + 1])
+            anchors.append(anchor)
+            anchor_hashes.append(_tensor_fingerprint(anchor))
+        registry = {
+            "version": BOUNDARY_ANCHOR_VERSION,
+            "kind": "boundary_anchors",
+            "prepass_fingerprint": str(layout["fingerprint"]),
+            "plan_hash": str(layout["plan_hash"]),
+            "base_plan_hash": str(layout["base_plan_hash"]),
+            "source_timeline_fingerprint": str(
+                layout["source_timeline_fingerprint"]),
+            "scene_count": int(layout["scene_count"]),
+            "timeline_contract": layout["timeline_contract"],
+            "slots": layout["slots"],
+            "anchors": anchors,
+            "anchor_hashes": anchor_hashes,
+        }
+        registry["fingerprint"] = _fingerprint({
+            "prepass_fingerprint": registry["prepass_fingerprint"],
+            "anchor_hashes": anchor_hashes,
+        })
+        indices = ", ".join(
+            "%d:%d" % (int(item["scene"]), int(item["latent_step"]))
+            for item in layout["slots"])
+        status = "%d anchors from latent steps %s; %s" % (
+            len(anchors), indices, registry["fingerprint"][:12])
+        return registry, status
+
+
 class MiniMaxH3SemanticAnchorConditioning:
     """Internal presentation replacement used by Tagged Ref2VA expansion."""
 
@@ -11083,6 +11657,13 @@ class MiniMaxH3ChainContext:
                                "next-sigma schedule. This also selects the "
                                "external per-model patch route when Chain "
                                "Context's MODEL input is disconnected."}),
+                "boundary_anchors": (BOUNDARY_ANCHORS_TYPE, {
+                    "tooltip": "Optional scene-indexed latent registry from "
+                               "Extract Boundary Anchors. When connected, "
+                               "every scene—including scene 1—uses its own "
+                               "jointly generated endpoint latent as the "
+                               "future Guide. This takes priority over the "
+                               "legacy future_end_anchor toggle."}),
                 "visual_cond_noise_aug": ("FLOAT", {
                     "default": VISUAL_COND_NOISE_AUG_DEFAULT,
                     "min": 0.000,
@@ -11106,7 +11687,7 @@ class MiniMaxH3ChainContext:
                                "and is ignored by AV transition modes."}),
                 "future_end_anchor": ("BOOLEAN", {
                     "default": False,
-                    "tooltip": "Guide/AV research option. Reuse the final "
+                    "tooltip": "Legacy Guide/AV research option. Reuse the final "
                                "prepared predecessor-context latent step as "
                                "one clean Guide immediately after the target "
                                "timeline. In AV modes, the ordinary prefix "
@@ -11115,7 +11696,10 @@ class MiniMaxH3ChainContext:
                                "AV prefix geometry. It does not change the "
                                "mask, scene length, or Loop Trim. This may "
                                "retain background/camera composition but can "
-                               "pull the ending pose backward."}),
+                               "pull the ending pose backward. When a Boundary "
+                               "Anchors registry is connected, its scene-"
+                               "specific endpoint replaces this copied "
+                               "predecessor pose regardless of this toggle."}),
             }
         }
 
@@ -11154,7 +11738,7 @@ class MiniMaxH3ChainContext:
                    "Context.")
 
     def apply(self, state, conditioning, vae, latent, audio_vae=None,
-              model=None, drift_sigmas=None,
+              model=None, drift_sigmas=None, boundary_anchors=None,
               visual_cond_noise_aug=VISUAL_COND_NOISE_AUG_DEFAULT,
               future_end_anchor=False):
         index = int(state["index"])
@@ -11176,6 +11760,10 @@ class MiniMaxH3ChainContext:
 
             target_latent = apply_locked_source_audio_target(
                 latent, audio_vae, state.get("current_source_audio_target"))
+        explicit_future_anchor = (
+            _boundary_anchor_for_state(
+                boundary_anchors, state, target_latent)
+            if boundary_anchors is not None else None)
         generated_audio_context = (
             continuation_mode in GUIDE_CONTINUATION_MODES
             and _audio_policy_uses_generated_continuity(cfg)
@@ -11218,6 +11806,13 @@ class MiniMaxH3ChainContext:
             else:
                 prepared_conditioning = _prepare_native_guide_conditioning(
                     conditioning)
+            if explicit_future_anchor is not None:
+                from .nodes import _append_explicit_future_end_anchor
+
+                prepared_conditioning = _append_explicit_future_end_anchor(
+                    prepared_conditioning, target_latent,
+                    explicit_future_anchor,
+                    visual_cond_noise_aug=VISUAL_COND_NOISE_AUG_DEFAULT)
             return (
                 prepared_conditioning,
                 0,
@@ -11269,7 +11864,13 @@ class MiniMaxH3ChainContext:
                 context_spatial_proxy=context_spatial_proxy,
                 latent_color_carry=latent_color_carry,
             )
-            if bool(future_end_anchor):
+            if explicit_future_anchor is not None:
+                from .nodes import _append_explicit_future_end_anchor
+
+                out_conditioning = _append_explicit_future_end_anchor(
+                    out_conditioning, out_latent, explicit_future_anchor,
+                    visual_cond_noise_aug=VISUAL_COND_NOISE_AUG_DEFAULT)
+            elif bool(future_end_anchor):
                 # Keep this experimental dependency local so lightweight
                 # plan/archive consumers can import Chain Nodes without
                 # needing to construct the full conditioning helper surface.
@@ -11388,8 +11989,16 @@ class MiniMaxH3ChainContext:
             context_audio=previous_audio,
             video_context_latent=video_context_latent,
             visual_cond_noise_aug=visual_cond_noise_aug,
-            future_end_anchor=bool(future_end_anchor),
+            future_end_anchor=(
+                bool(future_end_anchor)
+                if explicit_future_anchor is None else False),
         )
+        if explicit_future_anchor is not None:
+            from .nodes import _append_explicit_future_end_anchor
+
+            out = _append_explicit_future_end_anchor(
+                out, target_latent, explicit_future_anchor,
+                visual_cond_noise_aug=VISUAL_COND_NOISE_AUG_DEFAULT)
         return (out, trim, True, target_latent, model)
 
 
@@ -17053,6 +17662,8 @@ CHAIN_NODE_CLASS_MAPPINGS = {
     "MiniMaxH3SourceTimelineScenePreview": (
         MiniMaxH3SourceTimelineScenePreview),
     "MiniMaxH3TaggedAudioReference": MiniMaxH3TaggedAudioReference,
+    "MiniMaxH3BoundaryAnchorPrepass": MiniMaxH3BoundaryAnchorPrepass,
+    "MiniMaxH3ExtractBoundaryAnchors": MiniMaxH3ExtractBoundaryAnchors,
     "MiniMaxH3SemanticAnchorConditioning": (
         MiniMaxH3SemanticAnchorConditioning),
     "MiniMaxH3TaggedReferenceToVideo": MiniMaxH3TaggedReferenceToVideo,
@@ -17105,6 +17716,10 @@ CHAIN_NODE_DISPLAY_NAME_MAPPINGS = {
     "MiniMaxH3SourceTimelineScenePreview": (
         "MiniMax H3 Source Timeline Scene Preview"),
     "MiniMaxH3TaggedAudioReference": "MiniMax H3 Tagged Audio Ref",
+    "MiniMaxH3BoundaryAnchorPrepass": (
+        "MiniMax H3 Joint Boundary Anchor Prepass"),
+    "MiniMaxH3ExtractBoundaryAnchors": (
+        "MiniMax H3 Extract Joint Boundary Anchors"),
     "MiniMaxH3SemanticAnchorConditioning": (
         "MiniMax H3 Semantic Anchors (Internal)"),
     "MiniMaxH3TaggedReferenceToVideo": "MiniMax H3 Tagged Ref2VA",

@@ -336,6 +336,86 @@ def _video_guide_tail_from_latent(latent, frames, target_video):
     return tail
 
 
+def _append_future_anchor_latent(
+        conditioning, latent, suffix_latent,
+        visual_cond_noise_aug=VISUAL_COND_NOISE_AUG_DEFAULT,
+        boundary_anchor=False):
+    """Append one explicit video-latent Guide after an H3 target timeline."""
+    guide_api = _activate_inline_patches()
+    native_guides = guide_api == "native"
+    visual_cond_noise_aug = _validate_visual_cond_noise_aug(
+        visual_cond_noise_aug)
+
+    video = _video_from_latent(latent)
+    frame_count = _pixel_frames(int(video.shape[2]))
+    if getattr(suffix_latent, "ndim", 0) != 5:
+        raise ValueError(
+            "h3_motion_context: future anchor must be a video latent with "
+            "shape [B,C,1,H,W].")
+    if int(suffix_latent.shape[0]) != 1 or int(suffix_latent.shape[2]) != 1:
+        raise ValueError(
+            "h3_motion_context: future anchor must contain exactly one "
+            "batch and one temporal latent step; got %s." %
+            (tuple(suffix_latent.shape),))
+    target_geometry = (
+        int(video.shape[1]), int(video.shape[3]), int(video.shape[4]))
+    suffix_geometry = (
+        int(suffix_latent.shape[1]), int(suffix_latent.shape[3]),
+        int(suffix_latent.shape[4]))
+    if suffix_geometry != target_geometry:
+        raise ValueError(
+            "h3_motion_context: future-anchor/target latent geometry differs: "
+            "%s vs %s." % (suffix_geometry, target_geometry))
+    if hasattr(suffix_latent, "to") and hasattr(video, "device"):
+        suffix_latent = suffix_latent.to(video.device, video.dtype)
+    suffix_latent = suffix_latent.clone()
+
+    suffix = {
+        "resolved_frame_index": frame_count,
+        "latent": suffix_latent,
+        "h3_chain_future_end_anchor": True,
+    }
+    if bool(boundary_anchor):
+        suffix["h3_chain_boundary_anchor"] = True
+    if not native_guides:
+        suffix[MC_KEY] = frame_count
+
+    out = []
+    for embedding, extra in conditioning:
+        metadata = extra.copy()
+        prior_frame_count = metadata.get("minimax_frame_count")
+        if (prior_frame_count is not None
+                and int(prior_frame_count) != frame_count):
+            raise ValueError(
+                "h3_motion_context: the conditioning carries keyframes "
+                "resolved for a %d frame clip, but the AV target is %d "
+                "frames." % (int(prior_frame_count), frame_count))
+        keyframes = list(metadata.get("minimax_keyframes") or [])
+        metadata["minimax_keyframes"] = keyframes + [suffix]
+        metadata["minimax_visual_cond_noise_aug"] = visual_cond_noise_aug
+        if not native_guides:
+            metadata["minimax_frame_count"] = frame_count
+        out.append([embedding, metadata])
+    return out
+
+
+def _append_explicit_future_end_anchor(
+        conditioning, latent, anchor_latent,
+        visual_cond_noise_aug=VISUAL_COND_NOISE_AUG_DEFAULT):
+    """Append a jointly generated scene-boundary latent as a future Guide."""
+    out = _append_future_anchor_latent(
+        conditioning, latent, anchor_latent,
+        visual_cond_noise_aug=visual_cond_noise_aug,
+        boundary_anchor=True)
+    frame_count = _pixel_frames(int(_video_from_latent(latent).shape[2]))
+    _LOG.info(
+        "h3_motion_context: appended one precomputed boundary-anchor latent "
+        "step as a clean Guide at frame %d; target mask, output length, and "
+        "trim unchanged",
+        frame_count)
+    return out
+
+
 def _append_future_end_anchor(
         conditioning, latent, prefix_frames,
         visual_cond_noise_aug=VISUAL_COND_NOISE_AUG_DEFAULT):
@@ -351,13 +431,7 @@ def _append_future_end_anchor(
     therefore a conditioning row only: it never enters the decoded output,
     changes the target mask, or contributes to Loop Trim.
     """
-    guide_api = _activate_inline_patches()
-    native_guides = guide_api == "native"
-    visual_cond_noise_aug = _validate_visual_cond_noise_aug(
-        visual_cond_noise_aug)
-
     video = _video_from_latent(latent)
-    frame_count = _pixel_frames(int(video.shape[2]))
     prefix_frames = int(prefix_frames)
     if prefix_frames < 1:
         raise ValueError(
@@ -379,35 +453,11 @@ def _append_future_end_anchor(
 
     # Use the final prepared prefix step, including any AV-only proxy/tone
     # treatment, but present it as one phase-zero Guide step beyond the target.
-    suffix_latent = video[:1, :, prefix_steps - 1:prefix_steps].clone()
-    suffix = {
-        "resolved_frame_index": frame_count,
-        "latent": suffix_latent,
-        "h3_chain_future_end_anchor": True,
-    }
-    if not native_guides:
-        suffix[MC_KEY] = frame_count
-
-    out = []
-    for embedding, extra in conditioning:
-        metadata = extra.copy()
-        prior_frame_count = metadata.get("minimax_frame_count")
-        if (prior_frame_count is not None
-                and int(prior_frame_count) != frame_count):
-            raise ValueError(
-                "h3_motion_context: the conditioning carries keyframes "
-                "resolved for a %d frame clip, but the AV target is %d "
-                "frames." % (int(prior_frame_count), frame_count))
-        keyframes = list(metadata.get("minimax_keyframes") or [])
-        metadata["minimax_keyframes"] = keyframes + [suffix]
-        # ComfyUI currently exposes one augmentation value for every visual
-        # row in a conditioning payload. AV's preserved prefix is in the
-        # target latent and is unaffected, while this makes the new suffix a
-        # stock-clean Guide (and keeps any ordinary stock guides at baseline).
-        metadata["minimax_visual_cond_noise_aug"] = visual_cond_noise_aug
-        if not native_guides:
-            metadata["minimax_frame_count"] = frame_count
-        out.append([embedding, metadata])
+    suffix_latent = video[:1, :, prefix_steps - 1:prefix_steps]
+    out = _append_future_anchor_latent(
+        conditioning, latent, suffix_latent,
+        visual_cond_noise_aug=visual_cond_noise_aug)
+    frame_count = _pixel_frames(int(video.shape[2]))
 
     _LOG.info(
         "h3_motion_context: AV future anchor reused prepared prefix latent "
