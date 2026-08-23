@@ -276,7 +276,9 @@ def main():
             return T(np.zeros((1, 16, steps, h, w), dtype=np.float32))
 
     node = nodes.MiniMaxH3MotionContext()
-    assert list(node.INPUT_TYPES()["optional"])[-1] == "video_context_latent"
+    assert list(node.INPUT_TYPES()["optional"])[-1] == "future_end_anchor"
+    assert node.INPUT_TYPES()["optional"]["future_end_anchor"][1][
+        "default"] is False
     # Simulate conditioning produced by MiniMaxH3ReferenceToVideo. Motion
     # Context must append its timeline-audio block without dropping either
     # existing Ref2VA block.

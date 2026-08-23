@@ -168,7 +168,8 @@ selective_payload = {
     "keyframes": [
         {"latent": torch.tensor(1), "h3_chain_context_visual": True},
         {"audio_latent": torch.tensor(2)},
-        {"latent": torch.tensor(3)},
+        {"latent": torch.tensor(3),
+         "h3_chain_future_end_anchor": True},
     ],
     "refs": [
         {"kind": "image", "latent": torch.tensor(4)},
@@ -183,6 +184,10 @@ assert schedule._context_visual_flags(selective_payload) == [
     True, False, False]
 assert schedule._selective_visual_augs(
     selective_payload, 0.004, 0.999) == [0.004, 0.875, 0.875]
+clean_suffix_payload = copy.deepcopy(selective_payload)
+clean_suffix_payload["visual_cond_noise_aug"] = 0.999
+assert schedule._selective_visual_augs(
+    clean_suffix_payload, 0.0, 0.999) == [0.0, 0.999, 0.999]
 
 # Dynamic calls must traverse one coherent forward-noise trajectory. H3
 # restarts the same seeded CPU generator for a condition on every call; it

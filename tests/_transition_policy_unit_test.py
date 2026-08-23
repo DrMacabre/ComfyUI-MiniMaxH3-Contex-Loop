@@ -280,7 +280,9 @@ assert visual_aug_schema[1]["default"] == 0.999
 assert visual_aug_schema[1]["min"] == 0.0
 assert visual_aug_schema[1]["max"] == 1.0
 assert visual_aug_schema[1]["step"] == 0.001
-assert list(context_optional)[-1] == "visual_cond_noise_aug"
+assert context_optional["future_end_anchor"][0] == "BOOLEAN"
+assert context_optional["future_end_anchor"][1]["default"] is False
+assert list(context_optional)[-1] == "future_end_anchor"
 
 
 class CapturingMotionContext:
@@ -306,6 +308,7 @@ try:
         vae=object(),
         latent="target-latent",
         visual_cond_noise_aug=0.995,
+        future_end_anchor=True,
     )
 finally:
     chain.MiniMaxH3MotionContext = original_motion_context
@@ -313,6 +316,7 @@ finally:
 assert result == ("tapered-conditioning", 39, True, "target-latent", None)
 assert captured["context_length"] == 39
 assert captured["visual_cond_noise_aug"] == 0.995
+assert captured["future_end_anchor"] is True
 assert tuple(captured["context_frames"].shape) == (39, 19, 31, 3)
 assert not torch.equal(captured["context_frames"], source[-39:])
 assert captured["context_latent"] is original_latent

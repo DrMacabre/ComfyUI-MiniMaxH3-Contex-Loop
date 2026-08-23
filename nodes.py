@@ -428,6 +428,18 @@ class MiniMaxH3MotionContext:
                                "block directly, avoiding RGB decode and VAE "
                                "re-encode. Incompatible or imported context "
                                "falls back to context_frames."}),
+                "future_end_anchor": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Research option for Guide continuation. "
+                               "Reuse the final latent step of the predecessor "
+                               "context as one clean Guide immediately after "
+                               "the target timeline. The existing prefix, "
+                               "output length, and trim count are unchanged. "
+                               "This can retain a background/camera cue while "
+                               "the scheduled prefix stays weak. Keep visual "
+                               "condition noise augmentation at 0.999 so this "
+                               "suffix remains clean. It may pull the ending "
+                               "pose toward the predecessor."}),
             },
         }
 
@@ -450,7 +462,8 @@ class MiniMaxH3MotionContext:
               encode_mode, anchor_mode, crop, audio_context_length=22,
               audio_mode="timeline", context_latent=None, audio_vae=None,
               context_audio=None, video_context_latent=None,
-              visual_cond_noise_aug=VISUAL_COND_NOISE_AUG_DEFAULT):
+              visual_cond_noise_aug=VISUAL_COND_NOISE_AUG_DEFAULT,
+              future_end_anchor=False):
         guide_api = _activate_inline_patches()
         native_guides = guide_api == "native"
         visual_cond_noise_aug = _validate_visual_cond_noise_aug(
@@ -583,6 +596,30 @@ class MiniMaxH3MotionContext:
                     "h3_chain_context_visual": True,
                 })
 
+        # Optional two-sided Guide experiment. Reuse only the last temporal
+        # latent step from the already prepared predecessor context and place
+        # it one pixel frame beyond the target. Condition rows are never part
+        # of the decoded target, so this acts as a sacrificial one-frame suffix
+        # without changing the raw/delivered frame count or Loop Trim.
+        #
+        # Deliberately omit h3_chain_context_visual. Guide Late Reveal can keep
+        # the recursive prefix weak or sigma-matched while this single suffix
+        # retains stock-clean strength on the composition-setting first step.
+        if bool(future_end_anchor):
+            if not blocks:
+                raise ValueError(
+                    "h3_motion_context: future_end_anchor requires positive "
+                    "visual context.")
+            suffix_latent = blocks[-1][:, :, -1:].clone()
+            suffix = {
+                "resolved_frame_index": frame_count,
+                "latent": suffix_latent,
+                "h3_chain_future_end_anchor": True,
+            }
+            if not native_guides:
+                suffix[MC_KEY] = frame_count
+            keyframes.append(suffix)
+
         ref_audio_t = 0
         motion_context_audio_ref = None
         timeline_end_frame = None
@@ -712,9 +749,12 @@ class MiniMaxH3MotionContext:
         index_summary = ("%d..%d" % (indices[0], indices[-1])
                          if indices else "none")
         _LOG.info("h3_motion_context: %s/%s, %d frames -> %d cond blocks at "
-                  "indices %s, %d frame clip at %dx%d, trim %d, audio %s",
+                  "indices %s%s, %d frame clip at %dx%d, trim %d, audio %s",
                   encode_mode, anchor_mode, n, len(blocks),
-                  index_summary, frame_count, width, height, trim,
+                  index_summary,
+                  (" + clean future anchor at %d" % frame_count
+                   if bool(future_end_anchor) else ""),
+                  frame_count, width, height, trim,
                   ("%d frames -> %d latent steps (%.3fs) from %s, %s"
                    % (a_frames, ref_audio_t, ref_audio_t / AUDIO_HZ, audio_src,
                       "on the timeline ending at frame %.3f"

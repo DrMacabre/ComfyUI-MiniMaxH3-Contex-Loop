@@ -11103,6 +11103,19 @@ class MiniMaxH3ChainContext:
                                "references already present in that payload. "
                                "It does not control an AV preserved prefix "
                                "and is ignored by AV transition modes."}),
+                "future_end_anchor": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Guide-only research option. Reuse the final "
+                               "predecessor context latent as one clean Guide "
+                               "immediately after the target timeline. It "
+                               "does not change the prefix, scene length, or "
+                               "Loop Trim. This may retain background/camera "
+                               "composition while Guide Late Reveal keeps the "
+                               "multi-frame prefix weak or sigma-matched. Keep "
+                               "visual_cond_noise_aug at 0.999 and Late "
+                               "Reveal scope at chain_context_only so this "
+                               "suffix remains clean. It may pull the ending "
+                               "pose backward."}),
             }
         }
 
@@ -11142,7 +11155,8 @@ class MiniMaxH3ChainContext:
 
     def apply(self, state, conditioning, vae, latent, audio_vae=None,
               model=None, drift_sigmas=None,
-              visual_cond_noise_aug=VISUAL_COND_NOISE_AUG_DEFAULT):
+              visual_cond_noise_aug=VISUAL_COND_NOISE_AUG_DEFAULT,
+              future_end_anchor=False):
         index = int(state["index"])
         plan = state["plan"]
         cfg = plan["compatibility"]
@@ -11214,6 +11228,10 @@ class MiniMaxH3ChainContext:
         previous_frames = _previous_context_frames(
             state, vae, context_length)
         if continuation_mode in MASKED_CONTINUATION_MODES:
+            if bool(future_end_anchor):
+                _LOG.warning(
+                    "H3 Chain future_end_anchor is a Guide-only experiment "
+                    "and is ignored by %s.", continuation_mode)
             if (abs(float(visual_cond_noise_aug)
                     - VISUAL_COND_NOISE_AUG_DEFAULT) > 5e-7):
                 _LOG.warning(
@@ -11362,6 +11380,7 @@ class MiniMaxH3ChainContext:
             context_audio=previous_audio,
             video_context_latent=video_context_latent,
             visual_cond_noise_aug=visual_cond_noise_aug,
+            future_end_anchor=bool(future_end_anchor),
         )
         return (out, trim, True, target_latent, model)
 

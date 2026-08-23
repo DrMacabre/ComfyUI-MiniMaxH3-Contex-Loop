@@ -238,6 +238,20 @@ timestep pin on step 2 and every later step. `full_sigmas` is mandatory, so
 the mapping remains absolute across split model branches and does not drift
 when a solver performs extra evaluations inside one step.
 
+The optional Chain Context `future_end_anchor` probe tests a more selective
+way to retain composition without restoring the complete prefix to `0.999`.
+It reuses only the predecessor context's final latent step as one stock-clean
+visual condition at the first temporal position after the target. The normal
+recursive prefix is unchanged and remains the only visual condition controlled
+by Guide Late Reveal, so it may stay `matched` or use a weak/manual schedule.
+Condition rows are not decoded target frames; this future suffix therefore
+does not change raw or delivered scene length and requires no extra trim. It is
+not colour-only, so it may preserve background/camera geometry while also
+pulling the ending pose toward the predecessor. Keep Chain Context's base
+`visual_cond_noise_aug=0.999` and Late Reveal's selective
+`scope=chain_context_only`; `all_visual_conditions` or a weakened base value
+would schedule/weaken the suffix too.
+
 This differs from simply inserting Guide at the end. The model sees low-SNR
 structure while establishing the new scene, then receives increasingly precise
 identity/pose/seam evidence while details form. A post-sampling reinsertion can

@@ -338,6 +338,34 @@ def main():
     assert tuple(keyframes[1]["audio_latent"].shape)[-1] == 37
     assert abs(keyframes[1]["resolved_frame_index"]) < 1e-6
 
+    suffix_output, suffix_trim = nodes.MiniMaxH3MotionContext().apply(
+        conditioning=[["conditioning", {"minimax_refs": refs}]],
+        vae=VAE(), latent=target, context_frames=context, context_length=22,
+        encode_mode="video", anchor_mode="head", crop="disabled",
+        audio_context_length=0, future_end_anchor=True,
+    )
+    assert suffix_trim == 22
+    suffix_keyframes = suffix_output[0][1]["minimax_keyframes"]
+    assert len(suffix_keyframes) == 2
+    assert suffix_keyframes[0]["resolved_frame_index"] == 0
+    assert suffix_keyframes[0]["h3_chain_context_visual"] is True
+    assert suffix_keyframes[1]["resolved_frame_index"] == frame_count
+    assert tuple(suffix_keyframes[1]["latent"].shape)[2] == 1
+    assert suffix_keyframes[1]["h3_chain_future_end_anchor"] is True
+    assert "h3_chain_context_visual" not in suffix_keyframes[1]
+    assert all(nodes.MC_KEY not in value for value in suffix_keyframes)
+    suffix_layout = mm.PackedLayout(
+        7, latent_t, height, width, audio_t,
+        keyframes=suffix_keyframes, refs=refs)
+    suffix_origin = layout_patch._target_origin(suffix_layout)
+    suffix_segments = [
+        start for start, _stop, kind in suffix_layout.segments
+        if kind == "cond"
+    ]
+    assert len(suffix_segments) == 2
+    assert abs(float(suffix_layout.position_ids[suffix_segments[1], 0])
+               - (suffix_origin + FRAME_RESCALE * frame_count)) < 1e-9
+
     audio_only_output, audio_only_trim = nodes.MiniMaxH3MotionContext().apply(
         conditioning=[["conditioning", {"minimax_refs": refs}]],
         vae=VAE(), latent=target, context_frames=context[:0], context_length=0,

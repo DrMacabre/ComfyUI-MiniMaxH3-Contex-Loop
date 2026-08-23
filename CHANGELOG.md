@@ -9,6 +9,13 @@ Newest first. This file keeps release history out of the onboarding README.
   former neutral replacement text remains available in the How To Run note
   for explicit copy/paste comparisons.
 
+- Added an opt-in `future_end_anchor` Guide experiment. It reuses the
+  predecessor context's final latent step as one stock-clean visual condition
+  immediately after the target timeline. The normal prefix, output length,
+  and Loop Trim stay unchanged. This tests whether one background/camera cue
+  can preserve composition while the multi-frame prefix remains weak or
+  sigma-matched instead of jumping back to `0.999` after step one.
+
 - Added an opt-in **Guide Late Reveal** research MODEL patch. During an active
   Guide-family continuation, it replaces H3's static near-clean visual
   predecessor condition with a coherent late-reveal schedule. The recommended
