@@ -6,16 +6,16 @@ import {
     promptTextToLines,
     promptValueToText,
     sharedPrompt,
-} from "./h3_chain_plan_core.mjs?v=0.5.10";
+} from "./h3_chain_plan_core.mjs?v=0.5.11";
 import {
     buildPromptAssistantContext,
     makePromptAssistRequest,
-} from "./h3_prompt_assistant_core.mjs?v=0.5.10";
-import {PromptAssistantClient} from "./h3_prompt_assistant_client.mjs?v=0.5.10";
+} from "./h3_prompt_assistant_core.mjs?v=0.5.11";
+import {PromptAssistantClient} from "./h3_prompt_assistant_client.mjs?v=0.5.11";
 import {
     directOptimizerConfigurationError,
     makeDirectPromptOptimizeRequest,
-} from "./h3_prompt_optimizer_core.mjs?v=0.5.10";
+} from "./h3_prompt_optimizer_core.mjs?v=0.5.11";
 import {
     openPromptOptimizerSettings,
     promptOptimizerBackend,
@@ -27,8 +27,8 @@ import {
     promptRevisionLabel,
     promptRevisionNavigation,
     promptRevisionTree,
-} from "./h3_prompt_history_core.mjs?v=0.5.10";
-import {availableReferenceRecords} from "./h3_reference_preview_core.mjs?v=0.5.10";
+} from "./h3_prompt_history_core.mjs?v=0.5.11";
+import {availableReferenceRecords} from "./h3_reference_preview_core.mjs?v=0.5.11";
 import {
     PromptUndoHistory,
     RICH_PROMPT_GUIDES,
@@ -38,10 +38,10 @@ import {
     richGenerationMode,
     richGuideInstruction,
     tokenizeRichPrompt,
-} from "./h3_rich_prompt_editor_core.mjs?v=0.5.10";
-import {createPromptCompletionController} from "./h3_prompt_completion_core.mjs?v=0.5.10";
-import {createH3PromptSchemaController} from "./h3_prompt_schema_ui.mjs?v=0.5.10";
-import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.5.10";
+} from "./h3_rich_prompt_editor_core.mjs?v=0.5.11";
+import {createPromptCompletionController} from "./h3_prompt_completion_core.mjs?v=0.5.11";
+import {createH3PromptSchemaController} from "./h3_prompt_schema_ui.mjs?v=0.5.11";
+import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.5.11";
 
 const {publishCompanionScene, rebaseScenePrompt} = promptCompanionSync;
 function publishCompanionPrompt(...args) {

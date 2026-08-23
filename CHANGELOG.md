@@ -4,10 +4,17 @@ Newest first. This file keeps release history out of the onboarding README.
 
 ## Unreleased
 
+## v0.5.11 — Plan Studio transport hardening
+
 - The bundled LBH 3D deferred-upscale workflow now leaves the pass-2 prompt
   override blank, preserving the exact compiled scene prompt by default. The
   former neutral replacement text remains available in the How To Run note
   for explicit copy/paste comparisons.
+- Moved Plan Studio checkpoint discovery off ComfyUI's event loop, added a
+  lightweight polling response, deduplicated preview builds, and stopped scene
+  selection from repeatedly reconstructing media players. Slow requests and
+  canceled preview clients now leave useful server diagnostics instead of
+  amplifying Windows transport stalls.
 
 ## v0.5.10 — Compact upscale adapter
 
