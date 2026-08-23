@@ -320,6 +320,20 @@ assembly_changed["scopes"]["assembly_only"]["final_audio"] = "generated"
 assembly_changed["scopes"]["assembly_only"]["source_audio_fingerprint"] = "x"
 assert chain._scene_dependency_diffs(scene1_a, assembly_changed) == []
 
+# A scene's selected pre-patched MODEL route remains routing/provenance only.
+# It must not invalidate completed predecessors, and the default Base spelling
+# remains absent for old checkpoint compatibility.
+assert "lora_route" not in scene1_a["scopes"]["scene_generation"]
+routed_plan = json.loads(json.dumps(prepared_a))
+routed_plan["shots"][0]["lora_route"] = "a"
+routed_dependency = chain._scene_dependency_record(
+    routed_plan, 1,
+    scene1_a["scopes"]["scene_generation"]["source_reference_window"])
+route_diffs = chain._scene_dependency_diffs(scene1_a, routed_dependency)
+assert route_diffs == []
+assert "lora_route" not in chain._history_contract(
+    routed_plan, 1)["shots"][0]
+
 # A later incoming context does not retroactively redefine scene 1.
 long_context = make_plan(22)
 prepared_long = chain._plan_with_source_audio(long_context, audio_a)

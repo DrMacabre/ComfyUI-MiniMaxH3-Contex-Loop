@@ -3,6 +3,7 @@ import {api} from "/scripts/api.js";
 import {
     H3_CONTEXT_LENGTHS,
     MAX_SHOTS,
+    SCENE_LORA_ROUTES,
     automaticSceneColor,
     calculatePlanTiming,
     duplicateShot,
@@ -17,6 +18,7 @@ import {
     safeShotId,
     sceneContextLength,
     sceneContinuationMode,
+    sceneLoRARoute,
     sceneVideoBlendFrames,
     setSharedPrompt,
     setShotLengthMode,
@@ -935,7 +937,7 @@ function mount(node) {
             }
             const copy = element("span", "h3studio-card-copy");
             copy.append(element("span", "h3studio-card-title", `${index + 1}. ${row.id}`),
-                element("span", "h3studio-card-meta", `${formatClock(row.deliveredSeconds)} · ${row.rawFrames || "—"}f raw`));
+                element("span", "h3studio-card-meta", `${formatClock(row.deliveredSeconds)} · ${row.rawFrames || "—"}f raw${row.loraRoute === "base" ? "" : ` · LoRA ${row.loraRoute.toUpperCase()}`}`));
             card.append(copy, element("span", "h3studio-render-dot"));
             host.append(card);
         }
@@ -1271,6 +1273,24 @@ function mount(node) {
         const seedWrap = element("span", "h3studio-length");
         const reroll = button("↻", "Store a new random seed for this scene", () => { seed.value = randomSceneSeed(); shot.seed = seed.value; writePlan(); });
         seedWrap.append(seed, reroll);
+        const loraRoute = element("select");
+        for (const route of SCENE_LORA_ROUTES) {
+            const option = element(
+                "option", "",
+                route === "base" ? "Base model" : `LoRA ${route.toUpperCase()}`,
+            );
+            option.value = route;
+            loraRoute.append(option);
+        }
+        loraRoute.value = sceneLoRARoute(shot);
+        loraRoute.title = "Select the Base or A-D MODEL branch on MiniMax H3 Scene LoRA Scheduler. Branches come from ordinary ComfyUI LoRA loaders.";
+        loraRoute.addEventListener("change", () => {
+            if (loraRoute.value === "base") delete shot.lora_route;
+            else shot.lora_route = loraRoute.value;
+            sceneLoRARoute(shot);
+            writePlan();
+            renderTimeline();
+        });
         const planSettings = settings();
         const incomingTransition = element("select");
         const inheritOption = element(
@@ -1448,6 +1468,7 @@ function mount(node) {
         form.append(
             field("Scene ID", id), field("Length", lengthControl),
             field("Steps", steps), field("Seed", seedWrap),
+            field("LoRA route", loraRoute),
             field("Incoming transition", incomingTransition),
             field("Final assembly crossfade frames", blendFrames),
         );

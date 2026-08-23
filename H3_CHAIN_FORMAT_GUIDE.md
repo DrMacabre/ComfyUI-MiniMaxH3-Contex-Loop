@@ -223,6 +223,7 @@ Shot = string | {
   "frames"?: integer,             // alias of length
   "steps"?: integer,
   "seed"?: integer | digit string,
+  "lora_route"?: "base" | "a" | "b" | "c" | "d",
   "context_length"?: 0 | 1 | 5 | 22 | 39 | ... | 243,
   "audio_context_length"?: integer, // 0..240
   "continuation_mode"?: "guide" | "tone_carry_guide" | "latent_guide" | "tapered_guide" | "masked_av" | "tapered_av" | "feathered_av" | "audio_feathered_av" | "drift_control_av"
@@ -488,6 +489,17 @@ base_seed + scene index + scene id
 
 The same plan and `base_seed` produce the same derived seeds. Changing a scene
 ID or moving it to another position changes its derived seed.
+
+`lora_route` selects a pre-patched MODEL input on **MiniMax H3 Scene LoRA
+Scheduler**. Omit it or use `base` for the unpatched route; `a` through `d`
+select LoRA A-D. The scheduler is not a loader: create each branch with the
+ordinary ComfyUI LoRA loader already used by the workflow, and stack loaders
+when one scene needs several LoRAs. Because its MODEL inputs are lazy, only the
+active scene's selected branch is evaluated. Route selection is stored in the
+Plan and checkpoint revision as provenance, but is deliberately excluded from
+checkpoint/resume verification. LoRA filenames and strengths remain external;
+include them in `generation_fingerprint` only when strict invalidation is
+desired.
 
 `continuation_mode` describes the transition from the preceding clip into this
 scene. Omit it to inherit the Plan node setting. Use `guide` when this is a new

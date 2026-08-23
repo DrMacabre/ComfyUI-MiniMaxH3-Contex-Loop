@@ -169,6 +169,7 @@ CONTINUATION_MODES = (
     "guide", "tone_carry_guide", "latent_guide", "tapered_guide",
     "masked_av", "tapered_av", "feathered_av", "audio_feathered_av",
     "drift_control_av", "color_stable_drift_av")
+SCENE_LORA_ROUTES = ("base", "a", "b", "c", "d")
 LOOP_MEMORY_POLICIES = ("off", "unload_models", "fresh_scene")
 GUIDE_CONTINUATION_MODES = frozenset((
     "guide", "tone_carry_guide", "latent_guide", "tapered_guide"))
@@ -185,6 +186,7 @@ RGB_PROXY_GUIDE_MODES = frozenset((
     "guide", "tone_carry_guide", "tapered_guide"))
 REFERENCE_AUDIO_TIMELINE_MODES = ("standalone", "source_timeline")
 MOTION_REFERENCE_SHORT_EDGES = ("384", "512", "768", "source")
+_LAZY_INPUT_MISSING = object()
 
 # These Plan-wide controls describe how the next scene consumes an immutable
 # predecessor. Their effective values are still recorded on generated scenes,
@@ -4234,6 +4236,19 @@ def _shot_context_spatial_proxy(shot: dict[str, Any]) -> str:
     return resolved
 
 
+def _shot_lora_route(shot: dict[str, Any]) -> str:
+    """Resolve one scene's pre-patched MODEL branch without loading a LoRA."""
+    value = shot.get("lora_route")
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return "base"
+    resolved = str(value).strip().lower()
+    if resolved not in SCENE_LORA_ROUTES:
+        raise ValueError(
+            "H3 scene LoRA route must be one of %s." %
+            (SCENE_LORA_ROUTES,))
+    return resolved
+
+
 def _context_spatial_proxy_size(width: int, height: int) -> tuple[int, int]:
     """Return the recipe's aligned 5/6 proxy canvas."""
     alignment = int(CONTEXT_SPATIAL_PROXY_RECIPE["pixel_alignment"])
@@ -5494,6 +5509,7 @@ def _normalize_plan(
                 (index, shot_continuation_mode))
         try:
             shot_context_spatial_proxy = _shot_context_spatial_proxy(item)
+            shot_lora_route = _shot_lora_route(item)
         except ValueError as exc:
             raise ValueError("Shot %d: %s" % (index, exc)) from exc
         if shot_context_spatial_proxy != "off":
@@ -5704,6 +5720,10 @@ def _normalize_plan(
             # Boundary-only and deliberately scene-local: absence leaves this
             # scene and all other incoming boundaries unchanged.
             shot["context_spatial_proxy"] = shot_context_spatial_proxy
+        if shot_lora_route != "base":
+            # Base is represented by absence so every pre-scheduler Plan and
+            # checkpoint retains its exact serialized hash.
+            shot["lora_route"] = shot_lora_route
         shots.append(shot)
         stitched_frames += delivered_frames
 
@@ -6108,7 +6128,9 @@ def _effective_editor_plan(plan: dict[str, Any]) -> dict[str, Any]:
              **({"generated_continuity": shot["generated_continuity"]}
                 if "generated_continuity" in shot else {}),
              **({"source_audio_target": shot["source_audio_target"]}
-                if "source_audio_target" in shot else {}))
+                if "source_audio_target" in shot else {}),
+             **({"lora_route": shot["lora_route"]}
+                if "lora_route" in shot else {}))
             for shot in plan["shots"]],
     }
 
@@ -6717,6 +6739,7 @@ def _public_segment(value: dict[str, Any]) -> dict[str, Any]:
         "seed", "steps", "continuation_mode", "context_length",
         "audio_context_length", "context_spatial_proxy",
         "source_reference", "generated_continuity", "source_audio_target",
+        "lora_route",
         "guide_tone_carry",
         "guide_tone_input_applied",
         "latent_color_stats",
@@ -12599,6 +12622,129 @@ class MiniMaxH3ChainCurrent:
         }
 
 
+class MiniMaxH3ChainLoRAScheduler:
+    """Select a pre-patched MODEL branch from the active scene declaration."""
+
+    _ROUTE_INPUTS = {
+        "base": "base_model",
+        "a": "lora_a",
+        "b": "lora_b",
+        "c": "lora_c",
+        "d": "lora_d",
+    }
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "state": (STATE_TYPE, {
+                    "tooltip": "Current Shot state. The active scene's "
+                               "lora_route selects one MODEL branch."}),
+                "base_model": ("MODEL", {
+                    "lazy": True,
+                    "tooltip": "Unpatched/base MODEL route. Keep using the "
+                               "ordinary ComfyUI model loader that already "
+                               "feeds your workflow."}),
+            },
+            "optional": {
+                "lora_a": ("MODEL", {
+                    "lazy": True,
+                    "tooltip": "Route A MODEL from an existing ComfyUI LoRA "
+                               "loader or a stack of LoRA loaders."}),
+                "lora_b": ("MODEL", {
+                    "lazy": True,
+                    "tooltip": "Route B MODEL from an existing ComfyUI LoRA "
+                               "loader or a stack of LoRA loaders."}),
+                "lora_c": ("MODEL", {
+                    "lazy": True,
+                    "tooltip": "Route C MODEL from an existing ComfyUI LoRA "
+                               "loader or a stack of LoRA loaders."}),
+                "lora_d": ("MODEL", {
+                    "lazy": True,
+                    "tooltip": "Route D MODEL from an existing ComfyUI LoRA "
+                               "loader or a stack of LoRA loaders."}),
+            },
+        }
+
+    RETURN_TYPES = ("MODEL", "STRING")
+    RETURN_NAMES = ("model", "status")
+    OUTPUT_TOOLTIPS = (
+        "Only the active scene's selected pre-patched MODEL. Connect this to "
+        "the sampler or to Chain Context when Drift-Control owns the MODEL "
+        "path.",
+        "Selected Base/LoRA route and scene number.",
+    )
+    FUNCTION = "select"
+    CATEGORY = "conditioning/minimax/contex_loop"
+    DESCRIPTION = (
+        "Route a pre-patched MODEL per scene without loading or applying any "
+        "LoRA. Build Base and A-D branches with ordinary ComfyUI model/LoRA "
+        "loaders, then choose Base or LoRA A-D on each Plan scene. Inputs are "
+        "lazy, so an unused branch is not evaluated merely because it is "
+        "connected.")
+
+    @classmethod
+    def _selection(cls, state: Any) -> tuple[int, str, str]:
+        if not isinstance(state, dict) or not isinstance(
+                state.get("plan"), dict):
+            raise ValueError(
+                "H3 Scene LoRA Scheduler requires Current Shot state.")
+        index = int(state.get("index", 0))
+        shots = state["plan"].get("shots")
+        if (not isinstance(shots, list) or index < 1 or index > len(shots)):
+            raise ValueError(
+                "H3 Scene LoRA Scheduler received an invalid scene index %d."
+                % index)
+        route = _shot_lora_route(shots[index - 1])
+        return index, route, cls._ROUTE_INPUTS[route]
+
+    def check_lazy_status(
+        self,
+        state,
+        base_model=None,
+        lora_a=_LAZY_INPUT_MISSING,
+        lora_b=_LAZY_INPUT_MISSING,
+        lora_c=_LAZY_INPUT_MISSING,
+        lora_d=_LAZY_INPUT_MISSING,
+    ):
+        _index, _route, input_name = self._selection(state)
+        values = {
+            "base_model": base_model,
+            "lora_a": lora_a,
+            "lora_b": lora_b,
+            "lora_c": lora_c,
+            "lora_d": lora_d,
+        }
+        return [input_name] if values[input_name] is None else []
+
+    def select(
+        self,
+        state,
+        base_model,
+        lora_a=_LAZY_INPUT_MISSING,
+        lora_b=_LAZY_INPUT_MISSING,
+        lora_c=_LAZY_INPUT_MISSING,
+        lora_d=_LAZY_INPUT_MISSING,
+    ):
+        index, route, input_name = self._selection(state)
+        values = {
+            "base_model": base_model,
+            "lora_a": lora_a,
+            "lora_b": lora_b,
+            "lora_c": lora_c,
+            "lora_d": lora_d,
+        }
+        selected = values[input_name]
+        if selected is _LAZY_INPUT_MISSING or selected is None:
+            label = "Base" if route == "base" else "LoRA %s" % route.upper()
+            raise ValueError(
+                "H3 scene %d selects %s, but the scheduler's %s input is "
+                "not connected." % (index, label, input_name))
+        label = "Base" if route == "base" else "LoRA %s" % route.upper()
+        return (selected, "scene %d -> %s (%s)" % (
+            index, label, input_name))
+
+
 class MiniMaxH3PatchPriority:
     @classmethod
     def INPUT_TYPES(cls):
@@ -13422,6 +13568,8 @@ class MiniMaxH3ChainSegmentSave:
                 "prompt": str(shot["prompt"]),
                 "prompt_hash": str(shot["prompt_hash"]),
                 "seed": str(shot["seed"]),
+                **({"lora_route": str(shot["lora_route"])}
+                   if "lora_route" in shot else {}),
                 "sample_rate": str(sample_rate),
                 "denoised_latent": (
                     "true" if denoised_latent is not None else "false"),
@@ -13460,6 +13608,8 @@ class MiniMaxH3ChainSegmentSave:
                 "generated_continuity": str(
                     _resolved_scene_audio_policy(plan, shot)[
                         "generated_continuity"]),
+                **({"lora_route": shot["lora_route"]}
+                   if "lora_route" in shot else {}),
                 "blend_frames": blend_frames,
                 "sample_rate": sample_rate,
                 "segment_sha256": _file_sha256(published_segment),
@@ -18047,6 +18197,8 @@ def _checkpoint_plan_revision(segment: dict[str, Any]) -> dict[str, Any]:
     if "audio_context_length" in segment:
         revision["audio_context_length"] = int(
             segment["audio_context_length"])
+    if "lora_route" in segment:
+        revision["lora_route"] = str(segment["lora_route"])
     return revision
 
 
@@ -18934,6 +19086,7 @@ CHAIN_NODE_CLASS_MAPPINGS = {
     "MiniMaxH3ChainExternalVideo": MiniMaxH3ChainExternalVideo,
     "MiniMaxH3ChainLoopStart": MiniMaxH3ChainLoopStart,
     "MiniMaxH3ChainCurrent": MiniMaxH3ChainCurrent,
+    "MiniMaxH3ChainLoRAScheduler": MiniMaxH3ChainLoRAScheduler,
     "MiniMaxH3PatchPriority": MiniMaxH3PatchPriority,
     "MiniMaxH3ChainContext": MiniMaxH3ChainContext,
     "MiniMaxH3DriftControlModelPatch": MiniMaxH3DriftControlModelPatch,
@@ -18992,6 +19145,7 @@ CHAIN_NODE_DISPLAY_NAME_MAPPINGS = {
     "MiniMaxH3ChainExternalVideo": "MiniMax H3 Existing Video Context",
     "MiniMaxH3ChainLoopStart": "MiniMax H3 Contex Loop Start",
     "MiniMaxH3ChainCurrent": "MiniMax H3 Contex Loop Current Shot",
+    "MiniMaxH3ChainLoRAScheduler": "MiniMax H3 Scene LoRA Scheduler",
     "MiniMaxH3PatchPriority": "MiniMax H3 Patch Priority",
     "MiniMaxH3ChainContext": "MiniMax H3 Contex Loop Context",
     "MiniMaxH3DriftControlModelPatch": (

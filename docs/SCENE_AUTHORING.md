@@ -24,6 +24,20 @@ The [complete format guide](../H3_CHAIN_FORMAT_GUIDE.md) documents every Plan
 and per-scene field, raw versus delivered length, prompt structure, seeds, and
 timing.
 
+## Per-scene LoRA routes
+
+Each scene has a **Scene LoRA route** selector: Base or LoRA A-D. Connect
+Current Shot `state` to **MiniMax H3 Scene LoRA Scheduler**, connect the normal
+base MODEL to `base_model`, and connect MODEL outputs from ordinary ComfyUI
+LoRA loaders to the A-D inputs. The scheduler only routes those prepared
+models; it never chooses a file or applies a LoRA.
+
+One route can contain a stack of ordinary LoRA loaders. The same LoRA at two
+strengths can be represented by two branches. Inputs are lazy, so a connected
+branch is not evaluated until a scene selects it. Put patches shared by every
+scene after the scheduler. When using Drift-Control, send the scheduled MODEL
+through Chain Context's MODEL input/output before the sampler.
+
 ## Scene Prompt Editor
 
 Connect Plan to **MiniMax H3 Scene Prompt Editor** for a large synchronized

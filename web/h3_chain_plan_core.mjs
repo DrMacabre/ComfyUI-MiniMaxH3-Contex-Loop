@@ -13,6 +13,7 @@ export const CONTINUATION_MODES = Object.freeze([
 export const CONTEXT_SPATIAL_PROXY_MODES = Object.freeze([
     "off", "rgb_5_6", "latent_5_6",
 ]);
+export const SCENE_LORA_ROUTES = Object.freeze(["base", "a", "b", "c", "d"]);
 const RETIRED_CONTINUATION_MODES = Object.freeze({
     feathered_av_rgb: "feathered_av",
 });
@@ -275,6 +276,11 @@ export function parsePlanJson(source) {
         normalized.prompt = promptTextToLines(
             promptValueToText(shot.prompt, `Scene ${offset + 1} prompt`),
         );
+        if (Object.hasOwn(normalized, "lora_route")) {
+            const route = sceneLoRARoute(normalized);
+            if (route === "base") delete normalized.lora_route;
+            else normalized.lora_route = route;
+        }
         return normalized;
     });
 
@@ -423,6 +429,17 @@ export function sceneContinuationMode(shot, planDefault = "guide") {
         throw new Error(`Unknown scene continuation mode “${String(mode)}”.`);
     }
     return mode;
+}
+
+export function sceneLoRARoute(shot) {
+    const route = String(shot?.lora_route ?? "base").trim().toLowerCase()
+        || "base";
+    if (!SCENE_LORA_ROUTES.includes(route)) {
+        throw new Error(
+            `Scene LoRA route must be one of ${SCENE_LORA_ROUTES.join(", ")}.`,
+        );
+    }
+    return route;
 }
 
 export function sceneContextLength(shot, planDefault = 22) {
@@ -582,6 +599,13 @@ export function calculatePlanTiming(plan, settings = {}) {
         }
         try {
             validateSeed(shot.seed);
+        } catch (error) {
+            rowErrors.push(error.message);
+        }
+
+        let loraRoute = "base";
+        try {
+            loraRoute = sceneLoRARoute(shot);
         } catch (error) {
             rowErrors.push(error.message);
         }
@@ -763,6 +787,7 @@ export function calculatePlanTiming(plan, settings = {}) {
             ),
             continuationMode,
             contextSpatialProxy,
+            loraRoute,
             errors: rowErrors,
         });
         stitchedFrames += deliveredFrames;
