@@ -883,9 +883,7 @@ def validate_deferred_h3_upscale(path):
     assert conditioner["widgets_values"][:2] == [
         "text_only", "exclude_video_keep_audio"]
     assert conditioner["widgets_values"][2:] == ["", "inherit", "strict"]
-    assert override["widgets_values"][0].startswith(
-        "Preserve the existing video's identity")
-    assert override["widgets_values"][1] == ""
+    assert override["widgets_values"] == ["", ""]
     assert socket(override["inputs"], "references")["link"] is None
     assert socket(conditioner["inputs"], "tagged_references")["link"] == (
         socket(override["outputs"], "references")["links"][0])
@@ -935,6 +933,8 @@ def validate_deferred_h3_upscale(path):
     assert "keeping max picture refs at their cached geometry" in notes
     assert "excludes both the Qwen motion-video presentation" in notes
     assert "prompt override" in notes
+    assert "OPTIONAL NEUTRAL REPLACEMENT PROMPT" in notes
+    assert "Preserve the existing video's identity" in notes
     assert "12-step pass-2 prefix" in notes
     assert "small 12-step HQ context tail" in notes
     assert "save_latent is OFF" in notes

@@ -287,8 +287,9 @@ user can provide a short appearance/detail-only pass-2 prompt without repeating
 the source scene's motion or camera instructions. Automatic natural-language
 motion stripping is intentionally avoided because it cannot reliably separate
 action from identity, framing, or continuity clauses. The bundled LBH workflow
-therefore supplies a neutral preservation/detail override; clear that widget to
-A/B against the original compiled prompt.
+therefore leaves the override blank and uses the original compiled prompt by
+default. Its How To Run note retains a neutral preservation/detail replacement
+prompt for an explicit copy/paste A/B test.
 Revisions without a cache can use `text_only`; select `error` when the second
 pass must not proceed without Ref2VA conditioning.
 

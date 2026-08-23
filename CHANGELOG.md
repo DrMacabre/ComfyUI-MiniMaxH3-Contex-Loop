@@ -4,6 +4,11 @@ Newest first. This file keeps release history out of the onboarding README.
 
 ## Unreleased
 
+- The bundled LBH 3D deferred-upscale workflow now leaves the pass-2 prompt
+  override blank, preserving the exact compiled scene prompt by default. The
+  former neutral replacement text remains available in the How To Run note
+  for explicit copy/paste comparisons.
+
 ## v0.5.10 — Compact upscale adapter
 
 - Hid the Upscale Adapter's provenance-only `recipe_json` in the default
