@@ -343,6 +343,7 @@ function mount(node) {
         view:["scene","shared","player","json"].includes(node.properties[VIEW_PROPERTY])
             ? node.properties[VIEW_PROPERTY] : "scene",
         checkpoints:new Map(), checkpointSignature:"", checkpointError:"", checkpointToken:0,
+        checkpointPromise:null, checkpointRefreshQueued:false, disposed:false,
         sourcePreview:null,
         pollTimer:null, checkpointTimer:null, timelineHost:null, sourceTimelineHost:null, panelHost:null,
         planNotifyTimer:null,
@@ -592,7 +593,8 @@ function mount(node) {
         } catch (error) { if (history.sceneKey === key) { history.error = error?.message || String(error); renderHistory(); } }
     }
 
-    async function refreshCheckpoints() {
+    async function refreshCheckpointsNow() {
+        if (state.disposed) return;
         const currentRun = runName();
         const token = ++state.checkpointToken;
         if (!currentRun) {
@@ -604,11 +606,13 @@ function mount(node) {
             return;
         }
         try {
-            const query = new URLSearchParams({run_name:currentRun});
+            const query = new URLSearchParams({
+                run_name:currentRun, include_graph:"false",
+            });
             const response = await api.fetchApi(`/minimax_h3_context_loop/checkpoints?${query.toString()}`);
             const payload = await response.json();
             if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
-            if (token !== state.checkpointToken || currentRun !== runName()) return;
+            if (state.disposed || token !== state.checkpointToken || currentRun !== runName()) return;
             const records = payload.checkpoints ?? [];
             const signature = studioCheckpointSignature(currentRun, records);
             const recoveredFromError = Boolean(state.checkpointError);
@@ -633,6 +637,25 @@ function mount(node) {
             if (desired !== String(state.player.dataset.source ?? "") ||
                     desiredAudio !== String(
                         state.playerAudio?.dataset.source ?? "")) renderPanel();
+        }
+    }
+
+    async function refreshCheckpoints() {
+        if (state.disposed) return;
+        if (state.checkpointPromise) {
+            state.checkpointRefreshQueued = true;
+            return state.checkpointPromise;
+        }
+        const request = refreshCheckpointsNow();
+        state.checkpointPromise = request;
+        try {
+            return await request;
+        } finally {
+            if (state.checkpointPromise === request) state.checkpointPromise = null;
+            if (state.checkpointRefreshQueued && !state.disposed) {
+                state.checkpointRefreshQueued = false;
+                void refreshCheckpoints();
+            }
         }
     }
 
@@ -755,7 +778,7 @@ function mount(node) {
             card.className = `h3studio-card h3studio-source-card${index === state.active ? " h3studio-selected" : ""}`;
             card.style.setProperty("--scene", automaticSceneColor(index));
             card.style.flexGrow = String(Math.max(.55, row.deliveredFrames / Math.max(1, result.totalFrames) * state.plan.shots.length));
-            if (reference && index === state.active) {
+            if (reference && index === state.active && state.view !== "player") {
                 const media = element("video");
                 media.muted = true; media.playsInline = true; media.preload = "metadata";
                 media.src = sourcePreviewUrl(index, reference);
@@ -794,7 +817,10 @@ function mount(node) {
         if (state.view === "player") {
             state.timelinePosition = studioSceneStartSeconds(timing().shots, state.active);
         }
-        persistView(); renderTimeline(); renderPanel();
+        persistView(); renderSourceTimeline(); updateTimelineSelection();
+        if (state.view === "player" && state.player) {
+            seekTimeline(state.timelinePosition, false);
+        } else renderPanel();
         if (synchronize) publishActiveScene();
     }
 
@@ -1232,7 +1258,8 @@ function mount(node) {
         state.playerIndex = index; state.pendingSeek = localSeconds;
         state.timelinePosition = target;
         if (state.active !== index) {
-            state.active = index; persistView(); renderTimeline();
+            state.active = index; persistView(); renderSourceTimeline();
+            updateTimelineSelection();
             publishActiveScene();
         }
         if (state.playerSlider) state.playerSlider.value = String(target);
@@ -1534,7 +1561,8 @@ function mount(node) {
                 if (value === "player" && state.timelinePosition == null) {
                     state.timelinePosition = studioSceneStartSeconds(timing().shots, state.active);
                 }
-                state.view = value; persistView(); renderToolbarState(); renderPanel();
+                state.view = value; persistView(); renderToolbarState();
+                renderSourceTimeline(); renderPanel();
             });
             item.dataset.studioView = value; toolbar.append(item);
         }
@@ -1625,8 +1653,14 @@ function mount(node) {
         if (sourcePayload && String(displayNode ?? "") === String(node.id ?? "")
                 && String(sourcePayload.run_name ?? "") === runName()) {
             state.sourcePreview = sourcePayload;
-            renderTimeline();
-            if (state.view === "player") renderPanel();
+            renderSourceTimeline();
+            if (state.view === "player" && state.player) {
+                seekTimeline(
+                    state.timelinePosition ?? studioSceneStartSeconds(
+                        timing().shots, state.active),
+                    false,
+                );
+            }
         }
         const values = event.detail?.output?.h3_chain_active_scene;
         const scene = Array.isArray(values) ? values.at(-1) : null;
@@ -1644,6 +1678,8 @@ function mount(node) {
     api.addEventListener("executed", onPromptExecuted);
     const removed = node.onRemoved;
     node.onRemoved = function () {
+        state.disposed = true;
+        state.checkpointToken += 1;
         if (state.pollTimer != null) clearInterval(state.pollTimer);
         if (state.checkpointTimer != null) clearInterval(state.checkpointTimer);
         if (state.planNotifyTimer != null) clearTimeout(state.planNotifyTimer);

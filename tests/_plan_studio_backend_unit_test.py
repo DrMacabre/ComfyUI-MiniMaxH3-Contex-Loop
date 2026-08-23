@@ -7,6 +7,7 @@ import json
 import pathlib
 import sys
 import tempfile
+import time
 import types
 
 
@@ -44,8 +45,23 @@ sys.modules[spec.name] = chain
 spec.loader.exec_module(chain)
 
 
+async def cooperative_test_thread(function, *args, **kwargs):
+    # Keep this standalone test independent of the host runner's executor
+    # wakeup implementation while preserving the scheduling point needed to
+    # verify concurrent request deduplication.
+    await asyncio.sleep(0)
+    return function(*args, **kwargs)
+
+
+chain.asyncio.to_thread = cooperative_test_thread
+
+
 class Request:
     query = {"run_name": "studio"}
+
+
+class ActiveOnlyRequest:
+    query = {"run_name": "studio", "include_graph": "false"}
 
 
 async def check():
@@ -87,6 +103,22 @@ async def check():
         assert first_payload["checkpoints"][0]["audio"]["filename"] == (
             generated_audio.name)
         assert "preview_video" not in first_payload["checkpoints"][0]
+        assert "revisions" in first_payload
+
+        original_graph = chain.CheckpointGraphManager.graph
+
+        def reject_graph_build(*_args):
+            raise AssertionError(
+                "active-only Plan Studio polling built the graph")
+
+        try:
+            chain.CheckpointGraphManager.graph = reject_graph_build
+            active_only = json.loads(
+                (await chain._list_saved_checkpoints(ActiveOnlyRequest())).text)
+        finally:
+            chain.CheckpointGraphManager.graph = original_graph
+        assert active_only["checkpoints"][0]["ready"] is True
+        assert "revisions" not in active_only
 
         preview = reviews / (
             "clip_0001.%s.audiohash.review.mp4" % video_hash[:12])
@@ -159,6 +191,34 @@ async def check():
         command = captured[0][0]
         assert "fps=24" in command[command.index("-vf") + 1]
         assert command[command.index("-t") + 1] == "15.083333333"
+
+        deduplicated_record = dict(record)
+        deduplicated_record.update({
+            "video_seek_seconds": record["video_seek_seconds"] + 1 / 24,
+            "start_frame": record["start_frame"] + 1,
+            "end_frame": record["end_frame"] + 1,
+        })
+        captured.clear()
+        original_usable = chain._usable_ffmpeg
+        original_run = chain._run_ffmpeg
+        try:
+            chain._usable_ffmpeg = lambda: "/fake/ffmpeg"
+
+            def slow_fake_run(command, timeout_seconds=None):
+                captured.append((command, timeout_seconds))
+                time.sleep(.05)
+                pathlib.Path(command[-1]).write_bytes(b"deduplicated preview")
+
+            chain._run_ffmpeg = slow_fake_run
+            paths = await asyncio.gather(*(
+                chain._ensure_plan_studio_source_preview(deduplicated_record)
+                for _index in range(4)
+            ))
+        finally:
+            chain._usable_ffmpeg = original_usable
+            chain._run_ffmpeg = original_run
+        assert len(set(paths)) == 1
+        assert len(captured) == 1
 
 
 if __name__ == "__main__":

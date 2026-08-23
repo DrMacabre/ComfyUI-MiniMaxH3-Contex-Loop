@@ -25,7 +25,6 @@ import secrets
 import shutil
 import subprocess
 import sys
-import threading
 import time
 import uuid
 import wave
@@ -154,7 +153,9 @@ PLAN_STUDIO_PREVIEW_TTL_SECONDS = 6 * 60 * 60
 PLAN_STUDIO_PREVIEW_MAX_SESSIONS = 32
 PLAN_STUDIO_PREVIEW_MAX_HEIGHT = 480
 _PLAN_STUDIO_SOURCE_PREVIEWS: dict[str, dict[str, Any]] = {}
-_PLAN_STUDIO_PREVIEW_BUILD_LOCK = threading.Lock()
+_PLAN_STUDIO_PREVIEW_BUILD_LOOP: asyncio.AbstractEventLoop | None = None
+_PLAN_STUDIO_PREVIEW_BUILD_GATE: asyncio.Semaphore | None = None
+_PLAN_STUDIO_PREVIEW_BUILD_TASKS: dict[str, asyncio.Task[str]] = {}
 H3_CONTEXT_LENGTHS = (
     1, 5, 22, 39, 56, 73, 90, 107, 124,
     141, 158, 175, 192, 209, 226, 243,
@@ -16553,11 +16554,9 @@ async def _delete_checkpoint_revision(request):
     return web.json_response(payload)
 
 
-async def _list_saved_checkpoints(request):
-    run_name = _safe_name(request.query.get("run_name", ""), "")
-    if not run_name:
-        return web.json_response(
-            {"error": "A non-empty H3 chain run_name is required."}, status=400)
+def _saved_checkpoint_listing(
+        run_name: str, include_graph: bool = True) -> dict[str, Any]:
+    """Read checkpoint metadata without blocking ComfyUI's event loop."""
     checkpoint_dir = os.path.join(
         _output_root(), "h3_chains", run_name, "checkpoints")
     review_dir = os.path.join(
@@ -16611,6 +16610,12 @@ async def _list_saved_checkpoints(request):
             except (OSError, TypeError, ValueError, json.JSONDecodeError,
                     KeyError):
                 continue
+    payload: dict[str, Any] = {
+        "run_name": run_name,
+        "checkpoints": checkpoints,
+    }
+    if not include_graph:
+        return payload
     try:
         graph = CheckpointGraphManager(_output_root()).graph(run_name)
     except FileNotFoundError:
@@ -16621,19 +16626,38 @@ async def _list_saved_checkpoints(request):
                 "branch_count": 0, "bytes": 0, "broken_count": 0,
             },
         }
-    except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
-        return web.json_response(
-            {"error": "Could not build checkpoint lineage: %s" % exc},
-            status=500)
-    return web.json_response({
-        "run_name": run_name,
-        "checkpoints": checkpoints,
+    payload.update({
         "revisions": graph["revisions"],
         "scenes": graph["scenes"],
         "branches": graph["branches"],
         "graph_hash": graph["graph_hash"],
         "summary": graph["summary"],
     })
+    return payload
+
+
+async def _list_saved_checkpoints(request):
+    run_name = _safe_name(request.query.get("run_name", ""), "")
+    if not run_name:
+        return web.json_response(
+            {"error": "A non-empty H3 chain run_name is required."}, status=400)
+    include_graph = str(request.query.get(
+        "include_graph", "true")).strip().lower() not in (
+            "0", "false", "no")
+    started = time.monotonic()
+    try:
+        payload = await asyncio.to_thread(
+            _saved_checkpoint_listing, run_name, include_graph)
+    except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        return web.json_response(
+            {"error": "Could not build checkpoint listing: %s" % exc},
+            status=500)
+    elapsed = time.monotonic() - started
+    if elapsed >= 1.0:
+        _LOG.warning(
+            "H3 checkpoint listing took %.2fs for run %s (%s)",
+            elapsed, run_name, "full graph" if include_graph else "active only")
+    return web.json_response(payload)
 
 
 async def _open_run_folder(request):
@@ -16787,11 +16811,7 @@ def _plan_studio_source_preview_path(record: dict[str, Any]) -> str:
 
 
 def _build_plan_studio_source_preview(record: dict[str, Any]) -> str:
-    # The active timeline card and comparison player can request the same URL
-    # at once. Serialize the short cache fill so that only one ffmpeg process
-    # builds a given (or any other) Studio preview at a time.
-    with _PLAN_STUDIO_PREVIEW_BUILD_LOCK:
-        return _build_plan_studio_source_preview_unlocked(record)
+    return _build_plan_studio_source_preview_unlocked(record)
 
 
 def _build_plan_studio_source_preview_unlocked(
@@ -16846,6 +16866,67 @@ def _build_plan_studio_source_preview_unlocked(
     return output_path
 
 
+def _plan_studio_preview_async_state(
+        ) -> tuple[asyncio.Semaphore, dict[str, asyncio.Task[str]]]:
+    """Return build coordination bound to ComfyUI's current event loop."""
+    global _PLAN_STUDIO_PREVIEW_BUILD_LOOP
+    global _PLAN_STUDIO_PREVIEW_BUILD_GATE
+    global _PLAN_STUDIO_PREVIEW_BUILD_TASKS
+    loop = asyncio.get_running_loop()
+    if (_PLAN_STUDIO_PREVIEW_BUILD_LOOP is not loop or
+            _PLAN_STUDIO_PREVIEW_BUILD_GATE is None):
+        _PLAN_STUDIO_PREVIEW_BUILD_LOOP = loop
+        _PLAN_STUDIO_PREVIEW_BUILD_GATE = asyncio.Semaphore(1)
+        _PLAN_STUDIO_PREVIEW_BUILD_TASKS = {}
+    gate = _PLAN_STUDIO_PREVIEW_BUILD_GATE
+    assert gate is not None
+    return gate, _PLAN_STUDIO_PREVIEW_BUILD_TASKS
+
+
+async def _ensure_plan_studio_source_preview(
+        record: dict[str, Any]) -> str:
+    """Deduplicate preview work without parking worker threads on a lock."""
+    path = _plan_studio_source_preview_path(record)
+    if os.path.isfile(path) and os.path.getsize(path) > 0:
+        return path
+    gate, tasks = _plan_studio_preview_async_state()
+    task = tasks.get(path)
+    if task is None:
+        async def build() -> str:
+            async with gate:
+                if os.path.isfile(path) and os.path.getsize(path) > 0:
+                    return path
+                started = time.monotonic()
+                result = await asyncio.to_thread(
+                    _build_plan_studio_source_preview_unlocked, dict(record))
+                elapsed = time.monotonic() - started
+                if elapsed >= 2.0:
+                    _LOG.warning(
+                        "Plan Studio source preview build took %.2fs (%d frames)",
+                        elapsed, int(record.get("frame_count", 0)))
+                return result
+
+        task = asyncio.create_task(build())
+        tasks[path] = task
+
+        def finished(completed: asyncio.Task[str]) -> None:
+            if tasks.get(path) is completed:
+                tasks.pop(path, None)
+            if completed.cancelled():
+                return
+            # Retrieve failures even when the initiating browser request was
+            # canceled; other concurrent waiters still receive the exception.
+            try:
+                completed.exception()
+            except Exception:
+                pass
+
+        task.add_done_callback(finished)
+    # A browser abandoning one media element must not cancel the shared cache
+    # fill still needed by the timeline or comparison player.
+    return await asyncio.shield(task)
+
+
 async def _plan_studio_source_preview(request):
     token = str(request.query.get("token") or "")
     try:
@@ -16871,8 +16952,12 @@ async def _plan_studio_source_preview(request):
             status=404)
     session["created"] = time.monotonic()
     try:
-        path = await asyncio.to_thread(
-            _build_plan_studio_source_preview, record)
+        path = await _ensure_plan_studio_source_preview(record)
+    except asyncio.CancelledError:
+        _LOG.info(
+            "Plan Studio source preview request canceled for scene %d slot %d; "
+            "shared cache build continues", scene, slot)
+        raise
     except (OSError, RuntimeError, TypeError, ValueError) as exc:
         _LOG.warning("Plan Studio source preview failed: %s", exc)
         return web.json_response({"error": str(exc)}, status=500)
