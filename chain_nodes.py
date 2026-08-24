@@ -4256,11 +4256,13 @@ SCENE_PROMPT_SEED_MODES = ("inherit", "fixed", "randomize")
 
 
 def _scene_prompt_choice_seed(
-        shot: dict[str, Any], plan_prompt_seed: int, index: int,
+        shot: dict[str, Any], legacy_plan_prompt_seed: int, index: int,
         shot_id: str) -> tuple[str, int | None, int]:
     """Resolve one scene's prompt-alternative seed policy.
 
-    The Plan-level seed remains the backward-compatible fallback.  Fixed and
+    An absent scene policy derives a stable value from its index and ID. The
+    plan seed argument remains only for calls made through the brief 0.6.12
+    compatibility API; the Plan node no longer exposes or stores it. Fixed and
     randomize are explicit authoring choices stored on the scene, while the
     returned choice seed is the exact value persisted with a resolved prompt.
     """
@@ -4276,7 +4278,8 @@ def _scene_prompt_choice_seed(
             (", ".join(SCENE_PROMPT_SEED_MODES),))
 
     if mode == "inherit":
-        return mode, None, _derived_seed(plan_prompt_seed, index, shot_id)
+        return mode, None, _derived_seed(
+            legacy_plan_prompt_seed, index, shot_id)
     if mode == "randomize":
         return mode, None, secrets.randbits(64)
 
@@ -5526,9 +5529,7 @@ def _plan_with_review_revision(plan: dict[str, Any], index: int,
     shot = revised["shots"][index - 1]
     prompt_choice_seed = int(shot.get(
         "prompt_choice_seed",
-        _derived_seed(
-            int(plan.get("prompt_seed", 0)), index,
-            str(shot.get("id") or "")),
+        _derived_seed(0, index, str(shot.get("id") or "")),
     ))
     scene_prompt, dynamic_prompt = _resolve_dynamic_prompt(
         scene_prompt_template, prompt_choice_seed,
@@ -5600,7 +5601,7 @@ def _normalize_plan(
     video_blend_frames: int = 0,
     continuation_mode: str = "guide",
     chain_policy: Any = None,
-    prompt_seed: int = 0,
+    legacy_prompt_seed: int = 0,
 ) -> dict[str, Any]:
     try:
         raw = json.loads(str(plan_json or ""))
@@ -5667,9 +5668,9 @@ def _normalize_plan(
         else migrate_legacy_audio_mode(audio_mode))
     default_steps = max(1, min(10000, int(default_steps)))
     base_seed = max(0, min(MAX_SEED, int(base_seed)))
-    prompt_seed = int(prompt_seed)
-    if prompt_seed < 0 or prompt_seed > MAX_SEED:
-        raise ValueError("H3 prompt seed is outside the uint64 range.")
+    legacy_prompt_seed = int(legacy_prompt_seed)
+    if legacy_prompt_seed < 0 or legacy_prompt_seed > MAX_SEED:
+        raise ValueError("H3 legacy prompt seed is outside the uint64 range.")
     segment_crf = max(0, min(51, int(segment_crf)))
     video_blend_frames = int(video_blend_frames)
     if video_blend_frames < 0 or video_blend_frames > context_length:
@@ -5848,7 +5849,7 @@ def _normalize_plan(
         try:
             prompt_seed_mode, scene_prompt_seed, prompt_choice_seed = (
                 _scene_prompt_choice_seed(
-                    item, prompt_seed, index, shot_id))
+                    item, legacy_prompt_seed, index, shot_id))
         except ValueError as exc:
             raise ValueError("Shot %d: %s" % (index, exc)) from exc
         scene_prompt, dynamic_prompt = _resolve_dynamic_prompt(
@@ -6012,7 +6013,6 @@ def _normalize_plan(
         "shots": shots,
         "compatibility": compatibility,
         "segment_crf": segment_crf,
-        "prompt_seed": prompt_seed,
         "total_delivered_frames": stitched_frames,
     }
     plan_shot_contracts = []
@@ -10295,8 +10295,7 @@ class MiniMaxH3ChainPlan:
                                "<Picture/Video/Audio N> labels. Scene prompts "
                                "may use {first option|second option}; Plan "
                                "resolves each group from that scene's Prompt "
-                               "alternatives control, with prompt_seed as the "
-                               "backward-compatible fallback."}),
+                               "alternatives control."}),
                 "run_name": ("STRING", {
                     "default": "h3_chain",
                     "tooltip": "Identity of one render history and its folder "
@@ -10513,16 +10512,6 @@ class MiniMaxH3ChainPlan:
                                "soundtrack, source-audio reference, generated "
                                "audio continuity, and automatic audio context "
                                "in one connection."}),
-                "prompt_seed": ("INT", {
-                    "default": 0, "min": 0, "max": MAX_SEED,
-                    "control_after_generate": True,
-                    "tooltip": "Backward-compatible fallback seed for scenes "
-                               "whose Prompt alternatives control is Inherit. "
-                               "Its normal after-generate control defaults to "
-                               "Randomize, so inheriting scenes can select fresh "
-                               "{one|two} text. Each scene may instead choose "
-                               "Fixed scene seed or Randomize each queue. Prompt "
-                               "choice seeds never change sampler/noise seeds."}),
             },
         }
 
@@ -10575,7 +10564,6 @@ class MiniMaxH3ChainPlan:
               audio_context_length, default_duration_seconds, default_steps,
               base_seed, segment_crf, video_blend_frames=0,
               continuation_mode="guide",
-              prompt_seed=0,
               plan_json_input=None, chain_policy=None):
         effective_plan_json = (
             plan_json_input
@@ -10588,7 +10576,7 @@ class MiniMaxH3ChainPlan:
             anchor_mode, crop, audio_mode, audio_context_length,
             default_duration_seconds, default_steps, base_seed, segment_crf,
             generation_fingerprint, video_blend_frames, continuation_mode,
-            chain_policy, prompt_seed)
+            chain_policy)
         return (plan, plan["summary"], len(plan["shots"]),
                 plan["compatibility"]["width"],
                 plan["compatibility"]["height"],

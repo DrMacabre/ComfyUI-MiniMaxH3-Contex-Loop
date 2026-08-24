@@ -43,7 +43,7 @@ Restart ComfyUI, then:
 2. Resolve missing model selections; models are not bundled.
 3. Give Plan a unique `run_name` and edit its scene prompts.
    Use `{wide shot|close-up}` for alternatives. Each scene's **Prompt
-   alternatives** control can inherit Plan's fallback seed, keep a fixed scene
+   alternatives** control can derive a stable scene seed, keep an exact fixed
    seed, or randomize that scene on every queue. These choices never change
    sampler seeds, and the exact resolved choice is saved with the checkpoint.
 4. Keep **Guide** and **Generated audio** for a simple first run.

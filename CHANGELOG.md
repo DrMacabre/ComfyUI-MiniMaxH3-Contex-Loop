@@ -15,8 +15,9 @@ Newest first. This file keeps release history out of the onboarding README.
 
 - Added deterministic alternatives in scene prompts with ComfyUI-style
   `{first|second}` syntax. Every scene now has a **Prompt alternatives** policy:
-  inherit the Plan fallback, use an exact fixed scene seed, or generate a fresh
-  choice each time that Plan is queued. Sampler seeds remain completely
+  derive a stable scene seed, use an exact fixed scene seed, or generate a fresh
+  choice each time that Plan is queued. The redundant Plan-wide prompt seed was
+  removed. Sampler seeds remain completely
   independent. The authored template, selected text, and exact choice seed are
   saved together. Resume treats a new choice or policy from the same template
   as neutral for completed predecessors, but still rejects an actual template

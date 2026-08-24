@@ -681,6 +681,8 @@ assert.match(editorSource, /Derived seed:/);
 assert.match(editorSource, /New random/);
 assert.match(editorSource, /Use derived/);
 assert.match(editorSource, /Prompt alternatives/);
+assert.match(editorSource, /Stable derived/);
+assert.doesNotMatch(editorSource, /Inherit Plan seed/);
 assert.match(editorSource, /Randomize each queue/);
 assert.match(editorSource, /setScenePromptSeedMode/);
 assert.match(editorSource, /Scene LoRA route/);

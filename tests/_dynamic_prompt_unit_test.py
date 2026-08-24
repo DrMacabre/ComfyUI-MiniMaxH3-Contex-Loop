@@ -38,8 +38,7 @@ sys.modules[spec.name] = chain
 spec.loader.exec_module(chain)
 
 
-def normalize(plan_prompt_seed, prompt="A {wide|close} shot with {rain|sun}.",
-              **shot_overrides):
+def normalize(prompt="A {wide|close} shot with {rain|sun}.", **shot_overrides):
     shot = {
         "id": "one", "prompt": prompt, "length": 39, "seed": 123,
     }
@@ -48,7 +47,7 @@ def normalize(plan_prompt_seed, prompt="A {wide|close} shot with {rain|sun}.",
         json.dumps({"shots": [shot]}),
         "dynamic-prompt-test", 64, 64, 22, "video", "head", "disabled",
         "generated_audio", 22, 2.0, 8, 7, 18, "model-stack", 0,
-        "guide", None, plan_prompt_seed)
+        "guide", None)
 
 
 rendered, used = chain._resolve_dynamic_prompt(
@@ -62,7 +61,7 @@ assert chain._resolve_dynamic_prompt("ordinary {camera note}", 42) == (
 assert chain._resolve_dynamic_prompt(r"literal \{one\|two\}", 42) == (
     "literal {one|two}", False)
 
-first = normalize(0)
+first = normalize()
 assert first["shots"][0]["seed"] == 123
 assert first["shots"][0]["scene_prompt_template"] == (
     "A {wide|close} shot with {rain|sun}.")
@@ -73,7 +72,8 @@ assert first["shots"][0]["prompt_choice_seed"] == chain._derived_seed(
 
 different = None
 for candidate_seed in range(1, 100):
-    candidate = normalize(candidate_seed)
+    candidate = normalize(
+        prompt_seed_mode="fixed", prompt_seed=str(candidate_seed))
     if (candidate["shots"][0]["scene_prompt"] !=
             first["shots"][0]["scene_prompt"]):
         different = candidate
@@ -87,7 +87,7 @@ assert chain._scene_dependency_diffs(
     chain._scene_dependency_record(different, 1),
 ) == []
 
-fixed_scene = normalize(999, prompt_seed_mode="fixed", prompt_seed="42")
+fixed_scene = normalize(prompt_seed_mode="fixed", prompt_seed="42")
 assert fixed_scene["shots"][0]["prompt_seed_mode"] == "fixed"
 assert fixed_scene["shots"][0]["prompt_seed"] == 42
 assert fixed_scene["shots"][0]["prompt_choice_seed"] == 42
@@ -98,14 +98,14 @@ assert chain._scene_dependency_diffs(
     chain._scene_dependency_record(fixed_scene, 1),
 ) == []
 
-legacy_fixed_scene = normalize(999, prompt_seed="43")
+legacy_fixed_scene = normalize(prompt_seed="43")
 assert legacy_fixed_scene["shots"][0]["prompt_seed_mode"] == "fixed"
 assert legacy_fixed_scene["shots"][0]["prompt_choice_seed"] == 43
 
 original_randbits = chain.secrets.randbits
 try:
     chain.secrets.randbits = lambda bits: 777
-    randomized_scene = normalize(999, prompt_seed_mode="randomize")
+    randomized_scene = normalize(prompt_seed_mode="randomize")
 finally:
     chain.secrets.randbits = original_randbits
 assert randomized_scene["shots"][0]["prompt_seed_mode"] == "randomize"
@@ -119,20 +119,20 @@ assert chain._scene_dependency_diffs(
 ) == []
 
 try:
-    normalize(0, prompt_seed_mode="fixed")
+    normalize(prompt_seed_mode="fixed")
 except ValueError as exc:
     assert "fixed prompt_seed_mode requires prompt_seed" in str(exc)
 else:
     raise AssertionError("fixed prompt seed mode accepted no prompt_seed")
 
 try:
-    normalize(0, prompt_seed_mode="rolling")
+    normalize(prompt_seed_mode="rolling")
 except ValueError as exc:
     assert "prompt_seed_mode must be one of" in str(exc)
 else:
     raise AssertionError("invalid prompt seed mode was accepted")
 
-changed_template = normalize(candidate_seed, "A {wide|close} shot at night.")
+changed_template = normalize("A {wide|close} shot at night.")
 template_diffs = chain._scene_dependency_diffs(
     chain._scene_dependency_record(first, 1),
     chain._scene_dependency_record(changed_template, 1),
@@ -147,15 +147,15 @@ assert (rerolled_sampler["shots"][0]["scene_prompt"] ==
 assert (rerolled_sampler["shots"][0]["prompt_choice_seed"] ==
         first["shots"][0]["prompt_choice_seed"])
 
-plain_zero = normalize(0, "A fixed shot.")
-plain_random = normalize(999, "A fixed shot.")
+plain_zero = normalize("A fixed shot.")
+plain_random = normalize(
+    "A fixed shot.", prompt_seed_mode="fixed", prompt_seed="999")
 assert plain_zero["shots"][0]["scene_prompt"] == "A fixed shot."
 assert "scene_prompt_template" not in plain_zero["shots"][0]
 assert plain_zero["plan_hash"] == plain_random["plan_hash"]
 
-prompt_seed_schema = chain.MiniMaxH3ChainPlan.INPUT_TYPES()["optional"][
-    "prompt_seed"][1]
-assert prompt_seed_schema["control_after_generate"] is True
+assert "prompt_seed" not in chain.MiniMaxH3ChainPlan.INPUT_TYPES()["optional"]
+assert "prompt_seed" not in first
 assert chain.MiniMaxH3ChainPlan.IS_CHANGED(
     json.dumps({"shots": [{"prompt": "fixed"}]})) is False
 assert math.isnan(chain.MiniMaxH3ChainPlan.IS_CHANGED(json.dumps({
