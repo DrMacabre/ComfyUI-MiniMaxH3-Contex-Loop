@@ -200,6 +200,41 @@ assert any(item["field"] == "generation_fingerprint"
            for item in chain._scene_dependency_diffs(
                old_reference_dependency, semantic_active_dependency))
 
+# A real migration may have several native refs plus several new semantic
+# anchors. Check every direct inactive subset before trying legacy-order
+# permutations, whose factorial search can otherwise exhaust the safety cap
+# before it reaches the unchanged native-only registry.
+large_native_registry = None
+for tag in ("actor", "wardrobe", "prop", "later_actor"):
+    large_native_registry = chain._append_tagged_reference(
+        large_native_registry, kind="picture", tag=tag, value=tag,
+        content_hash=tag + "-hash")
+large_native_registry = chain._append_tagged_reference(
+    large_native_registry, kind="audio", tag="later_audio", value="audio",
+    content_hash="later-audio-hash", timeline_mode="source_timeline",
+    align_audio_reference=True)
+legacy_large_fingerprint = chain._make_reference_schedule(
+    large_native_registry["entries"])["fingerprint"]
+large_semantic_entries = [{
+    "kind": "semantic_anchor", "tag": tag,
+    "activation": "prompt", "value": tag,
+    "content_hash": tag + "-hash",
+} for tag in ("future_a", "future_b", "future_c")]
+large_semantic_bundle = chain._make_semantic_anchor_bundle(
+    large_semantic_entries, "512", "timestamped_video")
+large_combined_registry = chain._combined_reference_registry(
+    large_native_registry, large_semantic_bundle)
+legacy_large_dependency = chain._scene_dependency_record(
+    reference_plan(
+        legacy_large_fingerprint,
+        "@actor wears @wardrobe and carries @prop."), 1, None)
+large_combined_dependency = chain._scene_dependency_record(
+    reference_plan(
+        chain._reference_fingerprint_output(large_combined_registry),
+        "@actor wears @wardrobe and carries @prop."), 1, None)
+assert chain._scene_dependency_diffs(
+    legacy_large_dependency, large_combined_dependency) == []
+
 # Legacy scheduled references use their scene selectors rather than prompt tags.
 scheduled_v1 = chain._append_scheduled_reference(
     None, kind="picture", tag="actor", scenes="all", value="actor",
