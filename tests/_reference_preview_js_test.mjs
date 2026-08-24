@@ -276,8 +276,7 @@ connect(semanticAnchorA, semanticAnchorB, "previous");
 connect(semanticImageB, semanticAnchorB, "image");
 connect(semanticAnchorB, semanticBundle, "anchors");
 connect(nativePicture, semanticBundle, "references");
-connect(semanticBundle, semanticWrapper, "references", 1);
-connect(semanticBundle, semanticWrapper, "semantic_anchors", 0);
+connect(semanticBundle, semanticWrapper, "references", 0);
 
 assert.deepEqual(collectTaggedNodes(semanticWrapper), [nativePicture]);
 assert.deepEqual(

@@ -167,13 +167,12 @@ with tempfile.TemporaryDirectory() as temporary:
 
     dedicated_draft = chain.MiniMaxH3SemanticPictureAnchor().add(
         torch.zeros((1, 32, 32, 3)), "semantic_only")[0]
-    dedicated_bundle = chain.MiniMaxH3SemanticAnchorBundle().bundle(
+    dedicated_references = chain.MiniMaxH3SemanticAnchorBundle().bundle(
         dedicated_draft, "512", "timestamped_video",
         references=tagged_picture)[0]
     _prepared, dedicated = chain._preflight_chain(
         semantic_plan("Use @replacement and #semantic_only[0.00s]."),
-        tagged_references=tagged_picture,
-        semantic_anchors=dedicated_bundle)
+        tagged_references=dedicated_references)
     assert dedicated["ok"] is True
     assert dedicated["references"]["semantic_route"] == "bundle"
     assert dedicated["references"]["registered_semantic_tags"] == [
@@ -181,15 +180,15 @@ with tempfile.TemporaryDirectory() as temporary:
     assert [item["tag"] for item in dedicated["scenes"][0]["references"]] == [
         "replacement"]
 
-    _prepared, semantic_only = chain._preflight_chain(
+    semantic_only_references = chain.MiniMaxH3SemanticAnchorBundle().bundle(
+        dedicated_draft, "512", "timestamped_video")[0]
+    _prepared, semantic_only_single_wire = chain._preflight_chain(
         semantic_plan("Use #semantic_only[0.00s]."),
-        semantic_anchors=dedicated_bundle)
-    assert semantic_only["ok"] is True
-    assert semantic_only["references"]["route"] == "none"
-    assert semantic_only["references"]["semantic_route"] == "bundle"
-    assert semantic_only["references"]["registered_tags"] == []
-    assert semantic_only["references"]["registered_semantic_tags"] == [
-        "semantic_only"]
+        tagged_references=semantic_only_references)
+    assert semantic_only_single_wire["ok"] is True
+    assert semantic_only_single_wire["references"]["route"] == "tagged"
+    assert semantic_only_single_wire["references"][
+        "registered_semantic_tags"] == ["semantic_only"]
 
     _prepared, unknown_anchor = chain._preflight_chain(
         semantic_plan("Use #missing[1.00s]."),

@@ -180,7 +180,13 @@ export function collectTaggedNodes(wrapper) {
 }
 
 export function collectSemanticAnchorNodes(wrapper) {
-    const bundle = inputSource(wrapper, "semantic_anchors");
+    const candidates = [
+        inputSource(wrapper, "references"),
+        inputSource(wrapper, "tagged_references"),
+    ];
+    const bundle = candidates.find(
+        (node) => nodeType(node) === SEMANTIC_ANCHOR_BUNDLE_TYPE,
+    );
     if (nodeType(bundle) !== SEMANTIC_ANCHOR_BUNDLE_TYPE) {
         return {bundle: null, nodes: []};
     }

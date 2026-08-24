@@ -102,7 +102,7 @@ function sourceBinding(manager, source, link, createId, {
 export function collectSemanticAnchorBindings(manager, createId = randomBindingId) {
     manager.properties ??= {};
     manager.properties.h3_asset_roles ??= {};
-    const bundleLink = linkedNode(manager, "semantic_anchors");
+    const bundleLink = linkedNode(manager, "tagged_references");
     if (!bundleLink || nodeType(bundleLink.source) !== SEMANTIC_ANCHOR_BUNDLE_NODE) {
         return [];
     }

@@ -73,7 +73,10 @@ then click to insert it. Audio never autoplays.
 
 For new workflows, register Qwen-only stills with **Semantic Picture Anchor**,
 chain those small nodes, and finish them with one **Semantic Anchor Bundle**.
-Connect that single bundle to Tagged Ref2VA, Plan Studio, and Run Manager. The
+Connect the Bundle's **references** output to Tagged Ref2VA's **references**,
+Plan Studio's **tagged_references**, and Run Manager's **tagged_references**.
+That one reference carrier contains both native `@references` and Qwen-only
+`#anchors`, but semantic images remain excluded from native H3 capacity. The
 Bundle owns the shared presentation size and mode, so individual anchor nodes
 store their original picture and scale it only when a scene actually calls its
 `#tag`.
