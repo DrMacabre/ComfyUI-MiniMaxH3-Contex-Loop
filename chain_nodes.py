@@ -4855,9 +4855,31 @@ def _lineage_reference_is_active(
         int(start) <= int(scene) <= int(end) for start, end in ranges)
 
 
-def _reference_registry_growth_is_scene_neutral(
+def _reference_lineage_effective_fingerprint(
+        lineage: dict[str, Any], scene: int,
+        active_tags: set[str]) -> str | None:
+    """Hash only registry entries which can affect one generated scene."""
+    entries = lineage.get("entries")
+    if not isinstance(entries, list) or any(
+            not isinstance(entry, dict) for entry in entries):
+        return None
+    registry_mode = str(lineage.get("registry_mode") or "ordered")
+    if registry_mode not in ("ordered", "tagged"):
+        return None
+    effective = [
+        entry for entry in entries
+        if _lineage_reference_is_active(entry, scene, active_tags)
+    ]
+    # A wrapper describes semantic presentation settings. It has no effect on
+    # a scene which activates none of the wrapped registry's entries.
+    wrapper = lineage.get("wrapper") if effective else None
+    return _reference_contracts_fingerprint(
+        effective, wrapper, registry_mode)
+
+
+def _reference_registry_change_is_scene_neutral(
         saved: dict[str, Any], current: dict[str, Any]) -> bool:
-    """Prove that a registry mismatch only inserted inactive references."""
+    """Prove that a registry mismatch changes no reference used by the scene."""
     saved_scopes = saved.get("scopes") or {}
     current_scopes = current.get("scopes") or {}
     saved_global = saved_scopes.get("global_generation") or {}
@@ -4867,7 +4889,30 @@ def _reference_registry_growth_is_scene_neutral(
         current_global.get("generation_fingerprint") or "")
     if not saved_fingerprint or saved_fingerprint == current_fingerprint:
         return False
+    saved_lineage = saved.get("generation_fingerprint_lineage")
     lineage = current.get("generation_fingerprint_lineage")
+    scene = int(current.get("scene", 0))
+    saved_scene = saved_scopes.get("scene_generation") or {}
+    current_scene = current_scopes.get("scene_generation") or {}
+    saved_tags_value = saved_scene.get("active_reference_tags")
+    current_tags_value = current_scene.get("active_reference_tags")
+    if isinstance(saved_tags_value, list) and isinstance(
+            current_tags_value, list):
+        saved_tags = {str(tag) for tag in saved_tags_value}
+        current_tags = {str(tag) for tag in current_tags_value}
+        if saved_tags == current_tags and isinstance(
+                saved_lineage, dict) and isinstance(lineage, dict):
+            saved_effective = _reference_lineage_effective_fingerprint(
+                saved_lineage, scene, saved_tags)
+            current_effective = _reference_lineage_effective_fingerprint(
+                lineage, scene, current_tags)
+            if (saved_effective is not None
+                    and saved_effective == current_effective):
+                return True
+
+    # Migration fallback for older scene-dependency records which saved only
+    # the prior full-registry fingerprint. A current lineage can still prove
+    # append/insert-only growth when every added entry is inactive here.
     prefixes = lineage.get("prefixes") if isinstance(lineage, dict) else None
     if (not isinstance(prefixes, list) or len(prefixes) < 2
             or str(lineage.get("current") or "") != current_fingerprint
@@ -4880,8 +4925,6 @@ def _reference_registry_growth_is_scene_neutral(
         if isinstance(item, dict)
         and str(item.get("fingerprint") or "") == saved_fingerprint
     ), None)
-    scene = int(current.get("scene", 0))
-    current_scene = current_scopes.get("scene_generation") or {}
     active_tags = {
         str(tag) for tag in current_scene.get("active_reference_tags", ())
     }
@@ -5002,7 +5045,7 @@ def _scene_dependency_diffs(
                 item for item in scope_diffs
                 if item[0] not in ("prompt_hash", "active_reference_tags")]
         if scope == "global_generation" and (
-                _reference_registry_growth_is_scene_neutral(
+                _reference_registry_change_is_scene_neutral(
                     saved, reference_current)):
             scope_diffs = [item for item in scope_diffs
                            if item[0] != "generation_fingerprint"]
@@ -7102,13 +7145,35 @@ def _verify_segment_artifacts(segment: dict[str, Any], index: int) -> None:
                 "check." % index)
 
 
+def _resume_context_predecessor(
+        plan: dict[str, Any], start_clip: int) -> int | None:
+    """Return the sole saved scene whose AV state the selected start consumes."""
+    start_clip = int(start_clip)
+    if start_clip <= 1:
+        return None
+    cfg = plan["compatibility"]
+    shot = plan["shots"][start_clip - 1]
+    context_length = _shot_context_length(
+        shot, int(cfg.get("context_length", 0)))
+    audio_context_length = _shot_audio_context_length(
+        shot, int(cfg.get("audio_context_length", 0)), context_length)
+    continuation_mode = str(shot.get(
+        "continuation_mode", cfg.get("continuation_mode", "guide")))
+    generated_audio_context = (
+        continuation_mode in GUIDE_CONTINUATION_MODES
+        and _audio_policy_uses_generated_continuity(cfg, shot)
+        and not _audio_policy_locks_source_audio(cfg, shot)
+        and audio_context_length > 0)
+    return start_clip - 1 if (
+        context_length > 0 or generated_audio_context) else None
+
+
 def _load_resume_state(
         plan: dict[str, Any], start_clip: int,
         verify_history: bool = True, source_timeline: Any = None,
         source_audio: Any = None) -> dict[str, Any]:
-    if _st_load is None:
-        raise RuntimeError("safetensors is required to resume H3 chains.")
     previous_index = start_clip - 1
+    context_predecessor = _resume_context_predecessor(plan, int(start_clip))
     segments = []
     previous_meta = None
     if not bool(verify_history):
@@ -7127,7 +7192,8 @@ def _load_resume_state(
                 "missing: %s" % (start_clip, index, paths["metadata"]))
         metadata = _read_json(paths["metadata"])
         saved_dependency = metadata.get("scene_dependency")
-        if bool(verify_history) and isinstance(saved_dependency, dict):
+        if (bool(verify_history) and index == context_predecessor
+                and isinstance(saved_dependency, dict)):
             current_source_dependency = _canonical_source_reference_dependency(
                 plan, index, source_timeline, source_audio)
             if current_source_dependency is None:
@@ -7150,8 +7216,10 @@ def _load_resume_state(
                         _format_dependency_mismatches(dependency_diffs), index))
             accepted = str(metadata.get("history_hash") or "") or None
         else:
-            accepted = _selected_resume_history_hash(
-                plan, index, metadata, verify_history)
+            # Only the immediate predecessor can feed the selected scene, and
+            # a zero-context start consumes no predecessor at all. Keep older
+            # clips as immutable assembly artifacts under their saved identity.
+            accepted = str(metadata.get("history_hash") or "") or None
         if accepted is None:
             if bool(verify_history):
                 raise ValueError(
@@ -7178,27 +7246,36 @@ def _load_resume_state(
 
     if previous_meta is None:
         raise RuntimeError("Internal resume error: predecessor metadata unavailable.")
-    checkpoint = _absolute_output_path(previous_meta["segment"]["checkpoint"])
-    tensors = _st_load(checkpoint)
-    required = {"context_frames", "video", "audio"}
-    missing = sorted(required - set(tensors))
-    if missing:
-        raise ValueError("H3 chain checkpoint is missing tensors: %s" % missing)
-    context_frames = tensors["context_frames"]
-    previous_delivered = int(
-        previous_meta["segment"].get("delivered_frames", 0))
-    if (getattr(context_frames, "ndim", 0) != 4
-            or int(context_frames.shape[0]) > previous_delivered):
-        raise ValueError(
-            "H3 chain predecessor checkpoint contains an invalid context "
-            "tensor shape %s for a %d-frame delivered clip." %
-            (tuple(getattr(context_frames, "shape", ())),
-             previous_delivered))
+    context_frames = None
+    previous_latent = None
+    if context_predecessor is not None:
+        if _st_load is None:
+            raise RuntimeError("safetensors is required to resume H3 chains.")
+        checkpoint = _absolute_output_path(
+            previous_meta["segment"]["checkpoint"])
+        tensors = _st_load(checkpoint)
+        required = {"context_frames", "video", "audio"}
+        missing = sorted(required - set(tensors))
+        if missing:
+            raise ValueError(
+                "H3 chain checkpoint is missing tensors: %s" % missing)
+        context_frames = tensors["context_frames"]
+        previous_latent = {
+            "samples": [tensors["video"], tensors["audio"]]}
+        previous_delivered = int(
+            previous_meta["segment"].get("delivered_frames", 0))
+        if (getattr(context_frames, "ndim", 0) != 4
+                or int(context_frames.shape[0]) > previous_delivered):
+            raise ValueError(
+                "H3 chain predecessor checkpoint contains an invalid context "
+                "tensor shape %s for a %d-frame delivered clip." %
+                (tuple(getattr(context_frames, "shape", ())),
+                 previous_delivered))
     return {
         "plan": plan,
         "index": start_clip,
         "previous_frames": context_frames,
-        "previous_latent": {"samples": [tensors["video"], tensors["audio"]]},
+        "previous_latent": previous_latent,
         "segments": segments,
         "resumed_from": previous_index,
         "resume_history_verification_disabled": not bool(verify_history),
@@ -11526,6 +11603,8 @@ def _preflight_resume(
     }
     if int(start) <= 1:
         return result
+    context_predecessor = _resume_context_predecessor(plan, int(start))
+    result["context_predecessor"] = context_predecessor
     for index in range(1, int(start)):
         item: dict[str, Any] = {"scene": index, "ok": False}
         try:
@@ -11537,7 +11616,8 @@ def _preflight_resume(
             metadata = _read_json(metadata_path)
             saved_dependency = metadata.get("scene_dependency")
             dependency_diffs = []
-            if bool(verify_history) and isinstance(saved_dependency, dict):
+            if (bool(verify_history) and index == context_predecessor
+                    and isinstance(saved_dependency, dict)):
                 current_source_dependency = (
                     _canonical_source_reference_dependency(
                         plan, index, source_timeline, source_audio))
@@ -11555,8 +11635,11 @@ def _preflight_resume(
                     saved_dependency, current_dependency)
                 accepted = (str(metadata.get("history_hash") or "") or None)
             else:
-                accepted = _selected_resume_history_hash(
-                    plan, index, metadata, verify_history)
+                # These clips remain part of final assembly, but the selected
+                # sampler does not consume their settings or latent state.
+                # Validate their recorded identity and files without comparing
+                # them to edits in the current Plan.
+                accepted = str(metadata.get("history_hash") or "") or None
             item["mismatches"] = dependency_diffs
             if dependency_diffs:
                 raise ValueError(
