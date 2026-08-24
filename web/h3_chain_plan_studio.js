@@ -22,13 +22,18 @@ import {
     setShotLengthMode,
     sharedPrompt,
     shotLengthMode,
-} from "./h3_chain_plan_core.mjs?v=0.5.16";
+} from "./h3_chain_plan_core.mjs?v=0.5.17";
 import {
     promptRevisionHelp,
     promptRevisionLabel,
     promptRevisionNavigation,
-} from "./h3_prompt_history_core.mjs?v=0.5.16";
-import {availableReferenceRecords} from "./h3_reference_preview_core.mjs?v=0.5.16";
+} from "./h3_prompt_history_core.mjs?v=0.5.17";
+import {
+    availableReferenceRecords,
+    convertTaggedPictureReference,
+    taggedPictureReferenceMode,
+    taggedPictureReferenceToken,
+} from "./h3_reference_preview_core.mjs?v=0.5.17";
 import {
     applySceneAudioOverride,
     applySceneTransitionPreset,
@@ -37,12 +42,12 @@ import {
     sceneAudioPolicy,
     sceneTransitionPreset,
     transitionPresetLabel,
-} from "./h3_policy_core.mjs?v=0.5.16";
+} from "./h3_policy_core.mjs?v=0.5.17";
 import {
     resolveAudioContextLength,
     resolveAudioPolicy,
     resolveTransitionPolicy,
-} from "./h3_socket_presentation_core.mjs?v=0.5.16";
+} from "./h3_socket_presentation_core.mjs?v=0.5.17";
 import {
     locateStudioTimelineSecond,
     h3StudioGridMarkers,
@@ -54,8 +59,8 @@ import {
     studioSourceAudioSecond,
     studioSourceSecond,
     studioWaveformSceneSamples,
-} from "./h3_chain_plan_studio_core.mjs?v=0.5.16";
-import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.5.16";
+} from "./h3_chain_plan_studio_core.mjs?v=0.5.17";
+import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.5.17";
 
 const {connectedPromptEditors, publishCompanionScene} = promptCompanionSync;
 function publishCompanionPrompt(...args) {
@@ -216,6 +221,11 @@ function injectStyles() {
         .h3studio-refs { display:none; gap:5px; padding:7px; border:1px solid var(--hs-border);
             border-radius:6px; background:var(--hs-bg); flex-wrap:wrap; }
         .h3studio-refs.h3studio-open { display:flex; }
+        .h3studio-ref-entry { display:flex; align-items:stretch; gap:2px; }
+        .h3studio-ref-mode { display:flex; gap:1px; }
+        .h3studio-ref-mode button { min-width:28px; padding:2px 5px; font-size:10px; }
+        .h3studio-ref-mode button.h3studio-selected { border-color:var(--hs-accent);
+            color:var(--hs-accent); }
         .h3studio-ref-preview { flex:1 0 100%; display:grid; grid-template-columns:minmax(120px,220px) 1fr;
             gap:8px; align-items:start; color:var(--hs-muted); }
         .h3studio-ref-preview img,.h3studio-ref-preview video { width:100%; max-height:150px; object-fit:contain; background:#08090c; }
@@ -403,6 +413,7 @@ function mount(node) {
             status:null, loadToken:0, loadPromise:null, saveTimer:null,
             pendingDraft:null, savePromise:null, error:""},
         promptEditors:[], lastPromptEditorsSignature:"",
+        referenceSyntax:new Map(),
     };
     node._h3PlanStudioState = state;
 
@@ -1089,6 +1100,17 @@ function mount(node) {
                 : "No downstream Tagged/Scheduled Ref2VA, core Ref2VA, or I2V references were found."));
             return;
         }
+        function syntaxFor(record) {
+            const key = `${String(state.plan?.shots?.[state.active]?.id ?? state.active)}:${record.tag}`;
+            const usedMode = referenceData.mode === "tagged" && record.supportsSemantic
+                ? taggedPictureReferenceMode(textarea.value, record.tag) : "native";
+            return {
+                key,
+                usedMode,
+                syntax:["native", "semantic"].includes(usedMode)
+                    ? usedMode : state.referenceSyntax.get(key) ?? "native",
+            };
+        }
         const preview = element("div", "h3studio-ref-preview");
         function show(record) {
             preview.replaceChildren();
@@ -1100,16 +1122,64 @@ function mount(node) {
                 if (kind !== "image") { media.controls = true; media.preload = "metadata"; }
                 preview.append(media);
             }
-            preview.append(element("div", "", `${record.token}${record.label && record.label !== record.token ? ` → ${record.label}` : ""}\n${record.kind} · ${record.selector === "prompt tag" ? "insert to activate" : `scenes ${record.selector}`}`));
+            const {syntax} = syntaxFor(record);
+            const displayToken = syntax === "semantic"
+                ? taggedPictureReferenceToken(record.tag, "semantic")
+                : record.token;
+            preview.append(element("div", "", `${displayToken}${record.label && record.label !== record.token ? ` → ${record.label}` : ""}\n${record.kind} · ${record.selector === "prompt tag" ? "insert to activate" : `scenes ${record.selector}`}`));
         }
         const icons = {picture:"▧",video:"▶",audio:"♫"};
         for (const record of records) {
-            const chip = button(`${icons[record.kind] ?? "@"} ${record.token}`, "Insert this connected reference label or alias", () => {
-                insertText(textarea, record.token); tray.classList.remove("h3studio-open");
+            const {key, usedMode, syntax} = syntaxFor(record);
+            const displayToken = syntax === "semantic"
+                ? taggedPictureReferenceToken(record.tag, "semantic")
+                : record.token;
+            const entry = element("div", "h3studio-ref-entry");
+            const chip = button(`${icons[record.kind] ?? "@"} ${displayToken}`, "Insert this connected reference label or alias", () => {
+                const start = textarea.selectionStart ?? textarea.value.length;
+                insertText(textarea, displayToken);
+                if (syntax === "semantic") {
+                    textarea.setSelectionRange(
+                        start + displayToken.indexOf("[") + 1,
+                        start + displayToken.lastIndexOf("s]"),
+                    );
+                }
+                tray.classList.remove("h3studio-open");
             });
             chip.addEventListener("mouseenter", () => show(record));
             chip.addEventListener("focus", () => show(record));
-            tray.append(chip);
+            entry.append(chip);
+            if (referenceData.mode === "tagged" && record.supportsSemantic) {
+                const modes = element("div", "h3studio-ref-mode");
+                for (const [target, label] of [["native", "@"], ["semantic", "#"]]) {
+                    const control = button(
+                        label,
+                        target === "native"
+                            ? "Use native @tag and convert semantic anchors in this scene"
+                            : "Use semantic #tag[time] and convert native tags in this scene",
+                        () => {
+                            state.referenceSyntax.set(key, target);
+                            const next = convertTaggedPictureReference(
+                                textarea.value, record.tag, target,
+                            );
+                            if (next !== textarea.value) {
+                                textarea.value = next;
+                                textarea.dispatchEvent(new InputEvent("input", {
+                                    bubbles:true, inputType:"insertReplacementText",
+                                }));
+                            }
+                            renderReferenceTray(tray, textarea);
+                        },
+                    );
+                    control.classList.toggle(
+                        "h3studio-selected",
+                        syntax === target || usedMode === "mixed",
+                    );
+                    modes.append(control);
+                }
+                entry.append(modes);
+            }
+            tray.append(entry);
         }
         tray.append(preview); show(records[0]);
     }

@@ -8,7 +8,7 @@ import {
     promptTextToLines,
     promptValueToText,
     sharedPrompt,
-} from "./h3_chain_plan_core.mjs?v=0.5.16";
+} from "./h3_chain_plan_core.mjs?v=0.5.17";
 import {
     PROMPT_ASSIST_DEFAULT_INSTRUCTIONS,
     PROMPT_ASSIST_MODES,
@@ -17,23 +17,28 @@ import {
     makePromptAssistRequest,
     promptSceneKey,
     promptSourceRevision,
-} from "./h3_prompt_assistant_core.mjs?v=0.5.16";
-import {PromptAssistantClient} from "./h3_prompt_assistant_client.mjs?v=0.5.16";
+} from "./h3_prompt_assistant_core.mjs?v=0.5.17";
+import {PromptAssistantClient} from "./h3_prompt_assistant_client.mjs?v=0.5.17";
 import {
     promptRevisionHelp,
     promptRevisionLabel,
     promptRevisionNavigation,
     promptRevisionTree,
-} from "./h3_prompt_history_core.mjs?v=0.5.16";
-import {availableReferenceRecords} from "./h3_reference_preview_core.mjs?v=0.5.16";
+} from "./h3_prompt_history_core.mjs?v=0.5.17";
+import {
+    availableReferenceRecords,
+    convertTaggedPictureReference,
+    taggedPictureReferenceMode,
+    taggedPictureReferenceToken,
+} from "./h3_reference_preview_core.mjs?v=0.5.17";
 import {
     PromptUndoHistory,
     promptUndoDirection,
     tokenizeRichPrompt,
-} from "./h3_rich_prompt_editor_core.mjs?v=0.5.16";
-import {createPromptCompletionController} from "./h3_prompt_completion_core.mjs?v=0.5.16";
-import {createH3PromptSchemaController} from "./h3_prompt_schema_ui.mjs?v=0.5.16";
-import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.5.16";
+} from "./h3_rich_prompt_editor_core.mjs?v=0.5.17";
+import {createPromptCompletionController} from "./h3_prompt_completion_core.mjs?v=0.5.17";
+import {createH3PromptSchemaController} from "./h3_prompt_schema_ui.mjs?v=0.5.17";
+import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.5.17";
 
 const {publishCompanionScene, rebaseScenePrompt} = promptCompanionSync;
 function publishCompanionPrompt(...args) {
@@ -190,6 +195,11 @@ function injectStyles() {
         .h3sp-ref-help { flex:1 0 100%; color:var(--h3sp-muted); }
         .h3sp-ref-chip.h3sp-inactive { opacity:.48; }
         .h3sp-ref-chip.h3sp-active { border-color:#658b77; }
+        .h3sp-ref-entry { display:flex; align-items:stretch; gap:2px; }
+        .h3sp-ref-mode { display:flex; align-items:stretch; gap:1px; }
+        .h3sp-ref-mode button { min-width:28px; padding:2px 5px; font-size:10px; }
+        .h3sp-ref-mode button.h3sp-selected { border-color:var(--h3sp-accent);
+            color:var(--h3sp-accent); }
         .h3sp-ref-preview { display:none; flex:1 0 100%; min-height:58px;
             padding:8px; border:1px solid color-mix(in srgb,var(--h3sp-border) 74%,transparent);
             border-radius:6px; background:var(--comfy-input-bg,#11141a); }
@@ -668,6 +678,7 @@ function mount(node) {
         decorated: node.properties[PRESENTATION_PROPERTY] !== false,
         records: [],
         referenceMode: null,
+        referenceSyntax: new Map(),
         completion: null,
         schema: null,
         promptTextarea: null,
@@ -1838,14 +1849,77 @@ function mount(node) {
         } else if (caret != null) restoreCaret(state.richEditor, caret);
     }
 
-    function insertPromptText(text) {
+    function insertPromptText(text, selectSemanticTimestamp = false) {
         if (state.decorated && state.richEditor) {
+            const insertionStart = selectionTextOffset(state.richEditor);
             insertPlainText(state.richEditor, text);
-            const caret = selectionTextOffset(state.richEditor);
-            renderRichEditorText(editorPlainText(state.richEditor), caret);
+            if (selectSemanticTimestamp) {
+                const first = String(text).indexOf("[") + 1;
+                const last = String(text).lastIndexOf("s]");
+                renderRichEditorText(editorPlainText(state.richEditor), null, {
+                    selectionStart:insertionStart + first,
+                    selectionEnd:insertionStart + last,
+                });
+            } else {
+                const caret = selectionTextOffset(state.richEditor);
+                renderRichEditorText(editorPlainText(state.richEditor), caret);
+            }
         } else if (state.promptTextarea) {
+            const insertionStart = state.promptTextarea.selectionStart
+                ?? state.promptTextarea.value.length;
             insertText(state.promptTextarea, text);
+            if (selectSemanticTimestamp) {
+                const first = String(text).indexOf("[") + 1;
+                const last = String(text).lastIndexOf("s]");
+                state.promptTextarea.setSelectionRange(
+                    insertionStart + first, insertionStart + last,
+                );
+            }
         }
+    }
+
+    function referenceSyntaxKey(record) {
+        const shot = state.plan?.shots?.[state.active];
+        return `${String(shot?.id ?? state.active)}:${record.tag}`;
+    }
+
+    function activePromptText() {
+        return state.decorated && state.richEditor
+            ? editorPlainText(state.richEditor)
+            : state.promptTextarea?.value ?? "";
+    }
+
+    function selectedReferenceSyntax(record) {
+        if (state.referenceMode !== "tagged" || !record.supportsSemantic) {
+            return "native";
+        }
+        const promptMode = taggedPictureReferenceMode(
+            activePromptText(), record.tag,
+        );
+        if (promptMode === "native" || promptMode === "semantic") {
+            return promptMode;
+        }
+        return state.referenceSyntax.get(referenceSyntaxKey(record)) ?? "native";
+    }
+
+    function convertReferenceSyntax(record, mode, refs) {
+        state.referenceSyntax.set(referenceSyntaxKey(record), mode);
+        const current = activePromptText();
+        const next = convertTaggedPictureReference(current, record.tag, mode);
+        if (next !== current) {
+            if (state.decorated && state.richEditor) {
+                renderRichEditorText(next, next.length);
+                state.richEditor.dispatchEvent(new InputEvent("input", {
+                    bubbles:true, inputType:"insertReplacementText",
+                }));
+            } else if (state.promptTextarea) {
+                state.promptTextarea.value = next;
+                state.promptTextarea.dispatchEvent(new InputEvent("input", {
+                    bubbles:true, inputType:"insertReplacementText",
+                }));
+            }
+        }
+        renderReferenceTray(refs);
     }
 
     function insertPromptDialogue() {
@@ -1885,11 +1959,17 @@ function mount(node) {
         }
 
         const sourceTitle = media.source?.title || nodeType(media.source) || "unresolved source";
-        const mapping = record.active
+        const mapping = record.label
             ? `${record.label} in scene ${state.active + 1}`
-            : `inactive in scene ${state.active + 1}`;
+            : record.semanticActive
+                ? `semantic anchor active in scene ${state.active + 1}`
+                : `inactive in scene ${state.active + 1}`;
+        const syntax = selectedReferenceSyntax(record);
+        const displayToken = syntax === "semantic"
+            ? taggedPictureReferenceToken(record.tag, "semantic")
+            : record.token;
         const previewTitle = record.mode === "native"
-            ? record.token : `${record.token} → ${mapping}`;
+            ? displayToken : `${displayToken} → ${mapping}`;
         const copy = element("div", "h3sp-ref-preview-copy");
         copy.append(
             element("div", "h3sp-ref-preview-title", previewTitle),
@@ -1928,11 +2008,9 @@ function mount(node) {
         }
 
         const help = mode === "tagged"
-            ? "Prompt-driven references. Hover to preview; click a @tag to insert it. " +
-              "Writing the tag activates that asset for this scene and compiles it " +
-              "to a compact native H3 label. For a picture, type #tag[2.50s] " +
-              "to add a Qwen-only semantic checkpoint, or a Picture storyboard " +
-              "cue when that mode is selected on Tagged Ref2VA. Audio never autoplays."
+            ? "Prompt-driven references. Picture previews switch and convert between " +
+              "native @tag and semantic #tag[time]. Video and audio stay native-only. " +
+              "Audio never autoplays."
             : mode === "scheduled"
             ? `Scheduled references for scene ${state.active + 1}. Hover to preview; ` +
               "click to insert the optional stable @alias. It compiles to a native label; " +
@@ -1949,13 +2027,18 @@ function mount(node) {
             const aliasMode = mode === "scheduled" || mode === "tagged";
             const mapping = aliasMode && record.label
                 ? ` → ${record.label}` : "";
+            const syntax = selectedReferenceSyntax(record);
+            const displayToken = syntax === "semantic"
+                ? taggedPictureReferenceToken(record.tag, "semantic")
+                : record.token;
+            const entry = element("div", "h3sp-ref-entry");
             const chip = button(
-                `${icons[record.kind] ?? "@"} ${record.token}${mapping}`,
+                `${icons[record.kind] ?? "@"} ${displayToken}${mapping}`,
                 aliasMode
-                    ? `Insert ${record.token}; it activates this reference and compiles to a native label in this scene.`
+                    ? `Insert ${displayToken}; it activates this reference in this scene.`
                     : `Insert ${record.token} for the connected core conditioning input.`,
                 () => {
-                    insertPromptText(record.token);
+                    insertPromptText(displayToken, syntax === "semantic");
                     refs.classList.remove("h3sp-open");
                 },
             );
@@ -1963,7 +2046,28 @@ function mount(node) {
             chip.classList.toggle("h3sp-active", record.active);
             chip.addEventListener("mouseenter", () => showReferencePreview(record, preview));
             chip.addEventListener("focus", () => showReferencePreview(record, preview));
-            refs.append(chip);
+            entry.append(chip);
+            if (mode === "tagged" && record.supportsSemantic) {
+                const usedMode = taggedPictureReferenceMode(
+                    activePromptText(), record.tag,
+                );
+                const modes = element("div", "h3sp-ref-mode");
+                const native = button("@", "Use native @tag and convert semantic anchors in this scene", () => {
+                    convertReferenceSyntax(record, "native", refs);
+                });
+                const semantic = button("#", "Use semantic #tag[time] and convert native tags in this scene", () => {
+                    convertReferenceSyntax(record, "semantic", refs);
+                });
+                native.classList.toggle(
+                    "h3sp-selected", syntax === "native" || usedMode === "mixed",
+                );
+                semantic.classList.toggle(
+                    "h3sp-selected", syntax === "semantic" || usedMode === "mixed",
+                );
+                modes.append(native, semantic);
+                entry.append(modes);
+            }
+            refs.append(entry);
         }
         refs.append(preview);
         showReferencePreview(records[0], preview);

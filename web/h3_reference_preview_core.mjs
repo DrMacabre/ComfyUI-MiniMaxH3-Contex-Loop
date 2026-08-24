@@ -42,6 +42,62 @@ export function referenceTag(value) {
     return String(value ?? "").trim().replace(/^@+/, "");
 }
 
+function escapedPattern(value) {
+    return String(value ?? "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+export function taggedPictureReferenceToken(tag, mode = "native", timestamp = 0) {
+    const cleanTag = referenceTag(tag);
+    if (!cleanTag) return "";
+    if (mode !== "semantic") return `@${cleanTag}`;
+    const seconds = Number(timestamp);
+    const safeSeconds = Number.isFinite(seconds) ? Math.max(0, seconds) : 0;
+    return `#${cleanTag}[${safeSeconds.toFixed(2)}s]`;
+}
+
+export function taggedPictureReferenceMode(prompt, tag) {
+    const cleanTag = referenceTag(tag);
+    if (!cleanTag) return "unused";
+    const escaped = escapedPattern(cleanTag);
+    const native = new RegExp(
+        `(^|[^A-Za-z0-9_])@${escaped}(?![A-Za-z0-9_-])`, "i",
+    ).test(String(prompt ?? ""));
+    const semantic = new RegExp(
+        `(^|[^A-Za-z0-9_])#${escaped}\\[[0-9]+(?:\\.[0-9]+)?s?\\]`, "i",
+    ).test(String(prompt ?? ""));
+    if (native && semantic) return "mixed";
+    if (semantic) return "semantic";
+    if (native) return "native";
+    return "unused";
+}
+
+export function convertTaggedPictureReference(
+        prompt, tag, mode = "native", timestamp = 0) {
+    const source = String(prompt ?? "");
+    const cleanTag = referenceTag(tag);
+    if (!cleanTag || !["native", "semantic"].includes(mode)) return source;
+    const escaped = escapedPattern(cleanTag);
+    if (mode === "semantic") {
+        const replacement = taggedPictureReferenceToken(
+            cleanTag, "semantic", timestamp,
+        );
+        return source.replace(
+            new RegExp(
+                `(^|[^A-Za-z0-9_])@${escaped}(?![A-Za-z0-9_-])`, "gi",
+            ),
+            (_match, prefix) => `${prefix}${replacement}`,
+        );
+    }
+    const replacement = taggedPictureReferenceToken(cleanTag, "native");
+    return source.replace(
+        new RegExp(
+            `(^|[^A-Za-z0-9_])#${escaped}\\[[0-9]+(?:\\.[0-9]+)?s?\\]`,
+            "gi",
+        ),
+        (_match, prefix) => `${prefix}${replacement}`,
+    );
+}
+
 function inputConnection(node, name) {
     const input = node?.inputs?.find((item) => item.name === name);
     const link = input?.link == null ? null : node.graph?.links?.[input.link];
@@ -212,11 +268,18 @@ function promptTagSet(prompt) {
     )].map((match) => match[1]));
 }
 
+function semanticPromptTagSet(prompt) {
+    return new Set([...String(prompt ?? "").matchAll(
+        /(?<![A-Za-z0-9_])#([A-Za-z][A-Za-z0-9_-]{0,63})\[[0-9]+(?:\.[0-9]+)?s?\]/gi,
+    )].map((match) => match[1]));
+}
+
 export function taggedReferenceRecords(editorNode, prompt = "") {
     const wrapper = findTaggedRef2VA(editorNode);
     if (!wrapper) return {wrapper: null, mode: null, records: []};
     const nodes = collectTaggedNodes(wrapper);
     const used = promptTagSet(prompt);
+    const semanticUsed = semanticPromptTagSet(prompt);
     const pictures = [];
     const videos = [];
     const pairedAudios = [];
@@ -227,7 +290,9 @@ export function taggedReferenceRecords(editorNode, prompt = "") {
         if (type === TAGGED_PICTURE_REF_TYPE) {
             const record = baseRecord(node, "picture", 1, "image");
             record.selector = "prompt tag";
-            record.active = used.has(record.tag);
+            record.nativeActive = used.has(record.tag);
+            record.semanticActive = semanticUsed.has(record.tag);
+            record.active = record.nativeActive || record.semanticActive;
             pictures.push(record);
         } else if (type === TAGGED_VIDEO_REF_TYPE ||
                 type === TAGGED_MOTION_REF_TYPE ||
@@ -285,7 +350,7 @@ export function taggedReferenceRecords(editorNode, prompt = "") {
 
     let ordinal = 0;
     for (const item of pictures) {
-        if (item.active) item.label = `<Picture ${++ordinal}>`;
+        if (item.nativeActive) item.label = `<Picture ${++ordinal}>`;
     }
     ordinal = 0;
     const activeMotionRecords = [];
@@ -316,7 +381,14 @@ export function taggedReferenceRecords(editorNode, prompt = "") {
         mode: "tagged",
         records: [...pictures, ...videos, ...pairedAudios, ...audios]
             .filter((item) => item.tag)
-            .map((item) => ({...item, token: `@${item.tag}`})),
+            .map((item) => ({
+                ...item,
+                token: `@${item.tag}`,
+                nativeToken: `@${item.tag}`,
+                semanticToken: item.kind === "picture"
+                    ? taggedPictureReferenceToken(item.tag, "semantic") : null,
+                supportsSemantic: item.kind === "picture",
+            })),
     };
 }
 

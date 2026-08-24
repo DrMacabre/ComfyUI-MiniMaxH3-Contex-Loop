@@ -68,6 +68,27 @@ registry_v2 = chain._append_tagged_reference(
 token_v1 = chain._reference_fingerprint_output(registry_v1)
 token_v2 = chain._reference_fingerprint_output(registry_v2)
 
+# Prompt-driven tags define identity. Rewiring the same tag→asset registry in
+# another node order must not change its fingerprint or native packing order.
+registry_reordered = chain._append_tagged_reference(
+    None, kind="picture", tag="later", value="later-v1",
+    content_hash="later-hash-v1")
+registry_reordered = chain._append_tagged_reference(
+    registry_reordered, kind="picture", tag="actor", value="actor-v1",
+    content_hash="actor-hash-v1")
+assert registry_reordered["fingerprint"] == registry_v2["fingerprint"]
+_compiled, _summary, ordered_bindings = (
+    chain._compile_tagged_reference_prompt(
+        registry_v2, 1, 1, "@later watches @actor."))
+_compiled, _summary, reordered_bindings = (
+    chain._compile_tagged_reference_prompt(
+        registry_reordered, 1, 1, "@later watches @actor."))
+assert [entry["tag"] for entry in ordered_bindings["pictures"]] == [
+    "actor", "later"]
+assert [entry["tag"] for entry in reordered_bindings["pictures"]] == [
+    "actor", "later"]
+assert ordered_bindings["aliases"] == reordered_bindings["aliases"]
+
 
 def reference_plan(token, first_prompt="@actor opens."):
     return chain._normalize_plan(
@@ -92,6 +113,42 @@ legacy_reference_dependency = json.loads(json.dumps(old_reference_dependency))
 legacy_reference_dependency.pop("generation_fingerprint_lineage", None)
 assert chain._scene_dependency_diffs(
     legacy_reference_dependency, new_reference_dependency) == []
+
+# New nodes may be inserted at the beginning or middle of a ComfyUI reference
+# chain. Their position must not invalidate old scenes when their tags are
+# inactive; the unchanged old registry is still present as an ordered subset.
+registry_inserted = chain._append_tagged_reference(
+    None, kind="picture", tag="actor", value="actor-v1",
+    content_hash="actor-hash-v1")
+registry_inserted = chain._append_tagged_reference(
+    registry_inserted, kind="picture", tag="stairs", value="stairs-v1",
+    content_hash="stairs-hash-v1")
+registry_inserted = chain._append_tagged_reference(
+    registry_inserted, kind="picture", tag="later", value="later-v1",
+    content_hash="later-hash-v1")
+inserted_dependency = chain._scene_dependency_record(
+    reference_plan(chain._reference_fingerprint_output(registry_inserted)),
+    1, None)
+assert chain._scene_dependency_diffs(
+    new_reference_dependency, inserted_dependency) == []
+legacy_v2_dependency = json.loads(json.dumps(new_reference_dependency))
+legacy_v2_dependency.pop("generation_fingerprint_lineage", None)
+assert chain._scene_dependency_diffs(
+    legacy_v2_dependency, inserted_dependency) == []
+legacy_reordered_fingerprint = chain._make_reference_schedule(
+    registry_reordered["entries"])["fingerprint"]
+assert legacy_reordered_fingerprint != registry_reordered["fingerprint"]
+legacy_reordered_dependency = chain._scene_dependency_record(
+    reference_plan(legacy_reordered_fingerprint), 1, None)
+assert chain._scene_dependency_diffs(
+    legacy_reordered_dependency, inserted_dependency) == []
+inserted_active_dependency = chain._scene_dependency_record(
+    reference_plan(
+        chain._reference_fingerprint_output(registry_inserted),
+        "@actor enters @stairs."), 1, None)
+assert any(item["field"] == "generation_fingerprint"
+           for item in chain._scene_dependency_diffs(
+               new_reference_dependency, inserted_active_dependency))
 
 # The same append is generation-significant when the old scene prompt activates
 # the newly registered tag.
