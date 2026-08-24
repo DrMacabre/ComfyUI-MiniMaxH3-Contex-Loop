@@ -13,6 +13,9 @@ import {
 const records = [
     {kind:"picture", token:"@hero", label:"<Picture 1>", active:true},
     {kind:"picture", token:"@costume", label:null, active:false},
+    {kind:"picture", tag:"location", token:"#location[0.00s]",
+        nativeToken:null, semanticToken:"#location[0.00s]",
+        semanticOnly:true, label:null, active:false},
     {kind:"video", token:"@performance", label:"<Subject 1>", active:true},
     {kind:"audio", token:"@voice", label:"<Audio 1>", active:false},
 ];
@@ -43,6 +46,16 @@ const semantic = promptCompletionItems(
 );
 assert.deepEqual(semantic.map((item) => item.label), ["#costume[timestamp]"]);
 assert.equal(semantic[0].insertText, "#costume[0.00s]");
+const allSemantic = promptCompletionItems(
+    promptCompletionQuery("#", 1), records, {referenceMode:"tagged"},
+);
+assert.deepEqual(allSemantic.map((item) => item.label), [
+    "#hero[timestamp]", "#costume[timestamp]", "#location[timestamp]",
+]);
+assert.equal(allSemantic[2].detail.startsWith("Semantic Picture Anchor"), true);
+assert.equal(promptCompletionItems(
+    promptCompletionQuery("@loc", 4), records, {referenceMode:"tagged"},
+).length, 0);
 assert.deepEqual(applyPromptCompletion("Use #co here", promptCompletionQuery(
     "Use #co here", 7), semantic[0]), {
     text:"Use #costume[0.00s] here",

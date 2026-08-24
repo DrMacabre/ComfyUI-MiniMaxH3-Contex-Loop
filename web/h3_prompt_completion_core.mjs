@@ -138,30 +138,42 @@ function referenceItems(records, referenceMode, trigger) {
     for (const record of records ?? []) {
         const token = String(record?.token ?? "");
         if (trigger === "@") {
-            if (!token.startsWith("@")) continue;
+            const nativeToken = record?.nativeToken === null
+                ? "" : String(record?.nativeToken ?? token);
+            if (!nativeToken.startsWith("@")) continue;
             if (!record.active && referenceMode !== "tagged") continue;
-            const mapping = record.label && record.label !== token
+            const mapping = record.label && record.label !== nativeToken
                 ? ` → ${record.label}` : "";
             items.push({
-                id: `alias:${token}`,
+                id: `alias:${nativeToken}`,
                 kind: record.kind || "reference",
-                label: token,
-                insertText: token,
-                filterText: token,
+                label: nativeToken,
+                insertText: nativeToken,
+                filterText: nativeToken,
                 detail: `${record.active ? "Active" : "Insert to activate"} ${record.kind || "reference"}${mapping}`,
                 priority: record.active ? 0 : 1,
             });
         } else if (trigger === "#") {
-            if (referenceMode !== "tagged" || record.kind !== "picture"
-                    || !token.startsWith("@")) continue;
-            const anchor = `#${token.slice(1)}[0.00s]`;
+            if (referenceMode !== "tagged" || record.kind !== "picture") continue;
+            const tag = String(record?.tag ?? (
+                token.startsWith("@") ? token.slice(1)
+                    : token.startsWith("#") ? token.slice(1).split("[")[0] : ""
+            )).trim();
+            const semanticCapable = Boolean(
+                record?.supportsSemantic || record?.semanticOnly
+                || record?.semanticToken || token.startsWith("@"),
+            );
+            if (!tag || !semanticCapable) continue;
+            const anchor = `#${tag}[0.00s]`;
             items.push({
-                id: `semantic:${token}`,
+                id: `semantic:${tag}`,
                 kind: "semantic",
-                label: `#${token.slice(1)}[timestamp]`,
+                label: `#${tag}[timestamp]`,
                 insertText: anchor,
-                filterText: token.slice(1),
-                detail: "Tagged Picture · Qwen semantic/storyboard anchor; type the scene time",
+                filterText: tag,
+                detail: record?.semanticOnly
+                    ? "Semantic Picture Anchor · Qwen storyboard anchor; type the scene time"
+                    : "Tagged Picture · Qwen semantic/storyboard anchor; type the scene time",
                 selectionStart: anchor.indexOf("[") + 1,
                 selectionEnd: anchor.indexOf("s]"),
                 priority: record.active ? 0 : 1,

@@ -432,13 +432,37 @@ function copyEditorSelection(editor, event, cut = false) {
     return true;
 }
 
+function editorPointTextOffset(editor, node, offset) {
+    if (!node || (node !== editor && !editor.contains(node))) return null;
+    const range = document.createRange();
+    range.selectNodeContents(editor);
+    try {
+        range.setEnd(node, offset);
+    } catch (_error) {
+        return null;
+    }
+    return editorPlainText(range.cloneContents()).length;
+}
+
+function editorSelectionOffsets(editor) {
+    const selection = globalThis.getSelection?.();
+    if (!selection?.rangeCount) return null;
+    const selected = selection.getRangeAt(0);
+    const start = editorPointTextOffset(
+        editor, selected.startContainer, selected.startOffset,
+    );
+    const end = editorPointTextOffset(
+        editor, selected.endContainer, selected.endOffset,
+    );
+    return start == null || end == null ? null : {start, end};
+}
+
 function selectionTextOffset(editor) {
     const selection = globalThis.getSelection?.();
-    if (!selection?.rangeCount || !editor.contains(selection.anchorNode)) return editorPlainText(editor).length;
-    const range = selection.getRangeAt(0).cloneRange();
-    range.selectNodeContents(editor);
-    range.setEnd(selection.anchorNode, selection.anchorOffset);
-    return range.toString().length;
+    const offset = selection?.rangeCount
+        ? editorPointTextOffset(editor, selection.focusNode, selection.focusOffset)
+        : null;
+    return offset == null ? editorPlainText(editor).length : offset;
 }
 
 function restoreCaret(editor, requested) {
@@ -572,6 +596,7 @@ function mount(node) {
         decorated:node.properties[PRESENTATION_PROPERTY] !== false,
         records:[], referenceMode:null, editor:null, refs:null, status:null, optimizerStatus:null,
         referenceSyntax:new Map(),
+        promptSelection:null,
         completion:null, schema:null,
         history:{sceneKey:"", data:null, revisionId:null, host:null, loadToken:0, loadPromise:null,
             saveTimer:null, pendingDraft:null, savePromise:null, error:"", treeOpen:false,
@@ -1233,34 +1258,59 @@ function mount(node) {
         // programmatic toolbar/menu insertions.
     }
 
-    function decorateEditorAtCaret() {
-        if (!state.editor) return;
-        const caret = selectionTextOffset(state.editor);
-        renderEditorText(editorPlainText(state.editor), caret);
+    function rememberPromptSelection() {
+        const selected = state.editor ? editorSelectionOffsets(state.editor) : null;
+        if (selected) state.promptSelection = selected;
     }
 
     function insertDecoratedText(text, selectSemanticTimestamp = false) {
-        const insertionStart = selectionTextOffset(state.editor);
-        insertPlainText(state.editor, text);
+        const inserted = String(text ?? "");
+        const current = editorPlainText(state.editor);
+        const live = document.activeElement === state.editor
+            ? editorSelectionOffsets(state.editor) : null;
+        const selected = live ?? state.promptSelection ?? {
+            start:current.length, end:current.length,
+        };
+        const insertionStart = Math.max(
+            0, Math.min(current.length, Number(selected.start) || 0),
+        );
+        const insertionEnd = Math.max(
+            insertionStart,
+            Math.min(current.length, Number(selected.end) || insertionStart),
+        );
+        const next = current.slice(0, insertionStart)
+            + inserted + current.slice(insertionEnd);
         if (state.referenceMode === "tagged") {
             state.records = availableReferenceRecords(
                 node, state.active + 1, {
                     includeInactive: true,
                     prompt: [
                         sharedPrompt(state.plan).text.trim(),
-                        editorPlainText(state.editor).trim(),
+                        next.trim(),
                     ].filter(Boolean).join("\n\n"),
                 },
             ).records;
         }
         if (selectSemanticTimestamp) {
-            const first = String(text).indexOf("[") + 1;
-            const last = String(text).lastIndexOf("s]");
-            renderEditorText(editorPlainText(state.editor), null, {
+            const first = inserted.indexOf("[") + 1;
+            const last = inserted.lastIndexOf("s]");
+            renderEditorText(next, null, {
                 selectionStart: insertionStart + first,
                 selectionEnd: insertionStart + last,
             });
-        } else decorateEditorAtCaret();
+            state.promptSelection = {
+                start:insertionStart + first,
+                end:insertionStart + last,
+            };
+        } else {
+            const caret = insertionStart + inserted.length;
+            renderEditorText(next, caret);
+            state.promptSelection = {start:caret, end:caret};
+        }
+        state.editor.dispatchEvent(new InputEvent("input", {
+            bubbles:true, inputType:"insertText",
+        }));
+        state.editor.focus();
     }
 
     function referenceSyntaxKey(record) {
@@ -1269,9 +1319,9 @@ function mount(node) {
     }
 
     function selectedReferenceSyntax(record) {
-        if (state.referenceMode !== "tagged" || !record.supportsSemantic) {
-            return "native";
-        }
+        if (state.referenceMode !== "tagged") return "native";
+        if (record.semanticOnly) return "semantic";
+        if (!record.supportsSemantic) return "native";
         const promptMode = taggedPictureReferenceMode(
             editorPlainText(state.editor), record.tag,
         );
@@ -1782,6 +1832,7 @@ function mount(node) {
             renderReferenceTray();
             state.refs.classList.toggle("h3rp-open");
         }, "reference");
+        refsButton.addEventListener("pointerdown", rememberPromptSelection);
         refsButton.dataset.h3rpLock = "";
         const dialogue = button("Dialogue", "Wrap selected text in <d> tags", () => {
             const selection = globalThis.getSelection?.();
@@ -1846,11 +1897,17 @@ function mount(node) {
         );
         state.promptUndo = promptUndoForScene(shotId, initialPrompt);
         renderEditorText(initialPrompt);
+        state.promptSelection = {
+            start:initialPrompt.length, end:initialPrompt.length,
+        };
         editor.addEventListener("input", (event) => {
             saveEditorInput(event);
             state.completion?.refresh();
             state.schema?.refresh();
         });
+        for (const eventName of ["focus", "pointerup", "keyup"]) {
+            editor.addEventListener(eventName, rememberPromptSelection);
+        }
         editor.addEventListener("beforeinput", (event) => {
             if (event.inputType === "insertParagraph" || event.inputType === "insertLineBreak") {
                 event.preventDefault(); insertPlainText(editor, "\n");
@@ -1938,6 +1995,7 @@ function mount(node) {
 
         state.completion = createPromptCompletionController({
             input:editor,
+            maxItems:40,
             getText:() => editorPlainText(editor),
             getCaret:() => selectionTextOffset(editor),
             getRecords:() => state.records,

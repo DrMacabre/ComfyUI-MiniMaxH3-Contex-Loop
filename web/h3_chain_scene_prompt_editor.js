@@ -518,15 +518,37 @@ function copyEditorSelection(editor, event, cut = false) {
     return true;
 }
 
+function editorPointTextOffset(editor, node, offset) {
+    if (!node || (node !== editor && !editor.contains(node))) return null;
+    const range = document.createRange();
+    range.selectNodeContents(editor);
+    try {
+        range.setEnd(node, offset);
+    } catch (_error) {
+        return null;
+    }
+    return editorPlainText(range.cloneContents()).length;
+}
+
+function editorSelectionOffsets(editor) {
+    const selection = globalThis.getSelection?.();
+    if (!selection?.rangeCount) return null;
+    const selected = selection.getRangeAt(0);
+    const start = editorPointTextOffset(
+        editor, selected.startContainer, selected.startOffset,
+    );
+    const end = editorPointTextOffset(
+        editor, selected.endContainer, selected.endOffset,
+    );
+    return start == null || end == null ? null : {start, end};
+}
+
 function selectionTextOffset(editor) {
     const selection = globalThis.getSelection?.();
-    if (!selection?.rangeCount || !editor.contains(selection.anchorNode)) {
-        return editorPlainText(editor).length;
-    }
-    const range = selection.getRangeAt(0).cloneRange();
-    range.selectNodeContents(editor);
-    range.setEnd(selection.anchorNode, selection.anchorOffset);
-    return range.toString().length;
+    const offset = selection?.rangeCount
+        ? editorPointTextOffset(editor, selection.focusNode, selection.focusOffset)
+        : null;
+    return offset == null ? editorPlainText(editor).length : offset;
 }
 
 function restoreCaret(editor, requested) {
@@ -694,6 +716,7 @@ function mount(node) {
         schema: null,
         promptTextarea: null,
         richEditor: null,
+        promptSelection: null,
         referenceTray: null,
         popover: null,
         popoverTimer: null,
@@ -2047,31 +2070,85 @@ function mount(node) {
         } else if (caret != null) restoreCaret(state.richEditor, caret);
     }
 
-    function insertPromptText(text, selectSemanticTimestamp = false) {
+    function rememberPromptSelection() {
         if (state.decorated && state.richEditor) {
-            const insertionStart = selectionTextOffset(state.richEditor);
-            insertPlainText(state.richEditor, text);
+            const selected = editorSelectionOffsets(state.richEditor);
+            if (selected) state.promptSelection = {kind:"rich", ...selected};
+        } else if (state.promptTextarea) {
+            const start = state.promptTextarea.selectionStart;
+            const end = state.promptTextarea.selectionEnd;
+            if (start != null && end != null) {
+                state.promptSelection = {kind:"plain", start, end};
+            }
+        }
+    }
+
+    function insertPromptText(text, selectSemanticTimestamp = false) {
+        const inserted = String(text ?? "");
+        if (state.decorated && state.richEditor) {
+            const current = editorPlainText(state.richEditor);
+            const live = document.activeElement === state.richEditor
+                ? editorSelectionOffsets(state.richEditor) : null;
+            const saved = state.promptSelection?.kind === "rich"
+                ? state.promptSelection : null;
+            const selected = live ?? saved ?? {
+                start:current.length, end:current.length,
+            };
+            const insertionStart = Math.max(
+                0, Math.min(current.length, Number(selected.start) || 0),
+            );
+            const insertionEnd = Math.max(
+                insertionStart,
+                Math.min(current.length, Number(selected.end) || insertionStart),
+            );
+            const next = current.slice(0, insertionStart)
+                + inserted + current.slice(insertionEnd);
             if (selectSemanticTimestamp) {
-                const first = String(text).indexOf("[") + 1;
-                const last = String(text).lastIndexOf("s]");
-                renderRichEditorText(editorPlainText(state.richEditor), null, {
+                const first = inserted.indexOf("[") + 1;
+                const last = inserted.lastIndexOf("s]");
+                renderRichEditorText(next, null, {
                     selectionStart:insertionStart + first,
                     selectionEnd:insertionStart + last,
                 });
+                state.promptSelection = {
+                    kind:"rich",
+                    start:insertionStart + first,
+                    end:insertionStart + last,
+                };
             } else {
-                const caret = selectionTextOffset(state.richEditor);
-                renderRichEditorText(editorPlainText(state.richEditor), caret);
+                const caret = insertionStart + inserted.length;
+                renderRichEditorText(next, caret);
+                state.promptSelection = {kind:"rich", start:caret, end:caret};
             }
+            state.richEditor.dispatchEvent(new InputEvent("input", {
+                bubbles:true, inputType:"insertText",
+            }));
+            state.richEditor.focus();
         } else if (state.promptTextarea) {
-            const insertionStart = state.promptTextarea.selectionStart
+            const saved = state.promptSelection?.kind === "plain"
+                ? state.promptSelection : null;
+            const insertionStart = saved?.start
+                ?? state.promptTextarea.selectionStart
                 ?? state.promptTextarea.value.length;
-            insertText(state.promptTextarea, text);
+            const insertionEnd = saved?.end
+                ?? state.promptTextarea.selectionEnd
+                ?? insertionStart;
+            state.promptTextarea.setSelectionRange(insertionStart, insertionEnd);
+            insertText(state.promptTextarea, inserted);
             if (selectSemanticTimestamp) {
-                const first = String(text).indexOf("[") + 1;
-                const last = String(text).lastIndexOf("s]");
+                const first = inserted.indexOf("[") + 1;
+                const last = inserted.lastIndexOf("s]");
                 state.promptTextarea.setSelectionRange(
                     insertionStart + first, insertionStart + last,
                 );
+                state.promptSelection = {
+                    kind:"plain",
+                    start:insertionStart + first,
+                    end:insertionStart + last,
+                };
+            } else {
+                const caret = insertionStart + inserted.length;
+                state.promptSelection = {kind:"plain", start:caret, end:caret};
             }
         }
     }
@@ -2088,9 +2165,9 @@ function mount(node) {
     }
 
     function selectedReferenceSyntax(record) {
-        if (state.referenceMode !== "tagged" || !record.supportsSemantic) {
-            return "native";
-        }
+        if (state.referenceMode !== "tagged") return "native";
+        if (record.semanticOnly) return "semantic";
+        if (!record.supportsSemantic) return "native";
         const promptMode = taggedPictureReferenceMode(
             activePromptText(), record.tag,
         );
@@ -2356,6 +2433,11 @@ function mount(node) {
         state.richEditor = richEditor;
         renderRichEditorText(textarea.value);
         editorShell.append(richEditor);
+        state.promptSelection = {
+            kind:state.decorated ? "rich" : "plain",
+            start:textarea.value.length,
+            end:textarea.value.length,
+        };
 
         const tools = element("div", "h3sp-tools");
         const refs = element("div", "h3sp-refs");
@@ -2370,6 +2452,7 @@ function mount(node) {
                 refs.classList.toggle("h3sp-open", opening);
             },
         );
+        referenceButton.addEventListener("pointerdown", rememberPromptSelection);
         const dialogueButton = button("Dialogue", "Wrap selection in <d> dialogue tags", () => {
             insertPromptDialogue();
         });
@@ -2446,6 +2529,9 @@ function mount(node) {
             state.completion?.refresh();
             state.schema?.refresh();
         });
+        for (const eventName of ["focus", "pointerup", "keyup", "select"]) {
+            textarea.addEventListener(eventName, rememberPromptSelection);
+        }
         textarea.addEventListener("keydown", (event) => {
             if (state.completion?.handleKeydown(event)) {
                 return;
@@ -2469,6 +2555,9 @@ function mount(node) {
                 state.richInputType = "";
             }
         });
+        for (const eventName of ["focus", "pointerup", "keyup"]) {
+            richEditor.addEventListener(eventName, rememberPromptSelection);
+        }
         richEditor.addEventListener("beforeinput", (event) => {
             if (event.inputType === "insertParagraph" || event.inputType === "insertLineBreak") {
                 event.preventDefault();
@@ -2571,6 +2660,7 @@ function mount(node) {
         const activeInput = state.decorated ? richEditor : textarea;
         state.completion = createPromptCompletionController({
             input:activeInput,
+            maxItems:40,
             getText:() => state.decorated
                 ? editorPlainText(richEditor) : textarea.value,
             getCaret:() => state.decorated
