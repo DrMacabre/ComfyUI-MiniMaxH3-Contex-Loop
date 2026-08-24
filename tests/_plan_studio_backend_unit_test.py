@@ -5,6 +5,7 @@ import asyncio
 import importlib.util
 import json
 import pathlib
+import struct
 import sys
 import tempfile
 import time
@@ -170,6 +171,48 @@ async def check():
         record = chain._PLAN_STUDIO_SOURCE_PREVIEWS[
             source_payload["token"]]["records"]["1:0"]
         assert record["video_seek_seconds"] == 2.0 + 100 / 24
+
+        source_audio_file = pathlib.Path(temporary) / "source_audio.m4a"
+        source_audio_file.write_bytes(b"source audio")
+        source_audio_record = {
+            "audio_path": str(source_audio_file),
+            "audio_seek_seconds": 1.25,
+            "audio_kind": "external_path",
+            "frame_count": 340,
+            "duration_seconds": 340 / 24,
+            "media_fingerprint": "3" * 64,
+        }
+        original_source_audio_media = chain._plan_studio_source_audio_media
+        try:
+            chain._plan_studio_source_audio_media = (
+                lambda *_args, **_kwargs: dict(source_audio_record))
+            audio_payload = chain._register_plan_studio_source_previews(
+                plan, report, None, None, object())
+        finally:
+            chain._plan_studio_source_audio_media = original_source_audio_media
+        assert audio_payload["token"]
+        assert audio_payload["scenes"] == []
+        assert audio_payload["source_audio"]["available"] is True
+        assert audio_payload["source_audio"]["seek_seconds"] == 1.25
+        assert chain._PLAN_STUDIO_SOURCE_PREVIEWS[
+            audio_payload["token"]]["source_audio"] == source_audio_record
+
+        original_usable = chain._usable_ffmpeg
+        original_capture = chain._run_ffmpeg_capture
+        try:
+            chain._usable_ffmpeg = lambda: "/fake/ffmpeg"
+            chain._run_ffmpeg_capture = lambda *_args, **_kwargs: struct.pack(
+                "<%df" % 2720, *(
+                    [0.1] * 1360 + [0.8] * 1360))
+            waveform_path = pathlib.Path(
+                chain._build_plan_studio_source_waveform(source_audio_record))
+        finally:
+            chain._usable_ffmpeg = original_usable
+            chain._run_ffmpeg_capture = original_capture
+        waveform = json.loads(waveform_path.read_text(encoding="utf-8"))
+        assert waveform["points_per_second"] == 12
+        assert len(waveform["samples"]) == 170
+        assert max(waveform["samples"]) == 1.0
 
         captured = []
         original_usable = chain._usable_ffmpeg

@@ -22,13 +22,13 @@ import {
     setShotLengthMode,
     sharedPrompt,
     shotLengthMode,
-} from "./h3_chain_plan_core.mjs?v=0.6.0";
+} from "./h3_chain_plan_core.mjs?v=0.6.1";
 import {
     promptRevisionHelp,
     promptRevisionLabel,
     promptRevisionNavigation,
-} from "./h3_prompt_history_core.mjs?v=0.6.0";
-import {availableReferenceRecords} from "./h3_reference_preview_core.mjs?v=0.6.0";
+} from "./h3_prompt_history_core.mjs?v=0.6.1";
+import {availableReferenceRecords} from "./h3_reference_preview_core.mjs?v=0.6.1";
 import {
     applySceneAudioOverride,
     applySceneTransitionPreset,
@@ -37,22 +37,25 @@ import {
     sceneAudioPolicy,
     sceneTransitionPreset,
     transitionPresetLabel,
-} from "./h3_policy_core.mjs?v=0.6.0";
+} from "./h3_policy_core.mjs?v=0.6.1";
 import {
     resolveAudioContextLength,
     resolveAudioPolicy,
     resolveTransitionPolicy,
-} from "./h3_socket_presentation_core.mjs?v=0.6.0";
+} from "./h3_socket_presentation_core.mjs?v=0.6.1";
 import {
     locateStudioTimelineSecond,
     h3StudioGridMarkers,
     matchingStudioCheckpoint,
+    matchingStudioSourceAudio,
     matchingStudioSourceScene,
     studioCheckpointSignature,
     studioSceneStartSeconds,
+    studioSourceAudioSecond,
     studioSourceSecond,
-} from "./h3_chain_plan_studio_core.mjs?v=0.6.0";
-import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.6.0";
+    studioWaveformSceneSamples,
+} from "./h3_chain_plan_studio_core.mjs?v=0.6.1";
+import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.6.1";
 
 const {connectedPromptEditors, publishCompanionScene} = promptCompanionSync;
 function publishCompanionPrompt(...args) {
@@ -63,6 +66,7 @@ const NODE_NAME = "MiniMaxH3ChainPlanStudio";
 const PLAN_NAME = "MiniMaxH3ChainPlan";
 const ACTIVE_PROPERTY = "h3_plan_studio_active_scene";
 const VIEW_PROPERTY = "h3_plan_studio_view";
+const SOURCE_AUDIO_MUTES_PROPERTY = "h3_plan_studio_source_audio_mutes";
 const MIN_WIDTH = 820;
 const MIN_HEIGHT = 690;
 
@@ -108,6 +112,7 @@ function injectStyles() {
         .h3studio-ruler { position:relative; height:18px; margin:0 0 4px 83px; width:calc(100% - 83px); border-bottom:1px solid var(--hs-border);
             color:var(--hs-muted); font-size:10px; overflow:hidden; cursor:pointer; }
         .h3studio-track { display:grid; grid-template-columns:78px minmax(0,1fr); gap:5px; align-items:stretch; margin-top:4px; }
+        .h3studio-track[hidden] { display:none !important; }
         .h3studio-track-label { display:flex; align-items:center; justify-content:flex-end; color:var(--hs-muted);
             font-size:9px; font-weight:750; letter-spacing:.06em; text-align:right; }
         .h3studio-timeline { display:flex; gap:3px; min-height:76px; overflow-x:auto; overflow-y:hidden; }
@@ -129,6 +134,15 @@ function injectStyles() {
         .h3studio-source-card .h3studio-render-dot { background:#b58cff; }
         .h3studio-source-empty { display:flex; align-items:center; padding:0 10px; color:var(--hs-muted);
             min-height:48px; border:1px dashed var(--hs-border); border-radius:5px; }
+        .h3studio-audio-timeline { min-height:34px; }
+        .h3studio-audio-card { --scene:#84aaff; position:relative; flex:1 0 138px; min-width:138px;
+            height:34px; overflow:hidden; border:1px solid color-mix(in srgb,var(--scene) 65%,var(--hs-border));
+            border-radius:5px; background:color-mix(in srgb,var(--scene) 8%,var(--comfy-input-bg,#15171d)); cursor:pointer; }
+        .h3studio-audio-card.h3studio-selected { box-shadow:0 0 0 1px var(--scene) inset; }
+        .h3studio-audio-card.h3studio-audio-muted { opacity:.48; }
+        .h3studio-waveform { position:absolute; inset:3px 34px 3px 4px; width:calc(100% - 38px); height:28px; }
+        .h3studio-audio-mute { position:absolute; z-index:2; right:3px; top:3px; width:28px; height:26px;
+            padding:0 !important; display:grid; place-items:center; font-size:13px; }
         .h3studio-playhead { position:absolute; top:0; bottom:0; width:1px; background:#ff626a; pointer-events:none; }
         .h3studio-panel { flex:1 1 auto; min-height:0; overflow:auto; padding:9px;
             border:1px solid var(--hs-border); border-radius:7px; background:var(--hs-panel); }
@@ -180,6 +194,7 @@ function injectStyles() {
         .h3studio-compare-label-source { left:7px; }
         .h3studio-player-controls input[type=range] { flex:1; padding:0; }
         .h3studio-compare-controls { display:grid; grid-template-columns:auto minmax(100px,1fr) auto; gap:6px; align-items:center; }
+        .h3studio-compare-controls.h3studio-no-motion { grid-template-columns:1fr; }
         .h3studio-refs { display:none; gap:5px; padding:7px; border:1px solid var(--hs-border);
             border-radius:6px; background:var(--hs-bg); flex-wrap:wrap; }
         .h3studio-refs.h3studio-open { display:flex; }
@@ -350,10 +365,13 @@ function mount(node) {
             ? node.properties[VIEW_PROPERTY] : "scene",
         checkpoints:new Map(), checkpointSignature:"", checkpointError:"", checkpointToken:0,
         checkpointPromise:null, checkpointRefreshQueued:false, disposed:false,
-        sourcePreview:null,
-        pollTimer:null, checkpointTimer:null, timelineHost:null, sourceTimelineHost:null, panelHost:null,
+        sourcePreview:null, sourceWaveform:null, sourceWaveformToken:"",
+        sourceWaveformPromise:null,
+        pollTimer:null, checkpointTimer:null, timelineHost:null, sourceTimelineHost:null,
+        sourceAudioTimelineHost:null, sourceTrack:null, sourceAudioTrack:null,
+        panelHost:null,
         planNotifyTimer:null,
-        playhead:null, player:null, playerAudio:null,
+        playhead:null, player:null, playerAudio:null, sourceAudioPlayer:null,
         sourcePlayer:null, sourceLayer:null,
         playerSlider:null, playerIndex:-1,
         timelinePosition:null, pendingSeek:0,
@@ -730,6 +748,115 @@ function mount(node) {
         return api.apiURL(`/minimax_h3_context_loop/plan-studio/source-preview?${query.toString()}`);
     }
 
+    function sourceAudio() {
+        return matchingStudioSourceAudio(state.sourcePreview, timing().shots);
+    }
+
+    function sourceAudioUrl() {
+        if (!sourceAudio() || !state.sourcePreview?.token) return "";
+        const query = new URLSearchParams({token:state.sourcePreview.token});
+        return api.apiURL(`/minimax_h3_context_loop/plan-studio/source-audio?${query.toString()}`);
+    }
+
+    function sourceWaveformUrl(payload = state.sourcePreview) {
+        if (!payload?.source_audio?.available || !payload?.token) return "";
+        const query = new URLSearchParams({token:payload.token});
+        return api.apiURL(`/minimax_h3_context_loop/plan-studio/source-waveform?${query.toString()}`);
+    }
+
+    function sourceAudioMuteMap() {
+        const current = node.properties[SOURCE_AUDIO_MUTES_PROPERTY];
+        if (current && typeof current === "object" && !Array.isArray(current)) return current;
+        const created = {};
+        node.properties[SOURCE_AUDIO_MUTES_PROPERTY] = created;
+        return created;
+    }
+
+    function sourceAudioMuted(index) {
+        const row = timing().shots[index];
+        const key = row ? `${runName()}::${String(row.id)}` : "";
+        return Boolean(key && sourceAudioMuteMap()[key]);
+    }
+
+    function setSourceAudioMuted(index, muted) {
+        const row = timing().shots[index];
+        if (!row) return;
+        const mutes = sourceAudioMuteMap();
+        const key = `${runName()}::${String(row.id)}`;
+        if (muted) mutes[key] = true;
+        else delete mutes[key];
+        dirty();
+        renderSourceAudioTimeline();
+        root.querySelector(".h3studio-audio-choice")?.dispatchEvent(
+            new Event("change"),
+        );
+    }
+
+    function drawSourceWaveform(canvas, samples, color, muted) {
+        requestAnimationFrame(() => {
+            if (!canvas.isConnected) return;
+            const ratio = Math.max(1, window.devicePixelRatio || 1);
+            const width = Math.max(1, Math.round(canvas.clientWidth * ratio));
+            const height = Math.max(1, Math.round(canvas.clientHeight * ratio));
+            canvas.width = width; canvas.height = height;
+            const context = canvas.getContext("2d");
+            if (!context) return;
+            context.clearRect(0, 0, width, height);
+            context.strokeStyle = muted ? "rgba(190,198,214,.52)" : color;
+            context.lineWidth = Math.max(1, ratio);
+            const middle = height / 2;
+            context.beginPath();
+            if (!samples.length) {
+                context.moveTo(0, middle); context.lineTo(width, middle);
+            } else {
+                for (let x = 0; x < width; x += Math.max(1, Math.round(ratio))) {
+                    const sample = Math.max(0, Math.min(1, Number(
+                        samples[Math.min(samples.length - 1, Math.floor(
+                            x / width * samples.length,
+                        ))],
+                    ) || 0));
+                    const half = Math.max(ratio, sample * (height / 2 - ratio));
+                    context.moveTo(x, middle - half); context.lineTo(x, middle + half);
+                }
+            }
+            context.stroke();
+        });
+    }
+
+    async function loadSourceWaveform(payload = state.sourcePreview) {
+        const token = String(payload?.token ?? "");
+        const url = sourceWaveformUrl(payload);
+        if (!token || !url) return;
+        if (state.sourceWaveformToken === token && state.sourceWaveform) return;
+        if (state.sourceWaveformToken === token && state.sourceWaveformPromise) {
+            return state.sourceWaveformPromise;
+        }
+        state.sourceWaveformToken = token;
+        state.sourceWaveform = null;
+        const request = (async () => {
+            const response = await api.fetchApi(url);
+            const waveform = await response.json();
+            if (!response.ok) throw new Error(
+                waveform.error || `HTTP ${response.status}`,
+            );
+            if (state.disposed || state.sourceWaveformToken !== token) return;
+            state.sourceWaveform = waveform;
+            renderSourceAudioTimeline();
+        })();
+        state.sourceWaveformPromise = request;
+        try { await request; }
+        catch (error) {
+            if (state.sourceWaveformToken === token) {
+                state.sourceWaveform = {samples:[], error:error?.message || String(error)};
+                renderSourceAudioTimeline();
+            }
+        } finally {
+            if (state.sourceWaveformPromise === request) {
+                state.sourceWaveformPromise = null;
+            }
+        }
+    }
+
     function renderTimeline() {
         const host = state.timelineHost;
         if (!host || !state.plan) return;
@@ -762,6 +889,7 @@ function mount(node) {
             host.append(card);
         }
         renderSourceTimeline();
+        renderSourceAudioTimeline();
     }
 
     function renderSourceTimeline() {
@@ -770,12 +898,8 @@ function mount(node) {
         host.replaceChildren();
         const result = timing();
         const available = result.shots.some((_row, index) => sourceScene(index));
+        if (state.sourceTrack) state.sourceTrack.hidden = !available;
         if (!available) {
-            host.append(element(
-                "div", "h3studio-source-empty",
-                state.sourcePreview?.status
-                    ?? "Queue Plan Studio once with Tagged Motion References connected to reveal exact source windows.",
-            ));
             return;
         }
         for (let index = 0; index < state.plan.shots.length; index += 1) {
@@ -813,10 +937,62 @@ function mount(node) {
         }
     }
 
+    function renderSourceAudioTimeline() {
+        const host = state.sourceAudioTimelineHost;
+        if (!host || !state.plan) return;
+        host.replaceChildren();
+        const audio = sourceAudio();
+        if (state.sourceAudioTrack) state.sourceAudioTrack.hidden = !audio;
+        if (!audio) return;
+        const result = timing();
+        for (let index = 0; index < result.shots.length; index += 1) {
+            const row = result.shots[index];
+            const muted = sourceAudioMuted(index);
+            const card = element(
+                "div",
+                `h3studio-audio-card${index === state.active ? " h3studio-selected" : ""}${muted ? " h3studio-audio-muted" : ""}`,
+            );
+            card.title = `Scene ${index + 1} Source Timeline audio${muted ? " (muted)" : ""}`;
+            card.style.setProperty("--scene", automaticSceneColor(index));
+            card.style.flexGrow = String(Math.max(
+                .55,
+                row.deliveredFrames / Math.max(1, result.totalFrames) *
+                    state.plan.shots.length,
+            ));
+            card.addEventListener("click", () => void selectScene(index));
+            const canvas = element("canvas", "h3studio-waveform");
+            const samples = studioWaveformSceneSamples(
+                state.sourceWaveform, result.shots, index,
+            );
+            drawSourceWaveform(
+                canvas, samples, automaticSceneColor(index), muted,
+            );
+            const mute = button(
+                muted ? "🔇" : "🔊",
+                muted
+                    ? `Unmute source audio for scene ${index + 1}`
+                    : `Mute source audio for scene ${index + 1}`,
+                (event) => {
+                    event.stopPropagation();
+                    setSourceAudioMuted(index, !muted);
+                },
+            );
+            mute.className = "h3studio-audio-mute";
+            card.append(canvas, mute);
+            host.append(card);
+        }
+        if (!state.sourceWaveform && !state.sourceWaveformPromise) {
+            void loadSourceWaveform();
+        }
+    }
+
     function updateTimelineSelection() {
-        for (const host of [state.timelineHost, state.sourceTimelineHost]) {
+        for (const host of [
+            state.timelineHost, state.sourceTimelineHost,
+            state.sourceAudioTimelineHost,
+        ]) {
             if (!host) continue;
-            [...host.querySelectorAll(".h3studio-card")].forEach(
+            [...host.querySelectorAll(".h3studio-card,.h3studio-audio-card")].forEach(
                 (card, index) => card.classList.toggle("h3studio-selected", index === state.active),
             );
         }
@@ -828,7 +1004,8 @@ function mount(node) {
         if (state.view === "player") {
             state.timelinePosition = studioSceneStartSeconds(timing().shots, state.active);
         }
-        persistView(); renderSourceTimeline(); updateTimelineSelection();
+        persistView(); renderSourceTimeline(); renderSourceAudioTimeline();
+        updateTimelineSelection();
         if (state.view === "player" && state.player) {
             seekTimeline(state.timelinePosition, false);
         } else renderPanel();
@@ -1300,13 +1477,17 @@ function mount(node) {
     function disposePlayer() {
         const current = state.player;
         const generatedAudio = state.playerAudio;
+        const sourceAudioCurrent = state.sourceAudioPlayer;
         const sourceCurrent = state.sourcePlayer;
         state.player = null;
         state.playerAudio = null;
+        state.sourceAudioPlayer = null;
         state.sourcePlayer = null;
         state.sourceLayer = null;
         state.playerSlider = null;
-        for (const media of [current, generatedAudio, sourceCurrent]) {
+        for (const media of [
+            current, generatedAudio, sourceAudioCurrent, sourceCurrent,
+        ]) {
             if (!media) continue;
             try { media.pause(); } catch (_error) {}
             media.removeAttribute("src");
@@ -1328,6 +1509,7 @@ function mount(node) {
         state.timelinePosition = target;
         if (state.active !== index) {
             state.active = index; persistView(); renderSourceTimeline();
+            renderSourceAudioTimeline();
             updateTimelineSelection();
             publishActiveScene();
         }
@@ -1402,36 +1584,95 @@ function mount(node) {
                 targetSource.addEventListener("loadedmetadata", applySourceSeek, {once:true});
             } else applySourceSeek();
         }
+        if (state.sourceAudioPlayer) {
+            const targetSourceAudio = state.sourceAudioPlayer;
+            const timelineAudio = sourceAudio();
+            const timelineAudioUrl = timelineAudio ? sourceAudioUrl() : "";
+            const requestedAudioSeek = timelineAudio
+                ? studioSourceAudioSecond(timelineAudio, target) : 0;
+            const applySourceAudioSeek = () => {
+                if (state.sourceAudioPlayer !== targetSourceAudio ||
+                        !targetSourceAudio?.isConnected) return;
+                try { targetSourceAudio.currentTime = requestedAudioSeek; }
+                catch (_error) {}
+            };
+            if (!timelineAudioUrl) {
+                targetSourceAudio.pause();
+                delete targetSourceAudio.dataset.source;
+                targetSourceAudio.removeAttribute("src");
+                targetSourceAudio.load();
+            } else if (targetSourceAudio.dataset.source !== timelineAudioUrl) {
+                targetSourceAudio.dataset.source = timelineAudioUrl;
+                targetSourceAudio.src = timelineAudioUrl;
+                targetSourceAudio.load();
+                targetSourceAudio.addEventListener(
+                    "loadedmetadata", applySourceAudioSeek, {once:true},
+                );
+            } else applySourceAudioSeek();
+        }
         const label = root.querySelector(".h3studio-player-label");
         if (label) label.textContent = generated
             ? `Scene ${index + 1} · ${timing().shots[index].id}${reference ? ` ↔ @${reference.tag}` : ""}`
             : `Scene ${index + 1} has no saved segment${reference ? ` · @${reference.tag} is ready` : ""}.`;
         const audioChoice = root.querySelector(".h3studio-audio-choice");
-        const sourceAudioOption = audioChoice?.querySelector('option[value="source"]');
-        if (sourceAudioOption) sourceAudioOption.disabled = !reference?.has_audio;
-        if (audioChoice?.value === "source" && !reference?.has_audio) {
+        const motionAudioOption = audioChoice?.querySelector('option[value="motion"]');
+        if (motionAudioOption) {
+            motionAudioOption.disabled = !reference?.has_audio;
+            motionAudioOption.hidden = !reference?.has_audio;
+        }
+        const timelineAudioOption = audioChoice?.querySelector(
+            'option[value="source_timeline"]',
+        );
+        if (timelineAudioOption) {
+            timelineAudioOption.disabled = !sourceAudio();
+            timelineAudioOption.textContent = sourceAudioMuted(index)
+                ? "Source Timeline audio (scene muted)"
+                : "Source Timeline audio";
+        }
+        if (audioChoice?.value === "motion" && !reference?.has_audio) {
             audioChoice.value = "generated";
         }
+        if (audioChoice?.value === "source_timeline" && !sourceAudio()) {
+            audioChoice.value = "generated";
+        }
+        const hasMotion = Boolean(reference);
+        if (state.sourceLayer) state.sourceLayer.hidden = !hasMotion;
+        const compareControls = root.querySelector(".h3studio-compare-controls");
+        compareControls?.classList.toggle("h3studio-no-motion", !hasMotion);
+        for (const item of root.querySelectorAll(
+            ".h3studio-wipe-label,.h3studio-wipe-control,.h3studio-wipe-line,.h3studio-compare-label",
+        )) item.hidden = !hasMotion;
         audioChoice?.dispatchEvent(new Event("change"));
     }
 
     function renderPlayerPanel() {
         const wrapper = element("div", "h3studio-player");
-        const label = element("div", "h3studio-player-label", "Generated ↔ motion-reference comparison");
+        const label = element("div", "h3studio-player-label", "Generated playback");
         const stage = element("div", "h3studio-compare-stage");
         const video = element("video"); video.playsInline = true; video.preload = "metadata";
         const generatedAudio = element("audio");
         generatedAudio.preload = "metadata"; generatedAudio.hidden = true;
+        const sourceTimelineAudio = element("audio");
+        sourceTimelineAudio.preload = "metadata"; sourceTimelineAudio.hidden = true;
         const sourceVideo = element("video"); sourceVideo.playsInline = true;
         sourceVideo.preload = "metadata"; sourceVideo.muted = true;
         const sourceLayer = element("div", "h3studio-source-layer");
         sourceLayer.style.clipPath = "inset(0 50% 0 0)";
+        sourceLayer.hidden = true;
         const wipeLine = element("span", "h3studio-wipe-line"); wipeLine.style.left = "50%";
+        const sourceLabel = element(
+            "span", "h3studio-compare-label h3studio-compare-label-source",
+            "MOTION REF",
+        );
+        const generatedLabel = element(
+            "span", "h3studio-compare-label h3studio-compare-label-generated",
+            "GENERATED",
+        );
+        wipeLine.hidden = true; sourceLabel.hidden = true;
+        generatedLabel.hidden = true;
         sourceLayer.append(sourceVideo);
         stage.append(
-            video, sourceLayer, wipeLine,
-            element("span", "h3studio-compare-label h3studio-compare-label-source", "MOTION REF"),
-            element("span", "h3studio-compare-label h3studio-compare-label-generated", "GENERATED"),
+            video, sourceLayer, wipeLine, sourceLabel, generatedLabel,
         );
         const controls = element("div", "h3studio-player-controls");
         const play = button("▶", "Play or pause the delivered timeline from the current position", () => {
@@ -1462,17 +1703,47 @@ function mount(node) {
                 void generatedAudio.play().catch(() => {});
             }
         };
+        const playerTimelineSecond = () => {
+            const result = timing();
+            return Math.min(
+                result.totalSeconds,
+                studioSceneStartSeconds(result.shots, state.playerIndex) +
+                    (Number(video.currentTime) || 0),
+            );
+        };
+        const synchronizeSourceTimelineAudio = (
+            playAudio = false, timelineSecond = playerTimelineSecond(),
+        ) => {
+            const timelineAudio = sourceAudio();
+            if (!timelineAudio || !sourceTimelineAudio.dataset.source) return;
+            sourceTimelineAudio.playbackRate = video.playbackRate;
+            const target = studioSourceAudioSecond(
+                timelineAudio, timelineSecond,
+            );
+            if (Math.abs((Number(sourceTimelineAudio.currentTime) || 0) -
+                    target) > .12) {
+                try { sourceTimelineAudio.currentTime = target; }
+                catch (_error) {}
+            }
+            sourceTimelineAudio.muted =
+                audioChoice.value !== "source_timeline" ||
+                sourceAudioMuted(state.playerIndex);
+            if (playAudio && audioChoice.value === "source_timeline") {
+                void sourceTimelineAudio.play().catch(() => {});
+            }
+        };
         video.addEventListener("play", () => {
             play.textContent = "❚❚";
             syncSource(); synchronizeGeneratedAudio(true);
+            synchronizeSourceTimelineAudio(true);
             if (sourceVideo.dataset.source) void sourceVideo.play().catch(() => {});
         });
         video.addEventListener("pause", () => {
             play.textContent = "▶";
-            generatedAudio.pause(); sourceVideo.pause();
+            generatedAudio.pause(); sourceTimelineAudio.pause(); sourceVideo.pause();
         });
         video.addEventListener("waiting", () => {
-            generatedAudio.pause(); sourceVideo.pause();
+            generatedAudio.pause(); sourceTimelineAudio.pause(); sourceVideo.pause();
         });
         generatedAudio.addEventListener("canplay", () => {
             synchronizeGeneratedAudio(!video.paused);
@@ -1481,18 +1752,24 @@ function mount(node) {
             syncSource();
             if (!video.paused) void sourceVideo.play().catch(() => {});
         });
+        sourceTimelineAudio.addEventListener("canplay", () => {
+            synchronizeSourceTimelineAudio(!video.paused);
+        });
         video.addEventListener("seeking", () => {
-            generatedAudio.pause(); sourceVideo.pause();
-            synchronizeGeneratedAudio(false); syncSource();
+            generatedAudio.pause(); sourceTimelineAudio.pause(); sourceVideo.pause();
+            synchronizeGeneratedAudio(false); synchronizeSourceTimelineAudio(false);
+            syncSource();
         });
         video.addEventListener("seeked", () => {
-            synchronizeGeneratedAudio(!video.paused); syncSource();
+            synchronizeGeneratedAudio(!video.paused);
+            synchronizeSourceTimelineAudio(!video.paused); syncSource();
             if (!video.paused && sourceVideo.dataset.source) {
                 void sourceVideo.play().catch(() => {});
             }
         });
         video.addEventListener("ratechange", () => {
-            synchronizeGeneratedAudio(false); syncSource();
+            synchronizeGeneratedAudio(false);
+            synchronizeSourceTimelineAudio(false); syncSource();
         });
         video.addEventListener("timeupdate", () => {
             const result = timing();
@@ -1502,10 +1779,11 @@ function mount(node) {
             state.timelinePosition = current;
             slider.value = String(current); clock.textContent = `${formatClock(current)} / ${formatClock(result.totalSeconds)}`;
             if (state.playhead) state.playhead.style.left = `${result.totalSeconds ? current / result.totalSeconds * 100 : 0}%`;
-            synchronizeGeneratedAudio(false); syncSource();
+            synchronizeGeneratedAudio(false);
+            synchronizeSourceTimelineAudio(false, current); syncSource();
         });
         video.addEventListener("ended", () => {
-            generatedAudio.pause(); sourceVideo.pause();
+            generatedAudio.pause(); sourceTimelineAudio.pause(); sourceVideo.pause();
             const next = state.playerIndex + 1;
             if (next >= state.plan.shots.length) return;
             const result = timing();
@@ -1513,7 +1791,9 @@ function mount(node) {
             seekTimeline(start, true);
         });
         const compareControls = element("div", "h3studio-compare-controls");
-        const wipe = element("input"); wipe.type = "range"; wipe.min = "0"; wipe.max = "100";
+        const wipeLabel = element("span", "h3studio-wipe-label", "Wipe");
+        const wipe = element("input", "h3studio-wipe-control");
+        wipe.type = "range"; wipe.min = "0"; wipe.max = "100";
         wipe.step = "1"; wipe.value = "50";
         wipe.addEventListener("input", () => {
             const percent = Number(wipe.value);
@@ -1521,26 +1801,40 @@ function mount(node) {
             wipeLine.style.left = `${percent}%`;
         });
         const audioChoice = element("select", "h3studio-audio-choice");
-        for (const [value, text] of [["generated", "Generated audio"], ["source", "Motion-ref audio"]]) {
+        for (const [value, text] of [
+            ["generated", "Generated audio"],
+            ["source_timeline", "Source Timeline audio"],
+            ["motion", "Motion-ref audio"],
+        ]) {
             const option = element("option", "", text); option.value = value; audioChoice.append(option);
         }
         audioChoice.addEventListener("change", () => {
-            const useSource = audioChoice.value === "source";
-            video.muted = useSource || Boolean(generatedAudio.dataset.source);
-            generatedAudio.muted = useSource;
-            sourceVideo.muted = !useSource;
-            if (useSource) generatedAudio.pause();
+            const useMotion = audioChoice.value === "motion";
+            const useTimeline = audioChoice.value === "source_timeline";
+            video.muted = useMotion || useTimeline ||
+                Boolean(generatedAudio.dataset.source);
+            generatedAudio.muted = audioChoice.value !== "generated";
+            sourceVideo.muted = !useMotion;
+            sourceTimelineAudio.muted = !useTimeline ||
+                sourceAudioMuted(state.playerIndex);
+            if (audioChoice.value !== "generated") generatedAudio.pause();
             else synchronizeGeneratedAudio(!video.paused);
+            if (!useTimeline) sourceTimelineAudio.pause();
+            else synchronizeSourceTimelineAudio(!video.paused);
         });
-        compareControls.append(element("span", "", "Wipe"), wipe, audioChoice);
+        compareControls.append(wipeLabel, wipe, audioChoice);
         state.player = video; state.playerAudio = generatedAudio;
+        state.sourceAudioPlayer = sourceTimelineAudio;
         state.sourcePlayer = sourceVideo;
         state.sourceLayer = sourceLayer; state.playerSlider = slider;
         controls.append(play, slider, clock, button("Refresh", "Rescan saved checkpoints and segments", async () => {
             await refreshCheckpoints(); renderPanel();
         }));
-        wrapper.append(label, stage, generatedAudio, compareControls, controls,
-            element("div", "h3studio-message", "Generated playback uses synchronized Review audio when available and otherwise the saved delivered-audio sidecar. The source side is a cached low-resolution slice of the exact active @motion window; its compare offset skips incoming context removed from the delivered scene."));
+        wrapper.append(
+            label, stage, generatedAudio, sourceTimelineAudio,
+            compareControls, controls,
+            element("div", "h3studio-message", "Choose generated audio, the saved Source Timeline track, or motion-reference audio when that scene has an active @motion reference. Source Timeline playback follows the delivered-video clock; the waveform speaker buttons mute it scene by scene."),
+        );
         setTimeout(() => {
             if (state.player !== video || !video.isConnected) return;
             const result = timing();
@@ -1631,7 +1925,7 @@ function mount(node) {
                     state.timelinePosition = studioSceneStartSeconds(timing().shots, state.active);
                 }
                 state.view = value; persistView(); renderToolbarState();
-                renderSourceTimeline(); renderPanel();
+                renderSourceTimeline(); renderSourceAudioTimeline(); renderPanel();
             });
             item.dataset.studioView = value; toolbar.append(item);
         }
@@ -1640,6 +1934,9 @@ function mount(node) {
         const ruler = element("div", "h3studio-ruler");
         const timelineHost = element("div", "h3studio-timeline");
         const sourceTimelineHost = element("div", "h3studio-timeline");
+        const sourceAudioTimelineHost = element(
+            "div", "h3studio-timeline h3studio-audio-timeline",
+        );
         const generatedTrack = element("div", "h3studio-track");
         generatedTrack.append(
             element("div", "h3studio-track-label", "GENERATED"), timelineHost,
@@ -1648,16 +1945,32 @@ function mount(node) {
         sourceTrack.append(
             element("div", "h3studio-track-label", "MOTION REF"), sourceTimelineHost,
         );
+        const sourceAudioTrack = element("div", "h3studio-track");
+        sourceAudioTrack.append(
+            element("div", "h3studio-track-label", "SOURCE AUDIO"),
+            sourceAudioTimelineHost,
+        );
         let syncingScroll = false;
-        const syncScroll = (from, to) => {
+        const timelineHosts = [
+            timelineHost, sourceTimelineHost, sourceAudioTimelineHost,
+        ];
+        const syncScroll = (from) => {
             if (syncingScroll) return;
-            syncingScroll = true; to.scrollLeft = from.scrollLeft; syncingScroll = false;
+            syncingScroll = true;
+            for (const target of timelineHosts) {
+                if (target !== from) target.scrollLeft = from.scrollLeft;
+            }
+            syncingScroll = false;
         };
-        timelineHost.addEventListener("scroll", () => syncScroll(timelineHost, sourceTimelineHost));
-        sourceTimelineHost.addEventListener("scroll", () => syncScroll(sourceTimelineHost, timelineHost));
-        shell.append(ruler, generatedTrack, sourceTrack);
+        for (const host of timelineHosts) {
+            host.addEventListener("scroll", () => syncScroll(host));
+        }
+        shell.append(ruler, generatedTrack, sourceTrack, sourceAudioTrack);
         state.timelineHost = timelineHost;
         state.sourceTimelineHost = sourceTimelineHost;
+        state.sourceAudioTimelineHost = sourceAudioTimelineHost;
+        state.sourceTrack = sourceTrack;
+        state.sourceAudioTrack = sourceAudioTrack;
         const panelHost = element("div", "h3studio-panel"); state.panelHost = panelHost;
         root.append(head, toolbar, status, shell, panelHost);
         renderRuler(ruler, timing().totalSeconds); renderToolbarState(); renderStatus(); renderTimeline(); renderPanel();
@@ -1699,6 +2012,8 @@ function mount(node) {
                 state.checkpoints = new Map(); state.checkpointSignature = "";
                 state.checkpointError = ""; state.timelinePosition = null;
                 state.sourcePreview = null;
+                state.sourceWaveform = null; state.sourceWaveformToken = "";
+                state.sourceWaveformPromise = null;
             }
             state.active = Math.min(state.active, state.plan.shots.length - 1); renderShell(); void refreshCheckpoints();
         } catch (error) { showFailure(`Connected Plan JSON is invalid:\n${error.message}`); }
@@ -1721,8 +2036,17 @@ function mount(node) {
         const displayNode = event.detail?.display_node ?? event.detail?.node;
         if (sourcePayload && String(displayNode ?? "") === String(node.id ?? "")
                 && String(sourcePayload.run_name ?? "") === runName()) {
+            if (state.sourceWaveformToken !== String(sourcePayload.token ?? "")) {
+                state.sourceWaveform = null;
+                state.sourceWaveformToken = "";
+                state.sourceWaveformPromise = null;
+            }
             state.sourcePreview = sourcePayload;
             renderSourceTimeline();
+            renderSourceAudioTimeline();
+            if (sourcePayload.source_audio?.available) {
+                void loadSourceWaveform(sourcePayload);
+            }
             if (state.view === "player" && state.player) {
                 seekTimeline(
                     state.timelinePosition ?? studioSceneStartSeconds(
