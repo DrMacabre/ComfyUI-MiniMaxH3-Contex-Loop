@@ -142,6 +142,10 @@ assert.match(source, /state\.plan\.shots\.push\(makeShot\(state\.plan\.shots\)\)
 assert.match(source, /state\.active = state\.plan\.shots\.length - 1/);
 assert.match(source, /field\("Incoming transition", incomingTransition\)/);
 assert.match(source, /field\("Final assembly crossfade frames", blendFrames\)/);
+assert.match(source, /field\("Source reference", sourceReference\)/);
+assert.match(source, /field\("Generated continuity", generatedContinuity\)/);
+assert.match(source, /field\("Lock source audio", lockSourceAudio\)/);
+assert.match(source, /applySceneAudioOverride/);
 assert.match(source, /Advanced boundary controls/);
 assert.match(source, /experimentalCutMarker\.hidden = !advanced\.open/);
 assert.match(source, /advanced\.addEventListener\("toggle", refreshExperimentalMarkers\)/);

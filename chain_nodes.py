@@ -271,24 +271,75 @@ def _audio_policy_summary(value: Any) -> str:
     return summary
 
 
-def _audio_policy_locks_source_audio(value: Any) -> bool:
-    return _resolved_audio_policy(value).get(
+def _optional_scene_audio_axis(
+        shot: Any, key: str, allowed: tuple[str, ...]) -> str | None:
+    """Return one validated scene override, or None for inherited behavior."""
+    if not isinstance(shot, dict) or key not in shot:
+        return None
+    raw = shot.get(key)
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return None
+    value = str(raw).strip().lower()
+    if value == "inherit":
+        return None
+    if value not in allowed:
+        raise ValueError(
+            "Unknown H3 scene %s override %r; expected inherit or one of %s."
+            % (key.replace("_", " "), raw, allowed))
+    return value
+
+
+def _resolved_scene_audio_policy(
+        value: Any, shot: Any = None) -> dict[str, str]:
+    """Overlay one scene's generation axes on the Plan-wide audio policy.
+
+    Final mux choice deliberately remains Plan-wide. Locking the source target
+    keeps the existing contract rule: it disables loose source reference and
+    predecessor generated-audio carry for that scene.
+    """
+    policy = _resolved_audio_policy(value)
+    source_reference = _optional_scene_audio_axis(
+        shot, "source_reference", SOURCE_REFERENCE_POLICIES)
+    generated_continuity = _optional_scene_audio_axis(
+        shot, "generated_continuity", GENERATED_CONTINUITY_POLICIES)
+    source_audio_target = _optional_scene_audio_axis(
+        shot, "source_audio_target", ("off", "locked"))
+    return _contract_audio_policy(
+        policy["final_audio"],
+        source_reference or policy["source_reference"],
+        generated_continuity or policy["generated_continuity"],
+        source_audio_target or policy.get("source_audio_target", "off"),
+    )
+
+
+def _audio_policy_locks_source_audio(value: Any, shot: Any = None) -> bool:
+    return _resolved_scene_audio_policy(value, shot).get(
         "source_audio_target", "off") == "locked"
 
 
 def _audio_policy_requires_source(value: Any) -> bool:
     policy = _resolved_audio_policy(value)
-    return (policy["final_audio"] == "source" or
-            policy["source_reference"] == "on" or
+    if policy["final_audio"] == "source":
+        return True
+    shots = value.get("shots") if isinstance(value, dict) else None
+    if isinstance(shots, list):
+        return any(
+            _audio_policy_uses_source_reference(value, shot)
+            or _audio_policy_locks_source_audio(value, shot)
+            for shot in shots)
+    return (policy["source_reference"] == "on" or
             policy.get("source_audio_target") == "locked")
 
 
-def _audio_policy_uses_source_reference(value: Any) -> bool:
-    return _resolved_audio_policy(value)["source_reference"] == "on"
+def _audio_policy_uses_source_reference(value: Any, shot: Any = None) -> bool:
+    return _resolved_scene_audio_policy(
+        value, shot)["source_reference"] == "on"
 
 
-def _audio_policy_uses_generated_continuity(value: Any) -> bool:
-    return _resolved_audio_policy(value)["generated_continuity"] == "on"
+def _audio_policy_uses_generated_continuity(
+        value: Any, shot: Any = None) -> bool:
+    return _resolved_scene_audio_policy(
+        value, shot)["generated_continuity"] == "on"
 
 
 def _audio_policy_final(value: Any) -> str:
@@ -2188,7 +2239,7 @@ def _validate_source_timeline_hash(
         raise ValueError(
             "%s received a different H3 Source Timeline than Loop Start." %
             usage)
-    if _audio_policy_requires_source(compatibility):
+    if expected_audio and expected_audio != "none":
         actual_audio = str(source["fingerprints"].get("audio") or "none")
         content_audio = str(source["audio"].get("content_sha256") or "")
         if (not expected_audio or
@@ -2448,10 +2499,10 @@ def _tagged_audio_reference_value(
             (int(length), int(scene), current.get("raw_frames")))
     compatibility = plan.get("compatibility")
     if (not isinstance(compatibility, dict) or
-            not _audio_policy_uses_source_reference(compatibility)):
+            not _audio_policy_uses_source_reference(plan, current)):
         raise ValueError(
             "Tagged audio @%s source_timeline requires Source reference=on "
-            "in the Plan's Audio Policy." %
+            "in this scene's effective audio policy." %
             entry.get("tag", "audio"))
     expected_hash = str(compatibility.get("source_audio_hash") or "")
     entry_hash = str(entry.get("content_hash") or "")
@@ -4029,6 +4080,11 @@ def _legacy_history_contract(
         if "context_spatial_proxy" in shot:
             contract["context_spatial_proxy"] = shot[
                 "context_spatial_proxy"]
+        for key in (
+                "source_reference", "generated_continuity",
+                "source_audio_target"):
+            if key in shot:
+                contract[key] = shot[key]
         shots.append(contract)
     return {
         "version": PLAN_VERSION,
@@ -4117,10 +4173,10 @@ def _canonical_source_reference_dependency(
         source_timeline: Any = None, source_audio: Any = None
         ) -> dict[str, Any] | None:
     """Hash the canonical source PCM window which affects one scene."""
-    if (not _audio_policy_uses_source_reference(plan)
-            and not _audio_policy_locks_source_audio(plan)):
-        return None
     shot = plan["shots"][int(index) - 1]
+    if (not _audio_policy_uses_source_reference(plan, shot)
+            and not _audio_policy_locks_source_audio(plan, shot)):
+        return None
     external_lead = int(shot.get("external_context_frames", 0))
     start_frame = (0 if int(index) == 1 and external_lead > 0 else
                    max(0, int(shot["generation_start_frame"])))
@@ -4167,7 +4223,7 @@ def _scene_dependency_record(
     index = int(index)
     shot = plan["shots"][index - 1]
     compatibility = plan["compatibility"]
-    policy = _resolved_audio_policy(compatibility)
+    policy = _resolved_scene_audio_policy(compatibility, shot)
     context = _shot_context_length(
         shot, int(compatibility.get("context_length", 0)))
     audio_context = _shot_audio_context_length(
@@ -4232,7 +4288,7 @@ def _scene_dependency_record(
             "video_blend_frames": video_blend,
         },
     }
-    if _audio_policy_locks_source_audio(compatibility):
+    if _audio_policy_locks_source_audio(compatibility, shot):
         # Omit the disabled spelling so pre-switch scene-dependency records
         # remain byte-for-byte compatible with unchanged 0.5 runs.
         scopes["global_generation"]["source_audio_target"] = "locked"
@@ -5139,6 +5195,42 @@ def _normalize_plan(
             "audio_start_seconds": generation_start_frame / float(FPS),
             "audio_duration_seconds": raw_frames / float(FPS),
         }
+        # Scene-local audio generation axes are optional. Their absence is the
+        # exact stable spelling of "inherit Chain Policy"; final audio remains
+        # a Plan-wide assembly decision.
+        for audio_key, allowed in (
+                ("source_reference", SOURCE_REFERENCE_POLICIES),
+                ("generated_continuity", GENERATED_CONTINUITY_POLICIES),
+                ("source_audio_target", ("off", "locked"))):
+            override = _optional_scene_audio_axis(item, audio_key, allowed)
+            if override is not None:
+                shot[audio_key] = override
+        if "lock_source_audio" in item:
+            raw_lock = item.get("lock_source_audio")
+            if isinstance(raw_lock, bool):
+                lock_override = "locked" if raw_lock else "off"
+            elif raw_lock is None or (
+                    isinstance(raw_lock, str)
+                    and str(raw_lock).strip().lower() in ("", "inherit")):
+                lock_override = None
+            else:
+                lock_value = str(raw_lock).strip().lower()
+                if lock_value in ("on", "true", "locked", "1"):
+                    lock_override = "locked"
+                elif lock_value in ("off", "false", "0"):
+                    lock_override = "off"
+                else:
+                    raise ValueError(
+                        "Shot %d has unknown lock_source_audio override %r."
+                        % (index, raw_lock))
+            if (lock_override is not None
+                    and "source_audio_target" in shot
+                    and shot["source_audio_target"] != lock_override):
+                raise ValueError(
+                    "Shot %d defines conflicting source_audio_target and "
+                    "lock_source_audio overrides." % index)
+            if lock_override is not None:
+                shot["source_audio_target"] = lock_override
         # Absence means inherit the Plan node default. Omitting inherited
         # values preserves old guide plan and checkpoint hashes exactly.
         if "continuation_mode" in item:
@@ -5506,7 +5598,13 @@ def _effective_editor_plan(plan: dict[str, Any]) -> dict[str, Any]:
              **({"video_blend_frames": shot["video_blend_frames"]}
                 if "video_blend_frames" in shot else {}),
              **({"context_spatial_proxy": shot["context_spatial_proxy"]}
-                if "context_spatial_proxy" in shot else {}))
+                if "context_spatial_proxy" in shot else {}),
+             **({"source_reference": shot["source_reference"]}
+                if "source_reference" in shot else {}),
+             **({"generated_continuity": shot["generated_continuity"]}
+                if "generated_continuity" in shot else {}),
+             **({"source_audio_target": shot["source_audio_target"]}
+                if "source_audio_target" in shot else {}))
             for shot in plan["shots"]],
     }
 
@@ -6114,6 +6212,7 @@ def _public_segment(value: dict[str, Any]) -> dict[str, Any]:
         "prompt_prefix", "scene_prompt", "prompt", "prompt_hash", "archives",
         "seed", "steps", "continuation_mode", "context_length",
         "audio_context_length", "context_spatial_proxy",
+        "source_reference", "generated_continuity", "source_audio_target",
         "guide_tone_carry",
         "guide_tone_input_applied",
         "latent_color_stats",
@@ -10941,8 +11040,9 @@ class MiniMaxH3ChainCurrent:
         audio_slice = None
         target_audio_slice = None
         alignment_status = "audio ref unavailable"
-        source_reference_enabled = _audio_policy_uses_source_reference(plan)
-        source_audio_locked = _audio_policy_locks_source_audio(plan)
+        source_reference_enabled = _audio_policy_uses_source_reference(
+            plan, shot)
+        source_audio_locked = _audio_policy_locks_source_audio(plan, shot)
         if source_reference_enabled or source_audio_locked:
             external_lead = int(shot.get("external_context_frames", 0))
             if source_timeline is not None:
@@ -11019,14 +11119,22 @@ class MiniMaxH3ChainCurrent:
             repeated_frames,
             _shot_video_blend_frames(
                 shot, int(cfg.get("video_blend_frames", 0)), context_length))
+        scene_audio_policy = _resolved_scene_audio_policy(plan, shot)
+        scene_audio_status = "ref=%s/carry=%s/lock=%s" % (
+            scene_audio_policy["source_reference"],
+            scene_audio_policy["generated_continuity"],
+            "on" if scene_audio_policy.get(
+                "source_audio_target") == "locked" else "off")
         status = ("clip %d/%d %s; raw=%df delivered=%df; blend=%df; %s; %s; "
-                  "seed=%d" %
+                  "audio=%s; seed=%d" %
                   (index, len(plan["shots"]), shot["id"], shot["raw_frames"],
                    shot["delivered_frames"], video_blend_frames, audio_status,
-                   alignment_status, shot["seed"]))
+                   alignment_status, scene_audio_status, shot["seed"]))
         dependency_state = dict(state)
         if source_audio_locked:
             dependency_state["current_source_audio_target"] = target_audio_slice
+        else:
+            dependency_state.pop("current_source_audio_target", None)
         dependency_state["current_source_reference_dependency"] = (
             _canonical_source_reference_dependency(
                 plan, index, source_timeline, source_audio))
@@ -11197,7 +11305,7 @@ class MiniMaxH3ChainContext:
             "continuation_mode", cfg.get("continuation_mode", "guide"))
         context_spatial_proxy = _shot_context_spatial_proxy(shot)
         external_first = index == 1 and bool(state.get("external_context"))
-        source_audio_locked = _audio_policy_locks_source_audio(cfg)
+        source_audio_locked = _audio_policy_locks_source_audio(cfg, shot)
         target_latent = latent
         if source_audio_locked:
             from .masked_context import apply_locked_source_audio_target
@@ -11206,7 +11314,7 @@ class MiniMaxH3ChainContext:
                 latent, audio_vae, state.get("current_source_audio_target"))
         generated_audio_context = (
             continuation_mode in GUIDE_CONTINUATION_MODES
-            and _audio_policy_uses_generated_continuity(cfg)
+            and _audio_policy_uses_generated_continuity(cfg, shot)
             and not source_audio_locked
             and audio_context_length > 0)
         has_context = context_length > 0 or generated_audio_context
@@ -11265,7 +11373,7 @@ class MiniMaxH3ChainContext:
                 and previous_latent is not None
                 else None)
             preserve_audio_prefix = (
-                _audio_policy_uses_generated_continuity(cfg)
+                _audio_policy_uses_generated_continuity(cfg, shot)
                 and not source_audio_locked
                 and audio_context_length > 0)
             detail_video_seed = (
@@ -11754,8 +11862,8 @@ class MiniMaxH3ChainSegmentSave:
                 "current_source_reference_dependency")
             if (source_dependency is None
                     and state.get("source_timeline") is not None
-                    and (_audio_policy_uses_source_reference(plan)
-                         or _audio_policy_locks_source_audio(plan))):
+                    and (_audio_policy_uses_source_reference(plan, shot)
+                         or _audio_policy_locks_source_audio(plan, shot))):
                 source_dependency = _canonical_source_reference_dependency(
                     plan, index, state.get("source_timeline"), None)
             scene_dependency = _scene_dependency_record(
@@ -11829,12 +11937,20 @@ class MiniMaxH3ChainSegmentSave:
                     plan["compatibility"].get("continuation_mode", "guide")),
                 "context_length": effective_context_length,
                 "audio_context_length": effective_audio_context_length,
+                "source_reference": str(
+                    _resolved_scene_audio_policy(plan, shot)[
+                        "source_reference"]),
+                "generated_continuity": str(
+                    _resolved_scene_audio_policy(plan, shot)[
+                        "generated_continuity"]),
                 "blend_frames": blend_frames,
                 "sample_rate": sample_rate,
                 "segment_sha256": _file_sha256(published_segment),
                 "checkpoint_sha256": _file_sha256(published_checkpoint),
                 "prompt_file_sha256": _file_sha256(published_prompt),
             }
+            if _audio_policy_locks_source_audio(plan, shot):
+                segment["source_audio_target"] = "locked"
             cache_metadata = _find_reference_cache(
                 str(plan["compatibility"].get(
                     "generation_fingerprint") or ""),

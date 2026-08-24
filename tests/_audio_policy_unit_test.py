@@ -157,6 +157,97 @@ silent_current = chain.MiniMaxH3ChainCurrent().current(
     silent_state, None)["result"]
 assert silent_current[12] is None
 
+scene_policy = chain._contract_audio_policy("none", "off", "on")
+scene_chain_policy = chain._contract_compose_chain_policy(
+    scene_policy, chain._contract_transition_policy("guide"),
+    audio_context_length=5)
+scene_plan = chain._normalize_plan(
+    json.dumps({"shots": [
+        {"id": "ref", "prompt": "Source-guided scene.", "length": 56,
+         "source_reference": "on"},
+        {"id": "fresh", "prompt": "Independent generated sound.",
+         "length": 56, "generated_continuity": "off"},
+        {"id": "locked", "prompt": "Exact source waveform.", "length": 56,
+         "source_audio_target": "locked"},
+    ]}),
+    "scene-audio-policy-test", 64, 64, 5, "video", "head", "disabled",
+    "generated_audio", 5, 1.0, 8, 7, 18, "model-stack", 0, "guide",
+    scene_chain_policy)
+assert scene_plan["shots"][0]["source_reference"] == "on"
+assert scene_plan["shots"][1]["generated_continuity"] == "off"
+assert scene_plan["shots"][2]["source_audio_target"] == "locked"
+editor_scene_plan = chain._effective_editor_plan(scene_plan)
+assert editor_scene_plan["shots"][0]["source_reference"] == "on"
+assert editor_scene_plan["shots"][1]["generated_continuity"] == "off"
+assert editor_scene_plan["shots"][2]["source_audio_target"] == "locked"
+assert chain._audio_policy_uses_source_reference(
+    scene_plan, scene_plan["shots"][0])
+assert not chain._audio_policy_uses_source_reference(
+    scene_plan, scene_plan["shots"][1])
+assert not chain._audio_policy_uses_generated_continuity(
+    scene_plan, scene_plan["shots"][1])
+assert chain._audio_policy_locks_source_audio(
+    scene_plan, scene_plan["shots"][2])
+assert chain._audio_policy_requires_source(scene_plan)
+try:
+    chain._plan_with_source_audio(scene_plan, None)
+except ValueError as exc:
+    assert "requires source_audio" in str(exc)
+else:
+    raise AssertionError("scene source override accepted missing source audio")
+
+scene_samples = round(
+    scene_plan["total_delivered_frames"] / 24 * source_audio["sample_rate"])
+scene_audio = {
+    "waveform": chain.torch.linspace(
+        -0.5, 0.5, scene_samples).reshape(1, 1, -1),
+    "sample_rate": source_audio["sample_rate"],
+}
+prepared_scene_plan = chain._plan_with_source_audio(scene_plan, scene_audio)
+scene_ref_current = chain.MiniMaxH3ChainCurrent().current(
+    {"plan": prepared_scene_plan, "index": 1}, scene_audio)["result"]
+assert scene_ref_current[12] is not None
+scene_fresh_current = chain.MiniMaxH3ChainCurrent().current({
+    "plan": prepared_scene_plan, "index": 2,
+    "current_source_audio_target": {"stale": True},
+}, scene_audio)["result"]
+assert scene_fresh_current[12] is None
+assert "current_source_audio_target" not in scene_fresh_current[0]
+scene_locked_current = chain.MiniMaxH3ChainCurrent().current(
+    {"plan": prepared_scene_plan, "index": 3}, scene_audio)["result"]
+assert scene_locked_current[12] is None
+assert scene_locked_current[0]["current_source_audio_target"] is not None
+ref_dependency = chain._scene_dependency_record(
+    prepared_scene_plan, 1,
+    chain._canonical_source_reference_dependency(
+        prepared_scene_plan, 1, None, scene_audio))
+fresh_dependency = chain._scene_dependency_record(
+    prepared_scene_plan, 2, None)
+locked_dependency = chain._scene_dependency_record(
+    prepared_scene_plan, 3,
+    chain._canonical_source_reference_dependency(
+        prepared_scene_plan, 3, None, scene_audio))
+assert ref_dependency["scopes"]["global_generation"][
+    "source_reference"] == "on"
+assert fresh_dependency["scopes"]["incoming_boundary"][
+    "generated_continuity"] == "off"
+assert locked_dependency["scopes"]["global_generation"][
+    "source_audio_target"] == "locked"
+
+all_off_policy = chain._contract_audio_policy("none", "on", "off", "locked")
+all_off_chain = chain._contract_compose_chain_policy(
+    all_off_policy, chain._contract_transition_policy("guide"),
+    audio_context_length=5)
+all_off_plan = chain._normalize_plan(
+    json.dumps({"shots": [{
+        "id": "dry", "prompt": "No source needed.", "length": 39,
+        "source_reference": "off", "source_audio_target": "off",
+    }]}),
+    "scene-audio-all-off", 64, 64, 5, "video", "head", "disabled",
+    "generated_audio", 5, 1.0, 8, 7, 18, "model-stack", 0, "guide",
+    all_off_chain)
+assert not chain._audio_policy_requires_source(all_off_plan)
+
 off_reference = chain._append_tagged_reference(
     None, kind="video", tag="motion", value="video",
     content_hash="video-hash", paired_audio_policy="off")

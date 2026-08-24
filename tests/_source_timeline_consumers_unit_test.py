@@ -119,6 +119,26 @@ with tempfile.TemporaryDirectory() as temporary:
     assert "Source Timeline frame-exact" in second[13]
     assert second[14] == 0
 
+    scene_override_plan = chain._normalize_plan(
+        json.dumps({"shots": [
+            {"id": "dry", "prompt": "No source reference.", "length": 22},
+            {"id": "ref", "prompt": "Use source reference.", "length": 22,
+             "source_reference": "on"},
+        ]}),
+        "timeline-scene-overrides", 64, 64, 5, "video", "head",
+        "disabled", "generated_audio", 5, 1.0, 8, 7, 18,
+        "model-stack", 0, "guide")
+    override_started = chain.MiniMaxH3ChainLoopStart().start(
+        scene_override_plan, 1, source_timeline=timeline)
+    override_state = override_started[1]
+    assert chain.MiniMaxH3ChainCurrent().current(
+        override_state)["result"][12] is None
+    override_state["index"] = 2
+    override_second = chain.MiniMaxH3ChainCurrent().current(
+        override_state)["result"]
+    assert tuple(override_second[12]["waveform"].shape) == (1, 1, 44000)
+    assert override_second[0]["current_source_reference_dependency"] is not None
+
     tagged = chain.MiniMaxH3TaggedMotionReferenceTimeline().add(
         runtime, "motion", "<Subject 1>", "the supplied motion", "384",
         "embedded", "", "sequential")

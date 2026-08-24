@@ -969,6 +969,28 @@ def main():
     assert audio_only_result[3] is target
     assert any("audio_latent" in keyframe for keyframe in
                audio_only_result[0][0][1]["minimax_keyframes"])
+    scene_no_carry_plan = chain._normalize_plan(
+        json.dumps({"shots": [
+            {"id": "one", "prompt": "first", "length": 192},
+            {"id": "audio_cut", "prompt": "new sound", "length": 192,
+             "context_length": 0, "audio_context_length": 33,
+             "generated_continuity": "off"},
+        ]}),
+        "scene_audio_cut_test", 64, 32, 22, "video", "head",
+        "disabled", "generated_audio", 22, 8.0, 8, 1, 18,
+        "model-stack-v1", 0, "guide",
+    )
+    original_prepare = chain._prepare_native_guide_conditioning
+    chain._prepare_native_guide_conditioning = lambda value: value
+    try:
+        scene_no_carry_result = chain.MiniMaxH3ChainContext().apply(
+            {"plan": scene_no_carry_plan, "index": 2,
+             "previous_frames": frames, "previous_latent": previous},
+            conditioning, VideoVAE(), target)
+    finally:
+        chain._prepare_native_guide_conditioning = original_prepare
+    assert scene_no_carry_result[1:3] == (0, False)
+    assert scene_no_carry_result[3] is target
     mixed_state = {
         "plan": mixed_plan,
         "index": 2,
@@ -1041,6 +1063,25 @@ def main():
     assert not torch.count_nonzero(
         locked_chain_video_mask[:, :, :prefix_video_steps])
     assert not torch.count_nonzero(locked_chain_audio_mask)
+    scene_locked_plan = chain._normalize_plan(
+        json.dumps({"shots": [
+            {"id": "one", "prompt": "first", "length": 192},
+            {"id": "scene_locked", "prompt": "second", "length": 192,
+             "source_audio_target": "locked"},
+        ]}),
+        "scene_locked_source_audio_test", 64, 32, 39, "video", "head",
+        "disabled", "generated_audio", 39, 8.0, 8, 1, 18,
+        "model-stack-v1", 0, "audio_feathered_av",
+    )
+    scene_locked_result = chain.MiniMaxH3ChainContext().apply(
+        {"plan": scene_locked_plan, "index": 2,
+         "previous_frames": frames, "previous_latent": previous,
+         "current_source_audio_target": locked_source_window},
+        conditioning, VideoVAE(), target, LockedAudioVAE())
+    scene_locked_audio = scene_locked_result[3]["samples"].unbind()[1]
+    scene_locked_audio_mask = scene_locked_result[3]["noise_mask"].unbind()[1]
+    assert torch.equal(scene_locked_audio, locked_audio)
+    assert not torch.count_nonzero(scene_locked_audio_mask)
     locked_first_result = chain.MiniMaxH3ChainContext().apply(
         {"plan": locked_plan, "index": 1, "external_context": False,
          "current_source_audio_target": locked_source_window},

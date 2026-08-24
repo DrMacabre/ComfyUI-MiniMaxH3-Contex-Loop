@@ -35,6 +35,44 @@ The reverse Advanced/Legacy order is also valid: whichever is nearest Plan
 owns the effective transition. A standalone Legacy Adapter retains exact 0.4
 `audio_mode` behavior for imported workflows.
 
+### Per-scene audio behavior
+
+Final soundtrack remains a single Chain Policy choice, but the three
+generation-time audio axes can be overridden independently on each scene in
+Plan or Plan Studio:
+
+- **Source reference** decides whether that scene receives its exact source
+  window as a loose Ref2VA audio reference.
+- **Generated continuity** decides whether that scene carries the preceding
+  sampled audio latent.
+- **Lock source audio** places that scene's exact source window in the target
+  audio latent and protects it from denoising. Lock wins over the other two
+  switches for that scene.
+
+Each selector defaults to **Inherit Chain Policy**. Therefore existing plans
+do not change, and only scenes with an explicit override acquire new JSON or a
+new generation dependency. For example, a music video can use a source
+performance reference for scene 1, create fresh generated sound in scene 2,
+and lock an exact source passage in scene 3 while still choosing one global
+final soundtrack:
+
+```json
+{
+  "shots": [
+    {"id": "scene_1", "prompt": "...", "source_reference": "on"},
+    {"id": "scene_2", "prompt": "...", "generated_continuity": "off"},
+    {"id": "scene_3", "prompt": "...", "source_audio_target": "locked"}
+  ]
+}
+```
+
+The canonical stored values are `on`/`off` for `source_reference` and
+`generated_continuity`, and `locked`/`off` for `source_audio_target`. Omitting
+a key means inherit. Source audio still connects once at Loop Start or through
+Source Timeline; scenes that do not consume it need no rewiring. Changing one
+scene's effective source reference, generated carry, or lock invalidates that
+scene and its descendants, not unrelated earlier checkpoints.
+
 For a prerecorded song or dialogue performance that must remain exact, choose
 Source final audio and enable **Lock source audio**. The switch resolves Source
 reference and Generated continuity off: the source is no longer a loose Ref2VA

@@ -160,3 +160,77 @@ export function primaryTransitionOptions() {
         };
     });
 }
+
+const SCENE_AUDIO_AXES = Object.freeze({
+    source_reference: Object.freeze(["off", "on"]),
+    generated_continuity: Object.freeze(["off", "on"]),
+    source_audio_target: Object.freeze(["off", "locked"]),
+});
+
+function sceneAudioAxis(shot, key, fallback) {
+    const raw = shot?.[key];
+    if (raw === undefined || raw === null || String(raw).trim() === ""
+            || String(raw).trim().toLowerCase() === "inherit") {
+        return fallback;
+    }
+    const value = String(raw).trim().toLowerCase();
+    if (!SCENE_AUDIO_AXES[key]?.includes(value)) {
+        throw new Error(`Unknown scene ${key.replaceAll("_", " ")} override “${raw}”.`);
+    }
+    return value;
+}
+
+export function sceneAudioPolicy(shot, planPolicy = {}) {
+    const finalAudio = String(planPolicy.finalAudio ?? "generated");
+    const sourceReference = sceneAudioAxis(
+        shot, "source_reference", String(planPolicy.sourceReference ?? "off"),
+    );
+    const generatedContinuity = sceneAudioAxis(
+        shot, "generated_continuity",
+        String(planPolicy.generatedContinuity ?? "on"),
+    );
+    const sourceAudioTarget = sceneAudioAxis(
+        shot, "source_audio_target",
+        String(planPolicy.sourceAudioTarget ?? "off"),
+    );
+    if (sourceAudioTarget === "locked") {
+        return {
+            finalAudio, sourceReference:"off", generatedContinuity:"off",
+            sourceAudioTarget,
+        };
+    }
+    return {
+        finalAudio, sourceReference, generatedContinuity, sourceAudioTarget,
+    };
+}
+
+export function sceneAudioOverride(shot, key) {
+    if (!Object.hasOwn(SCENE_AUDIO_AXES, key)) {
+        throw new Error(`Unknown scene audio override axis “${key}”.`);
+    }
+    if (!Object.hasOwn(shot ?? {}, key) || shot[key] === null
+            || String(shot[key]).trim() === ""
+            || String(shot[key]).trim().toLowerCase() === "inherit") {
+        return "inherit";
+    }
+    return sceneAudioAxis(shot, key, null);
+}
+
+export function applySceneAudioOverride(shot, key, value) {
+    if (!shot || typeof shot !== "object" || Array.isArray(shot)) {
+        throw new Error("A scene audio override requires a scene object.");
+    }
+    if (!Object.hasOwn(SCENE_AUDIO_AXES, key)) {
+        throw new Error(`Unknown scene audio override axis “${key}”.`);
+    }
+    const selected = String(value ?? "inherit").trim().toLowerCase();
+    if (!selected || selected === "inherit") {
+        delete shot[key];
+        return shot;
+    }
+    if (!SCENE_AUDIO_AXES[key].includes(selected)) {
+        throw new Error(`Unknown scene ${key.replaceAll("_", " ")} override “${value}”.`);
+    }
+    shot[key] = selected;
+    return shot;
+}

@@ -22,23 +22,27 @@ import {
     setShotLengthMode,
     sharedPrompt,
     shotLengthMode,
-} from "./h3_chain_plan_core.mjs?v=0.5.12";
+} from "./h3_chain_plan_core.mjs?v=0.5.13";
 import {
     promptRevisionHelp,
     promptRevisionLabel,
     promptRevisionNavigation,
-} from "./h3_prompt_history_core.mjs?v=0.5.12";
-import {availableReferenceRecords} from "./h3_reference_preview_core.mjs?v=0.5.12";
+} from "./h3_prompt_history_core.mjs?v=0.5.13";
+import {availableReferenceRecords} from "./h3_reference_preview_core.mjs?v=0.5.13";
 import {
+    applySceneAudioOverride,
     applySceneTransitionPreset,
     primaryTransitionOptions,
+    sceneAudioOverride,
+    sceneAudioPolicy,
     sceneTransitionPreset,
     transitionPresetLabel,
-} from "./h3_policy_core.mjs?v=0.5.12";
+} from "./h3_policy_core.mjs?v=0.5.13";
 import {
     resolveAudioContextLength,
+    resolveAudioPolicy,
     resolveTransitionPolicy,
-} from "./h3_socket_presentation_core.mjs?v=0.5.12";
+} from "./h3_socket_presentation_core.mjs?v=0.5.13";
 import {
     locateStudioTimelineSecond,
     h3StudioGridMarkers,
@@ -47,8 +51,8 @@ import {
     studioCheckpointSignature,
     studioSceneStartSeconds,
     studioSourceSecond,
-} from "./h3_chain_plan_studio_core.mjs?v=0.5.12";
-import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.5.12";
+} from "./h3_chain_plan_studio_core.mjs?v=0.5.13";
+import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.5.13";
 
 const {connectedPromptEditors, publishCompanionScene} = promptCompanionSync;
 function publishCompanionPrompt(...args) {
@@ -138,6 +142,8 @@ function injectStyles() {
         .h3studio-scene-label { color:var(--hs-muted); }
         .h3studio-form { align-items:end; display:grid;
             grid-template-columns:minmax(130px,1.3fr) minmax(175px,1.3fr) minmax(65px,.5fr) minmax(135px,1.1fr) minmax(120px,.85fr) minmax(140px,1fr); margin-bottom:8px; }
+        .h3studio-audio-overrides { display:grid; grid-template-columns:repeat(3,minmax(160px,1fr));
+            gap:7px; margin:0 0 8px; align-items:end; }
         .h3studio-field { display:flex; min-width:0; flex-direction:column; gap:3px; color:var(--hs-muted); }
         .h3studio-advanced { margin:0 0 8px; padding:6px 8px; border:1px solid var(--hs-border);
             border-radius:6px; color:var(--hs-muted); }
@@ -181,7 +187,8 @@ function injectStyles() {
             gap:8px; align-items:start; color:var(--hs-muted); }
         .h3studio-ref-preview img,.h3studio-ref-preview video { width:100%; max-height:150px; object-fit:contain; background:#08090c; }
         .h3studio-ref-preview audio { width:100%; height:36px; }
-        @media(max-width:760px) { .h3studio-form,.h3studio-advanced-grid { grid-template-columns:1fr 1fr; }
+        @media(max-width:760px) { .h3studio-form,.h3studio-advanced-grid,
+            .h3studio-audio-overrides { grid-template-columns:1fr 1fr; }
             .h3studio-defaults { grid-template-columns:1fr; } }
     `;
     document.head.appendChild(style);
@@ -374,6 +381,7 @@ function mount(node) {
 
     function settings() {
         const transition = resolveTransitionPolicy(state.planNode ?? node);
+        const audioPolicy = resolveAudioPolicy(state.planNode ?? node);
         return {
             contextLength:transition.known
                 ? transition.contextLength
@@ -386,6 +394,7 @@ function mount(node) {
                 ? transition.continuationMode
                 : widget(state.planNode, "continuation_mode")?.value ?? "guide",
             transitionPreset:transition.known ? transition.preset : "custom",
+            audioPolicy,
             defaultDurationSeconds:widget(state.planNode, "default_duration_seconds")?.value ?? 15,
             defaultSteps:widget(state.planNode, "default_steps")?.value ?? 20,
         };
@@ -393,6 +402,7 @@ function mount(node) {
 
     function settingsSignature(planNode = state.planNode) {
         const transition = resolveTransitionPolicy(planNode ?? node);
+        const audioPolicy = resolveAudioPolicy(planNode ?? node);
         return JSON.stringify([
             transition.known
                 ? transition.contextLength
@@ -404,6 +414,9 @@ function mount(node) {
             transition.known
                 ? transition.continuationMode
                 : widget(planNode, "continuation_mode")?.value ?? "guide",
+            audioPolicy.sourceReference,
+            audioPolicy.generatedContinuity,
+            audioPolicy.sourceAudioTarget ?? "off",
             widget(planNode, "default_duration_seconds")?.value ?? 15,
             widget(planNode, "default_steps")?.value ?? 20,
         ]);
@@ -1131,6 +1144,62 @@ function mount(node) {
             field("Incoming transition", incomingTransition),
             field("Final assembly crossfade frames", blendFrames),
         );
+        const planAudioPolicy = settings().audioPolicy;
+        const effectiveAudioPolicy = sceneAudioPolicy(shot, planAudioPolicy);
+        function audioOverrideSelect(key, inherited, choices, title) {
+            const select = element("select");
+            const inheritedOption = element(
+                "option", "", `Inherit Chain Policy · ${inherited}`,
+            );
+            inheritedOption.value = "inherit";
+            select.append(inheritedOption);
+            for (const [value, label] of choices) {
+                const option = element("option", "", label);
+                option.value = value;
+                select.append(option);
+            }
+            select.value = sceneAudioOverride(shot, key);
+            select.title = title;
+            select.addEventListener("change", () => {
+                applySceneAudioOverride(shot, key, select.value);
+                writePlan();
+                renderStatus();
+            });
+            return select;
+        }
+        const sourceReference = audioOverrideSelect(
+            "source_reference",
+            planAudioPolicy.sourceReference ?? effectiveAudioPolicy.sourceReference,
+            [["on", "On · source window as Ref2VA audio"],
+             ["off", "Off · no source audio reference"]],
+            "Scene-local source-audio reference. It does not choose final "
+                + "soundtrack; Lock source audio wins over this switch.",
+        );
+        const generatedContinuity = audioOverrideSelect(
+            "generated_continuity",
+            planAudioPolicy.generatedContinuity
+                ?? effectiveAudioPolicy.generatedContinuity,
+            [["on", "On · continue prior generated audio"],
+             ["off", "Off · independent generated audio"]],
+            "Scene-local predecessor generated-audio carry. Lock source audio "
+                + "wins over this switch.",
+        );
+        const inheritedLock = (planAudioPolicy.sourceAudioTarget ?? "off")
+            === "locked" ? "on" : "off";
+        const lockSourceAudio = audioOverrideSelect(
+            "source_audio_target", inheritedLock,
+            [["locked", "On · protect exact source window"],
+             ["off", "Off · target remains denoisable"]],
+            "Locks this scene's exact source waveform into the target audio "
+                + "latent. Source reference and generated continuity become "
+                + "effectively off; final soundtrack stays global.",
+        );
+        const audioOverrides = element("div", "h3studio-audio-overrides");
+        audioOverrides.append(
+            field("Source reference", sourceReference),
+            field("Generated continuity", generatedContinuity),
+            field("Lock source audio", lockSourceAudio),
+        );
         const advanced = element("details", "h3studio-advanced");
         advanced.append(element(
             "summary", "", "Advanced boundary controls",
@@ -1159,7 +1228,7 @@ function mount(node) {
                     "Scene selection is synchronized in both directions; Studio keeps scene ID, length, steps, seed, timeline, and playback controls.",
                 ),
             );
-            panel.append(head, form, advanced, delegated);
+            panel.append(head, form, audioOverrides, advanced, delegated);
             return panel;
         }
 
@@ -1189,7 +1258,9 @@ function mount(node) {
         );
         const history = element("div", "h3studio-history");
         state.history.host = history; state.history.textarea = prompt; state.history.status = message;
-        panel.append(head, form, advanced, prompt, tools, tray, history);
+        panel.append(
+            head, form, audioOverrides, advanced, prompt, tools, tray, history,
+        );
         void loadHistory(row.id, prompt.value);
         return panel;
     }
