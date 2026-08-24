@@ -209,7 +209,7 @@ with tempfile.TemporaryDirectory() as temporary:
     chain._run_ffmpeg = fake_ffmpeg
     try:
         assembled = chain.MiniMaxH3ChainAssemble().assemble(
-            assembly_manifest, "source", "timeline_source", 96)
+            assembly_manifest, "plan", "timeline_source", 96)
     finally:
         chain._validate_manifest = original_validate_manifest
         chain._validate_prelude = original_validate_prelude
@@ -232,6 +232,89 @@ with tempfile.TemporaryDirectory() as temporary:
         deferred_prepared["source_timeline"])["audio"]["kind"] == (
             "external_path")
 
+    # A legacy AUDIO connected once at Loop Start is promoted to the same
+    # path-backed recovery contract without changing its released raw-audio
+    # fingerprint. Downstream nodes no longer need the tensor wire, while an
+    # old redundant wire remains valid when it carries the identical track.
+    legacy_plan = make_plan("legacy-audio-promoted")
+    legacy_started = chain.MiniMaxH3ChainLoopStart().start(
+        legacy_plan, 1, source_audio=tensor_audio)
+    legacy_state = legacy_started[1]
+    legacy_prepared = legacy_state["plan"]
+    legacy_timeline = legacy_state["source_timeline"]
+    legacy_hash = chain._audio_fingerprint(tensor_audio)
+    assert legacy_prepared["compatibility"]["source_audio_hash"] == (
+        legacy_hash)
+    assert "source_timeline_fingerprint" not in (
+        legacy_prepared["compatibility"])
+    assert legacy_timeline["audio"]["kind"] == "external_path"
+    assert legacy_timeline["recovery"][
+        "legacy_loop_start_source_audio_hash"] == legacy_hash
+    assert pathlib.Path(legacy_timeline["audio"]["path"]).is_file()
+    assert "source audio saved in run state" in legacy_started[2]
+    assert chain._canonical_source_reference_dependency(
+        legacy_prepared, 1, legacy_timeline, None) == (
+            chain._canonical_source_reference_dependency(
+                legacy_prepared, 1, None, tensor_audio))
+    legacy_current = chain.MiniMaxH3ChainCurrent().current(
+        legacy_state, tensor_audio)["result"]
+    assert tuple(legacy_current[12]["waveform"].shape) == (1, 1, 44000)
+    assert legacy_current[0]["current_source_reference_dependency"][
+        "route"] == "legacy_audio"
+
+    legacy_manifest = chain._manifest_from_segments(legacy_prepared, [
+        {"index": 1, "id": "one", "delivered_frames": 22},
+        {"index": 2, "id": "two", "delivered_frames": 17},
+    ], True)
+    legacy_recovered = chain._source_timeline_from_metadata(legacy_manifest)
+    chain._validate_source_timeline_hash(
+        legacy_manifest["compatibility"], legacy_recovered,
+        "legacy assembly recovery")
+    recovered_audio = chain._full_chain_selected_audio(
+        legacy_manifest, "source", None, None)
+    redundant_audio = chain._full_chain_selected_audio(
+        legacy_manifest, "source", None, tensor_audio)
+    assert int(recovered_audio["waveform"].shape[-1]) == 78000
+    assert torch.equal(
+        recovered_audio["waveform"], redundant_audio["waveform"])
+
+    # Checkpoint Manager must prefer the descriptor persisted with the
+    # selected revision, because Run Manager archived the user-facing Plan
+    # before Loop Start saw and materialized the legacy AUDIO wire.
+    manager_plan_path = root / "h3_chains" / "legacy-audio-promoted" / "plan.json"
+    manager_plan_path.write_text(json.dumps({
+        "plan_hash": legacy_prepared["plan_hash"],
+        "shots": [{"id": "one"}, {"id": "two"}],
+    }), encoding="utf-8")
+    manager_metadata = [{
+        "plan_hash": legacy_prepared["plan_hash"],
+        "compatibility": legacy_prepared["compatibility"],
+        "source_timeline": legacy_prepared["source_timeline"],
+        "segment": {
+            "index": index,
+            "delivered_frames": delivered,
+            "prompt_prefix": "",
+        },
+    } for index, delivered in ((1, 22), (2, 17))]
+    original_load_revision = chain._load_checkpoint_revision
+    original_validate_manifest = chain._validate_manifest
+    chain._load_checkpoint_revision = lambda _run, index, _revision: (
+        manager_metadata[index - 1], "metadata.json")
+    chain._validate_manifest = lambda value: value["segments"]
+    try:
+        selected_manifest = chain._checkpoint_selection_manifest(json.dumps({
+            "run_name": "legacy-audio-promoted",
+            "lineage": [
+                {"scene": 1, "revision": "one"},
+                {"scene": 2, "revision": "two"},
+            ],
+        }))
+    finally:
+        chain._load_checkpoint_revision = original_load_revision
+        chain._validate_manifest = original_validate_manifest
+    assert selected_manifest["source_timeline"] == (
+        legacy_prepared["source_timeline"])
+
 assert chain.CHAIN_NODE_CLASS_MAPPINGS[
     "MiniMaxH3TaggedMotionReferenceTimeline"] is (
         chain.MiniMaxH3TaggedMotionReferenceTimeline)
@@ -242,4 +325,4 @@ assert chain.CHAIN_NODE_CLASS_MAPPINGS[
 print(
     "Source Timeline consumers: Run Manager, Loop Start state, Current Shot, "
     "Tagged Motion, both previews, manifest recovery, and deferred-audio "
-    "materialization pass")
+    "materialization including one-wire legacy AUDIO promotion pass")

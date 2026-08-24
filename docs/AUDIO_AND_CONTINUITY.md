@@ -47,6 +47,22 @@ track rather than model-decoded audio. For a short voice/timbre
 reference where H3 should generate new words, choose Generated final audio and
 schedule that clip as an ordinary tagged audio reference.
 
+Legacy music-video workflows may still connect a full `AUDIO` directly to
+Loop Start instead of building Source Timeline. Loop Start now materializes
+that waveform once under the run's `source_timeline/` folder and carries its
+path-backed recovery descriptor through recursive state, checkpoint metadata,
+and the final manifest. Current Shot, partial review assembly, final assembly,
+and the full-chain SeedVR2 adapter can therefore recover it without another
+audio wire. Existing redundant downstream wires remain compatible when their
+fingerprint matches. A manifest produced before this recovery descriptor was
+added still needs its legacy `source_audio` fallback connected.
+
+For normal finishing, leave `audio_source` set to `plan`. `Final audio =
+generated` uses the generated WAV sidecars written by Segment Save, `Final
+audio = source` uses the persisted source track, and `Final audio = none`
+stays silent. The explicit source/generated/none choices on finishing nodes are
+overrides, not required routing steps.
+
 Saved 0.4 modes migrate without changing behavior:
 
 | Legacy `audio_mode` | Final | Source reference | Generated continuity |
