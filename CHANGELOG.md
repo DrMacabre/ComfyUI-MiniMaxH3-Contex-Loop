@@ -4,6 +4,18 @@ Newest first. This file keeps release history out of the onboarding README.
 
 ## Unreleased
 
+## v0.5.18 — Semantic anchors on the reference line
+
+- Split Qwen-only `#semantic[timestamp]` pictures from native H3 `@reference`
+  media. Semantic Picture Anchor nodes now feed the existing reference line
+  through one bundle, so semantic images do not consume native H3 reference
+  capacity and remain recoverable with the saved run.
+- Treat newly added or reordered semantic anchors as scene-neutral for saved
+  predecessors when they were not active in those scenes, preserving gradual
+  project construction without weakening resume validation for used refs.
+- Clarified the Run Manager reference socket so workflows without semantic
+  anchors are not told they must connect a semantic-specific input.
+
 ## v0.5.12 — Persistent Plan-selected audio
 
 - A source track connected once at Loop Start is now materialized as a
@@ -17,14 +29,6 @@ Newest first. This file keeps release history out of the onboarding README.
   manifests without the recovery descriptor retain their explicit fallback.
 
 ## v0.5.11 — Plan Studio transport hardening
-
-- Split Qwen-only `#semantic[timestamp]` pictures from native H3 `@reference`
-  media. New Semantic Picture Anchor nodes feed one Semantic Anchor Bundle
-  with centralized scale/mode controls; the bundle connects once to Tagged
-  Ref2VA, Plan Studio, and Run Manager. Semantic pictures no longer consume
-  native picture/video/audio capacity, while their source loaders remain
-  recoverable through the saved-run asset manifest and their combined
-  incremental fingerprint remains resume-safe.
 
 - The bundled LBH 3D deferred-upscale workflow now leaves the pass-2 prompt
   override blank, preserving the exact compiled scene prompt by default. The
