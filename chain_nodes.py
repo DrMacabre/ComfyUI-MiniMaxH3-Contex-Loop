@@ -4716,6 +4716,7 @@ def _reference_registry_growth_is_scene_neutral(
     if not removable and registry_mode != "tagged":
         return False
     attempts = 0
+    legacy_permutation_candidates = []
     first_remove_count = 0 if registry_mode == "tagged" else 1
     for remove_count in range(first_remove_count, len(removable) + 1):
         for removed in itertools.combinations(removable, remove_count):
@@ -4743,17 +4744,22 @@ def _reference_registry_growth_is_scene_neutral(
             if saved_fingerprint in fingerprints:
                 return True
             if registry_mode == "tagged" and len(candidate) <= 8:
-                # One-time migration for legacy tagged checkpoints whose raw
-                # hash recorded a different node-chain order. New tagged
-                # checkpoints use the canonical tag registry above.
-                for permutation in itertools.permutations(candidate):
-                    attempts += 1
-                    if attempts > 65536:
-                        return False
-                    if (_reference_contracts_fingerprint(
-                            list(permutation), lineage.get("wrapper"),
-                            "ordered") == saved_fingerprint):
-                        return True
+                legacy_permutation_candidates.append(candidate)
+
+    # One-time migration for legacy tagged checkpoints whose raw hash recorded
+    # a different node-chain order. Exhaust every direct inactive-subset proof
+    # first: permuting an eight-entry superset can otherwise spend the entire
+    # safety budget before reaching the unchanged native subset hidden behind
+    # newly added semantic anchors.
+    for candidate in legacy_permutation_candidates:
+        for permutation in itertools.permutations(candidate):
+            attempts += 1
+            if attempts > 65536:
+                return False
+            if (_reference_contracts_fingerprint(
+                    list(permutation), lineage.get("wrapper"),
+                    "ordered") == saved_fingerprint):
+                return True
     return False
 
 
