@@ -900,6 +900,113 @@ def validate_deferred_h3_upscale(path):
     return workflow
 
 
+def validate_deferred_h3_derope(path):
+    workflow = load(path)
+    validate_links(workflow)
+    validate_no_node_overlap(workflow)
+    node_types = {item.get("type") for item in workflow["nodes"]}
+    assert {
+        "MiniMaxH3ChainCheckpointManager",
+        "MiniMaxH3ChainUpscaleAdapter",
+        "MiniMaxH3ChainUpscaleCurrent",
+        "MiniMaxH3ChainDeropeGuard",
+        "MiniMaxH3ChainDeropeFreezeMask",
+        "MiniMaxH3ChainDeropeContinuity",
+        "MiniMaxH3ChainRecoveredAV",
+        "MiniMaxH3ChainUpscaleReferenceConditioning",
+        "H3ConditioningSyncFromLatents",
+        "H3JerkOracle", "H3TimeSmear", "H3AudioSmear", "H3V2VInit",
+        "H3InjectSchedule", "H3ExactRecover", "H3AudioRecover",
+        "MinimaxH3LatentUpscaler3D",
+        "MiniMaxH3ChainUpscaleSegmentSave",
+        "MiniMaxH3ChainUpscaleLoopEnd",
+        "MiniMaxH3ChainUpscaleMerge",
+    } <= node_types
+    assert not node_types.intersection({
+        "MiniMaxH3ChainPlan", "MiniMaxH3ChainPass2Prepare",
+        "BasicScheduler", "DisableNoise", "H3TemporalInsert",
+    })
+    for item in workflow["nodes"]:
+        if item["type"] != "Note":
+            assert not str(item.get("title") or "").strip(), item["type"]
+
+    adapter = node(workflow, "MiniMaxH3ChainUpscaleAdapter")
+    current = node(workflow, "MiniMaxH3ChainUpscaleCurrent")
+    oracle = node(workflow, "H3JerkOracle")
+    guard = node(workflow, "MiniMaxH3ChainDeropeGuard")
+    smear = node(workflow, "H3TimeSmear")
+    freeze = node(workflow, "MiniMaxH3ChainDeropeFreezeMask")
+    learned = node(workflow, "MinimaxH3LatentUpscaler3D")
+    continuity = node(workflow, "MiniMaxH3ChainDeropeContinuity")
+    conditioner = node(
+        workflow, "MiniMaxH3ChainUpscaleReferenceConditioning")
+    sync = node(workflow, "H3ConditioningSyncFromLatents")
+    init = node(workflow, "H3V2VInit")
+    schedule = node(workflow, "H3InjectSchedule")
+    recover = node(workflow, "H3ExactRecover")
+    recover_audio = node(workflow, "H3AudioRecover")
+    recovered_av = node(workflow, "MiniMaxH3ChainRecoveredAV")
+    saver = node(workflow, "MiniMaxH3ChainUpscaleSegmentSave")
+    loop_end = node(workflow, "MiniMaxH3ChainUpscaleLoopEnd")
+
+    assert adapter["widgets_values"][0:2] == [
+        "h3_lbh_3d_derope", "h3_latent"]
+    assert adapter["widgets_values"][3:7] == [1, 0, False, 18]
+    assert origin_for_input(workflow, socket(oracle["inputs"], "samples")) == (
+        current)
+    assert origin_for_input(workflow, socket(oracle["inputs"], "length")) == (
+        current)
+    assert origin_for_input(workflow, socket(guard["inputs"], "hold_map")) == (
+        oracle)
+    assert origin_for_input(
+        workflow, socket(smear["inputs"], "hold_map")) == guard
+    assert origin_for_input(
+        workflow, socket(smear["inputs"], "expand_to_end")) == guard
+    assert origin_for_input(
+        workflow, socket(freeze["inputs"], "hold_map_used")) == smear
+    smear_encode = origin_for_input(
+        workflow, socket(learned["inputs"], "latent"))
+    assert smear_encode["type"] == "VAEEncode"
+    assert origin_for_input(
+        workflow, socket(smear_encode["inputs"], "pixels")) == smear
+    assert origin_for_input(
+        workflow, socket(continuity["inputs"], "video_latent")) == learned
+    assert origin_for_input(
+        workflow, socket(conditioner["inputs"], "target_video_latent")) == (
+            continuity)
+    assert origin_for_input(
+        workflow, socket(sync["inputs"], "upscaled_latent")) == continuity
+    assert origin_for_input(
+        workflow, socket(init["inputs"], "samples")) == continuity
+    assert origin_for_input(workflow, socket(init["inputs"], "length")) == (
+        smear)
+    assert origin_for_input(workflow, socket(init["inputs"], "mask")) == (
+        freeze)
+    assert init["widgets_values"][5] is True
+    assert init["widgets_values"][6] == (
+        "follow the original performance (0.5)")
+    assert schedule["widgets_values"] == [
+        "beta", 8, 0.5, "faithful detail 0.50 (metric best)"]
+    assert recover_audio["widgets_values"][-1] == (
+        "keep the original performance (safe default)")
+    assert origin_for_input(
+        workflow, socket(recovered_av["inputs"], "video_latent"))["type"] == (
+            "VAEEncode")
+    assert origin_for_input(
+        workflow, socket(recovered_av["inputs"], "audio_latent"))["type"] == (
+            "VAEEncodeAudio")
+    assert origin_for_input(workflow, socket(saver["inputs"], "images")) == (
+        recover)
+    assert origin_for_input(
+        workflow, socket(saver["inputs"], "recovered_audio")) == recover_audio
+    assert origin_for_input(
+        workflow, socket(saver["inputs"], "upscaled_latent")) == recovered_av
+    assert origin_for_input(
+        workflow, socket(loop_end["inputs"], "upscaled_latent")) == (
+            recovered_av)
+    return workflow
+
+
 def validate_seedvr2_full_chain(path):
     workflow = load(path)
     validate_links(workflow)
@@ -966,6 +1073,9 @@ def main():
         EXAMPLES / "EXPERIMENTAL MiniMax H3 Ref2V - Sequential Motion.json")
     deferred_upscale_path = (
         EXAMPLES / "MiniMax H3 Deferred Upscale - H3 LBH 3D.json")
+    deferred_derope_path = (
+        EXAMPLES /
+        "MiniMax H3 Deferred Upscale + De-Rope - H3 LBH 3D.json")
     seedvr2_full_chain_path = (
         EXAMPLES / "MiniMax H3 Deferred Upscale - SeedVR2 Full Chain.json")
     masked_inpaint_path = (
@@ -987,6 +1097,7 @@ def main():
         ref2v_source_audio_path.name,
         sequential_path.name,
         deferred_upscale_path.name,
+        deferred_derope_path.name,
         seedvr2_full_chain_path.name,
         masked_inpaint_path.name,
         masked_ref_inpaint_path.name,
@@ -996,7 +1107,9 @@ def main():
     }
     for path in EXAMPLES.glob("*.json"):
         workflow = load(path)
-        if path in {deferred_upscale_path, seedvr2_full_chain_path}:
+        if path in {
+                deferred_upscale_path, deferred_derope_path,
+                seedvr2_full_chain_path}:
             continue
         if path == masked_bridge_path:
             validate_links(workflow)
@@ -1040,6 +1153,7 @@ def main():
     sequential, _sequential_plan = validate_sequential_motion_ref(
         sequential_path)
     deferred_upscale = validate_deferred_h3_upscale(deferred_upscale_path)
+    deferred_derope = validate_deferred_h3_derope(deferred_derope_path)
     seedvr2_full_chain = validate_seedvr2_full_chain(
         seedvr2_full_chain_path)
     masked_inpaint = load(masked_inpaint_path)
@@ -1194,9 +1308,9 @@ def main():
             sequential, masked_inpaint, masked_ref_inpaint,
             masked_single_extension,
             masked_chain_extension, masked_bridge, deferred_upscale,
-            seedvr2_full_chain)
+            deferred_derope, seedvr2_full_chain)
     }
-    assert len(uuids) == 17
+    assert len(uuids) == 18
 
     asset = EXAMPLES / "assets" / "jigen_market_garden_doom_opening.png"
     assert asset.is_file()
@@ -1223,7 +1337,8 @@ def main():
           "experimental sequential-motion Ref2VA, masked video inpaint, "
           "picture-conditioned masked Ref2VA inpaint, "
           "looped masked AV extension, two-ended masked AV bridge, and "
-          "deferred LBH 3D H3 and whole-chain SeedVR2; "
+          "deferred LBH 3D H3, chain-aware MAINodes de-rope, and "
+          "whole-chain SeedVR2; "
           "valid links, bundled "
           "assets, timeline wiring, six-section prompts, restoration, and "
           "attribution pass")

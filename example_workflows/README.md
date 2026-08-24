@@ -23,6 +23,7 @@ example_workflows/
 │   ├── soldier_crabs_inpaint_mask.png
 │   └── soldier_crabs_reference_cc0.png
 ├── EXPERIMENTAL MiniMax H3 Ref2V - Sequential Motion.json
+├── MiniMax H3 Deferred Upscale + De-Rope - H3 LBH 3D.json
 ├── MiniMax H3 Deferred Upscale - H3 LBH 3D.json
 ├── MiniMax H3 Deferred Upscale - SeedVR2 Full Chain.json
 ├── MiniMax H3 - Masked AV Bridge - Two Clips.json
@@ -55,6 +56,44 @@ The additional sequential-motion workflow is deliberately prefixed
 recursive Motion Context.
 
 ## Deferred H3 upscale
+
+[`MiniMax H3 Deferred Upscale + De-Rope - H3 LBH 3D.json`](<MiniMax H3 Deferred Upscale + De-Rope - H3 LBH 3D.json>)
+combines the working LBH 3D spatial latent upscale with MAINodes' stable
+decoded `H3 Jerk Oracle → H3 Time Smear → H3 V2V Init → H3 Exact Recover`
+route in the same H3 regeneration pass. It deliberately does not use the
+experimental latent temporal-insertion node. Install both
+[Comfyui_Minimax_h3_latent_Upscaler](https://github.com/LBH-123-AI/Comfyui_Minimax_h3_latent_Upscaler)
+and [ComfyUI-MAINodes](https://github.com/matlowai/ComfyUI-MAINodes) before
+opening it.
+
+Four chain-native adapters make that single-clip recipe safe inside a deferred
+scene loop. **Chain De-Rope Guard** forces the disposable repeated prefix to
+hold 1, protects the last 17 frames of a non-final selected scene, and enables
+MAINodes' `expand_to_end` only at the branch tip. **Chain De-Rope Freeze Mask**
+uses `H3 Time Smear.hold_map_used` to freeze that same prefix in `H3 V2V Init`.
+**Chain De-Rope Continuity** replaces a target-resolution Drift-Control prefix
+with the previous saved HQ tail. After exact video/audio recovery,
+**Chain Recovered AV** verifies that the result is back on the original RAW
+clock and repacks the re-encoded streams for latent saving, child-loop resume,
+and the next scene's HQ continuation.
+
+Audio follows MAINodes' dialogue-safe route: decode the RAW source audio
+latent, stretch it with `H3 Audio Smear`, seed `H3 V2V Init` at strength 0.5,
+then recover it with the identical hold map. The bundled final-audio preset
+keeps the original performance; it still seeds pass 2 so speech timing cannot
+pull the regenerated mouth back to natural speed. Upscale Segment Save now
+accepts this recovered RAW-clock audio, applies the same repeated-prefix trim
+as video, and records it instead of silently restoring the old source sidecar.
+
+The de-rope target is temporally longer than its source by design. **H3
+Conditioning Sync From Latents** therefore permits a different target time
+axis while continuing to synchronize only spatial reference/keyframe geometry.
+The default cached-reference policy still removes motion-video conditioning:
+the saved source latent already supplies the accepted motion. The stable
+pixel-smear route keeps the expanded IMAGE batch on CPU, but effective duration
+can still grow two to three times on high-motion scenes; use the adapter's
+scene range controls or a less aggressive oracle preset if RAM or wall time is
+too high.
 
 [`MiniMax H3 Deferred Upscale - SeedVR2 Full Chain.json`](<MiniMax H3 Deferred Upscale - SeedVR2 Full Chain.json>)
 is the low-RAM whole-video route. Checkpoint Manager supplies the selected

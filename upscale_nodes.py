@@ -5,7 +5,9 @@ is adapted into a second recursive graph whose body may contain any upscaler
 (native H3 latent refinement, LTX video-to-video, or a custom image pipeline).
 Each delivered HQ scene is persisted below the source run's ``upscaled``
 folder before the loop advances, and the final merger reuses the original
-audio contract without requiring the source video segments.
+audio contract without requiring the source video segments. A chain-aware
+MAINodes de-rope route may instead supply exact-recovered RAW-clock audio to
+the same scene save contract.
 """
 
 from __future__ import annotations
@@ -129,6 +131,41 @@ def _source_segment(state: dict[str, Any], index: int | None = None
     if int(source.get("index", -1)) != slot:
         raise ValueError("Source manifest scene indexes are not contiguous.")
     return source
+
+
+def _derope_hold_map(value: Any, expected_frames: int,
+                     label: str) -> tuple[dict[str, Any], list[int]]:
+    """Parse one MAINodes hold map without importing the optional pack."""
+    try:
+        parsed = json.loads(str(value or ""))
+    except json.JSONDecodeError as exc:
+        raise ValueError("%s must contain valid JSON." % label) from exc
+    if not isinstance(parsed, dict) or not isinstance(parsed.get("holds"), list):
+        raise ValueError("%s must contain a JSON object with a holds list." % label)
+    holds = []
+    for index, item in enumerate(parsed["holds"]):
+        if isinstance(item, bool):
+            raise ValueError("%s hold %d is not a positive integer." % (
+                label, index))
+        try:
+            hold = int(item)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError("%s hold %d is not a positive integer." % (
+                label, index)) from exc
+        if hold < 1 or float(item) != float(hold):
+            raise ValueError("%s hold %d is not a positive integer." % (
+                label, index))
+        holds.append(hold)
+    expected = int(expected_frames)
+    if len(holds) != expected:
+        raise ValueError(
+            "%s covers %d world frames; source scene requires %d RAW "
+            "frames." % (label, len(holds), expected))
+    if "world_len" in parsed and int(parsed["world_len"]) != expected:
+        raise ValueError(
+            "%s says world_len=%s; source scene requires %d RAW frames." %
+            (label, parsed["world_len"], expected))
+    return dict(parsed), holds
 
 
 def _source_continuation_mode(state: dict[str, Any],
@@ -872,6 +909,260 @@ class MiniMaxH3ChainUpscaleCurrent:
                 state.get("previous_latent"), status)
 
 
+class MiniMaxH3ChainDeropeGuard:
+    """Make a MAINodes hold map safe at recursive H3 chain boundaries."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "state": (UPSCALE_STATE_TYPE, {
+                    "tooltip": "Current Upscale state. Its RAW/delivered "
+                               "contract identifies the disposable prefix "
+                               "and whether another selected scene follows."}),
+                "hold_map": ("STRING", {
+                    "forceInput": True,
+                    "tooltip": "Adaptive world-frame hold map from MAINodes "
+                               "H3 Jerk Oracle, before H3 Time Smear."}),
+            },
+        }
+
+    RETURN_TYPES = ("STRING", "BOOLEAN", "INT", "INT", "STRING")
+    RETURN_NAMES = (
+        "hold_map", "expand_to_end", "protected_prefix",
+        "protected_suffix", "status")
+    OUTPUT_TOOLTIPS = (
+        "Hold map with the chain's disposable prefix and continuation-side "
+        "suffix forced to rate 1.",
+        "Connect to H3 Time Smear expand_to_end. It is enabled only for the "
+        "last scene in the selected branch.",
+        "Number of RAW prefix frames protected from temporal dilation.",
+        "Number of closing frames protected because another scene follows.",
+        "Verified scene-clock and boundary-protection summary.",
+    )
+    FUNCTION = "guard"
+    CATEGORY = "conditioning/minimax/contex_loop/upscale"
+    DESCRIPTION = (
+        "Adapt a MAINodes de-rope hold map to one deferred H3 chain scene. "
+        "The repeated continuation prefix is never retimed; a non-final "
+        "scene also protects its last 17 frames so recovery cannot accelerate "
+        "motion into the next scene. H3 Time Smear's end expansion is enabled "
+        "only at the selected branch tip.")
+
+    def guard(self, state, hold_map):
+        source = _source_segment(state)
+        raw = int(source.get("raw_frames", 0))
+        delivered = int(source.get("delivered_frames", 0))
+        if raw < 1 or delivered < 1 or delivered > raw:
+            raise ValueError(
+                "H3 de-rope scene has invalid RAW/delivered frames %d/%d." %
+                (raw, delivered))
+        parsed, holds = _derope_hold_map(
+            hold_map, raw, "H3 de-rope oracle hold map")
+        prefix = raw - delivered
+        scene = int(state["index"])
+        scene_count = len(state["source_manifest"].get("segments") or ())
+        suffix = min(17, raw) if scene < scene_count else 0
+        removed_prefix = sum(holds[:prefix]) - min(prefix, len(holds))
+        removed_suffix = (
+            sum(holds[len(holds) - suffix:]) - suffix if suffix else 0)
+        for index in range(min(prefix, len(holds))):
+            holds[index] = 1
+        for index in range(max(0, len(holds) - suffix), len(holds)):
+            holds[index] = 1
+        parsed.update({
+            "holds": holds,
+            "world_len": raw,
+            "h3_chain_scene": scene,
+            "h3_chain_protected_prefix": prefix,
+            "h3_chain_protected_suffix": suffix,
+        })
+        expand_to_end = scene == scene_count
+        status = (
+            "de-rope scene %d/%d: %d RAW frames; prefix %d held at 1 "
+            "(%d dilated frames removed); suffix %d held at 1 "
+            "(%d removed); expand_to_end=%s; protected map currently %d "
+            "frames before H3 legal-grid padding" % (
+                scene, scene_count, raw, prefix, removed_prefix, suffix,
+                removed_suffix, "on" if expand_to_end else "off",
+                sum(holds)))
+        return (json.dumps(parsed, separators=(",", ":")), expand_to_end,
+                prefix, suffix, status)
+
+
+class MiniMaxH3ChainDeropeFreezeMask:
+    """Freeze a protected chain prefix in MAINodes H3 V2V Init."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "state": (UPSCALE_STATE_TYPE, {
+                    "tooltip": "Current Upscale state carrying the exact "
+                               "RAW/delivered prefix contract."}),
+                "hold_map_used": ("STRING", {
+                    "forceInput": True,
+                    "tooltip": "Final hold_map_used emitted by H3 Time Smear. "
+                               "It includes end expansion and legal padding."}),
+            },
+        }
+
+    RETURN_TYPES = ("MASK", "INT", "STRING")
+    RETURN_NAMES = ("mask", "dilated_length", "status")
+    OUTPUT_TOOLTIPS = (
+        "Time-varying regenerate mask for H3 V2V Init: zero over the "
+        "continuation prefix and one over material pass 2 may refine.",
+        "Exact dilated frame length encoded by hold_map_used.",
+        "Prefix-freeze and dilated-clock summary.",
+    )
+    FUNCTION = "mask"
+    CATEGORY = "conditioning/minimax/contex_loop/upscale"
+    DESCRIPTION = (
+        "Build the time-varying mask paired with De-Rope Guard. Connect it "
+        "to MAINodes H3 V2V Init and enable time_varying. This prevents pass "
+        "2 from re-texturing a Drift-Control continuation prefix after the "
+        "same prefix has been protected from retiming.")
+
+    def mask(self, state, hold_map_used):
+        if chain.torch is None:
+            raise RuntimeError("PyTorch is required for an H3 de-rope mask.")
+        source = _source_segment(state)
+        raw = int(source.get("raw_frames", 0))
+        delivered = int(source.get("delivered_frames", 0))
+        prefix = raw - delivered
+        _parsed, holds = _derope_hold_map(
+            hold_map_used, raw, "H3 Time Smear hold_map_used")
+        if any(hold != 1 for hold in holds[:prefix]):
+            raise ValueError(
+                "H3 Time Smear hold_map_used retimes the %d-frame chain "
+                "prefix. Route H3 Jerk Oracle through MiniMax H3 Chain "
+                "De-Rope Guard before Time Smear." % prefix)
+        length = sum(holds)
+        mask = chain.torch.ones((length, 8, 8), dtype=chain.torch.float32)
+        if prefix:
+            mask[:prefix] = 0.0
+        status = (
+            "de-rope freeze mask: frames [0,%d) frozen, [%d,%d) open; "
+            "connect to H3 V2V Init mask with time_varying enabled" %
+            (prefix, prefix, length))
+        return mask, length, status
+
+
+class MiniMaxH3ChainDeropeContinuity:
+    """Splice a saved HQ Drift-Control tail into the dilated pass-2 init."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "state": (UPSCALE_STATE_TYPE, {
+                    "tooltip": "Current Upscale state, including the prior "
+                               "HQ context restored for a resumed child run."}),
+                "video_latent": ("LATENT", {
+                    "tooltip": "Target-resolution 24-channel clean video "
+                               "latent after Time Smear, VAE encode, and the "
+                               "spatial latent upscaler."}),
+            },
+        }
+
+    RETURN_TYPES = ("LATENT", "STRING")
+    RETURN_NAMES = ("video_latent", "status")
+    OUTPUT_TOOLTIPS = (
+        "Target-resolution de-rope video init with the prior HQ tail spliced "
+        "into a Drift-Control prefix when required.",
+        "Whether prior HQ context was spliced, source context was protected, "
+        "or the scene has no latent continuation prefix.",
+    )
+    FUNCTION = "splice"
+    CATEGORY = "conditioning/minimax/contex_loop/upscale"
+    DESCRIPTION = (
+        "Restore deferred-upscale continuity before MAINodes H3 V2V Init. "
+        "For Drift-Control scenes it replaces the protected target-resolution "
+        "prefix with the previous scene's saved HQ latent tail; other scenes "
+        "pass through unchanged.")
+
+    def splice(self, state, video_latent):
+        video, _width, _height = _target_video_geometry(video_latent)
+        output, steps, route = _drift_continuation_video(video, state)
+        result = dict(video_latent)
+        result["samples"] = output
+        status = "de-rope continuity: %s" % route
+        if steps:
+            status += " (%d latent steps)" % steps
+        return result, status
+
+
+class MiniMaxH3ChainRecoveredAV:
+    """Repack exact-recovered de-rope latents for chain save and resume."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "state": (UPSCALE_STATE_TYPE, {
+                    "tooltip": "Current Upscale state whose RAW clock the "
+                               "recovered latent must match."}),
+                "video_latent": ("LATENT", {
+                    "tooltip": "H3 video VAE encode of frames after H3 Exact "
+                               "Recover, back on the original RAW clock."}),
+            },
+            "optional": {
+                "audio_latent": ("LATENT", {
+                    "tooltip": "Optional H3 audio VAE encode of H3 Audio "
+                               "Recover. Connect it when save_latent should "
+                               "retain a complete recovered AV checkpoint."}),
+            },
+        }
+
+    RETURN_TYPES = ("LATENT", "STRING")
+    RETURN_NAMES = ("latent", "status")
+    OUTPUT_TOOLTIPS = (
+        "Recovered single-video or joint AV latent suitable for Upscale "
+        "Segment Save and Loop End.",
+        "Verified recovered RAW clock and packed stream layout.",
+    )
+    FUNCTION = "pack"
+    CATEGORY = "conditioning/minimax/contex_loop/upscale"
+    DESCRIPTION = (
+        "Return the de-roped result to the source scene's world clock. This "
+        "node rejects a still-dilated video latent, optionally rejoins the "
+        "recovered audio latent, and provides the exact HQ context that a "
+        "following Drift-Control scene or interrupted child run needs.")
+
+    def pack(self, state, video_latent, audio_latent=None):
+        video, width, height = _target_video_geometry(video_latent)
+        source = _source_segment(state)
+        raw = chain._validate_h3_length(
+            source.get("raw_frames", 0), "Recovered H3 scene length")
+        expected_steps = (raw - 5) // 17 * 5 + 2
+        if int(video.shape[2]) != expected_steps:
+            raise ValueError(
+                "Recovered de-rope video still has %d latent steps; the "
+                "%d-frame RAW world clock requires %d. Decode pass 2, run "
+                "H3 Exact Recover, then VAE Encode before this node." %
+                (int(video.shape[2]), raw, expected_steps))
+        streams = [video]
+        layout = "video"
+        if audio_latent is not None:
+            audio = _single_latent_tensor(
+                audio_latent, "Recovered de-rope audio latent")
+            if getattr(audio, "ndim", 0) != 4 or int(audio.shape[1]) != 32:
+                raise ValueError(
+                    "Recovered de-rope audio latent must be [B,32,2,T], "
+                    "got %s." % (tuple(getattr(audio, "shape", ())),))
+            if int(audio.shape[0]) != int(video.shape[0]):
+                raise ValueError(
+                    "Recovered de-rope video/audio batches differ: %d vs %d." %
+                    (int(video.shape[0]), int(audio.shape[0])))
+            streams.append(audio)
+            layout = "joint AV"
+        result = dict(video_latent)
+        result["samples"] = _packed_samples(streams)
+        return result, (
+            "recovered de-rope %s at %dx%d on %d-frame RAW clock (%d video "
+            "latent steps)" % (layout, width, height, raw, expected_steps))
+
+
 class MiniMaxH3UpscaleReferencePromptOverride:
     """Inline editor that remains on the normal Tagged Reference chain."""
 
@@ -1182,10 +1473,12 @@ class H3ConditioningSyncFromLatents:
             "required": {
                 "original_latent": ("LATENT", {
                     "tooltip": "Original-resolution 24-channel H3 video latent "
-                               "whose conditioning will be synchronized."}),
+                               "whose conditioning will be synchronized. Its "
+                               "time may differ from a de-rope target."}),
                 "upscaled_latent": ("LATENT", {
                     "tooltip": "Upscaled 24-channel H3 video latent. Its exact "
-                               "X/Y scale drives the conditioning resize."}),
+                               "X/Y scale drives the conditioning resize; a "
+                               "dilated de-rope time axis is supported."}),
                 "positive": ("CONDITIONING", {
                     "tooltip": "Original H3 conditioning containing minimax_refs "
                                "and/or minimax_keyframes. Cached max pictures "
@@ -1228,8 +1521,10 @@ class H3ConditioningSyncFromLatents:
         "latents. Resizes match-sized picture refs and keyframes while keeping "
         "Core H3 max-sized pictures invariant, filters or retains motion refs "
         "according to the conditioner policy (or an explicit override), "
-        "updates changed H/W metadata, and leaves text, time, and audio "
-        "conditioning untouched. Build a new Guider from the returned output.")
+        "updates changed H/W metadata, and leaves reference time and audio "
+        "conditioning untouched. The target may use a longer de-rope clock; "
+        "only batch and video channels must match. Build a new Guider from "
+        "the returned output.")
 
     def sync(self, original_latent, upscaled_latent, positive,
              method="bilinear",
@@ -1237,11 +1532,11 @@ class H3ConditioningSyncFromLatents:
         original, _source_width, _source_height = _target_video_geometry(
             original_latent)
         upscaled, width, height = _target_video_geometry(upscaled_latent)
-        if tuple(original.shape[:3]) != tuple(upscaled.shape[:3]):
+        if tuple(original.shape[:2]) != tuple(upscaled.shape[:2]):
             raise ValueError(
-                "H3 conditioning sync requires matching batch/channel/time; "
+                "H3 conditioning sync requires matching batch/channel; "
                 "original %s vs upscaled %s." %
-                (tuple(original.shape[:3]), tuple(upscaled.shape[:3])))
+                (tuple(original.shape[:2]), tuple(upscaled.shape[:2])))
         if method not in CONDITIONING_SYNC_METHODS:
             raise ValueError("Unknown H3 conditioning sync method %r." % method)
         if motion_ref_mode not in CONDITIONING_SYNC_MOTION_MODES:
@@ -1417,6 +1712,11 @@ class MiniMaxH3ChainUpscaleSegmentSave:
                     "tooltip": "Final HQ latent. Required when save_latent is "
                                "enabled and whenever a following Drift-Control "
                                "scene needs its compact HQ context tail."}),
+                "recovered_audio": ("AUDIO", {
+                    "tooltip": "Optional RAW-clock audio from H3 Audio "
+                               "Recover. When connected, Segment Save applies "
+                               "the same repeated-head trim as video and "
+                               "replaces the source checkpoint audio."}),
             },
         }
 
@@ -1438,7 +1738,8 @@ class MiniMaxH3ChainUpscaleSegmentSave:
     def IS_CHANGED(cls, *args, **kwargs):
         return float("NaN")
 
-    def save(self, state, images, upscaled_latent=None):
+    def save(self, state, images, upscaled_latent=None,
+             recovered_audio=None):
         if chain._st_save is None or chain.torch is None:
             raise RuntimeError("safetensors and torch are required for H3 upscale saves.")
         index = int(state["index"])
@@ -1477,9 +1778,35 @@ class MiniMaxH3ChainUpscaleSegmentSave:
         source_tensors = _load_source_tensors(source)
         tensors = {"upscale_marker": chain.torch.tensor([index])}
         sample_rate = int(source.get("sample_rate", 0))
-        if "delivered_audio" in source_tensors:
+        audio_route = "none"
+        if recovered_audio is not None:
+            waveform, sample_rate = chain._validate_audio(
+                recovered_audio, "Recovered H3 de-rope audio")
+            expected_raw = int(round(raw / float(chain.FPS) * sample_rate))
+            available = int(waveform.shape[-1])
+            # H3's 40 Hz audio clock and VAE decode may leave a sub-frame
+            # tail, but a delivered-only track is materially too short and
+            # must not be mistaken for the RAW scene clock.
+            tolerance = max(2, int(round(sample_rate / float(chain.FPS))))
+            if available + tolerance < expected_raw:
+                raise ValueError(
+                    "Recovered H3 de-rope audio contains %d samples at %d Hz; "
+                    "the %d-frame RAW scene needs about %d. Connect H3 Audio "
+                    "Recover output, not delivered source audio." %
+                    (available, sample_rate, raw, expected_raw))
+            start = int(round(trim / float(chain.FPS) * sample_rate))
+            count = int(round(delivered / float(chain.FPS) * sample_rate))
+            padded = chain._pad_audio_to_samples({
+                "waveform": waveform,
+                "sample_rate": sample_rate,
+            }, start + count, "Recovered H3 de-rope audio")
+            tensors["delivered_audio"] = chain._tensor_cpu_clone(
+                padded["waveform"][..., start:start + count])
+            audio_route = "recovered de-rope audio"
+        elif "delivered_audio" in source_tensors:
             tensors["delivered_audio"] = chain._tensor_cpu_clone(
                 source_tensors["delivered_audio"])
+            audio_route = "source checkpoint audio"
         latent_layout = "omitted"
         if save_latent:
             latent_tensors, latent_layout = _latent_checkpoint_tensors(
@@ -1530,6 +1857,7 @@ class MiniMaxH3ChainUpscaleSegmentSave:
                 "latent_saved": "true" if save_latent else "false",
                 "context_steps": str(context_steps),
                 "sample_rate": str(sample_rate),
+                "audio_route": audio_route,
             })
             os.replace(checkpoint_tmp, checkpoint_path)
 
@@ -1550,6 +1878,7 @@ class MiniMaxH3ChainUpscaleSegmentSave:
                 "width": width,
                 "height": height,
                 "sample_rate": sample_rate,
+                "audio_route": audio_route,
                 "latent_saved": save_latent,
                 "latent_layout": latent_layout,
                 "context_steps": context_steps,
@@ -1611,6 +1940,8 @@ class MiniMaxH3ChainUpscaleSegmentSave:
         status = ("saved HQ scene %d/%d at %dx%d; latent %s -> %s" %
                   (index, len(state["source_manifest"]["segments"]), width,
                    height, "saved" if save_latent else "omitted", segment_path))
+        if audio_route != "none":
+            status += "; %s" % audio_route
         if context_steps:
             status += "; retained %d-step Drift-Control HQ tail" % context_steps
         return {
@@ -1943,6 +2274,10 @@ class MiniMaxH3ChainUpscaleMerge:
 UPSCALE_NODE_CLASS_MAPPINGS = {
     "MiniMaxH3ChainUpscaleAdapter": MiniMaxH3ChainUpscaleAdapter,
     "MiniMaxH3ChainUpscaleCurrent": MiniMaxH3ChainUpscaleCurrent,
+    "MiniMaxH3ChainDeropeGuard": MiniMaxH3ChainDeropeGuard,
+    "MiniMaxH3ChainDeropeFreezeMask": MiniMaxH3ChainDeropeFreezeMask,
+    "MiniMaxH3ChainDeropeContinuity": MiniMaxH3ChainDeropeContinuity,
+    "MiniMaxH3ChainRecoveredAV": MiniMaxH3ChainRecoveredAV,
     "MiniMaxH3UpscaleReferencePromptOverride": (
         MiniMaxH3UpscaleReferencePromptOverride),
     "MiniMaxH3ChainUpscaleReferenceConditioning": (
@@ -1957,6 +2292,12 @@ UPSCALE_NODE_CLASS_MAPPINGS = {
 UPSCALE_NODE_DISPLAY_NAME_MAPPINGS = {
     "MiniMaxH3ChainUpscaleAdapter": "MiniMax H3 Checkpoint Upscale Adapter",
     "MiniMaxH3ChainUpscaleCurrent": "MiniMax H3 Upscale Current Scene",
+    "MiniMaxH3ChainDeropeGuard": "MiniMax H3 Chain De-Rope Guard",
+    "MiniMaxH3ChainDeropeFreezeMask": (
+        "MiniMax H3 Chain De-Rope Freeze Mask"),
+    "MiniMaxH3ChainDeropeContinuity": (
+        "MiniMax H3 Chain De-Rope Continuity"),
+    "MiniMaxH3ChainRecoveredAV": "MiniMax H3 Chain Recovered AV",
     "MiniMaxH3UpscaleReferencePromptOverride": (
         "MiniMax H3 Upscale Reference + Prompt Override"),
     "MiniMaxH3ChainUpscaleReferenceConditioning": (
