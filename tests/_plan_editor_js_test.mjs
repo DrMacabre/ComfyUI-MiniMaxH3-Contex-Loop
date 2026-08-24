@@ -9,6 +9,7 @@ import {
     CONTEXT_SPATIAL_PROXY_MODES,
     H3_CONTEXT_LENGTHS,
     SCENE_LORA_ROUTES,
+    SCENE_PROMPT_SEED_MODES,
     automaticSceneColor,
     calculatePlanTiming,
     derivedSceneSeed,
@@ -23,7 +24,9 @@ import {
     sceneContextLength,
     sceneContinuationMode,
     sceneLoRARoute,
+    scenePromptSeedMode,
     sceneVideoBlendFrames,
+    setScenePromptSeedMode,
     setShotLengthMode,
     setSharedPrompt,
     shotLengthMode,
@@ -242,6 +245,38 @@ const numericSeed = parsePlanJson(
     '{"shots":[{"id":"seed","prompt":"x","seed":18446744073709551615}]}',
 );
 assert.equal(numericSeed.shots[0].seed, "18446744073709551615");
+assert.deepEqual(SCENE_PROMPT_SEED_MODES, [
+    "inherit", "fixed", "randomize",
+]);
+assert.equal(scenePromptSeedMode({}), "inherit");
+assert.equal(scenePromptSeedMode({prompt_seed:"42"}), "fixed");
+const promptSeedShot = {};
+setScenePromptSeedMode(promptSeedShot, "fixed", {
+    getRandomValues(words) {
+        words[0] = 1;
+        words[1] = 2;
+        return words;
+    },
+});
+assert.deepEqual(promptSeedShot, {
+    prompt_seed_mode:"fixed", prompt_seed:"4294967298",
+});
+setScenePromptSeedMode(promptSeedShot, "randomize");
+assert.deepEqual(promptSeedShot, {prompt_seed_mode:"randomize"});
+setScenePromptSeedMode(promptSeedShot, "inherit");
+assert.deepEqual(promptSeedShot, {});
+assert.throws(
+    () => setScenePromptSeedMode({}, "rolling"),
+    /Prompt seed mode must be one of/,
+);
+const numericPromptSeed = parsePlanJson(
+    '{"shots":[{"id":"prompt-seed","prompt":"x",' +
+    '"prompt_seed":18446744073709551615}]}',
+);
+assert.deepEqual(numericPromptSeed.shots[0], {
+    id:"prompt-seed", prompt:["x"], prompt_seed_mode:"fixed",
+    prompt_seed:"18446744073709551615",
+});
 const promptContainingSeedText = parsePlanJson(
     '{"shots":[{"prompt":"Literal \\\"seed\\\": 18446744073709551615 text"}]}',
 );
@@ -645,6 +680,9 @@ assert.doesNotMatch(editorSource, /\[\["Picture", 9\], \["Video", 3\], \["Audio"
 assert.match(editorSource, /Derived seed:/);
 assert.match(editorSource, /New random/);
 assert.match(editorSource, /Use derived/);
+assert.match(editorSource, /Prompt alternatives/);
+assert.match(editorSource, /Randomize each queue/);
+assert.match(editorSource, /setScenePromptSeedMode/);
 assert.match(editorSource, /Scene LoRA route/);
 assert.match(editorSource, /MiniMax H3 Scene LoRA Scheduler/);
 assert.match(editorSource, /delete shot\.lora_route/);

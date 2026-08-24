@@ -4252,6 +4252,50 @@ def _derived_seed(base_seed: int, index: int, shot_id: str) -> int:
                           "big")
 
 
+SCENE_PROMPT_SEED_MODES = ("inherit", "fixed", "randomize")
+
+
+def _scene_prompt_choice_seed(
+        shot: dict[str, Any], plan_prompt_seed: int, index: int,
+        shot_id: str) -> tuple[str, int | None, int]:
+    """Resolve one scene's prompt-alternative seed policy.
+
+    The Plan-level seed remains the backward-compatible fallback.  Fixed and
+    randomize are explicit authoring choices stored on the scene, while the
+    returned choice seed is the exact value persisted with a resolved prompt.
+    """
+    raw_mode = shot.get("prompt_seed_mode")
+    if raw_mode is None or (
+            isinstance(raw_mode, str) and not raw_mode.strip()):
+        mode = "fixed" if "prompt_seed" in shot else "inherit"
+    else:
+        mode = str(raw_mode).strip().lower()
+    if mode not in SCENE_PROMPT_SEED_MODES:
+        raise ValueError(
+            "prompt_seed_mode must be one of %s." %
+            (", ".join(SCENE_PROMPT_SEED_MODES),))
+
+    if mode == "inherit":
+        return mode, None, _derived_seed(plan_prompt_seed, index, shot_id)
+    if mode == "randomize":
+        return mode, None, secrets.randbits(64)
+
+    if "prompt_seed" not in shot:
+        raise ValueError("fixed prompt_seed_mode requires prompt_seed.")
+    value = shot.get("prompt_seed")
+    if isinstance(value, bool) or (
+            isinstance(value, float) and not value.is_integer()):
+        raise ValueError("prompt_seed must be an unsigned 64-bit integer.")
+    try:
+        resolved = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "prompt_seed must be an unsigned 64-bit integer.") from exc
+    if resolved < 0 or resolved > MAX_SEED:
+        raise ValueError("prompt_seed is outside the uint64 range.")
+    return mode, resolved, resolved
+
+
 def _shot_context_length(shot: dict[str, Any],
                          default_context_length: int) -> int:
     """Resolve an optional scene override; zero deliberately means no context."""
@@ -5480,8 +5524,12 @@ def _plan_with_review_revision(plan: dict[str, Any], index: int,
     revised = dict(plan)
     revised["shots"] = [dict(shot) for shot in plan["shots"]]
     shot = revised["shots"][index - 1]
-    prompt_choice_seed = _derived_seed(
-        int(plan.get("prompt_seed", 0)), index, str(shot.get("id") or ""))
+    prompt_choice_seed = int(shot.get(
+        "prompt_choice_seed",
+        _derived_seed(
+            int(plan.get("prompt_seed", 0)), index,
+            str(shot.get("id") or "")),
+    ))
     scene_prompt, dynamic_prompt = _resolve_dynamic_prompt(
         scene_prompt_template, prompt_choice_seed,
         "%d:%s" % (index, shot.get("id", "")))
@@ -5797,7 +5845,12 @@ def _normalize_plan(
                 if seed_value is None else int(seed_value))
         if seed < 0 or seed > MAX_SEED:
             raise ValueError("Shot %d seed is outside the uint64 range." % index)
-        prompt_choice_seed = _derived_seed(prompt_seed, index, shot_id)
+        try:
+            prompt_seed_mode, scene_prompt_seed, prompt_choice_seed = (
+                _scene_prompt_choice_seed(
+                    item, prompt_seed, index, shot_id))
+        except ValueError as exc:
+            raise ValueError("Shot %d: %s" % (index, exc)) from exc
         scene_prompt, dynamic_prompt = _resolve_dynamic_prompt(
             scene_prompt_template, prompt_choice_seed,
             "%d:%s" % (index, shot_id))
@@ -5820,6 +5873,11 @@ def _normalize_plan(
             "audio_start_seconds": generation_start_frame / float(FPS),
             "audio_duration_seconds": raw_frames / float(FPS),
         }
+        if prompt_seed_mode == "fixed":
+            shot["prompt_seed_mode"] = "fixed"
+            shot["prompt_seed"] = scene_prompt_seed
+        elif prompt_seed_mode == "randomize":
+            shot["prompt_seed_mode"] = "randomize"
         if dynamic_prompt:
             # Preserve author intent separately from the exact prompt sent to
             # H3.  Checkpoints and review candidates therefore remain fully
@@ -5963,7 +6021,7 @@ def _normalize_plan(
             key: value for key, value in shot.items()
             if key not in (
                 "prompt", "scene_prompt", "scene_prompt_template",
-                "prompt_choice_seed")
+                "prompt_choice_seed", "prompt_seed", "prompt_seed_mode")
         }
         if "prompt_template_hash" in shot:
             contract["prompt_hash"] = shot["prompt_template_hash"]
@@ -10236,7 +10294,9 @@ class MiniMaxH3ChainPlan:
                                "anchors such as #hero[2.50s], or native "
                                "<Picture/Video/Audio N> labels. Scene prompts "
                                "may use {first option|second option}; Plan "
-                               "resolves each group from prompt_seed."}),
+                               "resolves each group from that scene's Prompt "
+                               "alternatives control, with prompt_seed as the "
+                               "backward-compatible fallback."}),
                 "run_name": ("STRING", {
                     "default": "h3_chain",
                     "tooltip": "Identity of one render history and its folder "
@@ -10456,13 +10516,13 @@ class MiniMaxH3ChainPlan:
                 "prompt_seed": ("INT", {
                     "default": 0, "min": 0, "max": MAX_SEED,
                     "control_after_generate": True,
-                    "tooltip": "Independent random-alternative seed for "
-                               "{one|two} groups in scene prompts. Its normal "
-                               "after-generate control defaults to Randomize, "
-                               "so each queued run can select fresh text. It "
-                               "never changes sampler/noise seeds. Set its "
-                               "after-generate mode to Fixed to reproduce the "
-                               "same alternatives."}),
+                    "tooltip": "Backward-compatible fallback seed for scenes "
+                               "whose Prompt alternatives control is Inherit. "
+                               "Its normal after-generate control defaults to "
+                               "Randomize, so inheriting scenes can select fresh "
+                               "{one|two} text. Each scene may instead choose "
+                               "Fixed scene seed or Randomize each queue. Prompt "
+                               "choice seeds never change sampler/noise seeds."}),
             },
         }
 
@@ -10486,6 +10546,28 @@ class MiniMaxH3ChainPlan:
     DESCRIPTION = ("Parse and validate a frame-exact MiniMax H3 shot plan. "
                    "The plan computes valid lengths, overlaps, audio windows, "
                    "seeds, and checkpoint compatibility hashes.")
+
+    @classmethod
+    def IS_CHANGED(cls, plan_json, plan_json_input=None, **_kwargs):
+        """Force one execution only when a scene requests a fresh choice."""
+        source = (
+            plan_json_input
+            if isinstance(plan_json_input, str) and plan_json_input.strip()
+            else plan_json
+        )
+        try:
+            raw = json.loads(str(source or ""))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return False
+        shots = raw if isinstance(raw, list) else (
+            raw.get("shots", []) if isinstance(raw, dict) else [])
+        if any(
+                isinstance(shot, dict)
+                and str(shot.get("prompt_seed_mode") or "").strip().lower()
+                    == "randomize"
+                for shot in shots):
+            return float("NaN")
+        return False
 
     def build(self, plan_json, run_name, generation_fingerprint, width, height,
               context_length,
