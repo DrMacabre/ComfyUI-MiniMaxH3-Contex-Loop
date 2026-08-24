@@ -198,6 +198,8 @@ assert.match(source, /state\.plan\.shots\.push\(makeShot\(state\.plan\.shots\)\)
 assert.match(source, /state\.active = state\.plan\.shots\.length - 1/);
 assert.match(source, /field\("Incoming transition", incomingTransition\)/);
 assert.match(source, /field\("Prompt alternatives", promptSeedWrap\)/);
+assert.match(source, /Stable derived/);
+assert.doesNotMatch(source, /Inherit Plan seed/);
 assert.match(source, /Randomize each queue/);
 assert.match(source, /setScenePromptSeedMode/);
 assert.match(source, /field\("Final assembly crossfade frames", blendFrames\)/);

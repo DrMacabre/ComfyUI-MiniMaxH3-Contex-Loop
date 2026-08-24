@@ -26,18 +26,18 @@ import {
     setShotLengthMode,
     sharedPrompt,
     shotLengthMode,
-} from "./h3_chain_plan_core.mjs?v=0.6.12";
+} from "./h3_chain_plan_core.mjs?v=0.6.13";
 import {
     promptRevisionHelp,
     promptRevisionLabel,
     promptRevisionNavigation,
-} from "./h3_prompt_history_core.mjs?v=0.6.12";
+} from "./h3_prompt_history_core.mjs?v=0.6.13";
 import {
     availableReferenceRecords,
     convertTaggedPictureReference,
     taggedPictureReferenceMode,
     taggedPictureReferenceToken,
-} from "./h3_reference_preview_core.mjs?v=0.6.12";
+} from "./h3_reference_preview_core.mjs?v=0.6.13";
 import {
     applySceneAudioOverride,
     applySceneTransitionPreset,
@@ -46,12 +46,12 @@ import {
     sceneAudioPolicy,
     sceneTransitionPreset,
     transitionPresetLabel,
-} from "./h3_policy_core.mjs?v=0.6.12";
+} from "./h3_policy_core.mjs?v=0.6.13";
 import {
     resolveAudioContextLength,
     resolveAudioPolicy,
     resolveTransitionPolicy,
-} from "./h3_socket_presentation_core.mjs?v=0.6.12";
+} from "./h3_socket_presentation_core.mjs?v=0.6.13";
 import {
     locateStudioTimelineSecond,
     h3StudioGridMarkers,
@@ -63,8 +63,8 @@ import {
     studioSourceAudioSecond,
     studioSourceSecond,
     studioWaveformSceneSamples,
-} from "./h3_chain_plan_studio_core.mjs?v=0.6.12";
-import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.6.12";
+} from "./h3_chain_plan_studio_core.mjs?v=0.6.13";
+import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.6.13";
 
 const {connectedPromptEditors, publishCompanionScene} = promptCompanionSync;
 function publishCompanionPrompt(...args) {
@@ -1274,7 +1274,7 @@ function mount(node) {
         steps.addEventListener("change", () => { if (steps.value) shot.steps = Number(steps.value); else delete shot.steps; writePlan(); });
         const promptSeedMode = element("select");
         for (const [value, label] of [
-            ["inherit", "Inherit Plan seed"],
+            ["inherit", "Stable derived"],
             ["fixed", "Fixed scene seed"],
             ["randomize", "Randomize each queue"],
         ]) {
@@ -1303,7 +1303,7 @@ function mount(node) {
             rerollPromptSeed.disabled = selected !== "fixed";
             promptSeed.value = selected === "fixed" ? (shot.prompt_seed ?? "") : "";
             promptSeedWrap.title = selected === "inherit"
-                ? "Use the Plan prompt_seed fallback for this scene's {one|two} choices."
+                ? "Derive a stable seed from this scene's index and ID for its {one|two} choices."
                 : selected === "randomize"
                     ? "Choose fresh prompt alternatives whenever this Plan is queued; the exact choice seed is saved with the checkpoint."
                     : "Exact uint64 seed for this scene's prompt alternatives. This does not change sampler noise.";
