@@ -1,7 +1,11 @@
 import {app} from "/scripts/app.js";
 import {api} from "/scripts/api.js";
 import {
+    CONTINUATION_MODES,
+    FPS,
     H3_CONTEXT_LENGTHS,
+    MAX_H3_FRAMES,
+    MAX_SEED,
     MAX_SHOTS,
     SCENE_LORA_ROUTES,
     automaticSceneColor,
@@ -81,6 +85,12 @@ const SOURCE_VOLUME_PROPERTY = "h3_plan_studio_source_volume";
 const MOTION_VOLUME_PROPERTY = "h3_plan_studio_motion_volume";
 const MIN_WIDTH = 820;
 const MIN_HEIGHT = 690;
+const PLAN_SETTING_WIDGETS = Object.freeze([
+    "plan_json", "run_name", "generation_fingerprint", "width", "height",
+    "context_length", "encode_mode", "anchor_mode", "crop", "audio_mode",
+    "audio_context_length", "default_duration_seconds", "default_steps",
+    "base_seed", "segment_crf", "video_blend_frames", "continuation_mode",
+]);
 
 function monitorVolume(value, fallback = 1) {
     const number = Number(value);
@@ -182,6 +192,11 @@ function injectStyles() {
         .h3studio-advanced summary { cursor:pointer; font-weight:700; }
         .h3studio-advanced-grid { display:grid; grid-template-columns:repeat(3,minmax(160px,1fr));
             gap:7px; margin-top:7px; align-items:end; }
+        .h3studio-plan-settings { display:grid; grid-template-columns:repeat(3,minmax(170px,1fr));
+            gap:9px; align-items:end; }
+        .h3studio-plan-settings-section { grid-column:1 / -1; margin-top:5px; padding-top:7px;
+            border-top:1px solid var(--hs-border); color:var(--hs-accent); font-weight:750; }
+        .h3studio-plan-defaults-help { grid-column:1 / -1; color:var(--hs-muted); font-size:10px; }
         .h3studio-length { display:grid; grid-template-columns:112px minmax(80px,1fr); gap:5px; }
         .h3studio-prompt-seed { display:grid;
             grid-template-columns:132px minmax(90px,1fr) auto; gap:5px; }
@@ -236,7 +251,7 @@ function injectStyles() {
             gap:8px; align-items:start; color:var(--hs-muted); }
         .h3studio-ref-preview img,.h3studio-ref-preview video { width:100%; max-height:150px; object-fit:contain; background:#08090c; }
         .h3studio-ref-preview audio { width:100%; height:36px; }
-        @media(max-width:760px) { .h3studio-form,.h3studio-advanced-grid,
+        @media(max-width:760px) { .h3studio-form,.h3studio-advanced-grid,.h3studio-plan-settings,
             .h3studio-audio-overrides { grid-template-columns:1fr 1fr; }
             .h3studio-defaults { grid-template-columns:1fr; } }
     `;
@@ -385,17 +400,18 @@ function mount(node) {
     node.properties ??= {};
 
     const root = element("div", "h3studio");
-    root.title = "Optional timeline-based editor for the connected H3 Chain Plan.";
+    root.title = "Timeline Plan editor: use it standalone or synchronize it with a connected H3 Chain Plan.";
     for (const name of ["pointerdown","pointerup","mousedown","mouseup","click","dblclick"]) {
         root.addEventListener(name, (event) => event.stopPropagation());
     }
     root.addEventListener("wheel", (event) => event.stopPropagation());
 
     const state = {
-        plan:null, planNode:null, planWidget:null, lastValue:"", lastRunName:"",
+        plan:null, planNode:null, planOwner:null, planWidget:null,
+        lastValue:"", lastRunName:"",
         lastSettingsSignature:"",
         active:Math.max(0, Number(node.properties[ACTIVE_PROPERTY]) || 0),
-        view:["scene","shared","player","json"].includes(node.properties[VIEW_PROPERTY])
+        view:["scene","shared","settings","player","json"].includes(node.properties[VIEW_PROPERTY])
             ? node.properties[VIEW_PROPERTY] : "scene",
         checkpoints:new Map(), checkpointSignature:"", checkpointError:"", checkpointToken:0,
         checkpointPromise:null, checkpointRefreshQueued:false, disposed:false,
@@ -451,50 +467,83 @@ function mount(node) {
     }
 
     function runName() {
-        return String(widget(state.planNode, "run_name")?.value ?? "").trim();
+        return String(widget(state.planOwner ?? node, "run_name")?.value ?? "").trim();
     }
 
     function settings() {
-        const transition = resolveTransitionPolicy(state.planNode ?? node);
-        const audioPolicy = resolveAudioPolicy(state.planNode ?? node);
+        const owner = state.planOwner ?? node;
+        const transition = resolveTransitionPolicy(owner);
+        const audioPolicy = resolveAudioPolicy(owner);
         return {
             contextLength:transition.known
                 ? transition.contextLength
-                : widget(state.planNode, "context_length")?.value ?? 22,
-            audioContextLength:resolveAudioContextLength(state.planNode ?? node),
-            videoBlendFrames:widget(state.planNode, "video_blend_frames")?.value ?? 0,
-            encodeMode:widget(state.planNode, "encode_mode")?.value ?? "video",
-            anchorMode:widget(state.planNode, "anchor_mode")?.value ?? "head",
+                : widget(owner, "context_length")?.value ?? 22,
+            audioContextLength:resolveAudioContextLength(owner),
+            videoBlendFrames:widget(owner, "video_blend_frames")?.value ?? 0,
+            encodeMode:widget(owner, "encode_mode")?.value ?? "video",
+            anchorMode:widget(owner, "anchor_mode")?.value ?? "head",
             continuationMode:transition.known
                 ? transition.continuationMode
-                : widget(state.planNode, "continuation_mode")?.value ?? "guide",
+                : widget(owner, "continuation_mode")?.value ?? "guide",
+            generatedContinuity:audioPolicy.known
+                ? audioPolicy.generatedContinuity : "on",
+            sourceAudioTarget:audioPolicy.known
+                ? audioPolicy.sourceAudioTarget ?? "off" : "off",
             transitionPreset:transition.known ? transition.preset : "custom",
             audioPolicy,
-            defaultDurationSeconds:widget(state.planNode, "default_duration_seconds")?.value ?? 15,
-            defaultSteps:widget(state.planNode, "default_steps")?.value ?? 20,
+            defaultDurationSeconds:widget(owner, "default_duration_seconds")?.value ?? 15,
+            defaultSteps:widget(owner, "default_steps")?.value ?? 20,
         };
     }
 
-    function settingsSignature(planNode = state.planNode) {
-        const transition = resolveTransitionPolicy(planNode ?? node);
-        const audioPolicy = resolveAudioPolicy(planNode ?? node);
+    function settingsSignature(planOwner = state.planOwner ?? node) {
+        const transition = resolveTransitionPolicy(planOwner);
+        const audioPolicy = resolveAudioPolicy(planOwner);
         return JSON.stringify([
             transition.known
                 ? transition.contextLength
-                : widget(planNode, "context_length")?.value ?? 22,
-            resolveAudioContextLength(planNode ?? node),
-            widget(planNode, "video_blend_frames")?.value ?? 0,
-            widget(planNode, "encode_mode")?.value ?? "video",
-            widget(planNode, "anchor_mode")?.value ?? "head",
+                : widget(planOwner, "context_length")?.value ?? 22,
+            resolveAudioContextLength(planOwner),
+            widget(planOwner, "video_blend_frames")?.value ?? 0,
+            widget(planOwner, "encode_mode")?.value ?? "video",
+            widget(planOwner, "anchor_mode")?.value ?? "head",
             transition.known
                 ? transition.continuationMode
-                : widget(planNode, "continuation_mode")?.value ?? "guide",
+                : widget(planOwner, "continuation_mode")?.value ?? "guide",
             audioPolicy.sourceReference,
             audioPolicy.generatedContinuity,
             audioPolicy.sourceAudioTarget ?? "off",
-            widget(planNode, "default_duration_seconds")?.value ?? 15,
-            widget(planNode, "default_steps")?.value ?? 20,
+            ...PLAN_SETTING_WIDGETS.slice(1).map(
+                (name) => widget(planOwner, name)?.value ?? null),
         ]);
+    }
+
+    function mirrorConnectedPlan(planNode) {
+        if (!planNode) return false;
+        let changed = false;
+        for (const name of PLAN_SETTING_WIDGETS) {
+            const source = widget(planNode, name);
+            const target = widget(node, name);
+            if (!source || !target || Object.is(source.value, target.value)) continue;
+            target.value = source.value;
+            changed = true;
+        }
+        if (changed) dirty();
+        return changed;
+    }
+
+    function writePlanSetting(name, value, rerender = true) {
+        const targets = state.planNode ? [state.planNode, node] : [node];
+        for (const target of targets) {
+            const targetWidget = widget(target, name);
+            if (!targetWidget || Object.is(targetWidget.value, value)) continue;
+            targetWidget.value = value;
+            targetWidget.callback?.(targetWidget.value);
+        }
+        state.lastRunName = runName();
+        state.lastSettingsSignature = settingsSignature(state.planOwner ?? node);
+        dirty();
+        if (rerender) renderShell();
     }
 
     function timing() {
@@ -541,6 +590,10 @@ function mount(node) {
         const value = planToJson(state.plan);
         state.lastValue = value;
         state.planWidget.value = value;
+        if (state.planNode) {
+            const localPlanWidget = widget(node, "plan_json");
+            if (localPlanWidget) localPlanWidget.value = value;
+        }
         if (state.planNotifyTimer != null) clearTimeout(state.planNotifyTimer);
         const targetWidget = state.planWidget;
         state.planNotifyTimer = setTimeout(() => {
@@ -548,11 +601,14 @@ function mount(node) {
             if (targetWidget !== state.planWidget) return;
             targetWidget.callback?.(targetWidget.value);
         }, 75);
-        state.planNode?.graph?.setDirtyCanvas?.(true, true);
-        publishCompanionPrompt(
-            node, state.planNode, state.active,
-            promptValueToText(state.plan.shots[state.active]?.prompt));
-        if (message) message.textContent = "Saved to connected Plan";
+        state.planOwner?.graph?.setDirtyCanvas?.(true, true);
+        if (state.planNode) {
+            publishCompanionPrompt(
+                node, state.planNode, state.active,
+                promptValueToText(state.plan.shots[state.active]?.prompt));
+        }
+        if (message) message.textContent = state.planNode
+            ? "Saved to connected Plan" : "Saved in standalone Plan Studio";
         renderStatus();
         dirty();
     }
@@ -1666,6 +1722,134 @@ function mount(node) {
         return panel;
     }
 
+    function renderPlanSettingsPanel() {
+        const panel = element("div");
+        const grid = element("div", "h3studio-plan-settings");
+        const owner = state.planOwner ?? node;
+        const transition = resolveTransitionPolicy(owner);
+        const audioPolicy = resolveAudioPolicy(owner);
+        const value = (name, fallback = "") => widget(owner, name)?.value ?? fallback;
+        const section = (title) => element(
+            "div", "h3studio-plan-settings-section", title,
+        );
+        const textControl = (name, fallback = "", placeholder = "") => {
+            const control = element("input");
+            control.type = "text";
+            control.value = String(value(name, fallback));
+            control.placeholder = placeholder;
+            control.addEventListener("change", () => {
+                writePlanSetting(name, control.value.trim());
+            });
+            return control;
+        };
+        const numberControl = (
+            name, fallback, minimum, maximum, step = 1, integer = true,
+        ) => {
+            const control = element("input");
+            control.type = "number";
+            control.min = String(minimum); control.max = String(maximum);
+            control.step = String(step); control.value = String(value(name, fallback));
+            control.addEventListener("change", () => {
+                let parsed = Number(control.value);
+                if (!Number.isFinite(parsed)) parsed = Number(fallback);
+                parsed = Math.max(Number(minimum), Math.min(Number(maximum), parsed));
+                if (integer) parsed = Math.trunc(parsed);
+                writePlanSetting(name, parsed);
+            });
+            return control;
+        };
+        const selectControl = (name, options, fallback, transform = (item) => item) => {
+            const control = element("select");
+            for (const [optionValue, label] of options) {
+                const option = element("option", "", label);
+                option.value = optionValue; control.append(option);
+            }
+            control.value = String(value(name, fallback));
+            control.addEventListener("change", () => {
+                writePlanSetting(name, transform(control.value));
+            });
+            return control;
+        };
+        const baseSeed = element("input");
+        baseSeed.type = "text"; baseSeed.inputMode = "numeric";
+        baseSeed.value = String(value("base_seed", 0));
+        baseSeed.title = `Unsigned 64-bit seed (0–${MAX_SEED.toString()})`;
+        baseSeed.addEventListener("change", () => {
+            try {
+                const parsed = BigInt(baseSeed.value.trim() || "0");
+                if (parsed < 0n || parsed > MAX_SEED) throw new Error();
+                writePlanSetting("base_seed", parsed.toString());
+            } catch (_error) {
+                baseSeed.setCustomValidity("Base seed must be an unsigned 64-bit integer.");
+                baseSeed.reportValidity();
+                baseSeed.setCustomValidity("");
+            }
+        });
+
+        const mode = state.planNode
+            ? "Connected mode · changes are written to the H3 Chain Plan and mirrored into Studio. Disconnecting keeps this synchronized snapshot."
+            : "Standalone mode · this node owns, validates, and outputs the complete H3 Chain Plan.";
+        grid.append(
+            element("div", "h3studio-plan-defaults-help", mode),
+            section("Run identity and canvas"),
+            field("Run name", textControl("run_name", "h3_chain", "h3_chain")),
+            field("Generation fingerprint", textControl(
+                "generation_fingerprint", "", "optional compatibility tag",
+            )),
+            field("Base seed", baseSeed),
+            field("Width", numberControl("width", 960, 32, 4096, 32)),
+            field("Height", numberControl("height", 544, 32, 4096, 32)),
+            field("Segment CRF", numberControl("segment_crf", 18, 0, 51)),
+            section("Plan-wide scene defaults"),
+            field("Default seconds", numberControl(
+                "default_duration_seconds", 15, .1, MAX_H3_FRAMES / FPS, .01, false,
+            )),
+            field("Default steps", numberControl("default_steps", 20, 1, 10000)),
+            field("Default blend frames", numberControl(
+                "video_blend_frames", 0, 0, 243,
+            )),
+            field("Context encoding", selectControl("encode_mode", [
+                ["video", "Video clip"], ["frames", "Separate frames"],
+            ], "video")),
+            field("Anchor placement", selectControl("anchor_mode", [
+                ["head", "Head (tested)"], ["before", "Before timeline (experimental)"],
+            ], "head")),
+            field("Context fit", selectControl("crop", [
+                ["disabled", "Resize directly"], ["center", "Preserve aspect + center crop"],
+            ], "disabled")),
+            section("Legacy policy fallback"),
+        );
+        const context = selectControl(
+            "context_length", H3_CONTEXT_LENGTHS.map((item) => [String(item), `${item} frames`]), "22",
+            (item) => Number(item),
+        );
+        const continuation = selectControl(
+            "continuation_mode", CONTINUATION_MODES.map((item) => [item, item]), "guide",
+        );
+        const audioMode = selectControl("audio_mode", [
+            ["generated_audio", "Generated audio"],
+            ["source_track", "Source track"],
+            ["source_plus_timeline", "Source + generated continuity"],
+        ], "generated_audio");
+        const audioContext = numberControl("audio_context_length", 22, 0, 240);
+        context.disabled = transition.known;
+        continuation.disabled = transition.known;
+        audioMode.disabled = audioPolicy.known;
+        audioContext.disabled = audioPolicy.known;
+        grid.append(
+            field("Visual context", context),
+            field("Continuation implementation", continuation),
+            field("Audio mode", audioMode),
+            field("Audio context", audioContext),
+            element("div", "h3studio-plan-defaults-help",
+                transition.known || audioPolicy.known
+                    ? "Connected Chain Policy owns the disabled fallback controls. The active policy is used for timing and execution."
+                    : "These controls are used only when no Chain Policy is connected. Per-scene Advanced settings can still override them."),
+        );
+        panel.append(grid);
+        return panel;
+    }
+
     function playerCheckpoint(index) {
         const item = matchingStudioCheckpoint(
             state.checkpoints, index, timing().shots[index],
@@ -2225,6 +2409,7 @@ function mount(node) {
         state.history.host = null; state.history.textarea = null; state.history.status = null;
         disposePlayer();
         const content = state.view === "shared" ? renderSharedPanel()
+            : state.view === "settings" ? renderPlanSettingsPanel()
             : state.view === "player" ? renderPlayerPanel()
               : state.view === "json" ? renderJsonPanel() : renderScenePanel();
         state.panelHost.replaceChildren(content);
@@ -2241,7 +2426,9 @@ function mount(node) {
         root.replaceChildren();
         const head = element("div", "h3studio-head");
         head.append(element("span", "h3studio-title", "MiniMax H3 Plan Studio"),
-            element("span", "h3studio-run", runName() ? `run · ${runName()}` : "connect a named Plan"));
+            element("span", "h3studio-run", runName()
+                ? `${state.planNode ? "linked" : "standalone"} · ${runName()}`
+                : "name this run in Plan settings"));
         const toolbar = element("div", "h3studio-toolbar");
         const add = button("+ Scene", "Append a new scene and select it", async () => {
             if (state.plan.shots.length >= MAX_SHOTS) return;
@@ -2277,7 +2464,8 @@ function mount(node) {
         }); right.disabled = state.active >= state.plan.shots.length - 1;
         toolbar.append(add, duplicate, remove, left, right, element("span", "h3studio-spacer"));
         const sceneViewLabel = state.promptEditors.length ? "Scene settings" : "Scene prompt";
-        for (const [value,label] of [["scene",sceneViewLabel],["shared","Shared prompt"],["player","Player"],["json","JSON"]]) {
+        for (const [value,label] of [["scene",sceneViewLabel],["shared","Shared prompt"],
+            ["settings","Plan settings"],["player","Player"],["json","JSON"]]) {
             const item = button(label, `Open ${label.toLowerCase()} view`, () => {
                 void flushHistoryDraft();
                 if (value === "player" && state.timelinePosition == null) {
@@ -2339,30 +2527,37 @@ function mount(node) {
         disposePlayer();
         root.replaceChildren(element("div", "h3studio-title", "MiniMax H3 Plan Studio"),
             element("div", "h3studio-error", message),
-            element("div", "h3studio-message", "Connect the original H3 Chain Plan output to this node's plan input."));
+            element("div", "h3studio-message", "Repair the JSON tab or connect a valid H3 Chain Plan. Studio can operate in either mode."));
     }
 
     function loadPlan(force = false) {
         const planNode = upstreamPlanNode(node);
-        const planWidget = widget(planNode, "plan_json");
-        if (!planNode || !planWidget) {
-            if (force || state.planNode) { state.plan = null; state.planNode = null; state.planWidget = null; showFailure("No connected H3 Chain Plan was found."); }
+        if (planNode) mirrorConnectedPlan(planNode);
+        const planOwner = planNode ?? node;
+        const planWidget = widget(planOwner, "plan_json");
+        if (!planWidget) {
+            if (force || state.planOwner) {
+                state.plan = null; state.planNode = null;
+                state.planOwner = null; state.planWidget = null;
+                showFailure("Plan Studio's internal Plan fields are unavailable.");
+            }
             return;
         }
         const value = String(planWidget.value ?? "");
-        const currentRun = String(widget(planNode, "run_name")?.value ?? "").trim();
-        const currentSettings = settingsSignature(planNode);
-        const promptEditors = connectedPromptEditors(node).filter(
+        const currentRun = String(widget(planOwner, "run_name")?.value ?? "").trim();
+        const currentSettings = settingsSignature(planOwner);
+        const promptEditors = planNode ? connectedPromptEditors(node).filter(
             (editor) => upstreamPlanNode(editor) === planNode,
-        );
+        ) : [];
         const currentPromptEditors = promptEditorsSignature(promptEditors);
-        if (!force && planNode === state.planNode && value === state.lastValue
+        if (!force && planOwner === state.planOwner && value === state.lastValue
                 && currentRun === state.lastRunName
                 && currentSettings === state.lastSettingsSignature
                 && currentPromptEditors === state.lastPromptEditorsSignature) return;
         try {
-            const runChanged = planNode !== state.planNode || currentRun !== state.lastRunName;
-            state.plan = parsePlanJson(value); state.planNode = planNode; state.planWidget = planWidget;
+            const runChanged = planOwner !== state.planOwner || currentRun !== state.lastRunName;
+            state.plan = parsePlanJson(value); state.planNode = planNode;
+            state.planOwner = planOwner; state.planWidget = planWidget;
             state.lastValue = value; state.lastRunName = currentRun;
             state.lastSettingsSignature = currentSettings;
             state.promptEditors = promptEditors;
@@ -2375,7 +2570,9 @@ function mount(node) {
                 state.sourceWaveformPromise = null;
             }
             state.active = Math.min(state.active, state.plan.shots.length - 1); renderShell(); void refreshCheckpoints();
-        } catch (error) { showFailure(`Connected Plan JSON is invalid:\n${error.message}`); }
+        } catch (error) {
+            showFailure(`${planNode ? "Connected Plan" : "Standalone Plan Studio"} JSON is invalid:\n${error.message}`);
+        }
     }
 
     const domWidget = node.addDOMWidget("h3_plan_studio", "h3-plan-studio", root, {
