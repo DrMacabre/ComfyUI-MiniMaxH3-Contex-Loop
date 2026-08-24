@@ -53,6 +53,10 @@ def main():
     required = {
         "MiniMaxH3ChainUpscaleAdapter",
         "MiniMaxH3ChainUpscaleCurrent",
+        "MiniMaxH3ChainDeropeGuard",
+        "MiniMaxH3ChainDeropeFreezeMask",
+        "MiniMaxH3ChainDeropeContinuity",
+        "MiniMaxH3ChainRecoveredAV",
         "MiniMaxH3UpscaleReferencePromptOverride",
         "MiniMaxH3ChainUpscaleReferenceConditioning",
         "H3ConditioningSyncFromLatents",
@@ -486,6 +490,62 @@ def main():
             1, 24, 2, 8, 16)
         assert resized_motion["minimax_refs"][1]["latent_t"] == 2
 
+        # De-rope expands the pass-2 time axis. Spatial reference sync must
+        # accept that new clock while leaving each reference's own time alone.
+        derope_synced = upscale.H3ConditioningSyncFromLatents().sync(
+            {"samples": torch.zeros((1, 24, 2, 2, 2))},
+            {"samples": torch.zeros((1, 24, 7, 4, 6))},
+            sync_positive, "bilinear", "resize_video")[0][0][1]
+        assert tuple(derope_synced["minimax_refs"][1]["latent"].shape) == (
+            1, 24, 2, 8, 16)
+
+        derope_manifest = json.loads(json.dumps(source_manifest))
+        derope_manifest["segments"][0].update({
+            "raw_frames": 39,
+            "delivered_frames": 22,
+        })
+        derope_state = {
+            **upscale_state,
+            "source_manifest": derope_manifest,
+            "source_manifest_hash": upscale._source_hash(derope_manifest),
+        }
+        guarded = upscale.MiniMaxH3ChainDeropeGuard().guard(
+            derope_state, json.dumps({
+                "holds": [4] * 39,
+                "world_len": 39,
+            }))
+        guarded_map = json.loads(guarded[0])
+        assert guarded[1:4] == (False, 17, 17)
+        assert guarded_map["holds"][:17] == [1] * 17
+        assert guarded_map["holds"][-17:] == [1] * 17
+        assert guarded_map["holds"][17:22] == [4] * 5
+        # Simulate H3 Time Smear's legal-grid tail pad. It lives on the final
+        # hold and does not disturb the protected incoming prefix.
+        used_map = dict(guarded_map)
+        used_map["holds"] = list(used_map["holds"])
+        used_map["holds"][-1] += 2
+        freeze = upscale.MiniMaxH3ChainDeropeFreezeMask().mask(
+            derope_state, json.dumps(used_map))
+        assert freeze[1] == sum(used_map["holds"])
+        assert tuple(freeze[0].shape) == (freeze[1], 8, 8)
+        assert torch.all(freeze[0][:17] == 0)
+        assert torch.all(freeze[0][17:] == 1)
+
+        packed_recovered = upscale.MiniMaxH3ChainRecoveredAV().pack(
+            upscale_state,
+            {"samples": torch.ones((1, 24, 2, 4, 6))},
+            {"samples": torch.ones((1, 32, 2, 9))})
+        assert len(chain._streams_from_latent(packed_recovered[0])) == 2
+        assert "joint AV" in packed_recovered[1]
+        try:
+            upscale.MiniMaxH3ChainRecoveredAV().pack(
+                upscale_state,
+                {"samples": torch.ones((1, 24, 7, 4, 6))})
+        except ValueError as exc:
+            assert "still has 7 latent steps" in str(exc)
+        else:
+            raise AssertionError("Recovered AV accepted a dilated time axis")
+
         class FakeSampling:
             @staticmethod
             def noise_scaling(sigma, generated, latent):
@@ -590,6 +650,16 @@ def main():
         assert torch.all(drift_masks[0][:, :, 12:] == 1)
         assert "previous HQ latent tail spliced and protected" in (
             drift_prepared[3])
+        derope_continuity = (
+            upscale.MiniMaxH3ChainDeropeContinuity().splice(
+                resumed_drift_state,
+                {"samples": torch.ones(
+                    (1, 24, 16, 4, 4), dtype=torch.float32)}))
+        assert torch.allclose(
+            derope_continuity[0]["samples"][:, :, :12],
+            previous_hq_video[:, :, -12:])
+        assert "previous HQ latent tail spliced and protected" in (
+            derope_continuity[1])
         fallback_state = {**resumed_drift_state, "previous_latent": None}
         fallback_prepared = upscale.MiniMaxH3ChainPass2Prepare().prepare(
             {"samples": torch.ones(
@@ -613,6 +683,23 @@ def main():
         with safe_open(hq_checkpoint, framework="pt", device="cpu") as saved:
             assert "delivered_audio" in saved.keys()
             assert "upscaled_video" not in saved.keys()
+
+        recovered_audio_state = {
+            **upscale_state,
+            "profile": "recovered-audio",
+        }
+        recovered_audio = audio_for_frames(5)
+        recovered_audio["waveform"].fill_(0.5)
+        recovered_audio_segment = (
+            upscale.MiniMaxH3ChainUpscaleSegmentSave().save(
+                recovered_audio_state, hq_images,
+                recovered_audio=recovered_audio)["result"][0])
+        assert recovered_audio_segment["audio_route"] == (
+            "recovered de-rope audio")
+        with safe_open(chain._absolute_output_path(
+                recovered_audio_segment["checkpoint"]), framework="pt",
+                device="cpu") as saved:
+            assert torch.all(saved.get_tensor("delivered_audio") == 0.5)
 
         partial = upscale.MiniMaxH3ChainUpscaleLoopEnd().end(
             flow, upscale_state, hq_images, hq_segment)[0]

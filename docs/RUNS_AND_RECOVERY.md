@@ -258,7 +258,9 @@ applies the exact horizontal and vertical scale to `match` picture
 their Core H3 capped geometry. Pictures already rebuilt from a cache-v2 RGB
 master at the pass-2 canvas are not scaled twice. It updates changed reference
 H/W metadata and deliberately leaves text, temporal positions, and audio
-conditioning untouched. Upscale Reference
+conditioning untouched. A de-rope target may have a longer video time axis;
+sync accepts that deliberate difference because it changes only spatial
+reference geometry. Upscale Reference
 Conditioning's default `exclude_video_keep_audio` policy removes both the Qwen
 motion-video presentation and native motion-video latent because the pass-2
 source latent already contains the generated motion; audio paired with a video
@@ -270,6 +272,40 @@ Thus the child graph needs no reference registry or original picture/video/audio
 connections. Both cache versions retain the encoded native reference blocks
 used by sync; cache v2 additionally keeps original picture masters for
 workflows that choose target-resolution VAE re-encoding instead.
+
+The bundled **Deferred Upscale + De-Rope - H3 LBH 3D** workflow wraps
+[ComfyUI-MAINodes](https://github.com/matlowai/ComfyUI-MAINodes)' stable
+decoded time-smear recipe in the child loop:
+
+```text
+source x0 → H3 Jerk Oracle → Chain De-Rope Guard → H3 Time Smear
+          → H3 video VAE encode → LBH 3D → Chain De-Rope Continuity
+          → H3 V2V Init + Inject Schedule → sampler
+          → Exact/Audio Recover → re-encode → Chain Recovered AV
+```
+
+Guard forces the parent scene's repeated prefix to rate 1 and protects the
+last 17 frames when another selected scene follows. It enables Time Smear's
+`expand_to_end` only at the branch tip. Freeze Mask consumes Time Smear's final
+`hold_map_used` (including legal-grid padding) and freezes the protected prefix
+inside H3 V2V Init. For Drift-Control scene 2+, Continuity then replaces that
+target-resolution prefix with the prior HQ tail before sampling.
+
+Audio uses the identical hold map. Decode the source RAW audio latent, run H3
+Audio Smear, VAE-encode it into H3 V2V Init, and recover the pass-2 audio after
+sampling. The workflow seeds audio at strength 0.5 to keep dialogue timing
+aligned but uses MAINodes' safe final preset that retains the original
+performance. Segment Save's optional `recovered_audio` input trims the same
+repeated RAW prefix as video and records the recovered result. Chain Recovered
+AV rejects a still-dilated latent and packs the re-encoded world-clock video
+and audio for optional full-latent saving and compact Drift-Control resume.
+
+This is the stable pixel-smear route, not MAINodes' experimental temporal
+latent insertion. The expanded IMAGE batch stays on CPU, but high-motion
+scenes can still become two to three times longer internally. Narrow the
+adapter's scene range or reduce oracle aggressiveness when RAM or wall time is
+too high. Spatial upscale and de-rope remain in the same regeneration pass so
+a later independent upscale cannot undo the recovered motion timing.
 
 When pass 2 should use a different reference set, insert **Upscale Reference +
 Prompt Override** on the normal `H3_TAGGED_REFERENCES` line and connect its

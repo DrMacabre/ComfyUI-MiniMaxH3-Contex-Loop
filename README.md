@@ -125,6 +125,10 @@ leaves one revision at a time. Its Plan and Source Timeline pass-throughs can
 remain connected in generation workflows, while its selected-manifest output
 launches a standalone deferred upscale loop with no source Plan. Each profile
 is isolated under `upscaled/<profile>`, and saving the large HQ latent is optional.
+The bundled chain-aware de-rope variant combines LBH 3D with MAINodes in the
+same second pass, protects recursive scene boundaries, restores the prior HQ
+Drift-Control tail, and returns recovered video/audio to the source clock
+before checkpointing.
 For whole-video SeedVR2 finishing, Full-Chain Latent Video Adapter instead
 re-decodes every selected H3 checkpoint into one cached, lossless, file-backed
 movie. It resolves scene overlaps before upscaling and uses a temporary
