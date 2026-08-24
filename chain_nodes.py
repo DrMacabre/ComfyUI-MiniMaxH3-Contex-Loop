@@ -569,6 +569,128 @@ def _prompt_text(value: Any, label: str) -> str:
     return str(value or "").strip()
 
 
+def _resolve_dynamic_prompt(
+        value: str, seed: int, scope: str = ""
+) -> tuple[str, bool]:
+    """Resolve Comfy-style ``{one|two}`` groups deterministically.
+
+    Resolution is deliberately backend- and scene-local.  Expanding the
+    complete Plan JSON through ComfyUI's frontend dynamic-prompt serializer
+    would rerandomize unrelated scenes and make checkpoint recovery depend on
+    queue timing.  The same dedicated prompt seed, scope, and template always
+    produce the same effective prompt, independently of the sampler seed.
+
+    Nested groups and the escapes ``\\{``, ``\\}``, ``\\|``, and ``\\\\`` are
+    supported.  Braces without an unescaped top-level pipe remain literal.
+    """
+    text = str(value or "")
+    seed = int(seed)
+    if seed < 0 or seed > MAX_SEED:
+        raise ValueError("Dynamic prompt seed is outside the uint64 range.")
+
+    group_number = 0
+    max_groups = 256
+    max_depth = 32
+
+    def escaped_character(source: str, position: int) -> tuple[str, int] | None:
+        if (source[position] == "\\" and position + 1 < len(source)
+                and source[position + 1] in "{}|\\"):
+            return source[position + 1], position + 2
+        return None
+
+    def matching_brace(source: str, opening: int) -> int | None:
+        depth = 0
+        position = opening
+        while position < len(source):
+            escaped = escaped_character(source, position)
+            if escaped is not None:
+                position = escaped[1]
+                continue
+            character = source[position]
+            if character == "{":
+                depth += 1
+            elif character == "}":
+                depth -= 1
+                if depth == 0:
+                    return position
+            position += 1
+        return None
+
+    def alternatives(source: str) -> list[str] | None:
+        parts = []
+        start = 0
+        depth = 0
+        position = 0
+        while position < len(source):
+            escaped = escaped_character(source, position)
+            if escaped is not None:
+                position = escaped[1]
+                continue
+            character = source[position]
+            if character == "{":
+                depth += 1
+            elif character == "}" and depth:
+                depth -= 1
+            elif character == "|" and depth == 0:
+                parts.append(source[start:position])
+                start = position + 1
+            position += 1
+        if not parts:
+            return None
+        parts.append(source[start:])
+        return parts
+
+    def render(source: str, depth: int = 0) -> tuple[str, bool]:
+        nonlocal group_number
+        if depth > max_depth:
+            raise ValueError(
+                "Dynamic prompt nesting exceeds the maximum depth of %d." %
+                max_depth)
+        output = []
+        used = False
+        position = 0
+        while position < len(source):
+            escaped = escaped_character(source, position)
+            if escaped is not None:
+                output.append(escaped[0])
+                position = escaped[1]
+                continue
+            if source[position] != "{":
+                output.append(source[position])
+                position += 1
+                continue
+            closing = matching_brace(source, position)
+            if closing is None:
+                output.append(source[position])
+                position += 1
+                continue
+            body = source[position + 1:closing]
+            choices = alternatives(body)
+            if choices is None:
+                inner, inner_used = render(body, depth + 1)
+                output.extend(("{", inner, "}"))
+                used = used or inner_used
+                position = closing + 1
+                continue
+            if group_number >= max_groups:
+                raise ValueError(
+                    "Dynamic prompt contains more than %d alternative groups."
+                    % max_groups)
+            selector = hashlib.sha256(
+                ("%d\0%s\0%d\0%s" %
+                 (seed, scope, group_number, body)).encode("utf-8")
+            ).digest()
+            group_number += 1
+            selected = choices[int.from_bytes(selector[:8], "big") % len(choices)]
+            rendered, _nested_used = render(selected, depth + 1)
+            output.append(rendered)
+            used = True
+            position = closing + 1
+        return "".join(output), used
+
+    return render(text)
+
+
 def _h3_frame_length(seconds: float) -> int:
     """Round a duration up to H3's valid 17k+5 frame grid."""
     seconds = float(seconds)
@@ -4377,7 +4499,11 @@ def _legacy_history_contract(
     for shot in plan["shots"][:int(through_index)]:
         contract = {
             "id": shot["id"],
-            "prompt_hash": shot["prompt_hash"],
+            # A random alternative is runtime resolution of one authored
+            # template, not a rewrite of predecessor history.  The exact
+            # selected text remains in scene_dependency and checkpoint media.
+            "prompt_hash": shot.get(
+                "prompt_template_hash", shot["prompt_hash"]),
             "seed": shot["seed"],
             "steps": shot["steps"],
             "raw_frames": shot["raw_frames"],
@@ -4572,6 +4698,8 @@ def _scene_dependency_record(
         "scene_generation": {
             "id": str(shot["id"]),
             "prompt_hash": str(shot["prompt_hash"]),
+            **({"prompt_template_hash": str(shot["prompt_template_hash"])}
+               if "prompt_template_hash" in shot else {}),
             "seed": int(shot["seed"]),
             "steps": int(shot["steps"]),
             "raw_frames": int(shot["raw_frames"]),
@@ -4793,6 +4921,24 @@ def _scene_dependency_diffs(
             SCENE_DEPENDENCY_VERSION):
         raise ValueError("Current H3 scene dependency record is invalid.")
     scene = int(current["scene"])
+    saved_scene = saved.get("scopes", {}).get("scene_generation", {})
+    current_scene = current.get("scopes", {}).get("scene_generation", {})
+    same_dynamic_template = bool(
+        saved_scene.get("prompt_template_hash")
+        and saved_scene.get("prompt_template_hash") ==
+            current_scene.get("prompt_template_hash"))
+    reference_current = current
+    if same_dynamic_template:
+        # Reference-lineage growth must be judged against the alternative that
+        # actually produced the saved predecessor, not the fresh alternative
+        # selected for this queue.
+        reference_current = dict(current)
+        reference_scopes = dict(current.get("scopes", {}))
+        reference_scene = dict(current_scene)
+        reference_scene["active_reference_tags"] = list(
+            saved_scene.get("active_reference_tags", ()))
+        reference_scopes["scene_generation"] = reference_scene
+        reference_current["scopes"] = reference_scopes
     diffs = []
     for scope in DEPENDENCY_SCOPES:
         if scope == "assembly_only":
@@ -4800,8 +4946,17 @@ def _scene_dependency_diffs(
         saved_scope = saved.get("scopes", {}).get(scope, {})
         current_scope = current.get("scopes", {}).get(scope, {})
         scope_diffs = _dependency_value_diffs(saved_scope, current_scope)
+        if scope == "scene_generation" and same_dynamic_template:
+            # A new queue-level prompt seed may select a different authored
+            # alternative for scenes not being regenerated.  Their exact
+            # completed prompt remains checkpointed; only a template edit is
+            # a predecessor-history change.
+            scope_diffs = [
+                item for item in scope_diffs
+                if item[0] not in ("prompt_hash", "active_reference_tags")]
         if scope == "global_generation" and (
-                _reference_registry_growth_is_scene_neutral(saved, current)):
+                _reference_registry_growth_is_scene_neutral(
+                    saved, reference_current)):
             scope_diffs = [item for item in scope_diffs
                            if item[0] != "generation_fingerprint"]
         for field, before, after in scope_diffs:
@@ -5318,9 +5473,10 @@ def _plan_with_review_revision(plan: dict[str, Any], index: int,
     index = int(index)
     if index < 1 or index > len(plan["shots"]):
         raise ValueError("H3 review revision index is outside the plan.")
-    scene_prompt = str(scene_prompt or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    scene_prompt_template = str(scene_prompt or "").replace(
+        "\r\n", "\n").replace("\r", "\n").strip()
     prefix = str(plan.get("prompt_prefix") or "").strip()
-    if not scene_prompt and not prefix:
+    if not scene_prompt_template and not prefix:
         raise ValueError(
             "H3 review retry requires a scene prompt or shared prompt.")
     seed = int(seed)
@@ -5330,8 +5486,24 @@ def _plan_with_review_revision(plan: dict[str, Any], index: int,
     revised = dict(plan)
     revised["shots"] = [dict(shot) for shot in plan["shots"]]
     shot = revised["shots"][index - 1]
+    prompt_choice_seed = _derived_seed(
+        int(plan.get("prompt_seed", 0)), index, str(shot.get("id") or ""))
+    scene_prompt, dynamic_prompt = _resolve_dynamic_prompt(
+        scene_prompt_template, prompt_choice_seed,
+        "%d:%s" % (index, shot.get("id", "")))
     full_prompt = "\n\n".join(part for part in (prefix, scene_prompt) if part)
     shot["scene_prompt"] = scene_prompt
+    if dynamic_prompt:
+        shot["scene_prompt_template"] = scene_prompt_template
+        shot["prompt_template_hash"] = hashlib.sha256(
+            "\n\n".join(part for part in (
+                prefix, scene_prompt_template) if part).encode("utf-8")
+        ).hexdigest()
+        shot["prompt_choice_seed"] = prompt_choice_seed
+    else:
+        shot.pop("scene_prompt_template", None)
+        shot.pop("prompt_template_hash", None)
+        shot.pop("prompt_choice_seed", None)
     shot["prompt"] = full_prompt
     shot["prompt_hash"] = hashlib.sha256(
         full_prompt.encode("utf-8")).hexdigest()
@@ -5344,6 +5516,8 @@ def _plan_with_review_revision(plan: dict[str, Any], index: int,
     overrides = dict(revised.get("review_overrides") or {})
     overrides[str(index)] = {
         "scene_prompt": scene_prompt,
+        **({"scene_prompt_template": scene_prompt_template}
+           if dynamic_prompt else {}),
         "prompt_hash": shot["prompt_hash"],
         "seed": seed,
         "raw_frames": int(shot["raw_frames"]),
@@ -5384,6 +5558,7 @@ def _normalize_plan(
     video_blend_frames: int = 0,
     continuation_mode: str = "guide",
     chain_policy: Any = None,
+    prompt_seed: int = 0,
 ) -> dict[str, Any]:
     try:
         raw = json.loads(str(plan_json or ""))
@@ -5450,6 +5625,9 @@ def _normalize_plan(
         else migrate_legacy_audio_mode(audio_mode))
     default_steps = max(1, min(10000, int(default_steps)))
     base_seed = max(0, min(MAX_SEED, int(base_seed)))
+    prompt_seed = int(prompt_seed)
+    if prompt_seed < 0 or prompt_seed > MAX_SEED:
+        raise ValueError("H3 prompt seed is outside the uint64 range.")
     segment_crf = max(0, min(51, int(segment_crf)))
     video_blend_frames = int(video_blend_frames)
     if video_blend_frames < 0 or video_blend_frames > context_length:
@@ -5593,15 +5771,13 @@ def _normalize_plan(
             raise ValueError("Duplicate H3 shot id %r." % shot_id)
         seen_ids.add(shot_id)
 
-        prompt = _prompt_text(item.get("prompt", ""),
-                              "Shot %d (%s) prompt" % (index, shot_id))
-        if not prompt and not prompt_prefix:
+        scene_prompt_template = _prompt_text(
+            item.get("prompt", ""),
+            "Shot %d (%s) prompt" % (index, shot_id))
+        if not scene_prompt_template and not prompt_prefix:
             raise ValueError(
                 "Shot %d (%s) requires a scene prompt or shared prompt." %
                 (index, shot_id))
-        scene_prompt = prompt
-        prompt = "\n\n".join(
-            part for part in (prompt_prefix, scene_prompt) if part)
 
         explicit_length = item.get("length", item.get("frames"))
         if explicit_length is None:
@@ -5640,6 +5816,12 @@ def _normalize_plan(
                 if seed_value is None else int(seed_value))
         if seed < 0 or seed > MAX_SEED:
             raise ValueError("Shot %d seed is outside the uint64 range." % index)
+        prompt_choice_seed = _derived_seed(prompt_seed, index, shot_id)
+        scene_prompt, dynamic_prompt = _resolve_dynamic_prompt(
+            scene_prompt_template, prompt_choice_seed,
+            "%d:%s" % (index, shot_id))
+        prompt = "\n\n".join(
+            part for part in (prompt_prefix, scene_prompt) if part)
 
         shot = {
             "index": index,
@@ -5657,6 +5839,17 @@ def _normalize_plan(
             "audio_start_seconds": generation_start_frame / float(FPS),
             "audio_duration_seconds": raw_frames / float(FPS),
         }
+        if dynamic_prompt:
+            # Preserve author intent separately from the exact prompt sent to
+            # H3.  Checkpoints and review candidates therefore remain fully
+            # reproducible without replacing the editable Plan template.
+            shot["scene_prompt_template"] = scene_prompt_template
+            shot["prompt_template_hash"] = hashlib.sha256(
+                "\n\n".join(part for part in (
+                    prompt_prefix, scene_prompt_template) if part).encode(
+                        "utf-8")
+            ).hexdigest()
+            shot["prompt_choice_seed"] = prompt_choice_seed
         # Scene-local audio generation axes are optional. Their absence is the
         # exact stable spelling of "inherit Chain Policy"; final audio remains
         # a Plan-wide assembly decision.
@@ -5780,13 +5973,23 @@ def _normalize_plan(
         "shots": shots,
         "compatibility": compatibility,
         "segment_crf": segment_crf,
+        "prompt_seed": prompt_seed,
         "total_delivered_frames": stitched_frames,
     }
+    plan_shot_contracts = []
+    for shot in shots:
+        contract = {
+            key: value for key, value in shot.items()
+            if key not in (
+                "prompt", "scene_prompt", "scene_prompt_template",
+                "prompt_choice_seed")
+        }
+        if "prompt_template_hash" in shot:
+            contract["prompt_hash"] = shot["prompt_template_hash"]
+        plan_shot_contracts.append(contract)
     plan["plan_hash"] = _fingerprint({
         "compatibility": compatibility,
-        "shots": [{k: v for k, v in shot.items()
-                   if k not in ("prompt", "scene_prompt")}
-                  for shot in shots],
+        "shots": plan_shot_contracts,
     })
     continuation_summary = (
         resolved_continuation_modes[0]
@@ -6268,12 +6471,20 @@ def _archive_media_metadata(archives: Any) -> dict[str, str]:
 
 def _prompt_fields(plan: dict[str, Any], index: int) -> dict[str, Any]:
     shot = plan["shots"][int(index) - 1]
-    return {
+    fields = {
         "prompt_prefix": str(plan.get("prompt_prefix") or ""),
         "scene_prompt": str(shot.get("scene_prompt") or ""),
         "prompt": str(shot.get("prompt") or ""),
         "prompt_hash": str(shot["prompt_hash"]),
     }
+    if "scene_prompt_template" in shot:
+        fields["scene_prompt_template"] = str(
+            shot.get("scene_prompt_template") or "")
+        fields["prompt_template_hash"] = str(
+            shot.get("prompt_template_hash") or "")
+        fields["prompt_choice_seed"] = int(
+            shot.get("prompt_choice_seed", 0))
+    return fields
 
 
 def _tensor_cpu_clone(value: Any) -> Any:
@@ -6735,7 +6946,8 @@ def _public_segment(value: dict[str, Any]) -> dict[str, Any]:
         "generated_audio", "generated_audio_sha256",
         "raw_frames", "delivered_frames", "history_hash",
         "scene_dependency", "reference_cache",
-        "prompt_prefix", "scene_prompt", "prompt", "prompt_hash", "archives",
+        "prompt_prefix", "scene_prompt", "scene_prompt_template", "prompt",
+        "prompt_hash", "prompt_template_hash", "prompt_choice_seed", "archives",
         "seed", "steps", "continuation_mode", "context_length",
         "audio_context_length", "context_spatial_proxy",
         "source_reference", "generated_continuity", "source_audio_target",
@@ -10611,7 +10823,9 @@ class MiniMaxH3ChainPlan:
                                "media is connected elsewhere; this JSON only "
                                "mentions native @tags, Tagged Picture semantic "
                                "anchors such as #hero[2.50s], or native "
-                               "<Picture/Video/Audio N> labels."}),
+                               "<Picture/Video/Audio N> labels. Scene prompts "
+                               "may use {first option|second option}; Plan "
+                               "resolves each group from prompt_seed."}),
                 "run_name": ("STRING", {
                     "default": "h3_chain",
                     "tooltip": "Identity of one render history and its folder "
@@ -10829,6 +11043,16 @@ class MiniMaxH3ChainPlan:
                                "soundtrack, source-audio reference, generated "
                                "audio continuity, and automatic audio context "
                                "in one connection."}),
+                "prompt_seed": ("INT", {
+                    "default": 0, "min": 0, "max": MAX_SEED,
+                    "control_after_generate": True,
+                    "tooltip": "Independent random-alternative seed for "
+                               "{one|two} groups in scene prompts. Its normal "
+                               "after-generate control defaults to Randomize, "
+                               "so each queued run can select fresh text. It "
+                               "never changes sampler/noise seeds. Set its "
+                               "after-generate mode to Fixed to reproduce the "
+                               "same alternatives."}),
             },
         }
 
@@ -10859,6 +11083,7 @@ class MiniMaxH3ChainPlan:
               audio_context_length, default_duration_seconds, default_steps,
               base_seed, segment_crf, video_blend_frames=0,
               continuation_mode="guide",
+              prompt_seed=0,
               plan_json_input=None, chain_policy=None):
         effective_plan_json = (
             plan_json_input
@@ -10871,7 +11096,7 @@ class MiniMaxH3ChainPlan:
             anchor_mode, crop, audio_mode, audio_context_length,
             default_duration_seconds, default_steps, base_seed, segment_crf,
             generation_fingerprint, video_blend_frames, continuation_mode,
-            chain_policy)
+            chain_policy, prompt_seed)
         return (plan, plan["summary"], len(plan["shots"]),
                 plan["compatibility"]["width"],
                 plan["compatibility"]["height"],
@@ -13565,6 +13790,14 @@ class MiniMaxH3ChainSegmentSave:
                 "scene_dependency_hash": scene_dependency["generation_hash"],
                 "prompt_prefix": str(plan.get("prompt_prefix") or ""),
                 "scene_prompt": str(shot.get("scene_prompt") or ""),
+                **({
+                    "scene_prompt_template": str(
+                        shot.get("scene_prompt_template") or ""),
+                    "prompt_template_hash": str(
+                        shot.get("prompt_template_hash") or ""),
+                    "prompt_choice_seed": str(
+                        shot.get("prompt_choice_seed", 0)),
+                } if "scene_prompt_template" in shot else {}),
                 "prompt": str(shot["prompt"]),
                 "prompt_hash": str(shot["prompt_hash"]),
                 "seed": str(shot["seed"]),
@@ -13955,7 +14188,8 @@ def _select_review_candidate(
                 "The selected candidate was generated from a different "
                 "predecessor checkpoint.")
     selected_plan = _plan_with_review_revision(
-        plan, index, str(selected.get("scene_prompt") or ""),
+        plan, index, str(selected.get(
+            "scene_prompt_template", selected.get("scene_prompt")) or ""),
         int(selected.get("seed", 0)), int(selected.get("raw_frames", 0)))
     expected_history = _history_hash(selected_plan, index)
     if str(selected.get("history_hash") or "") != expected_history:
@@ -14286,7 +14520,9 @@ class MiniMaxH3ChainReview:
             revised_segment = dict(segment)
             revised_segment["_h3_review_decision"] = {
                 "action": "retry",
-                "scene_prompt": shot.get("scene_prompt", shot["prompt"]),
+                "scene_prompt": shot.get(
+                    "scene_prompt_template",
+                    shot.get("scene_prompt", shot["prompt"])),
                 "seed": next_seed,
                 "raw_frames": int(shot["raw_frames"]),
                 "candidate_batch": {
@@ -17936,7 +18172,9 @@ async def _submit_review_decision(request):
                        if isinstance(selected_segment, dict)
                        else decision.get(
                            "raw_frames", pending["current_length"]))
-    response_prompt = (selected_segment.get("scene_prompt")
+    response_prompt = (selected_segment.get(
+                           "scene_prompt_template",
+                           selected_segment.get("scene_prompt"))
                        if isinstance(selected_segment, dict)
                        else decision.get("scene_prompt", pending.get(
                            "public", {}).get("scene_prompt", "")))
@@ -18186,7 +18424,9 @@ def _checkpoint_plan_revision(segment: dict[str, Any]) -> dict[str, Any]:
         "scene_id": str(segment.get("id") or ""),
         "revision": str(segment.get("revision") or ""),
         "prompt_prefix": str(segment.get("prompt_prefix") or ""),
-        "scene_prompt": str(segment.get("scene_prompt") or ""),
+        "scene_prompt": str(segment.get(
+            "scene_prompt_template", segment.get("scene_prompt")) or ""),
+        "effective_scene_prompt": str(segment.get("scene_prompt") or ""),
         "seed": str(segment.get("seed") or "0"),
         "steps": int(segment.get("steps", 0)),
         "raw_frames": int(segment.get("raw_frames", 0)),

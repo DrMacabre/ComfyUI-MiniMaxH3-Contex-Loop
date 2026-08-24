@@ -4,6 +4,14 @@ Newest first. This file keeps release history out of the onboarding README.
 
 ## Unreleased — Deferred checkpoint upscaling
 
+- Added deterministic random alternatives in scene prompts with ComfyUI-style
+  `{first|second}` syntax. A dedicated Plan `prompt_seed` uses the normal
+  after-generate control and defaults to Randomize, while sampler seeds remain
+  completely independent. The authored template, selected text, and prompt
+  choice seed are saved together. Resume treats a new choice from the same
+  template as neutral for completed predecessors, but still rejects an actual
+  template edit.
+
 - Reference chips in both rich scene-prompt editors are now directly
   editable. Clicking a chip can replace that exact occurrence with another
   compatible connected reference, switch a tagged picture between native
