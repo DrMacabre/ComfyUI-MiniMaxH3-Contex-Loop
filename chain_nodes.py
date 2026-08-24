@@ -204,7 +204,6 @@ EXTERNAL_CONTEXT_TYPE = "H3_CHAIN_EXTERNAL_CONTEXT"
 REFERENCE_SCHEDULE_TYPE = "H3_REFERENCE_SCHEDULE"
 TAGGED_REFERENCE_TYPE = "H3_TAGGED_REFERENCES"
 SEMANTIC_ANCHOR_DRAFT_TYPE = "H3_SEMANTIC_ANCHOR_DRAFT"
-SEMANTIC_ANCHOR_BUNDLE_TYPE = "H3_SEMANTIC_ANCHOR_BUNDLE"
 SEMANTIC_PRESENTATION_TYPE = "H3_SEMANTIC_PRESENTATION"
 LAZY_MOTION_SOURCE_TYPE = "H3_LAZY_MOTION_SOURCE"
 SOURCE_TIMELINE_TYPE = "H3_SOURCE_TIMELINE"
@@ -1382,12 +1381,24 @@ def _make_semantic_anchor_bundle(
     }
 
 
+def _reference_semantic_anchor_bundle(
+        references: Any) -> dict[str, Any] | None:
+    """Resolve Qwen anchors embedded in the tagged reference carrier."""
+    carried = (
+        references.get("semantic_anchors")
+        if isinstance(references, dict) else None)
+    return _semantic_anchor_bundle(carried) if carried is not None else None
+
+
 def _combined_reference_registry(
         references: Any, semantic_anchors: Any = None) -> dict[str, Any]:
     """Build one lineage token while keeping native and Qwen media separate."""
     entries = _tagged_reference_entries(references)
-    if semantic_anchors is not None:
-        bundle = _semantic_anchor_bundle(semantic_anchors)
+    bundle = (
+        _semantic_anchor_bundle(semantic_anchors)
+        if semantic_anchors is not None
+        else _reference_semantic_anchor_bundle(references))
+    if bundle is not None:
         entries = entries + _semantic_anchor_draft_entries(bundle)
     return _make_tagged_references(entries)
 
@@ -7818,7 +7829,7 @@ class MiniMaxH3SemanticAnchorBundle:
             "required": {
                 "anchors": (SEMANTIC_ANCHOR_DRAFT_TYPE, {
                     "tooltip": "Final Semantic Picture Anchor draft. This "
-                               "single bundle output connects to Tagged "
+                               "Bundle's references output connects to Tagged "
                                "Ref2VA, Plan Studio, and Run Manager."}),
                 "semantic_anchor_size": (list(SEMANTIC_ANCHOR_SIZES), {
                     "default": "512",
@@ -7839,14 +7850,12 @@ class MiniMaxH3SemanticAnchorBundle:
             },
         }
 
-    RETURN_TYPES = (
-        SEMANTIC_ANCHOR_BUNDLE_TYPE, TAGGED_REFERENCE_TYPE, "STRING", "STRING")
-    RETURN_NAMES = (
-        "semantic_anchors", "references", "reference_fingerprint", "status")
+    RETURN_TYPES = (TAGGED_REFERENCE_TYPE, "STRING", "STRING")
+    RETURN_NAMES = ("references", "reference_fingerprint", "status")
     OUTPUT_TOOLTIPS = (
-        "One scaled-on-demand semantic bundle for Tagged Ref2VA, Plan Studio, "
-        "and Run Manager.",
-        "Native Tagged references passed through unchanged for Tagged Ref2VA.",
+        "One reference carrier containing native @references plus Qwen-only "
+        "#anchor metadata. Use this single line for Tagged Ref2VA, Plan "
+        "Studio, and Run Manager.",
         "Combined native + semantic incremental fingerprint for H3 Chain Plan.",
         "Semantic count, native count, mode, size, and fingerprint.",
     )
@@ -7855,8 +7864,9 @@ class MiniMaxH3SemanticAnchorBundle:
     DESCRIPTION = (
         "Finalize any number of Qwen-only semantic pictures behind one graph "
         "socket, centralize their presentation scale/mode, optionally pass "
-        "the native Tagged registry through, and emit one resume-safe "
-        "generation fingerprint. Semantic pictures remain outside native H3 "
+        "the native Tagged registry through the same references carrier, and "
+        "emit one resume-safe generation fingerprint. Semantic pictures "
+        "remain outside native H3 "
         "picture/video/audio capacity.")
 
     def bundle(self, anchors, semantic_anchor_size,
@@ -7880,7 +7890,11 @@ class MiniMaxH3SemanticAnchorBundle:
              combined["fingerprint"][:12]))
         bundle["combined_reference_fingerprint"] = combined["fingerprint"]
         bundle["reference_fingerprint_output"] = token
-        return bundle, native_registry, token, status
+        carrier = dict(native_registry)
+        carrier["semantic_anchors"] = bundle
+        carrier["combined_reference_fingerprint"] = combined["fingerprint"]
+        carrier["reference_fingerprint_output"] = token
+        return carrier, token, status
 
 
 class MiniMaxH3TaggedPictureReference:
@@ -9782,7 +9796,9 @@ class MiniMaxH3TaggedReferenceToVideo:
                        "Picture storyboard cue at 2.50 seconds into this "
                        "scene. Neither is a hard frame or spatial lock."})
         required["references"] = (TAGGED_REFERENCE_TYPE, {
-            "tooltip": "Final Tagged Picture/Video/Audio Ref chain. A source "
+            "tooltip": "Final Tagged Picture/Video/Audio reference line, "
+                       "normally from Semantic Anchor Bundle when semantic "
+                       "pictures are registered. A source "
                        "is active when its registered @tag occurs in the "
                        "resolved prompt. Tagged Pictures can additionally be "
                        "used through #tag[timestamp] semantic checkpoints or "
@@ -9835,11 +9851,6 @@ class MiniMaxH3TaggedReferenceToVideo:
                            "picture masters for target-resolution pass 2. "
                            "Deferred upscale discovers the cache from the "
                            "source checkpoint fingerprint."}),
-            "semantic_anchors": (SEMANTIC_ANCHOR_BUNDLE_TYPE, {
-                "tooltip": "Dedicated output from Semantic Anchor Bundle. "
-                           "Its Qwen-only pictures, centralized size, and "
-                           "presentation mode stay separate from native H3 "
-                           "picture/video/audio capacity."}),
         }
         return {"required": ordered, "optional": optional}
 
@@ -9886,13 +9897,11 @@ class MiniMaxH3TaggedReferenceToVideo:
               ref_image_size="match", state=None,
               reference_policy="strict", semantic_anchor_size="512",
               semantic_anchor_mode="timestamped_video",
-              cache_for_upscale=True, semantic_anchors=None):
+              cache_for_upscale=True):
         if GraphBuilder is None:
             raise RuntimeError(
                 "Tagged H3 Ref2VA requires ComfyUI GraphBuilder.")
-        anchor_bundle = (
-            _semantic_anchor_bundle(semantic_anchors)
-            if semantic_anchors is not None else None)
+        anchor_bundle = _reference_semantic_anchor_bundle(references)
         if anchor_bundle is not None:
             semantic_anchor_size = anchor_bundle["semantic_anchor_size"]
             semantic_anchor_mode = anchor_bundle["semantic_anchor_mode"]
@@ -11260,8 +11269,7 @@ def _preflight_chain(
         plan: Any, *, source_timeline: Any = None, source_audio: Any = None,
         start_clip: int = 1, scene_range: Any = "",
         verify_resume_history: bool = True, tagged_references: Any = None,
-        reference_schedule: Any = None,
-        semantic_anchors: Any = None) -> tuple[dict[str, Any], dict[str, Any]]:
+        reference_schedule: Any = None) -> tuple[dict[str, Any], dict[str, Any]]:
     report: dict[str, Any] = {
         "version": PREFLIGHT_VERSION, "ok": False, "status": "error",
         "errors": [], "warnings": [], "info": [], "scenes": [],
@@ -11343,8 +11351,8 @@ def _preflight_chain(
         route = ("tagged" if tagged_references is not None else
                  "scheduled" if reference_schedule is not None else "none")
         semantic_bundle = (
-            _semantic_anchor_bundle(semantic_anchors)
-            if semantic_anchors is not None else None)
+            _reference_semantic_anchor_bundle(tagged_references)
+            if tagged_references is not None else None)
         report["references"] = {"route": route, "fingerprint": "",
                                 "registered_tags": [],
                                 "semantic_route": (
@@ -11361,10 +11369,14 @@ def _preflight_chain(
                 if route == "scheduled" else [])
             registered = sorted({tag for entry in entries
                                  for tag in _reference_entry_tags(entry)})
+            reference_fingerprint = str(
+                (references or semantic_bundle or {}).get("fingerprint") or "")
+            if route == "tagged" and references is not None:
+                reference_fingerprint = str(
+                    _combined_reference_registry(
+                        references, semantic_bundle)["fingerprint"])
             report["references"].update({
-                "fingerprint": str(
-                    (references or semantic_bundle or {}).get(
-                        "fingerprint") or ""),
+                "fingerprint": reference_fingerprint,
                 "registered_tags": registered,
             })
             semantic_entries = (
@@ -11840,12 +11852,6 @@ class MiniMaxH3ChainPlanStudio:
                     "tooltip": "Optional active prompt-driven reference registry."}),
                 "reference_schedule": (REFERENCE_SCHEDULE_TYPE, {
                     "tooltip": "Optional legacy scheduled reference registry."}),
-                # Append new sockets after the original optional inputs so
-                # older serialized workflows retain their positional layout.
-                "semantic_anchors": (SEMANTIC_ANCHOR_BUNDLE_TYPE, {
-                    "tooltip": "Optional dedicated Qwen-only semantic bundle. "
-                               "Its #tags are validated separately from "
-                               "native @tag capacity."}),
             },
         }
 
@@ -11867,15 +11873,13 @@ class MiniMaxH3ChainPlanStudio:
 
     def passthrough(self, plan, source_timeline=None, source_audio=None,
                     start_clip=1, scene_range="", verify_resume_history=True,
-                    tagged_references=None, reference_schedule=None,
-                    semantic_anchors=None):
+                    tagged_references=None, reference_schedule=None):
         prepared, report = _preflight_chain(
             plan, source_timeline=source_timeline, source_audio=source_audio,
             start_clip=start_clip, scene_range=scene_range,
             verify_resume_history=verify_resume_history,
             tagged_references=tagged_references,
-            reference_schedule=reference_schedule,
-            semantic_anchors=semantic_anchors)
+            reference_schedule=reference_schedule)
         try:
             source_previews = _register_plan_studio_source_previews(
                 prepared, report, tagged_references, reference_schedule,
@@ -11965,12 +11969,11 @@ class MiniMaxH3ChainRunManager:
                        "automatic promotion; otherwise exactly one loader "
                        "asset assigned the Source track role becomes the "
                        "recoverable Source Timeline automatically."})
-        inputs["optional"]["semantic_anchors"] = (
-            SEMANTIC_ANCHOR_BUNDLE_TYPE, {
-                "tooltip": "One Semantic Anchor Bundle replaces individual "
-                           "Run Manager asset sockets for its Qwen-only "
-                           "pictures. The interface discovers and archives "
-                           "the bundle's upstream image loaders."})
+        inputs["optional"]["tagged_references"] = (
+            TAGGED_REFERENCE_TYPE, {
+                "tooltip": "Final reference line from Semantic Anchor Bundle. "
+                           "The manager discovers and archives the bundle's "
+                           "upstream semantic image loaders."})
         return inputs
 
     # The timeline output is appended so the established Plan output remains
@@ -11994,9 +11997,10 @@ class MiniMaxH3ChainRunManager:
 
     def passthrough(self, plan, archive_images, archive_audio, archive_video,
                     asset_bindings_json, source_timeline=None,
-                    semantic_anchors=None, **_assets):
-        if semantic_anchors is not None:
-            _semantic_anchor_bundle(semantic_anchors)
+                    tagged_references=None, **_assets):
+        if tagged_references is not None:
+            _tagged_reference_entries(tagged_references)
+            _reference_semantic_anchor_bundle(tagged_references)
         bindings = []
         try:
             bindings = json.loads(str(asset_bindings_json or "[]"))

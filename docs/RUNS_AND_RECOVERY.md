@@ -419,11 +419,12 @@ Connect loader outputs to Run Manager's dynamic **Connect loader asset** socket,
 up to 12 assets. Classify each as Picture, Video, Audio reference, or Source
 track so a short voice reference cannot be confused with a project soundtrack.
 
-Semantic pictures use the dedicated **semantic_anchors** socket instead. Wire
-all Semantic Picture Anchor nodes into one Semantic Anchor Bundle, then connect
-that one Bundle output to Run Manager. The interface discovers the Bundle's
-upstream image loaders and archives/restores them as individual picture assets
-without consuming the 12 direct loader sockets.
+Wire all Semantic Picture Anchor nodes into one Semantic Anchor Bundle, then
+connect the Bundle's **references** output to Run Manager's
+**tagged_references** socket. The same line can feed Tagged Ref2VA and Plan
+Studio. The interface discovers the Bundle's upstream image loaders and
+archives/restores them as individual picture assets without consuming the 12
+direct loader sockets.
 
 - Archive images and audio default on.
 - Archive video defaults off because video references can be large.

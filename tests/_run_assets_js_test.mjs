@@ -103,7 +103,7 @@ const semanticBundle = {
     type: "MiniMaxH3SemanticAnchorBundle",
     title: "Semantic Bundle",
     inputs: [{name: "anchors", link: 16}],
-    outputs: [{type: "H3_SEMANTIC_ANCHOR_BUNDLE"}],
+    outputs: [{type: "H3_TAGGED_REFERENCES"}],
 };
 nodes.push(semanticImageA, semanticImageB, semanticA, semanticB, semanticBundle);
 for (const item of [semanticA, semanticB, semanticBundle]) item.graph = graph;
@@ -115,7 +115,7 @@ graph.links[17] = {origin_id: 972, origin_slot: 0};
 const semanticManager = {
     graph,
     properties: {},
-    inputs: [{name: "semantic_anchors", link: 17}],
+    inputs: [{name: "tagged_references", link: 17}],
 };
 const semanticBindings = collectAssetBindings(
     semanticManager, () => `semantic-${++ordinal}`);

@@ -417,11 +417,14 @@ for index in range(9):
     native_capacity = chain.MiniMaxH3TaggedPictureReference().add(
         tagged_picture, "native_%d" % index,
         previous=native_capacity)[0]
-semantic_bundle, native_passthrough, combined_token, bundle_status = (
+native_passthrough, combined_token, bundle_status = (
     chain.MiniMaxH3SemanticAnchorBundle().bundle(
         semantic_draft, "768", "picture_storyboard",
         references=native_capacity))
-assert native_passthrough is native_capacity
+semantic_bundle = native_passthrough["semantic_anchors"]
+assert native_passthrough is not native_capacity
+assert native_passthrough["entries"] is native_capacity["entries"]
+assert native_passthrough["semantic_anchors"] is semantic_bundle
 assert semantic_bundle["kind"] == "bundle"
 assert semantic_bundle["semantic_anchor_size"] == "768"
 assert semantic_bundle["semantic_anchor_mode"] == "picture_storyboard"
@@ -434,8 +437,8 @@ capacity_prompt = " ".join(
     ["#anchor_%d[0.00s]" % index for index in range(10)])
 _capacity_compiled, _capacity_summary, capacity_bindings = (
     chain._compile_tagged_reference_prompt(
-        native_capacity, 1, 1, capacity_prompt,
-        semantic_anchor_bundle=semantic_bundle))
+        native_passthrough, 1, 1, capacity_prompt,
+        semantic_anchor_bundle=native_passthrough["semantic_anchors"]))
 assert len(capacity_bindings["pictures"]) == 9
 assert len(capacity_bindings["semantic_anchors"]) == 10
 assert capacity_bindings["semantic_anchor_mode"] == "picture_storyboard"
@@ -735,11 +738,10 @@ try:
     assert storyboard_expansion["result"][4] != semantic_expansion["result"][4]
 
     dedicated_expansion = chain.MiniMaxH3TaggedReferenceToVideo().apply(
-        "clip", "video-vae", "audio-vae", native_capacity, 1, 1,
+        "clip", "video-vae", "audio-vae", native_passthrough, 1, 1,
         "Use @native_0 and #anchor_0[0.00s].",
         64, 32, 22, "match", semantic_anchor_size="384",
-        semantic_anchor_mode="timestamped_video",
-        semantic_anchors=semantic_bundle)
+        semantic_anchor_mode="timestamped_video")
     dedicated_inputs = dedicated_expansion["expand"][
         "SemanticAnchors"]["inputs"]
     assert dedicated_inputs["presentation"]["semantic_anchor_size"] == "768"
