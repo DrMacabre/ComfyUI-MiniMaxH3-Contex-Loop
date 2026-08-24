@@ -4,6 +4,13 @@ Newest first. This file keeps release history out of the onboarding README.
 
 ## Unreleased — Deferred checkpoint upscaling
 
+- Reference insertion from the Scene Prompt Editor's top menu now preserves
+  the last rich-text or plain-text selection, so a chosen reference replaces
+  the selection or appears at the requested caret instead of jumping to the
+  prompt start. `#` autocomplete and the reference tray now also include
+  dedicated semantic-only picture anchors and select their timestamp for
+  immediate editing.
+
 - Added deterministic random alternatives in scene prompts with ComfyUI-style
   `{first|second}` syntax. A dedicated Plan `prompt_seed` uses the normal
   after-generate control and defaults to Randomize, while sampler seeds remain
