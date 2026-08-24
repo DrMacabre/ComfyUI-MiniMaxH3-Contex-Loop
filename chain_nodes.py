@@ -5363,6 +5363,61 @@ def _input_root() -> str:
     return os.path.abspath(folder_paths.get_input_directory())
 
 
+def _run_manager_source_track_path(binding: Any) -> str:
+    if not isinstance(binding, dict):
+        raise ValueError("Run Manager source-track binding is invalid.")
+    value = str(binding.get("original_value") or "").strip()
+    if value.endswith("[input]"):
+        value = value[:-7].rstrip()
+    elif value.endswith("[output]") or value.endswith("[temp]"):
+        raise ValueError(
+            "Run Manager source_track must come from a ComfyUI input "
+            "loader, not output or temporary media.")
+    if not value:
+        raise ValueError(
+            "Run Manager source_track has no loader filename.")
+    root = os.path.realpath(_input_root())
+    path = os.path.realpath(os.path.abspath(os.path.join(root, value)))
+    try:
+        inside = os.path.commonpath((root, path)) == root
+    except ValueError:
+        inside = False
+    if not inside or not os.path.isfile(path):
+        raise ValueError(
+            "Run Manager source_track is missing from the ComfyUI input "
+            "folder: %s" % value)
+    return path
+
+
+def _run_manager_source_track_timeline(
+        bindings: Any) -> dict[str, Any] | None:
+    if not isinstance(bindings, list):
+        raise ValueError("asset_bindings_json must contain a list")
+    tracks = [
+        binding for binding in bindings
+        if isinstance(binding, dict)
+        and str(binding.get("role") or "") == "source_track"
+    ]
+    if not tracks:
+        return None
+    if len(tracks) != 1:
+        raise ValueError(
+            "Run Manager found %d source_track assets; exactly one is "
+            "required for automatic Source Timeline promotion." %
+            len(tracks))
+    binding = tracks[0]
+    timeline = _make_source_timeline(
+        audio_path=_run_manager_source_track_path(binding),
+        embedded_audio="ignore",
+        source_route="Run Manager source_track asset")
+    timeline["recovery"] = dict(timeline.get("recovery") or {})
+    timeline["recovery"].update({
+        "source_route": "run_manager_source_track",
+        "asset_binding_id": str(binding.get("binding_id") or ""),
+    })
+    return _validate_source_timeline(timeline, require_runtime=True)
+
+
 def _run_dir(plan: dict[str, Any]) -> str:
     root = _output_root()
     path = os.path.abspath(os.path.join(root, "h3_chains", plan["run_name"]))
@@ -11277,9 +11332,10 @@ class MiniMaxH3ChainRunManager:
                            "file for this run. The manager reads the graph "
                            "link without decoding or retaining the media."})
         inputs["optional"]["source_timeline"] = (SOURCE_TIMELINE_TYPE, {
-            "tooltip": "Primary 0.5 media wire. The manager materializes "
-                       "deferred AUDIO once, persists recovery metadata, and "
-                       "passes the path-backed timeline onward."})
+            "tooltip": "Optional explicit media wire. It takes priority over "
+                       "automatic promotion; otherwise exactly one loader "
+                       "asset assigned the Source track role becomes the "
+                       "recoverable Source Timeline automatically."})
         return inputs
 
     # The timeline output is appended so the established Plan output remains
@@ -11288,7 +11344,8 @@ class MiniMaxH3ChainRunManager:
     RETURN_NAMES = ("plan", "source_timeline")
     OUTPUT_TOOLTIPS = (
         "The connected Plan with JSON-safe Source Timeline recovery metadata "
-        "when the primary media wire is connected.",
+        "from either the explicit media wire or the promoted Source track "
+        "asset.",
         "Path-backed Source Timeline for Loop Start, Tagged Motion, preview, "
         "and final assembly.",
     )
@@ -11296,12 +11353,31 @@ class MiniMaxH3ChainRunManager:
     CATEGORY = "conditioning/minimax/contex_loop"
     DESCRIPTION = ("Browse output/h3_chains projects; restore a saved run's "
                    "Plan and loader-backed reference assets; optionally keep "
-                   "content-addressed image, audio, and video fallbacks.")
+                   "content-addressed image, audio, and video fallbacks; and "
+                   "promote one Source track asset into the Plan's recoverable "
+                   "Source Timeline.")
 
     def passthrough(self, plan, archive_images, archive_audio, archive_video,
                     asset_bindings_json, source_timeline=None, **_assets):
+        bindings = []
+        try:
+            bindings = json.loads(str(asset_bindings_json or "[]"))
+            if not isinstance(bindings, list):
+                raise ValueError("asset_bindings_json must contain a list")
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            _LOG.warning(
+                "H3 Run Manager could not read asset bindings: %s", exc)
+            bindings = []
         managed_plan = plan
         managed_timeline = source_timeline
+        if managed_timeline is None:
+            try:
+                managed_timeline = _run_manager_source_track_timeline(
+                    bindings)
+            except (OSError, TypeError, ValueError) as exc:
+                _LOG.warning(
+                    "H3 Run Manager could not promote source_track to "
+                    "Source Timeline: %s", exc)
         if managed_timeline is None and isinstance(
                 plan.get("source_timeline"), dict):
             managed_timeline = _source_timeline_from_recovery(
@@ -11320,9 +11396,6 @@ class MiniMaxH3ChainRunManager:
                 os.path.join(_run_dir(plan), "source_timeline.json"),
                 managed_plan["source_timeline"])
         try:
-            bindings = json.loads(str(asset_bindings_json or "[]"))
-            if not isinstance(bindings, list):
-                raise ValueError("asset_bindings_json must contain a list")
             if bindings:
                 result = RunAssetStore(_output_root(), _input_root()).save(
                     plan["run_name"], bindings, {
@@ -11334,7 +11407,7 @@ class MiniMaxH3ChainRunManager:
                     _LOG.warning(
                         "H3 Run Manager asset archive warnings for %s: %s",
                         plan["run_name"], "; ".join(result["warnings"]))
-        except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        except (OSError, TypeError, ValueError) as exc:
             # Recovery metadata is supplementary and must never waste a long
             # H3 generation that already reached this pass-through.
             _LOG.warning("H3 Run Manager could not archive assets: %s", exc)
