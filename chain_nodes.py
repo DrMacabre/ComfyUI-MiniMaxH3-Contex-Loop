@@ -11977,9 +11977,12 @@ class MiniMaxH3ChainRunManager:
                        "recoverable Source Timeline automatically."})
         inputs["optional"]["tagged_references"] = (
             TAGGED_REFERENCE_TYPE, {
-                "tooltip": "Final reference line from Semantic Anchor Bundle. "
-                           "The manager discovers and archives the bundle's "
-                           "upstream semantic image loaders."})
+                "tooltip": "Final Tagged reference line. Connect it directly "
+                           "from the last Tagged Picture, Video, or Audio Ref, "
+                           "or from Semantic Anchor Bundle when semantic "
+                           "pictures are used. The manager also discovers and "
+                           "archives any semantic image loaders carried by "
+                           "that optional bundle."})
         return inputs
 
     # The timeline output is appended so the established Plan output remains
