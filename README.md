@@ -43,9 +43,10 @@ Restart ComfyUI, then:
 1. Open a maintained workflow from [`example_workflows/`](example_workflows/).
 2. Resolve missing model selections; models are not bundled.
 3. Give Plan a unique `run_name` and edit its scene prompts.
-   Use `{wide shot|close-up}` for random alternatives. Plan's independent
-   `prompt_seed` defaults to Randomize after each queue; set it to Fixed when
-   you need to reproduce the same choices without changing sampler seeds.
+   Use `{wide shot|close-up}` for alternatives. Each scene's **Prompt
+   alternatives** control can inherit Plan's fallback seed, keep a fixed scene
+   seed, or randomize that scene on every queue. These choices never change
+   sampler seeds, and the exact resolved choice is saved with the checkpoint.
 4. Keep **Guide** and **Generated audio** for a simple first run.
 5. Queue the graph. Preflight checks timing, media, references, compatibility,
    and resume state before H3 loads.

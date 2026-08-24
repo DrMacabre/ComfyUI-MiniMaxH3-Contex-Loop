@@ -14,6 +14,9 @@ export const CONTEXT_SPATIAL_PROXY_MODES = Object.freeze([
     "off", "rgb_5_6", "latent_5_6",
 ]);
 export const SCENE_LORA_ROUTES = Object.freeze(["base", "a", "b", "c", "d"]);
+export const SCENE_PROMPT_SEED_MODES = Object.freeze([
+    "inherit", "fixed", "randomize",
+]);
 const RETIRED_CONTINUATION_MODES = Object.freeze({
     feathered_av_rgb: "feathered_av",
 });
@@ -152,6 +155,48 @@ export function randomSceneSeed(randomSource = globalThis.crypto) {
     return ((BigInt(words[0]) << 32n) | BigInt(words[1])).toString();
 }
 
+export function scenePromptSeedMode(shot = {}) {
+    const raw = shot?.prompt_seed_mode;
+    if (raw == null || String(raw).trim() === "") {
+        return Object.hasOwn(shot ?? {}, "prompt_seed") ? "fixed" : "inherit";
+    }
+    const mode = String(raw).trim().toLowerCase();
+    if (!SCENE_PROMPT_SEED_MODES.includes(mode)) {
+        throw new Error(
+            `Prompt seed mode must be one of ${SCENE_PROMPT_SEED_MODES.join(", ")}.`,
+        );
+    }
+    return mode;
+}
+
+export function setScenePromptSeedMode(
+    shot, requested, randomSource = globalThis.crypto,
+) {
+    const mode = String(requested ?? "inherit").trim().toLowerCase();
+    if (!SCENE_PROMPT_SEED_MODES.includes(mode)) {
+        throw new Error(
+            `Prompt seed mode must be one of ${SCENE_PROMPT_SEED_MODES.join(", ")}.`,
+        );
+    }
+    if (mode === "inherit") {
+        delete shot.prompt_seed_mode;
+        delete shot.prompt_seed;
+    } else if (mode === "randomize") {
+        shot.prompt_seed_mode = "randomize";
+        delete shot.prompt_seed;
+    } else {
+        shot.prompt_seed_mode = "fixed";
+        if (!Object.hasOwn(shot, "prompt_seed")) {
+            shot.prompt_seed = randomSceneSeed(randomSource);
+        } else {
+            shot.prompt_seed = normalizedSeedInteger(
+                shot.prompt_seed, "Prompt seed",
+            ).toString();
+        }
+    }
+    return mode;
+}
+
 function clone(value) {
     return JSON.parse(JSON.stringify(value));
 }
@@ -191,7 +236,7 @@ function protectSeedIntegers(source) {
         } catch (_error) {
             continue;
         }
-        if (key !== "seed") {
+        if (key !== "seed" && key !== "prompt_seed") {
             continue;
         }
 
@@ -280,6 +325,28 @@ export function parsePlanJson(source) {
             const route = sceneLoRARoute(normalized);
             if (route === "base") delete normalized.lora_route;
             else normalized.lora_route = route;
+        }
+        if (Object.hasOwn(normalized, "prompt_seed_mode")
+                || Object.hasOwn(normalized, "prompt_seed")) {
+            const mode = scenePromptSeedMode(normalized);
+            if (mode === "inherit") {
+                delete normalized.prompt_seed_mode;
+                delete normalized.prompt_seed;
+            } else if (mode === "randomize") {
+                normalized.prompt_seed_mode = "randomize";
+                delete normalized.prompt_seed;
+            } else {
+                if (!Object.hasOwn(normalized, "prompt_seed")) {
+                    throw new Error(
+                        `Scene ${offset + 1} fixed prompt seed needs prompt_seed.`,
+                    );
+                }
+                normalized.prompt_seed_mode = "fixed";
+                normalized.prompt_seed = normalizedSeedInteger(
+                    normalized.prompt_seed,
+                    `Scene ${offset + 1} prompt seed`,
+                ).toString();
+            }
         }
         return normalized;
     });

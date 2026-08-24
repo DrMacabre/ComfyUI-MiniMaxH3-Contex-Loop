@@ -11,13 +11,14 @@ Newest first. This file keeps release history out of the onboarding README.
   dedicated semantic-only picture anchors and select their timestamp for
   immediate editing.
 
-- Added deterministic random alternatives in scene prompts with ComfyUI-style
-  `{first|second}` syntax. A dedicated Plan `prompt_seed` uses the normal
-  after-generate control and defaults to Randomize, while sampler seeds remain
-  completely independent. The authored template, selected text, and prompt
-  choice seed are saved together. Resume treats a new choice from the same
-  template as neutral for completed predecessors, but still rejects an actual
-  template edit.
+- Added deterministic alternatives in scene prompts with ComfyUI-style
+  `{first|second}` syntax. Every scene now has a **Prompt alternatives** policy:
+  inherit the Plan fallback, use an exact fixed scene seed, or generate a fresh
+  choice each time that Plan is queued. Sampler seeds remain completely
+  independent. The authored template, selected text, and exact choice seed are
+  saved together. Resume treats a new choice or policy from the same template
+  as neutral for completed predecessors, but still rejects an actual template
+  edit.
 
 - Reference chips in both rich scene-prompt editors are now directly
   editable. Clicking a chip can replace that exact occurrence with another
