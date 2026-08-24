@@ -12145,59 +12145,114 @@ def _register_plan_studio_source_previews(
     return payload
 
 
+_PLAN_STUDIO_AUTHORING_FIELDS = (
+    "plan_json", "run_name", "generation_fingerprint", "width", "height",
+    "context_length", "encode_mode", "anchor_mode", "crop", "audio_mode",
+    "audio_context_length", "default_duration_seconds", "default_steps",
+    "base_seed", "segment_crf", "video_blend_frames", "continuation_mode",
+)
+
+
+def _plan_studio_preflight_input_types():
+    return {
+        "source_timeline": (SOURCE_TIMELINE_TYPE, {
+            "tooltip": "Optional source media for the shared model-free preflight."}),
+        "source_audio": ("AUDIO", {
+            "tooltip": "Legacy source route; do not connect with Source Timeline."}),
+        "start_clip": ("INT", {"default": 1, "min": 1,
+            "max": MAX_SHOTS, "tooltip": "Resume scene to preflight."}),
+        "scene_range": ("STRING", {"default": "",
+            "tooltip": "Optional contiguous scene selection to preflight."}),
+        "verify_resume_history": ("BOOLEAN", {
+            "default": True,
+            "tooltip": "When resuming after scene 1, compare every "
+                       "saved predecessor dependency with the active "
+                       "Plan. Disable only for an intentional advanced "
+                       "recovery from known artifacts."}),
+        "tagged_references": (TAGGED_REFERENCE_TYPE, {
+            "tooltip": "Optional active prompt-driven reference registry."}),
+        "reference_schedule": (REFERENCE_SCHEDULE_TYPE, {
+            "tooltip": "Optional legacy scheduled reference registry."}),
+    }
+
+
 class MiniMaxH3ChainPlanStudio:
     @classmethod
     def INPUT_TYPES(cls):
+        plan_inputs = MiniMaxH3ChainPlan.INPUT_TYPES()
+        optional = {
+            # Keep plan first and the established preflight entries in their
+            # original order. Existing workflow input slots and widget values
+            # therefore survive the required-to-optional migration.
+            "plan": (PLAN_TYPE, {
+                "tooltip": "Optional H3 Chain Plan. When connected, Plan "
+                           "Studio edits and mirrors that Plan. When omitted, "
+                           "the Studio builds and outputs its own complete "
+                           "validated Plan from the Plan settings tab."}),
+            **_plan_studio_preflight_input_types(),
+        }
+        for name in _PLAN_STUDIO_AUTHORING_FIELDS:
+            optional[name] = plan_inputs["required"][name]
+        optional["chain_policy"] = plan_inputs["optional"]["chain_policy"]
         return {
-            "required": {
-                "plan": (PLAN_TYPE, {
-                    "tooltip": "Connect the H3 Chain Plan output. Plan Studio "
-                               "provides an optional timeline-based authoring "
-                               "interface and writes edits back to the connected "
-                               "Plan; this socket passes the validated Plan "
-                               "through unchanged."}),
-            },
-            "optional": {
-                "source_timeline": (SOURCE_TIMELINE_TYPE, {
-                    "tooltip": "Optional source media for the shared model-free preflight."}),
-                "source_audio": ("AUDIO", {
-                    "tooltip": "Legacy source route; do not connect with Source Timeline."}),
-                "start_clip": ("INT", {"default": 1, "min": 1,
-                    "max": MAX_SHOTS, "tooltip": "Resume scene to preflight."}),
-                "scene_range": ("STRING", {"default": "",
-                    "tooltip": "Optional contiguous scene selection to preflight."}),
-                "verify_resume_history": ("BOOLEAN", {
-                    "default": True,
-                    "tooltip": "When resuming after scene 1, compare every "
-                               "saved predecessor dependency with the active "
-                               "Plan. Disable only for an intentional advanced "
-                               "recovery from known artifacts."}),
-                "tagged_references": (TAGGED_REFERENCE_TYPE, {
-                    "tooltip": "Optional active prompt-driven reference registry."}),
-                "reference_schedule": (REFERENCE_SCHEDULE_TYPE, {
-                    "tooltip": "Optional legacy scheduled reference registry."}),
-            },
+            "required": {},
+            "optional": optional,
         }
 
-    RETURN_TYPES = (PLAN_TYPE, PREFLIGHT_TYPE, "BOOLEAN", "STRING", "STRING")
-    RETURN_NAMES = ("plan", "preflight", "ready", "status", "report_json")
+    RETURN_TYPES = (
+        PLAN_TYPE, PREFLIGHT_TYPE, "BOOLEAN", "STRING", "STRING",
+        "STRING", "INT", "INT", "INT", "INT",
+    )
+    RETURN_NAMES = (
+        "plan", "preflight", "ready", "status", "report_json",
+        "plan_summary", "clip_count", "width", "height",
+        "video_blend_frames",
+    )
     OUTPUT_TOOLTIPS = (
-        "The connected validated Plan, unchanged at execution time.",
+        "The connected Plan unchanged, or the complete validated standalone "
+        "Plan authored by Studio.",
         "Structured model-free preflight report.",
         "True when no blocking preflight error remains.",
         "Concise error/warning count.",
         "JSON serialization of the structured report.",
+        "The same normalized timing and compatibility summary as H3 Chain Plan.",
+        "Number of scenes in the authored Plan.",
+        "Validated generation width; connect to stock H3 conditioning.",
+        "Validated generation height; connect to stock H3 conditioning.",
+        "Legacy Plan-wide blend default; Current Shot state remains preferred.",
     )
     FUNCTION = "passthrough"
     CATEGORY = "conditioning/minimax/contex_loop"
-    DESCRIPTION = ("Optional timeline-oriented H3 Plan authoring studio with "
+    DESCRIPTION = ("Dual-mode timeline-oriented H3 Plan authoring studio with "
                    "scene navigation, prompt revisions, saved-segment status, "
                    "source-audio waveform, and synchronized preview playback. "
-                   "The original Plan node is unchanged.")
+                   "It mirrors an optional connected Plan or works standalone.")
 
-    def passthrough(self, plan, source_timeline=None, source_audio=None,
+    @classmethod
+    def IS_CHANGED(cls, plan=None, plan_json="", **_kwargs):
+        if plan is not None:
+            return False
+        return MiniMaxH3ChainPlan.IS_CHANGED(plan_json)
+
+    def passthrough(self, plan=None, source_timeline=None, source_audio=None,
                     start_clip=1, scene_range="", verify_resume_history=True,
-                    tagged_references=None, reference_schedule=None):
+                    tagged_references=None, reference_schedule=None,
+                    plan_json='{"shots":[{"id":"intro","prompt":"Describe the opening shot."}]}',
+                    run_name="h3_chain", generation_fingerprint="",
+                    width=960, height=544, context_length=22,
+                    encode_mode="video", anchor_mode="head", crop="disabled",
+                    audio_mode="generated_audio", audio_context_length=22,
+                    default_duration_seconds=15.0, default_steps=20,
+                    base_seed=0, segment_crf=18, video_blend_frames=0,
+                    continuation_mode="guide", chain_policy=None):
+        if plan is None:
+            plan = MiniMaxH3ChainPlan().build(
+                plan_json, run_name, generation_fingerprint, width, height,
+                context_length, encode_mode, anchor_mode, crop, audio_mode,
+                audio_context_length, default_duration_seconds, default_steps,
+                base_seed, segment_crf, video_blend_frames,
+                continuation_mode, chain_policy=chain_policy,
+            )[0]
         prepared, report = _preflight_chain(
             plan, source_timeline=source_timeline, source_audio=source_audio,
             start_clip=start_clip, scene_range=scene_range,
@@ -12224,8 +12279,14 @@ class MiniMaxH3ChainPlanStudio:
                 },
                 "status": "Source preview registration failed: %s" % exc,
             }
-        result = (plan, report, bool(report["ok"]), report["summary"],
-                  json.dumps(report, ensure_ascii=False, sort_keys=True))
+        result = (
+            plan, report, bool(report["ok"]), report["summary"],
+            json.dumps(report, ensure_ascii=False, sort_keys=True),
+            plan["summary"], len(plan["shots"]),
+            int(plan["compatibility"]["width"]),
+            int(plan["compatibility"]["height"]),
+            int(plan["compatibility"]["video_blend_frames"]),
+        )
         return {
             "ui": {"h3_plan_studio_source_timeline": [source_previews]},
             "result": result,
@@ -12235,19 +12296,24 @@ class MiniMaxH3ChainPlanStudio:
 class MiniMaxH3ChainPreflight:
     @classmethod
     def INPUT_TYPES(cls):
-        studio = MiniMaxH3ChainPlanStudio.INPUT_TYPES()
-        return {"required": studio["required"], "optional": studio["optional"]}
+        return {
+            "required": {
+                "plan": (PLAN_TYPE, {
+                    "tooltip": "Connect the validated H3 Chain Plan to inspect."}),
+            },
+            "optional": _plan_studio_preflight_input_types(),
+        }
 
-    RETURN_TYPES = MiniMaxH3ChainPlanStudio.RETURN_TYPES
-    RETURN_NAMES = MiniMaxH3ChainPlanStudio.RETURN_NAMES
-    OUTPUT_TOOLTIPS = MiniMaxH3ChainPlanStudio.OUTPUT_TOOLTIPS
+    RETURN_TYPES = (PLAN_TYPE, PREFLIGHT_TYPE, "BOOLEAN", "STRING", "STRING")
+    RETURN_NAMES = ("plan", "preflight", "ready", "status", "report_json")
+    OUTPUT_TOOLTIPS = MiniMaxH3ChainPlanStudio.OUTPUT_TOOLTIPS[:5]
     FUNCTION = "check"
     CATEGORY = "conditioning/minimax/contex_loop"
     DESCRIPTION = ("Model-free validation of Plan timing, Source Timeline, "
                    "references, runtime compatibility, and resume artifacts.")
 
     def check(self, plan, **kwargs):
-        return MiniMaxH3ChainPlanStudio().passthrough(plan, **kwargs)
+        return MiniMaxH3ChainPlanStudio().passthrough(plan=plan, **kwargs)
 
 
 class MiniMaxH3ChainRunManager:

@@ -24,7 +24,10 @@ const ASSEMBLE_NODE = "MiniMaxH3ChainAssemble";
 const ADVANCED_OUTPUTS = Object.freeze({
     MiniMaxH3ChainPolicy: ["status"],
     MiniMaxH3ChainPlan: ["summary", "clip_count", "video_blend_frames"],
-    MiniMaxH3ChainPlanStudio: ["status", "report_json"],
+    MiniMaxH3ChainPlanStudio: [
+        "status", "report_json", "plan_summary", "clip_count",
+        "video_blend_frames",
+    ],
     MiniMaxH3ChainPreflight: ["status", "report_json"],
     MiniMaxH3LazyMotionAVLoader: ["source_audio", "skip_first_frames", "status"],
     MiniMaxH3ChainCurrent: [
@@ -38,7 +41,16 @@ const ADVANCED_OUTPUTS = Object.freeze({
 });
 
 const ALWAYS_ADVANCED_WIDGETS = Object.freeze({
-    MiniMaxH3ChainPlanStudio: ["verify_resume_history"],
+    MiniMaxH3ChainPlanStudio: [
+        "verify_resume_history",
+        // Backing values for the Studio's dedicated Plan settings tab. Keep
+        // them serialized and recoverable through Show advanced without
+        // duplicating the normal Studio interface above its timeline.
+        "plan_json", "run_name", "generation_fingerprint", "width", "height",
+        "context_length", "encode_mode", "anchor_mode", "crop", "audio_mode",
+        "audio_context_length", "default_duration_seconds", "default_steps",
+        "base_seed", "segment_crf", "video_blend_frames", "continuation_mode",
+    ],
     MiniMaxH3ChainPreflight: ["verify_resume_history"],
     MiniMaxH3ChainUpscaleAdapter: ["recipe_json"],
 });

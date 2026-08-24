@@ -83,6 +83,28 @@ assert.equal(planPresentation.hiddenOutputs.has("clip_count"), true);
 assert.equal(planPresentation.hiddenOutputs.has("video_blend_frames"), true);
 assert.equal(presentationForNode(plan, true).hiddenWidgets.size, 0);
 
+const studio = node(30, "MiniMaxH3ChainPlanStudio", [], [], [
+    ["verify_resume_history", true], ["plan_json", "{}"],
+    ["run_name", "h3_chain"], ["generation_fingerprint", ""],
+    ["width", 960], ["height", 544], ["context_length", 22],
+    ["encode_mode", "video"], ["anchor_mode", "head"],
+    ["crop", "disabled"], ["audio_mode", "generated_audio"],
+    ["audio_context_length", 22], ["default_duration_seconds", 15],
+    ["default_steps", 20], ["base_seed", 0], ["segment_crf", 18],
+    ["video_blend_frames", 0], ["continuation_mode", "guide"],
+]);
+const compactStudio = presentationForNode(studio, false);
+for (const name of [
+    "plan_json", "run_name", "generation_fingerprint", "width", "height",
+    "context_length", "encode_mode", "anchor_mode", "crop", "audio_mode",
+    "audio_context_length", "default_duration_seconds", "default_steps",
+    "base_seed", "segment_crf", "video_blend_frames", "continuation_mode",
+]) {
+    assert.equal(compactStudio.hiddenWidgets.has(name), true,
+        `${name} is edited in Studio's dedicated Plan settings tab`);
+}
+assert.equal(presentationForNode(studio, true).hiddenWidgets.has("run_name"), false);
+
 const inputOrder = start.inputs.map((slot) => slot.name);
 const outputOrder = start.outputs.map((slot) => slot.name);
 const linkIds = start.inputs.map((slot) => slot.link);

@@ -125,6 +125,44 @@ with tempfile.TemporaryDirectory() as temporary:
     assert json.loads(studio["result"][4])["version"] == chain.PREFLIGHT_VERSION
     assert "h3_plan_studio_source_timeline" in studio["ui"]
 
+    studio_inputs = chain.MiniMaxH3ChainPlanStudio.INPUT_TYPES()
+    assert studio_inputs["required"] == {}
+    assert next(iter(studio_inputs["optional"])) == "plan"
+    assert all(name in studio_inputs["optional"] for name in (
+        "plan_json", "run_name", "generation_fingerprint", "width",
+        "height", "base_seed", "segment_crf", "chain_policy"))
+    assert chain.MiniMaxH3ChainPlanStudio.RETURN_NAMES[-5:] == (
+        "plan_summary", "clip_count", "width", "height",
+        "video_blend_frames")
+    preflight_inputs = chain.MiniMaxH3ChainPreflight.INPUT_TYPES()
+    assert tuple(preflight_inputs["required"]) == ("plan",)
+    assert "plan_json" not in preflight_inputs["optional"]
+    assert len(chain.MiniMaxH3ChainPreflight.RETURN_TYPES) == 5
+
+    standalone_policy = chain._contract_compose_chain_policy(
+        chain._contract_audio_policy("generated", "off", "on"),
+        chain._contract_transition_policy("cut"),
+        audio_context_length=0)
+    standalone = chain.MiniMaxH3ChainPlanStudio().passthrough(
+        plan_json=json.dumps({"shots": [{
+            "id": "standalone", "prompt": "Independent shot.",
+            "length": 22,
+        }]}),
+        run_name="studio_standalone", generation_fingerprint="studio:v1",
+        width=64, height=96, context_length=1,
+        encode_mode="video", anchor_mode="head", crop="disabled",
+        audio_mode="generated_audio", audio_context_length=0,
+        default_duration_seconds=1.0, default_steps=8,
+        base_seed=11, segment_crf=17, video_blend_frames=0,
+        continuation_mode="guide", chain_policy=standalone_policy,
+    )
+    standalone_plan = standalone["result"][0]
+    assert standalone_plan["run_name"] == "studio_standalone"
+    assert standalone_plan["compatibility"]["width"] == 64
+    assert standalone_plan["compatibility"]["height"] == 96
+    assert standalone_plan["shots"][0]["id"] == "standalone"
+    assert standalone["result"][-4:] == (1, 64, 96, 0)
+
     short = deferred_timeline(30)
     _prepared, failed = chain._preflight_chain(
         plan, source_timeline=short)
