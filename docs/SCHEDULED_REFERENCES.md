@@ -69,12 +69,19 @@ The Scene Prompt Editor's **@ Reference** tray shows only sources active for
 the selected scene. Hover a loader-backed tag to preview image, video, or audio,
 then click to insert it. Audio never autoplays.
 
-## Tagged semantic picture anchors
+## Dedicated semantic picture anchors
 
-The prompt-driven **Tagged** route also accepts `#picture[2.50s]`. This presents
-the registered Tagged Picture to Qwen at an approximate scene-local timestamp
-without adding another native VAE reference. It is useful for reinforcing a
-replacement character's identity later in a shot:
+For new workflows, register Qwen-only stills with **Semantic Picture Anchor**,
+chain those small nodes, and finish them with one **Semantic Anchor Bundle**.
+Connect that single bundle to Tagged Ref2VA, Plan Studio, and Run Manager. The
+Bundle owns the shared presentation size and mode, so individual anchor nodes
+store their original picture and scale it only when a scene actually calls its
+`#tag`.
+
+The prompt-driven Tagged route accepts `#picture[2.50s]`. This presents the
+matching Semantic Picture Anchor to Qwen at an approximate scene-local
+timestamp without adding a native VAE reference. It is useful for reinforcing
+a replacement character's identity later in a shot:
 
 ```text
 <Subject 1> is the replacement performer defined by @replacement.
@@ -82,16 +89,23 @@ replacement character's identity later in a shot:
 ```
 
 `@replacement` and `#replacement[...]` have distinct jobs and may be used
-together. The `@` form is a native Ref2VA picture. The `#` form is Qwen-only
-semantic reinforcement. A `#` anchor accepts a Tagged Picture only; its time
-must fall inside the current scene. It is an approximate semantic checkpoint,
-not an exact frame, pose, spatial mask, motion control, or continuation seam.
+together, including from different source nodes. The `@` form is a native
+Ref2VA picture and counts toward H3's nine active Picture slots. The `#` form is
+Qwen-only semantic reinforcement and never counts toward native picture,
+video, or audio limits. Its time must fall inside the current scene. It is an
+approximate semantic checkpoint, not an exact frame, pose, spatial mask,
+motion control, or continuation seam.
+
+Tagged Picture nodes remain accepted as `#tags` for existing workflows, but
+the dedicated semantic chain is preferred: inactive semantic images can stay
+in the project without crowding native reference accounting, while the Bundle
+emits one combined incremental fingerprint for Plan resume safety.
 Start with two or three sparse anchors—too many repeated pictures can resist
 the source video's changing pose.
 
 ### Picture storyboard mode
 
-Set Tagged Ref2VA's `semantic_anchor_mode` to `picture_storyboard` to compile
+Set Semantic Anchor Bundle's mode to `picture_storyboard` to compile
 the same `#picture[time]` syntax differently. Each distinct tagged image is
 added once as a separate Qwen-only `<Picture N>`, and the compiler adds an
 approximate scene-relative timing sentence for every requested time. No image
@@ -102,7 +116,8 @@ invent motion and transitions. `timestamped_video` remains the default and is
 better for sparse temporal reinforcement. Storyboard mode is useful for a
 sequence of compositions or appearances, but its textual timing is softer.
 
-`semantic_anchor_size` accepts 384, 512, 768, 1024, 1280, or source. Higher
+The Bundle's `semantic_anchor_size` accepts 384, 512, 768, 1024, 1280, or
+source. Higher
 values preserve more face, wardrobe, prop, and environment detail at the cost
 of longer Qwen conditioning and greater VRAM/runtime pressure. Prefer 512 or
 768 generally, 1024 for important detailed anchors, and 1280 for a small number

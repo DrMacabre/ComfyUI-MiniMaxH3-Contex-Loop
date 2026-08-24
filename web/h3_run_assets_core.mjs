@@ -5,6 +5,8 @@ export const ASSET_ROLES = Object.freeze([
     ["audio_reference", "Audio reference"],
     ["source_track", "Source track"],
 ]);
+export const SEMANTIC_ANCHOR_BUNDLE_NODE = "MiniMaxH3SemanticAnchorBundle";
+export const SEMANTIC_PICTURE_ANCHOR_NODE = "MiniMaxH3SemanticPictureAnchor";
 
 const MEDIA_WIDGET_NAMES = ["image", "audio", "file", "video", "path", "filename"];
 const MEDIA_EXTENSION = /\.(?:png|jpe?g|webp|gif|bmp|tiff?|wav|mp3|flac|ogg|m4a|aac|mp4|mov|mkv|webm|avi)(?:\s+\[(?:input|output|temp)\])?$/i;
@@ -54,6 +56,77 @@ function sourceForInput(manager, input) {
     return source ? {source, link} : null;
 }
 
+function inputByName(node, name) {
+    return node?.inputs?.find((input) => input.name === name) ?? null;
+}
+
+function linkedNode(node, inputName) {
+    const input = inputByName(node, inputName);
+    const link = input?.link == null ? null : node?.graph?.links?.[input.link];
+    const source = link ? node.graph?.getNodeById?.(link.origin_id) : null;
+    return source ? {source, link, input} : null;
+}
+
+function sourceBinding(manager, source, link, createId, {
+    input = null, roleOverride = "", labelPrefix = "",
+} = {}) {
+    source.properties ??= {};
+    const outputSlot = Number(link.origin_slot) || 0;
+    source.properties.h3_asset_binding_ids ??= {};
+    source.properties.h3_asset_binding_ids[outputSlot] ||= (
+        (outputSlot === 0 && source.properties.h3_asset_binding_id)
+        || createId()
+    );
+    const bindingId = source.properties.h3_asset_binding_ids[outputSlot];
+    const output = source.outputs?.[outputSlot] ?? {};
+    const widget = mediaWidget(source);
+    const inferred = roleOverride || inferAssetRole(output.type, nodeType(source));
+    const role = manager.properties.h3_asset_roles[bindingId] ?? inferred;
+    manager.properties.h3_asset_roles[bindingId] = role;
+    const title = String(source.title || nodeType(source) || `Node ${source.id}`);
+    if (input) input.label = `${assetInputNumber(input)}: ${title}`;
+    return {
+        binding_id: bindingId,
+        label: labelPrefix ? `${labelPrefix} · ${title}` : title,
+        role,
+        node_id: String(source.id ?? ""),
+        node_type: nodeType(source),
+        node_title: String(source.title ?? ""),
+        output_slot: outputSlot,
+        output_type: String(output.type ?? ""),
+        widget_name: String(widget?.name ?? ""),
+        original_value: typeof widget?.value === "string" ? widget.value : "",
+    };
+}
+
+export function collectSemanticAnchorBindings(manager, createId = randomBindingId) {
+    manager.properties ??= {};
+    manager.properties.h3_asset_roles ??= {};
+    const bundleLink = linkedNode(manager, "semantic_anchors");
+    if (!bundleLink || nodeType(bundleLink.source) !== SEMANTIC_ANCHOR_BUNDLE_NODE) {
+        return [];
+    }
+    const bindings = [];
+    const seenNodes = new Set();
+    let linked = linkedNode(bundleLink.source, "anchors");
+    while (linked && nodeType(linked.source) === SEMANTIC_PICTURE_ANCHOR_NODE
+            && !seenNodes.has(linked.source)) {
+        const anchor = linked.source;
+        seenNodes.add(anchor);
+        const tag = String(anchor.widgets?.find((item) => item.name === "tag")?.value
+            ?? "semantic").trim();
+        const image = linkedNode(anchor, "image");
+        if (image) {
+            bindings.push(sourceBinding(manager, image.source, image.link, createId, {
+                roleOverride: "picture",
+                labelPrefix: `#${tag || "semantic"}`,
+            }));
+        }
+        linked = linkedNode(anchor, "previous");
+    }
+    return bindings.reverse();
+}
+
 export function collectAssetBindings(manager, createId = randomBindingId) {
     manager.properties ??= {};
     manager.properties.h3_asset_roles ??= {};
@@ -64,33 +137,14 @@ export function collectAssetBindings(manager, createId = randomBindingId) {
         const linked = sourceForInput(manager, input);
         if (!linked) continue;
         const {source, link} = linked;
-        source.properties ??= {};
-        const outputSlot = Number(link.origin_slot) || 0;
-        source.properties.h3_asset_binding_ids ??= {};
-        source.properties.h3_asset_binding_ids[outputSlot] ||= (
-            (outputSlot === 0 && source.properties.h3_asset_binding_id)
-            || createId()
-        );
-        const bindingId = source.properties.h3_asset_binding_ids[outputSlot];
-        const output = source.outputs?.[outputSlot] ?? {};
-        const widget = mediaWidget(source);
-        const inferred = inferAssetRole(output.type, nodeType(source));
-        const role = manager.properties.h3_asset_roles[bindingId] ?? inferred;
-        manager.properties.h3_asset_roles[bindingId] = role;
-        const title = String(source.title || nodeType(source) || `Node ${source.id}`);
-        input.label = `${number}: ${title}`;
-        bindings.push({
-            binding_id: bindingId,
-            label: title,
-            role,
-            node_id: String(source.id ?? ""),
-            node_type: nodeType(source),
-            node_title: String(source.title ?? ""),
-            output_slot: outputSlot,
-            output_type: String(output.type ?? ""),
-            widget_name: String(widget?.name ?? ""),
-            original_value: typeof widget?.value === "string" ? widget.value : "",
-        });
+        bindings.push(sourceBinding(
+            manager, source, link, createId, {input}));
+    }
+    const seen = new Set(bindings.map((binding) => binding.binding_id));
+    for (const binding of collectSemanticAnchorBindings(manager, createId)) {
+        if (seen.has(binding.binding_id)) continue;
+        seen.add(binding.binding_id);
+        bindings.push(binding);
     }
     return bindings;
 }

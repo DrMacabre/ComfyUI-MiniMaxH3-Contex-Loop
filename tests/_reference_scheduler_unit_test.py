@@ -405,6 +405,52 @@ assert tagged_summary == (
 assert [entry["tag"] for entry in tagged_bindings["pictures"]] == ["look"]
 assert "face" not in tagged_bindings["aliases"]
 
+# Dedicated semantic pictures are collected behind one bundle, centralize
+# scale/mode there, and never consume native H3 Picture capacity.
+semantic_draft = None
+for index in range(10):
+    semantic_draft = chain.MiniMaxH3SemanticPictureAnchor().add(
+        tagged_picture, "anchor_%d" % index,
+        previous=semantic_draft)[0]
+native_capacity = None
+for index in range(9):
+    native_capacity = chain.MiniMaxH3TaggedPictureReference().add(
+        tagged_picture, "native_%d" % index,
+        previous=native_capacity)[0]
+semantic_bundle, native_passthrough, combined_token, bundle_status = (
+    chain.MiniMaxH3SemanticAnchorBundle().bundle(
+        semantic_draft, "768", "picture_storyboard",
+        references=native_capacity))
+assert native_passthrough is native_capacity
+assert semantic_bundle["kind"] == "bundle"
+assert semantic_bundle["semantic_anchor_size"] == "768"
+assert semantic_bundle["semantic_anchor_mode"] == "picture_storyboard"
+assert len(semantic_bundle["entries"]) == 10
+assert "10 semantic pictures" in bundle_status
+assert chain._generation_fingerprint_value(combined_token)[0] == (
+    semantic_bundle["combined_reference_fingerprint"])
+capacity_prompt = " ".join(
+    ["@native_%d" % index for index in range(9)] +
+    ["#anchor_%d[0.00s]" % index for index in range(10)])
+_capacity_compiled, _capacity_summary, capacity_bindings = (
+    chain._compile_tagged_reference_prompt(
+        native_capacity, 1, 1, capacity_prompt,
+        semantic_anchor_bundle=semantic_bundle))
+assert len(capacity_bindings["pictures"]) == 9
+assert len(capacity_bindings["semantic_anchors"]) == 10
+assert capacity_bindings["semantic_anchor_mode"] == "picture_storyboard"
+native_overflow = chain.MiniMaxH3TaggedPictureReference().add(
+    tagged_picture, "native_9", previous=native_capacity)[0]
+try:
+    chain._compile_tagged_reference_prompt(
+        native_overflow, 1, 1,
+        " ".join("@native_%d" % index for index in range(10)),
+        semantic_anchor_bundle=semantic_bundle)
+except ValueError as exc:
+    assert "stock H3 Ref2VA supports 9" in str(exc)
+else:
+    raise AssertionError("ten native pictures bypassed stock H3 capacity")
+
 semantic_compiled, semantic_summary, semantic_bindings = (
     chain._compile_tagged_reference_prompt(
         tagged, 1, 1,
@@ -687,6 +733,19 @@ try:
         "For the target video, around 0 seconds into this scene, "
         "<Picture 2> is an approximate visual storyboard reference.")
     assert storyboard_expansion["result"][4] != semantic_expansion["result"][4]
+
+    dedicated_expansion = chain.MiniMaxH3TaggedReferenceToVideo().apply(
+        "clip", "video-vae", "audio-vae", native_capacity, 1, 1,
+        "Use @native_0 and #anchor_0[0.00s].",
+        64, 32, 22, "match", semantic_anchor_size="384",
+        semantic_anchor_mode="timestamped_video",
+        semantic_anchors=semantic_bundle)
+    dedicated_inputs = dedicated_expansion["expand"][
+        "SemanticAnchors"]["inputs"]
+    assert dedicated_inputs["presentation"]["semantic_anchor_size"] == "768"
+    assert dedicated_inputs["presentation"]["semantic_anchor_mode"] == (
+        "picture_storyboard")
+    assert dedicated_expansion["result"][4] == combined_token
 finally:
     chain.GraphBuilder = original_graph_builder
 

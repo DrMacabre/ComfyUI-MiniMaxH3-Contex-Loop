@@ -76,6 +76,57 @@ delete graph.links[12];
 manager.properties.h3_asset_roles[bindings[1].binding_id] = "source_track";
 assert.equal(collectAssetBindings(manager)[1].role, "source_track");
 
+// Any number of semantic loaders can live behind one dedicated Run Manager
+// socket. The persisted bindings still point to the real loader widgets.
+const semanticImageA = loader(
+    960, "LoadImage", "IMAGE", "image", "beat-a.png");
+const semanticImageB = loader(
+    961, "LoadImage", "IMAGE", "image", "beat-b.png");
+const semanticA = {
+    id: 970,
+    type: "MiniMaxH3SemanticPictureAnchor",
+    title: "Semantic A",
+    inputs: [{name: "image", link: 13}, {name: "previous", link: null}],
+    outputs: [{type: "H3_SEMANTIC_ANCHOR_DRAFT"}],
+    widgets: [{name: "tag", value: "beat_a"}],
+};
+const semanticB = {
+    id: 971,
+    type: "MiniMaxH3SemanticPictureAnchor",
+    title: "Semantic B",
+    inputs: [{name: "image", link: 14}, {name: "previous", link: 15}],
+    outputs: [{type: "H3_SEMANTIC_ANCHOR_DRAFT"}],
+    widgets: [{name: "tag", value: "beat_b"}],
+};
+const semanticBundle = {
+    id: 972,
+    type: "MiniMaxH3SemanticAnchorBundle",
+    title: "Semantic Bundle",
+    inputs: [{name: "anchors", link: 16}],
+    outputs: [{type: "H3_SEMANTIC_ANCHOR_BUNDLE"}],
+};
+nodes.push(semanticImageA, semanticImageB, semanticA, semanticB, semanticBundle);
+for (const item of [semanticA, semanticB, semanticBundle]) item.graph = graph;
+graph.links[13] = {origin_id: 960, origin_slot: 0};
+graph.links[14] = {origin_id: 961, origin_slot: 0};
+graph.links[15] = {origin_id: 970, origin_slot: 0};
+graph.links[16] = {origin_id: 971, origin_slot: 0};
+graph.links[17] = {origin_id: 972, origin_slot: 0};
+const semanticManager = {
+    graph,
+    properties: {},
+    inputs: [{name: "semantic_anchors", link: 17}],
+};
+const semanticBindings = collectAssetBindings(
+    semanticManager, () => `semantic-${++ordinal}`);
+assert.equal(semanticBindings.length, 2);
+assert.deepEqual(semanticBindings.map((item) => item.original_value), [
+    "beat-a.png", "beat-b.png"]);
+assert.deepEqual(semanticBindings.map((item) => item.label.split(" · ")[0]), [
+    "#beat_a", "#beat_b"]);
+assert(semanticBindings.every((item) => item.role === "picture"));
+assert.equal(semanticManager.inputs.length, 1);
+
 const archived = {
     ...bindings[0],
     restore_value: "h3_project_hash_hero.png",

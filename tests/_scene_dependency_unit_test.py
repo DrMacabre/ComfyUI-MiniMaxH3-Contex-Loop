@@ -176,6 +176,30 @@ assert any(item["field"] == "generation_fingerprint"
            for item in chain._scene_dependency_diffs(
                old_reference_dependency, changed_dependency))
 
+# Dedicated Qwen-only semantic anchors share the incremental Plan fingerprint
+# without becoming native Ref2VA entries. Adding an unused #anchor must remain
+# resume-neutral; activating it in the old scene makes the change significant.
+semantic_entry = {
+    "kind": "semantic_anchor", "tag": "future_beat",
+    "activation": "prompt", "value": "semantic-v1",
+    "content_hash": "semantic-hash-v1",
+}
+semantic_bundle = chain._make_semantic_anchor_bundle(
+    [semantic_entry], "512", "timestamped_video")
+semantic_registry = chain._combined_reference_registry(
+    registry_v1, semantic_bundle)
+semantic_token = chain._reference_fingerprint_output(semantic_registry)
+semantic_inactive_dependency = chain._scene_dependency_record(
+    reference_plan(semantic_token), 1, None)
+assert chain._scene_dependency_diffs(
+    old_reference_dependency, semantic_inactive_dependency) == []
+semantic_active_dependency = chain._scene_dependency_record(
+    reference_plan(
+        semantic_token, "@actor reaches #future_beat[0.50s]."), 1, None)
+assert any(item["field"] == "generation_fingerprint"
+           for item in chain._scene_dependency_diffs(
+               old_reference_dependency, semantic_active_dependency))
+
 # Legacy scheduled references use their scene selectors rather than prompt tags.
 scheduled_v1 = chain._append_scheduled_reference(
     None, kind="picture", tag="actor", scenes="all", value="actor",
