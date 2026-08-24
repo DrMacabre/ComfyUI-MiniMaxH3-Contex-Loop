@@ -554,7 +554,8 @@ def main():
         "source_audio"][1]["tooltip"]
     assert "Source Timeline audio carried in state" in partial_audio_tooltip
     assert "none creates a silent partial" in partial_audio_tooltip
-    assert "Legacy fallback full source track" in legacy_source_tooltip
+    assert "state predates recoverable source audio" in legacy_source_tooltip
+    assert "legacy AUDIO connected at Loop Start" in legacy_source_tooltip
     assert "does not affect generation" in legacy_source_tooltip
 
     readable_prompts = chain._normalize_plan(

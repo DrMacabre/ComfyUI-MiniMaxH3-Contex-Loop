@@ -4,6 +4,18 @@ Newest first. This file keeps release history out of the onboarding README.
 
 ## Unreleased
 
+## v0.5.12 — Persistent Plan-selected audio
+
+- A source track connected once at Loop Start is now materialized as a
+  path-backed run asset and carried through state, checkpoint revisions, and
+  reconstructed manifests.
+- Final assembly and the full-chain SeedVR2 adapter can keep
+  `audio_source=plan`: generated uses checkpointed H3 audio, source recovers
+  the saved upstream track, and none remains silent without downstream
+  rewiring.
+- Matching redundant legacy source-audio wires remain compatible, while older
+  manifests without the recovery descriptor retain their explicit fallback.
+
 ## v0.5.11 — Plan Studio transport hardening
 
 - The bundled LBH 3D deferred-upscale workflow now leaves the pass-2 prompt

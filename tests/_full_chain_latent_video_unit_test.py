@@ -216,8 +216,9 @@ def main():
             }
             manifest["compatibility"]["source_audio_hash"] = (
                 chain._audio_fingerprint(source_audio))
+            manifest["compatibility"]["audio_mode"] = "source_track"
             _audio_video, audio_path, audio_status = node().adapt(
-                manifest, FakeVAE(), "source", "plan", "memory", False,
+                manifest, FakeVAE(), "plan", "plan", "memory", False,
                 256, source_audio=source_audio)
             assert "audio=source" in audio_status
             with av.open(audio_path, mode="r") as container:

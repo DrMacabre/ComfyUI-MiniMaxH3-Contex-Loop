@@ -103,9 +103,13 @@ def main():
         chain._run_ffmpeg = fake_ffmpeg
         try:
             result = chain.MiniMaxH3ChainAssemble().assemble(
-                manifest, "source", "source_final", 96, source,
+                manifest, "plan", "source_final", 96, source,
                 copy_to_output=True,
                 output_subfolder="published/finals")
+            manifest["compatibility"]["audio_mode"] = "generated_audio"
+            generated_result = chain.MiniMaxH3ChainAssemble().assemble(
+                manifest, "plan", "generated_final", 96)
+            manifest["compatibility"]["audio_mode"] = "source_track"
 
             chain.shutil.which = lambda executable: (
                 "/broken/ffmpeg" if executable == "ffmpeg"
@@ -141,7 +145,10 @@ def main():
             chain._video_output_item(str(output_copy))]
         assert result["ui"]["animated"] == (True,)
         assert sidecar_path.is_file()
-        assert muxed_pcm and not any(muxed_pcm[0])
+        assert len(muxed_pcm) == 2
+        assert not any(muxed_pcm[0])
+        assert any(muxed_pcm[1])
+        assert pathlib.Path(generated_result["result"][0]).is_file()
         with wave.open(str(sidecar_path), "rb") as generated_audio:
             assert generated_audio.getframerate() == 8000
             assert generated_audio.getnchannels() == 2

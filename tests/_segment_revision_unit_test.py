@@ -79,6 +79,10 @@ def main():
             "plan_hash": "plan",
             "prompt_prefix": "",
             "segment_crf": 18,
+            "source_timeline": {
+                "kind": "source_timeline",
+                "recovery": {"audio_path": "source.wav"},
+            },
             "compatibility": {
                 "audio_mode": "source_track",
                 "context_length": 2,
@@ -178,6 +182,7 @@ def main():
         assert current["segment"]["revision"] == second["revision"]
         assert current["segment"]["prompt"] == "second take"
         assert current["scene_dependency"] == second["scene_dependency"]
+        assert current["source_timeline"] == plan["source_timeline"]
         assert archived["segment"]["revision"] == first["revision"]
         assert archived["segment"]["prompt"] == "first take"
 

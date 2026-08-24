@@ -2172,17 +2172,47 @@ def _validate_source_timeline_hash(
     expected_timeline = str(
         compatibility.get("source_timeline_fingerprint") or "")
     actual_timeline = str(source["fingerprints"]["timeline"])
-    if not expected_timeline or expected_timeline != actual_timeline:
+    expected_audio = str(compatibility.get("source_audio_hash") or "")
+    legacy_audio = str(
+        (source.get("recovery") or {}).get(
+            "legacy_loop_start_source_audio_hash") or "")
+    legacy_recovery = bool(
+        source.get("video") is None
+        and expected_audio
+        and expected_audio != "none"
+        and legacy_audio == expected_audio
+        and str(source["audio"].get("content_sha256") or "") ==
+        expected_audio)
+    if (expected_timeline and expected_timeline != actual_timeline) or (
+            not expected_timeline and not legacy_recovery):
         raise ValueError(
             "%s received a different H3 Source Timeline than Loop Start." %
             usage)
     if _audio_policy_requires_source(compatibility):
-        expected_audio = str(compatibility.get("source_audio_hash") or "")
         actual_audio = str(source["fingerprints"].get("audio") or "none")
-        if not expected_audio or expected_audio != actual_audio:
+        content_audio = str(source["audio"].get("content_sha256") or "")
+        if (not expected_audio or
+                expected_audio not in (actual_audio, content_audio)):
             raise ValueError(
                 "%s received different Source Timeline audio than Loop "
                 "Start." % usage)
+
+
+def _source_timeline_recovers_legacy_audio(
+        compatibility: dict[str, Any], timeline: Any) -> bool:
+    """Whether a timeline is the saved form of Loop Start's legacy AUDIO."""
+    try:
+        source = _validate_source_timeline(timeline, require_runtime=True)
+    except (OSError, TypeError, ValueError):
+        return False
+    expected = str(compatibility.get("source_audio_hash") or "")
+    return bool(
+        source.get("video") is None
+        and expected
+        and expected != "none"
+        and str((source.get("recovery") or {}).get(
+            "legacy_loop_start_source_audio_hash") or "") == expected
+        and str(source["audio"].get("content_sha256") or "") == expected)
 
 
 def _source_timeline_from_metadata(value: Any) -> dict[str, Any] | None:
@@ -4101,7 +4131,11 @@ def _canonical_source_reference_dependency(
     if source_timeline is not None:
         audio = _source_timeline_scene_audio(
             source_timeline, start_frame, end_frame)
-        route = "source_timeline"
+        route = (
+            "legacy_audio"
+            if _source_timeline_recovers_legacy_audio(
+                plan["compatibility"], source_timeline)
+            else "source_timeline")
     else:
         if source_audio is None:
             return None
@@ -4634,6 +4668,40 @@ def _plan_with_source_audio(plan: dict[str, Any],
             "source_audio_hash": source_hash,
         })
     return prepared
+
+
+def _plan_with_recoverable_legacy_source_audio(
+        plan: dict[str, Any], source_audio: dict[str, Any] | None
+        ) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Bind legacy Loop Start AUDIO once and persist it for later consumers.
+
+    Keep the released legacy plan/source hash unchanged, but materialize the
+    waveform as an audio-only Source Timeline. The runtime state and eventual
+    manifest can then recover the same source track without repeated AUDIO
+    wires or a live tensor retained across recursive scenes.
+    """
+    prepared = _plan_with_source_audio(plan, source_audio)
+    if source_audio is None or not _audio_policy_requires_source(prepared):
+        return prepared, None
+    source_hash = str(
+        prepared["compatibility"].get("source_audio_hash") or "")
+    timeline = _make_source_timeline(
+        source_audio=source_audio, embedded_audio="ignore",
+        source_route="legacy Loop Start AUDIO")
+    timeline = _materialize_source_timeline_audio(timeline, prepared)
+    timeline = dict(timeline)
+    timeline["video"] = None
+    timeline["audio"] = dict(timeline["audio"])
+    timeline["fingerprints"] = dict(timeline["fingerprints"])
+    timeline["recovery"] = dict(timeline.get("recovery") or {})
+    timeline["recovery"].update({
+        "legacy_loop_start_source_audio": True,
+        "legacy_loop_start_source_audio_hash": source_hash,
+    })
+    timeline = _validate_source_timeline(timeline, require_runtime=True)
+    prepared = dict(prepared)
+    prepared["source_timeline"] = _source_timeline_recovery_record(timeline)
+    return prepared, timeline
 
 
 def _plan_with_source_timeline(
@@ -10670,8 +10738,12 @@ class MiniMaxH3ChainLoopStart:
                                "are mutually exclusive. Use this socket only "
                                "for an older workflow whose Audio Policy "
                                "needs final source audio or Source "
-                               "reference=on. A short, completely silent "
-                               "placeholder is padded."}),
+                               "reference=on. Loop Start saves it once as a "
+                               "path-backed run asset, so Current Shot, "
+                               "partial review, final assembly, and full-chain "
+                               "finishing do not need the AUDIO wired again. "
+                               "A short, completely silent placeholder is "
+                               "padded."}),
                 "external_context": (EXTERNAL_CONTEXT_TYPE, {
                     "tooltip": "Optional output from MiniMax H3 Existing Video "
                                "Context. When connected, scene 1 continues from "
@@ -10742,8 +10814,9 @@ class MiniMaxH3ChainLoopStart:
                 prepared_plan, runtime_timeline = _plan_with_source_timeline(
                     prepared_plan, source_timeline)
             else:
-                prepared_plan = _plan_with_source_audio(
-                    prepared_plan, source_audio)
+                prepared_plan, runtime_timeline = (
+                    _plan_with_recoverable_legacy_source_audio(
+                        prepared_plan, source_audio))
             range_start, range_end = _parse_scene_range(
                 scene_range, len(prepared_plan["shots"]), start_clip)
             state = _initial_state(
@@ -10769,7 +10842,12 @@ class MiniMaxH3ChainLoopStart:
         if prepared_plan["compatibility"].get("source_audio_silent_padding"):
             status += "; silent source audio will be padded to the plan duration"
         if state.get("source_timeline") is not None:
-            status += "; Source Timeline active"
+            if _source_timeline_recovers_legacy_audio(
+                    prepared_plan["compatibility"],
+                    state["source_timeline"]):
+                status += "; source audio saved in run state"
+            else:
+                status += "; Source Timeline active"
         if prepared_plan["compatibility"].get("external_context_hash"):
             status += "; scene 1 extends imported video"
             if isinstance(prepared_plan.get("prelude"), dict):
@@ -10787,9 +10865,10 @@ class MiniMaxH3ChainCurrent:
             },
             "optional": {
                 "source_audio": ("AUDIO", {
-                    "tooltip": "Legacy 0.4 full-track input. New workflows "
-                               "obtain the frame-exact scene slice from Source "
-                               "Timeline carried in state."}),
+                    "tooltip": "Legacy 0.4 full-track input. Loop Start now "
+                               "carries a path-backed copy in state, so this "
+                               "wire is unnecessary. A still-connected copy "
+                               "is accepted only when its fingerprint matches."}),
                 "align_audio_reference": ("BOOLEAN", {
                     "default": False,
                     "tooltip": "Experimental. Cap only source_audio_slice 5ms "
@@ -10848,9 +10927,17 @@ class MiniMaxH3ChainCurrent:
         shot = plan["shots"][index - 1]
         source_timeline = state.get("source_timeline")
         if source_timeline is not None and source_audio is not None:
-            raise ValueError(
-                "H3 Chain Current Shot already receives source media through "
-                "Loop Start's Source Timeline; disconnect legacy source_audio.")
+            if _source_timeline_recovers_legacy_audio(
+                    plan["compatibility"], source_timeline):
+                _validate_source_audio_hash(
+                    plan["compatibility"], source_audio,
+                    "H3 Chain Current Shot redundant legacy source audio")
+                source_audio = None
+            else:
+                raise ValueError(
+                    "H3 Chain Current Shot already receives source media "
+                    "through Loop Start's Source Timeline; disconnect legacy "
+                    "source_audio.")
         audio_slice = None
         target_audio_slice = None
         alignment_status = "audio ref unavailable"
@@ -11419,7 +11506,10 @@ class MiniMaxH3ChainSegmentSave:
                                "private AV overlap can also be checkpointed. "
                                "Connect it in every audio mode to preserve "
                                "H3's generated sound as WAV sidecars. Required "
-                               "for generated_audio and synchronized review."}),
+                               "for generated_audio and synchronized review. "
+                               "The bundled generation workflow already makes "
+                               "this connection; final assembly reads the saved "
+                               "sidecars without another audio wire."}),
                 "images_with_overlap": ("IMAGE", {
                     "tooltip": "Blend-ready output from Loop Trim. Required "
                                "only when Plan video_blend_frames is above 0. "
@@ -11845,6 +11935,9 @@ class MiniMaxH3ChainSegmentSave:
                 "archives": archives,
                 "segment": segment,
             }
+            if isinstance(plan.get("source_timeline"), dict):
+                metadata["source_timeline"] = _json_document(
+                    plan["source_timeline"])
             # This metadata replacement is the transaction's commit point. Until
             # it succeeds, resume keeps referencing the previous immutable pair.
             with checkpoint_run_lock(_output_root(), plan["run_name"]):
@@ -12316,12 +12409,11 @@ class MiniMaxH3ChainReview:
                                "MiniMax H3 Contex Loop Trim for synchronized "
                                "review."}),
                 "source_audio": ("AUDIO", {
-                    "tooltip": "Legacy fallback full source track used only "
-                               "when partial_audio_source is source and state "
-                               "does not carry a 0.5 Source Timeline. Leave this "
-                               "disconnected in Source Timeline workflows. It "
-                               "does not affect generation or the per-scene "
-                               "review preview."}),
+                    "tooltip": "Fallback only for runs whose state predates "
+                               "recoverable source audio. Both Source Timeline "
+                               "and a legacy AUDIO connected at Loop Start are "
+                               "now carried path-backed in state. This does not "
+                               "affect generation or the per-scene preview."}),
                 "candidate_count": ("INT", {
                     "default": 1,
                     "min": 1,
@@ -13047,8 +13139,9 @@ class MiniMaxH3ChainManifestLoad:
             prepared_plan, runtime_timeline = _plan_with_source_timeline(
                 prepared_plan, source_timeline)
         else:
-            prepared_plan = _plan_with_source_audio(
-                prepared_plan, source_audio)
+            prepared_plan, runtime_timeline = (
+                _plan_with_recoverable_legacy_source_audio(
+                    prepared_plan, source_audio))
         saved_count = _saved_scene_prefix_length(prepared_plan)
         if saved_count < 1:
             raise FileNotFoundError(
@@ -14926,9 +15019,17 @@ def _full_chain_selected_audio(
     elif selected == "source":
         timeline = _source_timeline_from_metadata(manifest)
         if timeline is not None and source_audio is not None:
-            raise ValueError(
-                "H3 Full-Chain Latent Video already recovered its Source "
-                "Timeline from the manifest; disconnect legacy source_audio.")
+            if _source_timeline_recovers_legacy_audio(
+                    manifest["compatibility"], timeline):
+                _validate_source_audio_hash(
+                    manifest["compatibility"], source_audio,
+                    "H3 Full-Chain Latent Video redundant legacy source audio")
+                source_audio = None
+            else:
+                raise ValueError(
+                    "H3 Full-Chain Latent Video already recovered its Source "
+                    "Timeline from the manifest; disconnect legacy "
+                    "source_audio.")
         if timeline is not None:
             _validate_source_timeline_hash(
                 manifest["compatibility"], timeline,
@@ -15177,10 +15278,11 @@ class MiniMaxH3ChainLatentVideoAdapter:
                                "H.264 scene files are not used."}),
                 "audio_source": (["plan", "source", "generated", "none"], {
                     "default": "plan",
-                    "tooltip": "Audio embedded in the continuous adapter "
-                               "video. plan follows the saved final-audio "
-                               "policy; Source Timeline recovery comes from "
-                               "the manifest."}),
+                    "tooltip": "Keep plan for automatic audio: generated "
+                               "uses checkpointed H3 sound, source recovers "
+                               "the track supplied once upstream, and none is "
+                               "silent. The other choices are explicit "
+                               "finishing overrides."}),
                 "blend_schedule": ("STRING", {
                     "default": "plan",
                     "tooltip": "Boundary crossfades applied before SeedVR2. "
@@ -15204,9 +15306,9 @@ class MiniMaxH3ChainLatentVideoAdapter:
             },
             "optional": {
                 "source_audio": ("AUDIO", {
-                    "tooltip": "Legacy fallback only. Current runs recover "
-                               "source audio from the Source Timeline stored "
-                               "on the selected manifest."}),
+                    "tooltip": "Legacy fallback only. Current manifests "
+                               "recover source audio saved from either Source "
+                               "Timeline or Loop Start's legacy AUDIO."}),
             },
         }
 
@@ -15478,14 +15580,14 @@ class MiniMaxH3ChainAssemble:
                 "audio_source": (["plan", "source", "generated", "none"],
                                  {
                                      "default": "plan",
-                                     "tooltip": "plan follows the Plan Audio "
-                                                "Policy's Final audio choice; "
-                                                "source muxes the external "
-                                                "track; generated assembles "
-                                                "saved scene audio and lets "
-                                                "later AV scenes own their "
-                                                "decoded overlap; none "
-                                                "creates a silent MP4."}),
+                                     "tooltip": "Keep plan for automatic "
+                                                "audio: generated assembles "
+                                                "checkpointed H3 sound, source "
+                                                "recovers the track supplied "
+                                                "once upstream, and none makes "
+                                                "a silent MP4. The other "
+                                                "choices are explicit "
+                                                "assembly overrides."}),
                 "filename": ("STRING", {
                     "default": "final",
                     "tooltip": "Final MP4 basename inside this chain's output "
@@ -15542,9 +15644,12 @@ class MiniMaxH3ChainAssemble:
                                "motion or audio sync. Off preserves the "
                                "existing stream-copy/blend behavior."}),
                 "source_audio": ("AUDIO", {
-                    "tooltip": "Full original source track. Required when "
-                               "audio_source resolves to source; it is trimmed "
-                               "or safely silent-padded to the final duration."}),
+                    "tooltip": "Legacy fallback for manifests created before "
+                               "Loop Start persisted its AUDIO. New manifests "
+                               "recover the original source track themselves; "
+                               "a redundant matching wire is harmless. The "
+                               "track is trimmed or safely silent-padded to "
+                               "the final duration."}),
                 "source_timeline": (SOURCE_TIMELINE_TYPE, {
                     "tooltip": "Primary 0.5 source-audio route. Usually this "
                                "can be left unconnected because the manifest "
@@ -15619,9 +15724,16 @@ class MiniMaxH3ChainAssemble:
             if source_timeline is None:
                 source_timeline = _source_timeline_from_metadata(manifest)
             if source_timeline is not None and source_audio is not None:
-                raise ValueError(
-                    "H3 Chain Assemble accepts Source Timeline or legacy "
-                    "source_audio, not both.")
+                if _source_timeline_recovers_legacy_audio(
+                        manifest["compatibility"], source_timeline):
+                    _validate_source_audio_hash(
+                        manifest["compatibility"], source_audio,
+                        "H3 Chain Assemble redundant legacy source audio")
+                    source_audio = None
+                else:
+                    raise ValueError(
+                        "H3 Chain Assemble accepts Source Timeline or legacy "
+                        "source_audio, not both.")
             if source_timeline is not None:
                 _validate_source_timeline_hash(
                     manifest["compatibility"], source_timeline,
@@ -16265,9 +16377,22 @@ def _checkpoint_selection_manifest(value: Any) -> dict[str, Any] | None:
     archives = _available_run_archives({"run_name": run_name})
     if archives:
         manifest["archives"] = archives
-    for key in ("prelude", "source_timeline"):
-        if isinstance(archived_plan.get(key), dict):
-            manifest[key] = _json_document(archived_plan[key])
+    if isinstance(archived_plan.get("prelude"), dict):
+        manifest["prelude"] = _json_document(archived_plan["prelude"])
+    timeline_records = [
+        item.get("source_timeline") for item in loaded
+        if isinstance(item.get("source_timeline"), dict)]
+    if timeline_records:
+        timeline_record = _json_document(timeline_records[0])
+        if any(_canonical_json(item) != _canonical_json(timeline_record)
+               for item in timeline_records[1:]):
+            raise ValueError(
+                "Selected checkpoint revisions use different Source "
+                "Timeline recovery descriptors.")
+        manifest["source_timeline"] = timeline_record
+    elif isinstance(archived_plan.get("source_timeline"), dict):
+        manifest["source_timeline"] = _json_document(
+            archived_plan["source_timeline"])
     _validate_manifest(manifest)
     return manifest
 
