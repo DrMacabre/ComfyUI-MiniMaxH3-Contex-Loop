@@ -100,6 +100,31 @@ export function convertTaggedPictureReference(
     );
 }
 
+export function referenceReplacementToken(
+        record, mode = "native", timestamp = 0) {
+    if (!record || !["native", "semantic"].includes(mode)) return "";
+    if (mode === "semantic") {
+        if (record.kind !== "picture" || !record.tag) return "";
+        return taggedPictureReferenceToken(record.tag, "semantic", timestamp);
+    }
+    if (record.nativeToken === null) return "";
+    return String(record.nativeToken ?? record.token ?? "");
+}
+
+export function replacePromptReferenceOccurrence(
+        prompt, start, end, record, mode = "native", timestamp = 0) {
+    const source = String(prompt ?? "");
+    const first = Number(start);
+    const last = Number(end);
+    if (!Number.isInteger(first) || !Number.isInteger(last)
+            || first < 0 || last < first || last > source.length) {
+        return source;
+    }
+    const replacement = referenceReplacementToken(record, mode, timestamp);
+    if (!replacement) return source;
+    return `${source.slice(0, first)}${replacement}${source.slice(last)}`;
+}
+
 function inputConnection(node, name) {
     const input = node?.inputs?.find((item) => item.name === name);
     const link = input?.link == null ? null : node.graph?.links?.[input.link];

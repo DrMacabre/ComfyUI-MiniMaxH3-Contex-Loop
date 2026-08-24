@@ -6,6 +6,12 @@ Newest first. This file keeps release history out of the onboarding README.
 
 ## v0.5.18 — Semantic anchors on the reference line
 
+- Reference chips in both rich scene-prompt editors are now directly
+  editable. Clicking a chip can replace that exact occurrence with another
+  compatible connected reference, switch a tagged picture between native
+  `@tag` and semantic `#tag[time]` syntax, and edit the semantic timestamp in
+  a dedicated seconds field without rewriting the prompt by hand.
+
 - Split Qwen-only `#semantic[timestamp]` pictures from native H3 `@reference`
   media. Semantic Picture Anchor nodes now feed the existing reference line
   through one bundle, so semantic images do not consume native H3 reference

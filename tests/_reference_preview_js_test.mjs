@@ -11,6 +11,8 @@ import {
     imageToVideoReferenceRecords,
     referencePreviewRecords,
     referenceIsActive,
+    referenceReplacementToken,
+    replacePromptReferenceOccurrence,
     scheduledReferenceRecords,
     taggedReferenceRecords,
     taggedPictureReferenceMode,
@@ -43,6 +45,48 @@ assert.equal(
         "Use #hero[0.00s], then #hero[2.5].", "hero", "native",
     ),
     "Use @hero, then @hero.",
+);
+const heroRecord = {
+    kind: "picture", tag: "hero", token: "@hero", nativeToken: "@hero",
+};
+const alternateRecord = {
+    kind: "picture", tag: "alternate", token: "@alternate",
+    nativeToken: "@alternate",
+};
+assert.equal(
+    referenceReplacementToken(alternateRecord, "semantic", 3.125),
+    "#alternate[3.13s]",
+);
+assert.equal(
+    replacePromptReferenceOccurrence(
+        "Use @hero, then @hero.", 16, 21, alternateRecord, "native",
+    ),
+    "Use @hero, then @alternate.",
+);
+assert.equal(
+    replacePromptReferenceOccurrence(
+        "Use #hero[1.00s] now.", 4, 16, heroRecord, "semantic", 2.5,
+    ),
+    "Use #hero[2.50s] now.",
+);
+assert.equal(
+    replacePromptReferenceOccurrence(
+        "Use @hero.", -1, 9, alternateRecord, "native",
+    ),
+    "Use @hero.",
+);
+assert.equal(
+    referenceReplacementToken(
+        {kind: "audio", tag: "voice", token: "@voice"}, "semantic", 1,
+    ),
+    "",
+);
+assert.equal(
+    referenceReplacementToken({
+        kind: "picture", tag: "only", token: "#only[0.00s]",
+        nativeToken: null, semanticOnly: true,
+    }, "native"),
+    "",
 );
 
 function makeNode(id, type, widgets = {}) {

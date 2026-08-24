@@ -28,6 +28,8 @@ import {
 import {
     availableReferenceRecords,
     convertTaggedPictureReference,
+    referenceReplacementToken,
+    replacePromptReferenceOccurrence,
     taggedPictureReferenceMode,
     taggedPictureReferenceToken,
 } from "./h3_reference_preview_core.mjs?v=0.5.18";
@@ -181,6 +183,15 @@ function injectStyles() {
         .h3sp-popover audio.h3sp-popover-media { height:42px; background:transparent; }
         .h3sp-popover-detail { margin-top:6px; color:rgba(238,242,248,.62);
             white-space:pre-wrap; overflow-wrap:anywhere; }
+        .h3sp-popover-editor { display:grid; gap:8px; }
+        .h3sp-popover-field { display:grid; grid-template-columns:82px minmax(0,1fr);
+            align-items:center; gap:7px; }
+        .h3sp-popover-field > span { color:rgba(238,242,248,.68); }
+        .h3sp-popover-field select,.h3sp-popover-field input { width:100%; min-width:0;
+            padding:5px 7px; border:1px solid #60718c; border-radius:5px;
+            background:#0e1117; color:#eef2f8; }
+        .h3sp-popover-actions { display:flex; justify-content:flex-end; gap:6px; }
+        .h3sp-popover-actions button { padding:4px 9px; }
         .h3sp-root.h3sp-assistant-enabled { overflow:auto; }
         .h3sp-root.h3sp-assistant-enabled .h3sp-textarea {
             min-height:220px; resize:vertical;
@@ -683,8 +694,10 @@ function mount(node) {
         schema: null,
         promptTextarea: null,
         richEditor: null,
+        referenceTray: null,
         popover: null,
         popoverTimer: null,
+        popoverPinned: false,
         assistant: {
             client: null,
             host: null,
@@ -1689,7 +1702,7 @@ function mount(node) {
             element("div", "h3sp-error", message),
             element("div", "h3sp-context", "Connect the Plan output to this node's plan input."),
         );
-        hidePopover();
+        hidePopover(true);
     }
 
     function navigate(offset, absolute = null, {synchronize = true, focus = true} = {}) {
@@ -1721,31 +1734,60 @@ function mount(node) {
         (state.decorated ? state.richEditor : state.promptTextarea)?.focus();
     }
 
-    function hidePopover() {
+    function ensureTokenPopover() {
+        if (state.popover) return state.popover;
+        const popover = element("div", "h3sp-popover");
+        popover.hidden = true;
+        popover.addEventListener("mouseenter", () => {
+            if (state.popoverTimer != null) window.clearTimeout(state.popoverTimer);
+        });
+        popover.addEventListener("mouseleave", scheduleHidePopover);
+        for (const eventName of [
+            "pointerdown", "pointerup", "mousedown", "mouseup", "click", "dblclick",
+            "keydown", "keyup", "keypress", "wheel",
+        ]) {
+            popover.addEventListener(eventName, (event) => event.stopPropagation());
+        }
+        document.body.append(popover);
+        state.popover = popover;
+        return popover;
+    }
+
+    function hidePopover(force = false) {
+        if (state.popoverPinned && !force) return;
         if (state.popoverTimer != null) {
             window.clearTimeout(state.popoverTimer);
             state.popoverTimer = null;
+        }
+        state.popoverPinned = false;
+        for (const media of state.popover?.querySelectorAll?.("audio,video") ?? []) {
+            media.pause?.();
         }
         if (state.popover) state.popover.hidden = true;
     }
 
     function scheduleHidePopover() {
+        if (state.popoverPinned) return;
         if (state.popoverTimer != null) window.clearTimeout(state.popoverTimer);
         state.popoverTimer = window.setTimeout(hidePopover, 140);
     }
 
+    function positionTokenPopover(popover, anchor) {
+        popover.hidden = false;
+        const rect = anchor.getBoundingClientRect();
+        const width = Math.min(360, globalThis.innerWidth - 24);
+        popover.style.left = `${Math.max(
+            12, Math.min(globalThis.innerWidth - width - 12, rect.left),
+        )}px`;
+        popover.style.top = `${Math.max(12, Math.min(
+            globalThis.innerHeight - popover.offsetHeight - 12, rect.bottom + 7,
+        ))}px`;
+    }
+
     function showTokenPopover(record, anchor) {
-        hidePopover();
-        const popover = state.popover ?? element("div", "h3sp-popover");
-        if (!state.popover) {
-            popover.hidden = true;
-            popover.addEventListener("mouseenter", () => {
-                if (state.popoverTimer != null) window.clearTimeout(state.popoverTimer);
-            });
-            popover.addEventListener("mouseleave", scheduleHidePopover);
-            document.body.append(popover);
-            state.popover = popover;
-        }
+        if (state.popoverPinned) return;
+        hidePopover(true);
+        const popover = ensureTokenPopover();
         popover.replaceChildren(element("div", "h3sp-popover-title", record.token));
         const mediaKind = record.kind === "picture" ? "image" : record.kind;
         const media = findMediaPreview(record.source, mediaKind);
@@ -1774,16 +1816,155 @@ function mount(node) {
             `${record.active ? "Active" : "Inactive"} in scene ${state.active + 1}\n` +
             `Source: ${sourceTitle}`,
         ));
-        popover.hidden = false;
-        const rect = anchor.getBoundingClientRect();
-        const width = Math.min(360, globalThis.innerWidth - 24);
-        popover.style.left = `${Math.max(12, Math.min(globalThis.innerWidth - width - 12, rect.left))}px`;
-        popover.style.top = `${Math.max(12, Math.min(
-            globalThis.innerHeight - popover.offsetHeight - 12, rect.bottom + 7,
-        ))}px`;
+        positionTokenPopover(popover, anchor);
     }
 
-    function makeRichToken(part) {
+    function recordSupportsNative(record) {
+        return record?.nativeToken !== null
+            && Boolean(String(record?.nativeToken ?? record?.token ?? ""));
+    }
+
+    function recordSupportsSemantic(record) {
+        return record?.kind === "picture" && Boolean(record?.tag)
+            && Boolean(record?.supportsSemantic || record?.semanticOnly);
+    }
+
+    function inlineReferenceCandidates(part) {
+        return state.records.filter((record) => {
+            if (state.referenceMode !== "tagged" && !record.active) return false;
+            return part.kind === "unknown" || record.kind === part.kind;
+        });
+    }
+
+    function showReferenceEditor(part, start, end, anchor) {
+        const candidates = inlineReferenceCandidates(part);
+        if (!candidates.length) return;
+        hidePopover(true);
+        state.popoverPinned = true;
+        const popover = ensureTokenPopover();
+        const editor = element("div", "h3sp-popover-editor");
+        editor.append(element("div", "h3sp-popover-title", "Replace reference"));
+
+        const referenceField = element("label", "h3sp-popover-field");
+        referenceField.append(element("span", "", "Reference"));
+        const referenceSelect = element("select");
+        for (let index = 0; index < candidates.length; index += 1) {
+            const record = candidates[index];
+            const option = element("option", "", record.token);
+            option.value = String(index);
+            if (record.label && record.label !== record.token) {
+                option.textContent = `${record.token} → ${record.label}`;
+            }
+            referenceSelect.append(option);
+        }
+        const currentIndex = Math.max(0, candidates.findIndex(
+            (record) => record === part.record
+                || (record.tag && record.tag === part.record?.tag)
+                || record.token === part.record?.token,
+        ));
+        referenceSelect.value = String(currentIndex);
+        referenceField.append(referenceSelect);
+
+        const modeField = element("label", "h3sp-popover-field");
+        modeField.append(element("span", "", "Syntax"));
+        const modeSelect = element("select");
+        modeField.append(modeSelect);
+
+        const timestampField = element("label", "h3sp-popover-field");
+        timestampField.append(element("span", "", "Time (sec)"));
+        const timestampInput = element("input");
+        timestampInput.type = "number";
+        timestampInput.min = "0";
+        timestampInput.step = "0.01";
+        timestampInput.value = String(part.timestamp ?? 0);
+        timestampField.append(timestampInput);
+
+        const updateModes = (preferred = modeSelect.value) => {
+            const record = candidates[Number(referenceSelect.value)];
+            const native = recordSupportsNative(record);
+            const semantic = recordSupportsSemantic(record);
+            modeSelect.replaceChildren();
+            if (native) {
+                const option = element("option", "", "@ native");
+                option.value = "native";
+                modeSelect.append(option);
+            }
+            if (semantic) {
+                const option = element("option", "", "# semantic timestamp");
+                option.value = "semantic";
+                modeSelect.append(option);
+            }
+            modeSelect.value = [...modeSelect.options].some(
+                (option) => option.value === preferred,
+            ) ? preferred : semantic && !native ? "semantic" : "native";
+            timestampField.hidden = modeSelect.value !== "semantic";
+            modeField.hidden = modeSelect.options.length < 2;
+        };
+        referenceSelect.addEventListener("change", () => updateModes());
+        modeSelect.addEventListener("change", () => {
+            timestampField.hidden = modeSelect.value !== "semantic";
+        });
+        updateModes(part.semantic ? "semantic" : "native");
+        editor.append(referenceField, modeField, timestampField);
+
+        const actions = element("div", "h3sp-popover-actions");
+        const cancel = element("button", "", "Cancel");
+        cancel.type = "button";
+        cancel.addEventListener("click", () => hidePopover(true));
+        const apply = element("button", "", "Apply");
+        apply.type = "button";
+        apply.addEventListener("click", () => {
+            const record = candidates[Number(referenceSelect.value)];
+            const mode = modeSelect.value;
+            const timestamp = Number(timestampInput.value);
+            const current = activePromptText();
+            if (current.slice(start, end) !== part.text) {
+                hidePopover(true);
+                renderRichEditorText(current);
+                return;
+            }
+            const next = replacePromptReferenceOccurrence(
+                current, start, end, record, mode, timestamp,
+            );
+            const replacement = referenceReplacementToken(
+                record, mode, timestamp,
+            );
+            hidePopover(true);
+            if (!state.richEditor || !replacement || next === current) return;
+            renderRichEditorText(next, start + replacement.length);
+            state.richEditor.dispatchEvent(new InputEvent("input", {
+                bubbles:true, inputType:"insertReplacementText",
+            }));
+            const referenceData = availableReferenceRecords(
+                node, state.active + 1, {
+                    includeInactive:true,
+                    prompt:[sharedPrompt(state.plan).text.trim(), next.trim()]
+                        .filter(Boolean).join("\n\n"),
+                },
+            );
+            state.records = referenceData.records;
+            state.referenceMode = referenceData.mode;
+            renderRichEditorText(next, start + replacement.length);
+            if (state.referenceTray) renderReferenceTray(state.referenceTray);
+            state.richEditor.focus();
+        });
+        actions.append(cancel, apply);
+        editor.append(actions);
+        editor.addEventListener("keydown", (event) => {
+            if (event.key === "Escape") {
+                event.preventDefault();
+                cancel.click();
+            } else if (event.key === "Enter") {
+                event.preventDefault();
+                apply.click();
+            }
+        });
+        popover.replaceChildren(editor);
+        positionTokenPopover(popover, anchor);
+        referenceSelect.focus();
+    }
+
+    function makeRichToken(part, start, end) {
         if (part.type === "text") return document.createTextNode(part.text);
         const kind = part.type === "reference" ? part.kind : part.type;
         const token = element("span", `h3sp-token h3sp-token-${kind}`);
@@ -1808,13 +1989,29 @@ function mount(node) {
         }
         token.append(element("span", "h3sp-token-label", part.text));
         if (part.record) {
-            token.title = `${part.text} · hover for ${kind} preview`;
+            token.title = part.type === "reference"
+                ? `${part.text} · click to replace or edit; hover for preview`
+                : `${part.text} · hover for ${kind} preview`;
             token.addEventListener("mouseenter", () => showTokenPopover(part.record, token));
             token.addEventListener("mouseleave", scheduleHidePopover);
             token.addEventListener("focus", () => showTokenPopover(part.record, token));
         } else {
             token.title = part.type === "reference"
-                ? "Unresolved reference in this scene" : part.text;
+                ? "Unresolved reference in this scene · click to replace"
+                : part.text;
+        }
+        if (part.type === "reference") {
+            token.tabIndex = 0;
+            token.addEventListener("click", (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                showReferenceEditor(part, start, end, token);
+            });
+            token.addEventListener("keydown", (event) => {
+                if (event.key !== "Enter" && event.key !== " ") return;
+                event.preventDefault();
+                showReferenceEditor(part, start, end, token);
+            });
         }
         return token;
     }
@@ -1836,7 +2033,8 @@ function mount(node) {
                 && editableSelection?.selectionStart >= partStart
                 && editableSelection?.selectionEnd <= partEnd;
             fragment.append(unfinished || editingSemanticTime
-                ? document.createTextNode(part.text) : makeRichToken(part));
+                ? document.createTextNode(part.text)
+                : makeRichToken(part, partStart, partEnd));
         }
         state.richEditor.replaceChildren(fragment);
         if (editableSelection?.selectionStart != null
@@ -2078,7 +2276,7 @@ function mount(node) {
             showFailure("The connected Plan has no scenes.");
             return;
         }
-        hidePopover();
+        hidePopover(true);
         state.completion?.destroy();
         state.completion = null;
         state.schema = null;
@@ -2161,6 +2359,7 @@ function mount(node) {
 
         const tools = element("div", "h3sp-tools");
         const refs = element("div", "h3sp-refs");
+        state.referenceTray = refs;
         const referenceButton = button(
             "@ Reference",
             "Browse connected Ref2VA media; typing @ opens inline autocomplete",
@@ -2478,7 +2677,7 @@ function mount(node) {
     node.onRemoved = function () {
         if (state.pollTimer != null) window.clearInterval(state.pollTimer);
         if (state.popoverTimer != null) window.clearTimeout(state.popoverTimer);
-        hidePopover();
+        hidePopover(true);
         state.popover?.remove();
         state.completion?.destroy();
         state.completion = null;
