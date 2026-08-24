@@ -30,8 +30,11 @@ import {
 } from "../web/h3_chain_plan_core.mjs";
 import {
     PRIMARY_TRANSITION_PRESETS,
+    applySceneAudioOverride,
     applySceneTransitionPreset,
     primaryTransitionOptions,
+    sceneAudioOverride,
+    sceneAudioPolicy,
     sceneTransitionPreset,
     transitionPresetLabel,
 } from "../web/h3_policy_core.mjs";
@@ -68,6 +71,34 @@ assert.deepEqual(compactBoundary, {});
 assert.equal(transitionPresetLabel("soft_av"), "Soft AV");
 assert.equal(
     transitionPresetLabel("color_drift_av"), "Color-Stable Drift AV",
+);
+
+const sceneAudio = {};
+const planAudio = {
+    finalAudio:"generated", sourceReference:"off",
+    generatedContinuity:"on", sourceAudioTarget:"off",
+};
+assert.deepEqual(sceneAudioPolicy(sceneAudio, planAudio), {
+    finalAudio:"generated", sourceReference:"off",
+    generatedContinuity:"on", sourceAudioTarget:"off",
+});
+assert.equal(sceneAudioOverride(sceneAudio, "source_reference"), "inherit");
+applySceneAudioOverride(sceneAudio, "source_reference", "on");
+applySceneAudioOverride(sceneAudio, "generated_continuity", "off");
+applySceneAudioOverride(sceneAudio, "source_audio_target", "locked");
+assert.deepEqual(sceneAudio, {
+    source_reference:"on", generated_continuity:"off",
+    source_audio_target:"locked",
+});
+assert.deepEqual(sceneAudioPolicy(sceneAudio, planAudio), {
+    finalAudio:"generated", sourceReference:"off",
+    generatedContinuity:"off", sourceAudioTarget:"locked",
+});
+applySceneAudioOverride(sceneAudio, "source_audio_target", "inherit");
+assert.equal(sceneAudio.source_audio_target, undefined);
+assert.throws(
+    () => applySceneAudioOverride(sceneAudio, "source_reference", "maybe"),
+    /Unknown scene source reference override/,
 );
 
 assert.equal(AUTO_SCENE_COLORS.length, 12);
@@ -611,6 +642,10 @@ assert.match(editorSource, /New random/);
 assert.match(editorSource, /Use derived/);
 assert.match(editorSource, /Incoming transition/);
 assert.match(editorSource, /Final assembly crossfade frames/);
+assert.match(editorSource, /field\("Source reference", sourceReference\)/);
+assert.match(editorSource, /field\("Generated continuity", generatedContinuity\)/);
+assert.match(editorSource, /field\("Lock source audio", lockSourceAudio\)/);
+assert.match(editorSource, /applySceneAudioOverride/);
 assert.match(editorSource, /Advanced visual context/);
 assert.match(editorSource, /Advanced audio context/);
 assert.match(editorSource, /Advanced implementation/);

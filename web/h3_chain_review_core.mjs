@@ -5,7 +5,7 @@ import {
     sceneAudioContextLength,
     sceneContextLength,
     sharedPrompt,
-} from "./h3_chain_plan_core.mjs?v=0.5.5";
+} from "./h3_chain_plan_core.mjs?v=0.6.0";
 
 const FPS = 24;
 const MAX_H3_FRAMES = 3592;

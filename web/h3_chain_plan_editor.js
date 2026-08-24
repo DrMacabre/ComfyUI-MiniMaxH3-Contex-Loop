@@ -23,19 +23,22 @@ import {
     setSharedPrompt,
     shotLengthMode,
     sharedPrompt,
-} from "./h3_chain_plan_core.mjs?v=0.5.5";
-import {availableReferenceRecords} from "./h3_reference_preview_core.mjs?v=0.5.5";
+} from "./h3_chain_plan_core.mjs?v=0.6.0";
+import {availableReferenceRecords} from "./h3_reference_preview_core.mjs?v=0.6.0";
 import {
+    applySceneAudioOverride,
     applySceneTransitionPreset,
     primaryTransitionOptions,
+    sceneAudioOverride,
+    sceneAudioPolicy,
     sceneTransitionPreset,
     transitionPresetLabel,
-} from "./h3_policy_core.mjs?v=0.5.5";
+} from "./h3_policy_core.mjs?v=0.6.0";
 import {
     resolveAudioContextLength,
     resolveAudioPolicy,
     resolveTransitionPolicy,
-} from "./h3_socket_presentation_core.mjs?v=0.5.5";
+} from "./h3_socket_presentation_core.mjs?v=0.6.0";
 
 // This scene editor is an original implementation. Its quick @ reference and
 // # dialogue interactions are inspired by nkxx188/ComfyUI-MiniMaxH3-Easy,
@@ -184,6 +187,8 @@ function injectStyles() {
             overflow-wrap:anywhere; }
         .h3c-boundary-fields { display:grid; grid-template-columns:minmax(220px,1fr)
             minmax(180px,.7fr); gap:7px; margin-top:8px; }
+        .h3c-audio-fields { display:grid; grid-template-columns:repeat(3,minmax(150px,1fr));
+            gap:7px; margin-top:8px; }
         .h3c-advanced-fields { display: none; grid-template-columns:repeat(4, minmax(140px, 1fr)); gap: 7px; margin-top: 8px; }
         .h3c-editor.h3c-show-advanced .h3c-advanced-fields { display: grid; }
         .h3c-errors { display: none; margin: 7px 0; padding: 7px; border-radius: 5px; color: #ffb4b8; background: #5d202866; white-space: pre-wrap; }
@@ -197,7 +202,8 @@ function injectStyles() {
         .h3c-footer a { color: var(--h3c-accent); }
         @media (max-width: 650px) {
             .h3c-defaults, .h3c-length-row, .h3c-advanced-fields,
-            .h3c-seed-control, .h3c-boundary-fields { grid-template-columns: 1fr; }
+            .h3c-seed-control, .h3c-boundary-fields, .h3c-audio-fields {
+                grid-template-columns: 1fr; }
             .h3c-seed-status { grid-column:1; }
             .h3c-card-head { flex-wrap: wrap; }
             .h3c-timing { width: 100%; }
@@ -479,7 +485,7 @@ function mountEditor(node) {
 
     function currentSettings() {
         const transition = resolveTransitionPolicy(node);
-        const audio = resolveAudioPolicy(node);
+        const audioPolicy = resolveAudioPolicy(node);
         return {
             contextLength: transition.known
                 ? transition.contextLength
@@ -491,11 +497,12 @@ function mountEditor(node) {
             continuationMode: transition.known
                 ? transition.continuationMode
                 : widgetValue(node, "continuation_mode", "guide"),
-            generatedContinuity: audio.known
-                ? audio.generatedContinuity : "on",
-            sourceAudioTarget: audio.known
-                ? audio.sourceAudioTarget ?? "off" : "off",
+            generatedContinuity: audioPolicy.known
+                ? audioPolicy.generatedContinuity : "on",
+            sourceAudioTarget: audioPolicy.known
+                ? audioPolicy.sourceAudioTarget ?? "off" : "off",
             transitionPreset: transition.known ? transition.preset : "custom",
+            audioPolicy,
             defaultDurationSeconds: widgetValue(node, "default_duration_seconds", 15),
             defaultSteps: widgetValue(node, "default_steps", 20),
         };
@@ -1037,6 +1044,63 @@ function mountEditor(node) {
             field("Incoming transition", incomingTransition),
             field("Final assembly crossfade frames", blendFrames),
         );
+        const planAudioPolicy = resolvedPlanSettings.audioPolicy;
+        const effectiveAudioPolicy = sceneAudioPolicy(shot, planAudioPolicy);
+        function audioOverrideSelect(key, inherited, choices, title) {
+            const select = element("select", "h3c-audio-override");
+            const inheritedOption = element(
+                "option", "", `Inherit Chain Policy · ${inherited}`,
+            );
+            inheritedOption.value = "inherit";
+            select.append(inheritedOption);
+            for (const [value, label] of choices) {
+                const option = element("option", "", label);
+                option.value = value;
+                select.append(option);
+            }
+            select.value = sceneAudioOverride(shot, key);
+            select.title = title;
+            select.addEventListener("change", () => {
+                applySceneAudioOverride(shot, key, select.value);
+                syncPlan();
+            });
+            return select;
+        }
+        const sourceReference = audioOverrideSelect(
+            "source_reference",
+            planAudioPolicy.sourceReference ?? effectiveAudioPolicy.sourceReference,
+            [["on", "On · use this source-track window as Ref2VA audio"],
+             ["off", "Off · no source audio reference"]],
+            "Controls only this scene's loose source-audio Ref2VA reference. "
+                + "It does not choose final soundtrack. Lock source audio wins "
+                + "over this switch.",
+        );
+        const generatedContinuity = audioOverrideSelect(
+            "generated_continuity",
+            planAudioPolicy.generatedContinuity
+                ?? effectiveAudioPolicy.generatedContinuity,
+            [["on", "On · continue prior generated audio"],
+             ["off", "Off · generate an independent audio stream"]],
+            "Controls whether this scene carries the predecessor's generated "
+                + "audio latent. Lock source audio wins over this switch.",
+        );
+        const inheritedLock = (planAudioPolicy.sourceAudioTarget ?? "off")
+            === "locked" ? "on" : "off";
+        const lockSourceAudio = audioOverrideSelect(
+            "source_audio_target", inheritedLock,
+            [["locked", "On · protect this exact source window"],
+             ["off", "Off · leave target audio denoisable"]],
+            "Locks only this scene's exact source waveform into the H3 target "
+                + "audio latent. While on, loose source reference and generated "
+                + "continuity are effectively off. Final soundtrack remains "
+                + "the global Chain Policy choice.",
+        );
+        const audioFields = element("div", "h3c-audio-fields");
+        audioFields.append(
+            field("Source reference", sourceReference),
+            field("Generated continuity", generatedContinuity),
+            field("Lock source audio", lockSourceAudio),
+        );
         advanced.append(
             field("Steps (blank = default)", steps),
             field("Advanced visual context", context),
@@ -1051,6 +1115,7 @@ function mountEditor(node) {
             promptTools(prompt, index + 1),
             field("Scene seed", seedControl),
             boundary,
+            audioFields,
             advanced,
         );
         return card;
