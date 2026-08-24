@@ -20,13 +20,15 @@ import {
     sceneContextLength,
     sceneContinuationMode,
     sceneLoRARoute,
+    scenePromptSeedMode,
     sceneVideoBlendFrames,
+    setScenePromptSeedMode,
     setShotLengthMode,
     setSharedPrompt,
     shotLengthMode,
     sharedPrompt,
-} from "./h3_chain_plan_core.mjs?v=0.5.18";
-import {availableReferenceRecords} from "./h3_reference_preview_core.mjs?v=0.5.18";
+} from "./h3_chain_plan_core.mjs?v=0.5.19";
+import {availableReferenceRecords} from "./h3_reference_preview_core.mjs?v=0.5.19";
 import {
     applySceneAudioOverride,
     applySceneTransitionPreset,
@@ -35,12 +37,12 @@ import {
     sceneAudioPolicy,
     sceneTransitionPreset,
     transitionPresetLabel,
-} from "./h3_policy_core.mjs?v=0.5.18";
+} from "./h3_policy_core.mjs?v=0.5.19";
 import {
     resolveAudioContextLength,
     resolveAudioPolicy,
     resolveTransitionPolicy,
-} from "./h3_socket_presentation_core.mjs?v=0.5.18";
+} from "./h3_socket_presentation_core.mjs?v=0.5.19";
 
 // This scene editor is an original implementation. Its quick @ reference and
 // # dialogue interactions are inspired by nkxx188/ComfyUI-MiniMaxH3-Easy,
@@ -799,6 +801,60 @@ function mountEditor(node) {
             prompt, `scene:${sceneColorKey(shot, index)}`, 112,
         );
 
+        const promptSeedControl = element("div", "h3c-seed-control");
+        const promptSeedMode = element("select");
+        for (const [modeValue, label] of [
+            ["inherit", "Stable derived"],
+            ["fixed", "Fixed scene seed"],
+            ["randomize", "Randomize each queue"],
+        ]) {
+            const option = element("option", "", label);
+            option.value = modeValue;
+            promptSeedMode.append(option);
+        }
+        const promptSeed = element("input");
+        promptSeed.type = "text";
+        promptSeed.inputMode = "numeric";
+        promptSeed.placeholder = "Scene prompt seed";
+        const newPromptSeed = button(
+            "New random",
+            "Create and store a new fixed alternative-choice seed for only this scene",
+            () => {
+                shot.prompt_seed_mode = "fixed";
+                shot.prompt_seed = randomSceneSeed();
+                refreshPromptSeedControl();
+                syncPlan();
+            },
+        );
+        function refreshPromptSeedControl() {
+            const selected = scenePromptSeedMode(shot);
+            promptSeedMode.value = selected;
+            promptSeed.disabled = selected !== "fixed";
+            newPromptSeed.disabled = selected !== "fixed";
+            promptSeed.value = selected === "fixed" ? (shot.prompt_seed ?? "") : "";
+            if (selected === "inherit") {
+                promptSeed.title = "This scene derives a stable alternative-choice seed from its scene index and ID.";
+            } else if (selected === "randomize") {
+                promptSeed.title = "A fresh alternative-choice seed is generated whenever this Plan is queued. The exact resolved seed is still saved with the scene checkpoint.";
+            } else {
+                promptSeed.title = "Unsigned 64-bit seed used only to choose this scene's {one|two} prompt alternatives. It never changes the sampler seed.";
+            }
+        }
+        promptSeedMode.addEventListener("change", () => {
+            setScenePromptSeedMode(shot, promptSeedMode.value);
+            refreshPromptSeedControl();
+            syncPlan();
+        });
+        promptSeed.addEventListener("change", () => {
+            if (promptSeed.value.trim()) shot.prompt_seed = promptSeed.value.trim();
+            else shot.prompt_seed = randomSceneSeed();
+            setScenePromptSeedMode(shot, "fixed");
+            refreshPromptSeedControl();
+            syncPlan();
+        });
+        promptSeedControl.append(promptSeedMode, promptSeed, newPromptSeed);
+        refreshPromptSeedControl();
+
         const seedControl = element("div", "h3c-seed-control");
         const seed = element("input");
         seed.type = "text";
@@ -1128,6 +1184,7 @@ function mountEditor(node) {
             lengthRow,
             field("Scene prompt (optional with shared prompt)", prompt),
             promptTools(prompt, index + 1),
+            field("Prompt alternatives", promptSeedControl),
             field("Scene seed", seedControl),
             field("Scene LoRA route", loraRoute),
             boundary,

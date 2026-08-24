@@ -19,23 +19,25 @@ import {
     sceneContextLength,
     sceneContinuationMode,
     sceneLoRARoute,
+    scenePromptSeedMode,
     sceneVideoBlendFrames,
+    setScenePromptSeedMode,
     setSharedPrompt,
     setShotLengthMode,
     sharedPrompt,
     shotLengthMode,
-} from "./h3_chain_plan_core.mjs?v=0.5.18";
+} from "./h3_chain_plan_core.mjs?v=0.5.19";
 import {
     promptRevisionHelp,
     promptRevisionLabel,
     promptRevisionNavigation,
-} from "./h3_prompt_history_core.mjs?v=0.5.18";
+} from "./h3_prompt_history_core.mjs?v=0.5.19";
 import {
     availableReferenceRecords,
     convertTaggedPictureReference,
     taggedPictureReferenceMode,
     taggedPictureReferenceToken,
-} from "./h3_reference_preview_core.mjs?v=0.5.18";
+} from "./h3_reference_preview_core.mjs?v=0.5.19";
 import {
     applySceneAudioOverride,
     applySceneTransitionPreset,
@@ -44,12 +46,12 @@ import {
     sceneAudioPolicy,
     sceneTransitionPreset,
     transitionPresetLabel,
-} from "./h3_policy_core.mjs?v=0.5.18";
+} from "./h3_policy_core.mjs?v=0.5.19";
 import {
     resolveAudioContextLength,
     resolveAudioPolicy,
     resolveTransitionPolicy,
-} from "./h3_socket_presentation_core.mjs?v=0.5.18";
+} from "./h3_socket_presentation_core.mjs?v=0.5.19";
 import {
     locateStudioTimelineSecond,
     h3StudioGridMarkers,
@@ -61,8 +63,8 @@ import {
     studioSourceAudioSecond,
     studioSourceSecond,
     studioWaveformSceneSamples,
-} from "./h3_chain_plan_studio_core.mjs?v=0.5.18";
-import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.5.18";
+} from "./h3_chain_plan_studio_core.mjs?v=0.5.19";
+import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.5.19";
 
 const {connectedPromptEditors, publishCompanionScene} = promptCompanionSync;
 function publishCompanionPrompt(...args) {
@@ -181,6 +183,8 @@ function injectStyles() {
         .h3studio-advanced-grid { display:grid; grid-template-columns:repeat(3,minmax(160px,1fr));
             gap:7px; margin-top:7px; align-items:end; }
         .h3studio-length { display:grid; grid-template-columns:112px minmax(80px,1fr); gap:5px; }
+        .h3studio-prompt-seed { display:grid;
+            grid-template-columns:132px minmax(90px,1fr) auto; gap:5px; }
         .h3studio-context-pair { display:grid; grid-template-columns:1fr 1fr; gap:5px; }
         .h3studio-prompt { min-height:250px; width:100%; font:15px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace !important; }
         .h3studio-prompt-tools { display:flex; align-items:center; gap:6px; margin:7px 0; flex-wrap:wrap; }
@@ -1263,6 +1267,57 @@ function mount(node) {
         const steps = element("input"); steps.type = "number"; steps.min = "1"; steps.max = "10000";
         steps.placeholder = String(state.plan.defaults?.steps ?? settings().defaultSteps); steps.value = shot.steps ?? "";
         steps.addEventListener("change", () => { if (steps.value) shot.steps = Number(steps.value); else delete shot.steps; writePlan(); });
+        const promptSeedMode = element("select");
+        for (const [modeValue, label] of [
+            ["inherit", "Stable derived"],
+            ["fixed", "Fixed scene seed"],
+            ["randomize", "Randomize each queue"],
+        ]) {
+            const option = element("option", "", label);
+            option.value = modeValue;
+            promptSeedMode.append(option);
+        }
+        const promptSeed = element("input");
+        promptSeed.type = "text";
+        promptSeed.inputMode = "numeric";
+        promptSeed.placeholder = "Prompt seed";
+        const promptSeedWrap = element("span", "h3studio-prompt-seed");
+        const rerollPromptSeed = button(
+            "↻", "Store a new fixed prompt-alternative seed for this scene",
+            () => {
+                shot.prompt_seed_mode = "fixed";
+                shot.prompt_seed = randomSceneSeed();
+                refreshPromptSeed();
+                writePlan();
+            },
+        );
+        function refreshPromptSeed() {
+            const selected = scenePromptSeedMode(shot);
+            promptSeedMode.value = selected;
+            promptSeed.disabled = selected !== "fixed";
+            rerollPromptSeed.disabled = selected !== "fixed";
+            promptSeed.value = selected === "fixed" ? (shot.prompt_seed ?? "") : "";
+            promptSeedWrap.title = selected === "inherit"
+                ? "Derive a stable seed from this scene's index and ID for its {one|two} choices."
+                : selected === "randomize"
+                    ? "Choose fresh prompt alternatives whenever this Plan is queued; the exact choice seed is saved with the checkpoint."
+                    : "Exact uint64 seed for this scene's prompt alternatives. This does not change sampler noise.";
+        }
+        promptSeedMode.addEventListener("change", () => {
+            setScenePromptSeedMode(shot, promptSeedMode.value);
+            refreshPromptSeed();
+            writePlan();
+            renderStatus();
+        });
+        promptSeed.addEventListener("change", () => {
+            if (promptSeed.value.trim()) shot.prompt_seed = promptSeed.value.trim();
+            else shot.prompt_seed = randomSceneSeed();
+            setScenePromptSeedMode(shot, "fixed");
+            refreshPromptSeed();
+            writePlan();
+        });
+        promptSeedWrap.append(promptSeedMode, promptSeed, rerollPromptSeed);
+        refreshPromptSeed();
         const seed = element("input"); seed.type = "text"; seed.inputMode = "numeric"; seed.placeholder = "Stable derived seed"; seed.value = shot.seed ?? "";
         seed.addEventListener("change", () => { if (seed.value.trim()) shot.seed = seed.value.trim(); else delete shot.seed; writePlan(); });
         const seedWrap = element("span", "h3studio-length");
@@ -1462,7 +1517,9 @@ function mount(node) {
         const form = element("div", "h3studio-form");
         form.append(
             field("Scene ID", id), field("Length", lengthControl),
-            field("Steps", steps), field("Seed", seedWrap),
+            field("Steps", steps),
+            field("Prompt alternatives", promptSeedWrap),
+            field("Seed", seedWrap),
             field("LoRA route", loraRoute),
             field("Incoming transition", incomingTransition),
             field("Final assembly crossfade frames", blendFrames),

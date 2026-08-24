@@ -4,7 +4,7 @@ Newest first. This file keeps release history out of the onboarding README.
 
 ## Unreleased
 
-## v0.5.18 — Semantic anchors on the reference line
+## v0.5.19 — Per-scene prompt authoring
 
 - Reference insertion from the Scene Prompt Editor's top menu now preserves
   the last rich-text or plain-text selection, so a chosen reference replaces
@@ -29,6 +29,16 @@ Newest first. This file keeps release history out of the onboarding README.
   `@tag` and semantic `#tag[time]` syntax, and edit the semantic timestamp in
   a dedicated seconds field without rewriting the prompt by hand.
 
+- Added **MiniMax H3 Scene LoRA Scheduler**, a lazy per-scene MODEL router
+  that deliberately does not load or patch LoRAs. Plan and Plan Studio expose
+  Base plus LoRA A-D on every scene; each branch comes from ordinary ComfyUI
+  LoRA loaders and may contain a stack or strength variant. Only the selected
+  input is evaluated. Route choices are saved as Plan/revision provenance but
+  deliberately excluded from checkpoint/resume verification, and Base remains
+  absent from serialization for compatibility with existing plans.
+
+## v0.5.18 — Semantic anchors on the reference line
+
 - Split Qwen-only `#semantic[timestamp]` pictures from native H3 `@reference`
   media. Semantic Picture Anchor nodes now feed the existing reference line
   through one bundle, so semantic images do not consume native H3 reference
@@ -52,14 +62,6 @@ Newest first. This file keeps release history out of the onboarding README.
   manifests without the recovery descriptor retain their explicit fallback.
 
 ## v0.5.11 — Plan Studio transport hardening
-
-- Added **MiniMax H3 Scene LoRA Scheduler**, a lazy per-scene MODEL router
-  that deliberately does not load or patch LoRAs. Plan and Plan Studio expose
-  Base plus LoRA A-D on every scene; each branch comes from ordinary ComfyUI
-  LoRA loaders and may contain a stack or strength variant. Only the selected
-  input is evaluated. Route choices are saved as Plan/revision provenance but
-  deliberately excluded from checkpoint/resume verification, and Base remains
-  absent from serialization for compatibility with existing plans.
 
 - The bundled LBH 3D deferred-upscale workflow now leaves the pass-2 prompt
   override blank, preserving the exact compiled scene prompt by default. The
