@@ -191,7 +191,8 @@ skipped_schedule, skipped_fingerprint, skipped_status = (
     chain.MiniMaxH3ScheduledAudioReference().add(
         None, "song", "all", dynprompt=disabled_graph, unique_id="audio"))
 assert skipped_schedule["entries"] == []
-assert skipped_schedule["fingerprint"] == skipped_fingerprint
+assert chain._generation_fingerprint_value(skipped_fingerprint)[0] == (
+    skipped_schedule["fingerprint"])
 assert "skipped because compliance is disabled" in skipped_status
 
 disabled_picture_graph = FakeDynamicPrompt({
@@ -271,7 +272,8 @@ lazy_schedule, lazy_fingerprint, lazy_status = (
 assert lazy_audio.reads > 0
 assert lazy_schedule["entries"][0]["value"] is lazy_audio
 assert len(lazy_schedule["entries"][0]["content_hash"]) == 64
-assert lazy_schedule["fingerprint"] == lazy_fingerprint
+assert chain._generation_fingerprint_value(lazy_fingerprint)[0] == (
+    lazy_schedule["fingerprint"])
 assert "@lazy_voice audio on 1:2" in lazy_status
 try:
     chain.MiniMaxH3ScheduledAudioReference().add(
