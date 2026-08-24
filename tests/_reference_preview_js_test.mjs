@@ -3,6 +3,7 @@ import {
     availableReferenceRecords,
     collectScheduleNodes,
     collectTaggedNodes,
+    convertTaggedPictureReference,
     coreReferenceRecords,
     findScheduledRef2VA,
     findTaggedRef2VA,
@@ -11,7 +12,37 @@ import {
     referenceIsActive,
     scheduledReferenceRecords,
     taggedReferenceRecords,
+    taggedPictureReferenceMode,
+    taggedPictureReferenceToken,
 } from "../web/h3_reference_preview_core.mjs";
+
+assert.equal(taggedPictureReferenceToken("@hero", "native"), "@hero");
+assert.equal(
+    taggedPictureReferenceToken("hero", "semantic", 2.5),
+    "#hero[2.50s]",
+);
+assert.equal(taggedPictureReferenceMode("Use @hero.", "hero"), "native");
+assert.equal(
+    taggedPictureReferenceMode("Use #hero[2.50s].", "hero"),
+    "semantic",
+);
+assert.equal(
+    taggedPictureReferenceMode("Use @hero then #hero[2.50s].", "hero"),
+    "mixed",
+);
+assert.equal(
+    convertTaggedPictureReference(
+        "Use @hero, but keep @heroine and mail x@hero.",
+        "hero", "semantic", 1.25,
+    ),
+    "Use #hero[1.25s], but keep @heroine and mail x@hero.",
+);
+assert.equal(
+    convertTaggedPictureReference(
+        "Use #hero[0.00s], then #hero[2.5].", "hero", "native",
+    ),
+    "Use @hero, then @hero.",
+);
 
 function makeNode(id, type, widgets = {}) {
     return {
@@ -188,6 +219,17 @@ assert.equal(
     promptRefs.find(({tag}) => tag === "lazy_motion_audio").source,
     taggedLazyLoader,
 );
+const semanticPromptRefs = taggedReferenceRecords(
+    taggedEditor, "Use #hero_face[1.50s].",
+).records;
+const semanticHero = semanticPromptRefs.find(({tag}) => tag === "hero_face");
+assert.equal(semanticHero.active, true);
+assert.equal(semanticHero.nativeActive, false);
+assert.equal(semanticHero.semanticActive, true);
+assert.equal(semanticHero.label, null);
+assert.equal(semanticHero.nativeToken, "@hero_face");
+assert.equal(semanticHero.semanticToken, "#hero_face[0.00s]");
+assert.equal(semanticHero.supportsSemantic, true);
 assert.equal(referencePreviewRecords(
     taggedEditor, 2, {prompt: "Use @hero_look."}).mode, "tagged");
 assert.deepEqual(

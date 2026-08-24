@@ -6,16 +6,16 @@ import {
     promptTextToLines,
     promptValueToText,
     sharedPrompt,
-} from "./h3_chain_plan_core.mjs?v=0.6.5";
+} from "./h3_chain_plan_core.mjs?v=0.6.6";
 import {
     buildPromptAssistantContext,
     makePromptAssistRequest,
-} from "./h3_prompt_assistant_core.mjs?v=0.6.5";
-import {PromptAssistantClient} from "./h3_prompt_assistant_client.mjs?v=0.6.5";
+} from "./h3_prompt_assistant_core.mjs?v=0.6.6";
+import {PromptAssistantClient} from "./h3_prompt_assistant_client.mjs?v=0.6.6";
 import {
     directOptimizerConfigurationError,
     makeDirectPromptOptimizeRequest,
-} from "./h3_prompt_optimizer_core.mjs?v=0.6.5";
+} from "./h3_prompt_optimizer_core.mjs?v=0.6.6";
 import {
     openPromptOptimizerSettings,
     promptOptimizerBackend,
@@ -27,8 +27,13 @@ import {
     promptRevisionLabel,
     promptRevisionNavigation,
     promptRevisionTree,
-} from "./h3_prompt_history_core.mjs?v=0.6.5";
-import {availableReferenceRecords} from "./h3_reference_preview_core.mjs?v=0.6.5";
+} from "./h3_prompt_history_core.mjs?v=0.6.6";
+import {
+    availableReferenceRecords,
+    convertTaggedPictureReference,
+    taggedPictureReferenceMode,
+    taggedPictureReferenceToken,
+} from "./h3_reference_preview_core.mjs?v=0.6.6";
 import {
     PromptUndoHistory,
     RICH_PROMPT_GUIDES,
@@ -38,9 +43,9 @@ import {
     richGenerationMode,
     richGuideInstruction,
     tokenizeRichPrompt,
-} from "./h3_rich_prompt_editor_core.mjs?v=0.6.5";
-import {createPromptCompletionController} from "./h3_prompt_completion_core.mjs?v=0.6.5";
-import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.6.5";
+} from "./h3_rich_prompt_editor_core.mjs?v=0.6.6";
+import {createPromptCompletionController} from "./h3_prompt_completion_core.mjs?v=0.6.6";
+import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.6.6";
 
 const {publishCompanionScene, rebaseScenePrompt} = promptCompanionSync;
 function publishCompanionPrompt(...args) {
@@ -145,6 +150,13 @@ function injectStyles() {
       .h3rp-ref-tray.h3rp-open { display:grid; grid-template-columns:repeat(auto-fill,minmax(205px,1fr)); }
       .h3rp-ref-help { grid-column:1/-1; color:var(--h3rp-muted); }
       .h3rp-ref-card { justify-content:flex-start !important; min-width:0; text-align:left; }
+      .h3rp-ref-card-shell { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:4px;
+        align-items:stretch; min-width:0; }
+      .h3rp-ref-mode { display:flex; flex-direction:column; gap:2px; }
+      .h3rp-ref-mode button { min-width:38px !important; min-height:0 !important; padding:2px 5px !important;
+        font-size:10px !important; }
+      .h3rp-ref-mode button.h3rp-selected { border-color:var(--h3rp-accent) !important;
+        color:var(--h3rp-accent) !important; }
       .h3rp-ref-card.h3rp-inactive { opacity:.46; }
       .h3rp-ref-card-copy { min-width:0; overflow:hidden; }
       .h3rp-ref-card-title,.h3rp-ref-card-detail { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -535,6 +547,7 @@ function mount(node) {
         fontSize:clamp(node.properties[FONT_PROPERTY], MIN_FONT, MAX_FONT, DEFAULT_FONT),
         guide:normalizeRichGuide(node.properties[GUIDE_PROPERTY]),
         records:[], referenceMode:null, editor:null, refs:null, status:null, optimizerStatus:null,
+        referenceSyntax:new Map(),
         completion:null,
         history:{sceneKey:"", data:null, revisionId:null, host:null, loadToken:0, loadPromise:null,
             saveTimer:null, pendingDraft:null, savePromise:null, error:"", treeOpen:false,
@@ -891,8 +904,12 @@ function mount(node) {
         if (state.popoverTimer != null) window.clearTimeout(state.popoverTimer), state.popoverTimer = null;
         const popover = ensurePopover();
         popover.replaceChildren();
+        const syntax = selectedReferenceSyntax(record);
+        const displayToken = syntax === "semantic"
+            ? taggedPictureReferenceToken(record.tag, "semantic")
+            : record.token;
         const title = (state.referenceMode === "scheduled" || state.referenceMode === "tagged") && record.label
-            ? `${record.token} → ${record.label}` : record.token;
+            ? `${displayToken} → ${record.label}` : displayToken;
         popover.append(element("div", "h3rp-popover-title", title));
         const mediaKind = record.kind === "picture" ? "image" : record.kind;
         const media = findMediaPreview(record.source, mediaKind);
@@ -1002,7 +1019,8 @@ function mount(node) {
         renderEditorText(editorPlainText(state.editor), caret);
     }
 
-    function insertDecoratedText(text) {
+    function insertDecoratedText(text, selectSemanticTimestamp = false) {
+        const insertionStart = selectionTextOffset(state.editor);
         insertPlainText(state.editor, text);
         if (state.referenceMode === "tagged") {
             state.records = availableReferenceRecords(
@@ -1015,7 +1033,61 @@ function mount(node) {
                 },
             ).records;
         }
-        decorateEditorAtCaret();
+        if (selectSemanticTimestamp) {
+            const first = String(text).indexOf("[") + 1;
+            const last = String(text).lastIndexOf("s]");
+            renderEditorText(editorPlainText(state.editor), null, {
+                selectionStart: insertionStart + first,
+                selectionEnd: insertionStart + last,
+            });
+        } else decorateEditorAtCaret();
+    }
+
+    function referenceSyntaxKey(record) {
+        const shot = state.plan?.shots?.[state.active];
+        return `${String(shot?.id ?? state.active)}:${record.tag}`;
+    }
+
+    function selectedReferenceSyntax(record) {
+        if (state.referenceMode !== "tagged" || !record.supportsSemantic) {
+            return "native";
+        }
+        const promptMode = taggedPictureReferenceMode(
+            editorPlainText(state.editor), record.tag,
+        );
+        if (promptMode === "native" || promptMode === "semantic") {
+            return promptMode;
+        }
+        return state.referenceSyntax.get(referenceSyntaxKey(record)) ?? "native";
+    }
+
+    function convertReferenceSyntax(record, mode) {
+        state.referenceSyntax.set(referenceSyntaxKey(record), mode);
+        const current = editorPlainText(state.editor);
+        const next = convertTaggedPictureReference(current, record.tag, mode);
+        if (next !== current) {
+            renderEditorText(next, next.length);
+            state.editor.dispatchEvent(new InputEvent("input", {
+                bubbles:true, inputType:"insertReplacementText",
+            }));
+            state.records = availableReferenceRecords(
+                node, state.active + 1, {
+                    includeInactive:true,
+                    prompt:[sharedPrompt(state.plan).text.trim(), next.trim()]
+                        .filter(Boolean).join("\n\n"),
+                },
+            ).records;
+        }
+        renderReferenceTray();
+    }
+
+    function insertReference(record) {
+        const mode = selectedReferenceSyntax(record);
+        const token = mode === "semantic"
+            ? taggedPictureReferenceToken(record.tag, "semantic")
+            : record.token;
+        insertDecoratedText(token, mode === "semantic");
+        state.refs?.classList.remove("h3rp-open");
     }
 
     function renderReferenceTray() {
@@ -1028,14 +1100,18 @@ function mount(node) {
         }
         tray.append(element("div", "h3rp-ref-help",
             state.referenceMode === "tagged"
-                ? "Click a registered @tag for a native reference. For a picture, type #tag[2.50s] for a Qwen-only semantic checkpoint, or a Picture storyboard cue when that mode is selected on Tagged Ref2VA. Hover for a media preview; audio never autoplays."
+                ? "Picture previews can switch and convert between native @tag and semantic #tag[time]. Video and audio stay native-only. Hover for a media preview; audio never autoplays."
                 : `Scene ${state.active + 1}: click an active reference to insert it. Hover for image, video, or audio preview. Audio never autoplays.`));
         for (const record of state.records) {
             const insertable = record.active || state.referenceMode === "tagged";
-            const card = button("", insertable ? `Insert ${record.token}` : `${record.token} is inactive in this scene`, () => {
+            const mode = selectedReferenceSyntax(record);
+            const displayToken = mode === "semantic"
+                ? taggedPictureReferenceToken(record.tag, "semantic")
+                : record.token;
+            const shell = element("div", "h3rp-ref-card-shell");
+            const card = button("", insertable ? `Insert ${displayToken}` : `${record.token} is inactive in this scene`, () => {
                 if (!insertable) return;
-                insertDecoratedText(record.token);
-                tray.classList.remove("h3rp-open");
+                insertReference(record);
             });
             card.classList.add("h3rp-ref-card");
             if (!record.active) card.classList.add("h3rp-inactive");
@@ -1049,7 +1125,7 @@ function mount(node) {
             } else card.append(icon(record.kind));
             const copy = element("span", "h3rp-ref-card-copy");
             copy.append(
-                element("div", "h3rp-ref-card-title", record.token),
+                element("div", "h3rp-ref-card-title", displayToken),
                 element("div", "h3rp-ref-card-detail", record.label && record.label !== record.token
                     ? `${record.label} · ${record.selector === "prompt tag" ? "prompt activated" : `scenes ${record.selector}`}`
                     : `${record.kind} · ${record.selector === "prompt tag" ? "insert to activate" : `scenes ${record.selector}`}`),
@@ -1057,7 +1133,28 @@ function mount(node) {
             card.append(copy);
             card.addEventListener("mouseenter", () => showPopover(record, card));
             card.addEventListener("mouseleave", scheduleHidePopover);
-            tray.append(card);
+            shell.append(card);
+            if (state.referenceMode === "tagged" && record.supportsSemantic) {
+                const usedMode = taggedPictureReferenceMode(
+                    editorPlainText(state.editor), record.tag,
+                );
+                const modes = element("div", "h3rp-ref-mode");
+                const native = button("@", "Use native @tag; convert semantic anchors already in this scene", () => {
+                    convertReferenceSyntax(record, "native");
+                });
+                const semantic = button("#", "Use semantic #tag[time]; convert native tags already in this scene", () => {
+                    convertReferenceSyntax(record, "semantic");
+                });
+                native.classList.toggle(
+                    "h3rp-selected", mode === "native" || usedMode === "mixed",
+                );
+                semantic.classList.toggle(
+                    "h3rp-selected", mode === "semantic" || usedMode === "mixed",
+                );
+                modes.append(native, semantic);
+                shell.append(modes);
+            }
+            tray.append(shell);
         }
     }
 

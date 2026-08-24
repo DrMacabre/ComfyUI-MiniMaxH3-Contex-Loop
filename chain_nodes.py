@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import gc
 import hashlib
+import itertools
 import json
 import logging
 import math
@@ -1109,17 +1110,22 @@ def _make_reference_schedule(
 
 
 def _reference_fingerprint_lineage(value: Any) -> dict[str, Any]:
-    """Return a JSON-safe append history for one ordered reference registry."""
+    """Return JSON-safe history and contracts for one reference registry."""
     entries = _reference_schedule_entries(value)
+    contracts = [_reference_entry_contract(entry) for entry in entries]
+    registry_mode = (
+        "tagged" if isinstance(value, dict)
+        and value.get("activation") == "prompt" else "ordered")
     prefixes = [{
-        "fingerprint": _make_reference_schedule([])["fingerprint"],
+        "fingerprint": _reference_contracts_fingerprint(
+            [], registry_mode=registry_mode),
         "entry": None,
     }]
-    for index, entry in enumerate(entries, start=1):
+    for index, entry in enumerate(contracts, start=1):
         prefixes.append({
-            "fingerprint": _make_reference_schedule(
-                entries[:index])["fingerprint"],
-            "entry": _reference_entry_contract(entry),
+            "fingerprint": _reference_contracts_fingerprint(
+                contracts[:index], registry_mode=registry_mode),
+            "entry": entry,
         })
     current = str(value.get("fingerprint") or "")
     if not current or prefixes[-1]["fingerprint"] != current:
@@ -1128,6 +1134,11 @@ def _reference_fingerprint_lineage(value: Any) -> dict[str, Any]:
         "version": REFERENCE_FINGERPRINT_LINEAGE_VERSION,
         "current": current,
         "prefixes": prefixes,
+        "registry_mode": registry_mode,
+        # Full contracts let resume recognize a previously saved ordered
+        # registry when newly added, inactive nodes were inserted anywhere in
+        # the ComfyUI chain rather than only attached at its output end.
+        "entries": contracts,
     }
 
 
@@ -1151,10 +1162,40 @@ def _reference_fingerprint_output(
             "version": REFERENCE_FINGERPRINT_LINEAGE_VERSION,
             "current": prefixes[-1]["fingerprint"],
             "prefixes": prefixes,
+            "registry_mode": lineage["registry_mode"],
+            "entries": lineage["entries"],
+            "wrapper": {
+                "key": wrapper_key,
+                "contract": extras,
+            },
         }
     return _canonical_json({
         "h3_reference_fingerprint_lineage": lineage,
     })
+
+
+def _reference_contracts_fingerprint(
+        entries: list[dict[str, Any]],
+        wrapper: dict[str, Any] | None = None,
+        registry_mode: str = "ordered") -> str:
+    contracts = list(entries)
+    if str(registry_mode) == "tagged":
+        contracts = sorted(contracts, key=lambda entry: (
+            str(entry.get("kind") or ""),
+            str(entry.get("tag") or ""),
+            str(entry.get("audio_tag") or ""),
+            _canonical_json(entry),
+        ))
+    fingerprint = _fingerprint({
+        "version": REFERENCE_SCHEDULE_VERSION,
+        "entries": contracts,
+    })
+    if isinstance(wrapper, dict):
+        fingerprint = _fingerprint({
+            str(wrapper["key"]): fingerprint,
+            **dict(wrapper.get("contract") or {}),
+        })
+    return fingerprint
 
 
 def _generation_fingerprint_value(
@@ -1196,11 +1237,44 @@ def _generation_fingerprint_value(
         elif not isinstance(entry, dict):
             raise ValueError("H3 reference fingerprint lineage is malformed.")
         normalized.append({"fingerprint": fingerprint, "entry": entry})
-    return current, {
+    entries = lineage.get("entries")
+    if entries is not None and (
+            not isinstance(entries, list)
+            or any(not isinstance(entry, dict) for entry in entries)):
+        raise ValueError("H3 reference fingerprint lineage is malformed.")
+    normalized_lineage = {
         "version": REFERENCE_FINGERPRINT_LINEAGE_VERSION,
         "current": current,
         "prefixes": normalized,
     }
+    registry_mode = str(lineage.get("registry_mode") or "ordered")
+    if registry_mode not in ("ordered", "tagged"):
+        raise ValueError("H3 reference fingerprint lineage is malformed.")
+    normalized_lineage["registry_mode"] = registry_mode
+    if entries is not None:
+        normalized_lineage["entries"] = _json_document(entries)
+    wrapper = lineage.get("wrapper")
+    if wrapper is not None:
+        if (not isinstance(wrapper, dict)
+                or not isinstance(wrapper.get("key"), str)
+                or not wrapper["key"]
+                or not isinstance(wrapper.get("contract"), dict)):
+            raise ValueError("H3 reference fingerprint lineage is malformed.")
+        normalized_lineage["wrapper"] = _json_document(wrapper)
+    if entries is not None:
+        if (_reference_contracts_fingerprint(
+                normalized_lineage["entries"],
+                normalized_lineage.get("wrapper"), registry_mode) != current):
+            raise ValueError(
+                "H3 reference fingerprint lineage does not match its entries.")
+        for index, item in enumerate(normalized):
+            if (_reference_contracts_fingerprint(
+                    normalized_lineage["entries"][:index],
+                    normalized_lineage.get("wrapper"), registry_mode) !=
+                    item["fingerprint"]):
+                raise ValueError(
+                    "H3 reference fingerprint lineage has invalid history.")
+    return current, normalized_lineage
 
 
 def _tagged_reference_entries(value: Any) -> list[dict[str, Any]]:
@@ -1220,6 +1294,9 @@ def _make_tagged_references(
         entries: list[dict[str, Any]]) -> dict[str, Any]:
     result = _make_reference_schedule(entries)
     result["activation"] = "prompt"
+    result["fingerprint"] = _reference_contracts_fingerprint(
+        [_reference_entry_contract(entry) for entry in entries],
+        registry_mode="tagged")
     return result
 
 
@@ -2671,9 +2748,14 @@ def _active_reference_bindings(
             entry for entry in entries if _reference_is_active(entry, scene)]
     else:
         entries = _tagged_reference_entries(schedule)
-        active = [
-            entry for entry in entries
-            if activation_tags.intersection(_reference_entry_tags(entry))]
+        active = sorted(
+            [entry for entry in entries
+             if activation_tags.intersection(_reference_entry_tags(entry))],
+            key=lambda entry: (
+                str(entry.get("kind") or ""),
+                str(entry.get("tag") or ""),
+                str(entry.get("audio_tag") or ""),
+            ))
     pictures = [entry for entry in active if entry.get("kind") == "picture"]
     videos = [entry for entry in active if entry.get("kind") == "video"]
     audios = [entry for entry in active if entry.get("kind") == "audio"]
@@ -4435,7 +4517,7 @@ def _scene_dependency_record(
     lineage = compatibility.get("generation_fingerprint_lineage")
     if isinstance(lineage, dict):
         # Comparison metadata, deliberately outside dependency scopes: it can
-        # explain an append-only registry change without changing what the
+        # explain an incremental registry change without changing what the
         # already-generated scene depended on.
         record["generation_fingerprint_lineage"] = _json_document(lineage)
     return record
@@ -4469,9 +4551,9 @@ def _lineage_reference_is_active(
         int(start) <= int(scene) <= int(end) for start, end in ranges)
 
 
-def _reference_registry_append_is_scene_neutral(
+def _reference_registry_growth_is_scene_neutral(
         saved: dict[str, Any], current: dict[str, Any]) -> bool:
-    """Prove that a registry mismatch only appended inactive references."""
+    """Prove that a registry mismatch only inserted inactive references."""
     saved_scopes = saved.get("scopes") or {}
     current_scopes = current.get("scopes") or {}
     saved_global = saved_scopes.get("global_generation") or {}
@@ -4494,19 +4576,77 @@ def _reference_registry_append_is_scene_neutral(
         if isinstance(item, dict)
         and str(item.get("fingerprint") or "") == saved_fingerprint
     ), None)
-    if ancestor_index is None or ancestor_index >= len(prefixes) - 1:
-        return False
     scene = int(current.get("scene", 0))
     current_scene = current_scopes.get("scene_generation") or {}
     active_tags = {
         str(tag) for tag in current_scene.get("active_reference_tags", ())
     }
-    for item in prefixes[ancestor_index + 1:]:
-        entry = item.get("entry") if isinstance(item, dict) else None
-        if (not isinstance(entry, dict)
-                or _lineage_reference_is_active(entry, scene, active_tags)):
-            return False
-    return True
+    # Fast path for the original append-only lineage format and for ordinary
+    # chains extended at their output end.
+    if ancestor_index is not None and ancestor_index < len(prefixes) - 1:
+        if all(
+                isinstance(item, dict)
+                and isinstance(item.get("entry"), dict)
+                and not _lineage_reference_is_active(
+                    item["entry"], scene, active_tags)
+                for item in prefixes[ancestor_index + 1:]):
+            return True
+
+    # ComfyUI users commonly prepend a new source node, or insert it between
+    # existing nodes. Rebuild subsets by removing only references that are
+    # inactive for this predecessor. Tagged registries compare canonically by
+    # tag; ordered scheduled registries preserve the surviving order.
+    entries = lineage.get("entries") if isinstance(lineage, dict) else None
+    if not isinstance(entries, list) or not entries:
+        return False
+    removable = [
+        index for index, entry in enumerate(entries)
+        if isinstance(entry, dict)
+        and not _lineage_reference_is_active(entry, scene, active_tags)
+    ]
+    registry_mode = str(lineage.get("registry_mode") or "ordered")
+    if not removable and registry_mode != "tagged":
+        return False
+    attempts = 0
+    first_remove_count = 0 if registry_mode == "tagged" else 1
+    for remove_count in range(first_remove_count, len(removable) + 1):
+        for removed in itertools.combinations(removable, remove_count):
+            attempts += 1
+            # A pathological manual token must not turn resume preflight into
+            # an exponential-time operation. Normal H3 registries reach a
+            # match after trying the one or few newly inserted refs.
+            if attempts > 65536:
+                return False
+            removed_set = set(removed)
+            candidate = [
+                entry for index, entry in enumerate(entries)
+                if index not in removed_set
+            ]
+            fingerprints = {
+                _reference_contracts_fingerprint(
+                    candidate, lineage.get("wrapper"), registry_mode)
+            }
+            if registry_mode == "tagged":
+                # Migrate checkpoints written before tagged registries became
+                # order-independent. The current chain's surviving order is
+                # the usual legacy order when new nodes were inserted.
+                fingerprints.add(_reference_contracts_fingerprint(
+                    candidate, lineage.get("wrapper"), "ordered"))
+            if saved_fingerprint in fingerprints:
+                return True
+            if registry_mode == "tagged" and len(candidate) <= 8:
+                # One-time migration for legacy tagged checkpoints whose raw
+                # hash recorded a different node-chain order. New tagged
+                # checkpoints use the canonical tag registry above.
+                for permutation in itertools.permutations(candidate):
+                    attempts += 1
+                    if attempts > 65536:
+                        return False
+                    if (_reference_contracts_fingerprint(
+                            list(permutation), lineage.get("wrapper"),
+                            "ordered") == saved_fingerprint):
+                        return True
+    return False
 
 
 def _scene_dependency_diffs(
@@ -4526,7 +4666,7 @@ def _scene_dependency_diffs(
         current_scope = current.get("scopes", {}).get(scope, {})
         scope_diffs = _dependency_value_diffs(saved_scope, current_scope)
         if scope == "global_generation" and (
-                _reference_registry_append_is_scene_neutral(saved, current)):
+                _reference_registry_growth_is_scene_neutral(saved, current)):
             scope_diffs = [item for item in scope_diffs
                            if item[0] != "generation_fingerprint"]
         for field, before, after in scope_diffs:
