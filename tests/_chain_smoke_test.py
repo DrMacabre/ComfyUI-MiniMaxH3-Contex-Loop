@@ -701,7 +701,8 @@ def main():
         audio=paired_audio, previous=picture_schedule)[0]
     schedule, schedule_fingerprint, _status = audio_node.add(
         voice_audio, "voice", "3", previous=video_schedule)
-    assert schedule_fingerprint == schedule["fingerprint"]
+    assert chain._generation_fingerprint_value(schedule_fingerprint)[0] == (
+        schedule["fingerprint"])
     assert len(schedule["entries"]) == 3
     assert schedule["entries"][0]["value"].shape[0] == 1
 
@@ -921,7 +922,8 @@ def main():
         "entries"][1]["value"]
     assert tagged_inputs["ref_audios.ref_audio_0"] is voice_audio
     assert "ref_images.ref_image_1" not in tagged_inputs
-    assert tagged_expanded["result"][4] == tagged["fingerprint"]
+    assert chain._generation_fingerprint_value(
+        tagged_expanded["result"][4])[0] == tagged["fingerprint"]
 
     tagged_motion = tagged_video_node.add(
         sequential_video, "motion", "motion_audio", "sequential",

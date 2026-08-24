@@ -55,6 +55,95 @@ def audio(values):
 
 
 plan = make_plan(5)
+
+# Reference registries are incremental. Appending an unused prompt reference
+# must not invalidate an already-rendered predecessor, including checkpoints
+# saved before lineage metadata existed.
+registry_v1 = chain._append_tagged_reference(
+    None, kind="picture", tag="actor", value="actor-v1",
+    content_hash="actor-hash-v1")
+registry_v2 = chain._append_tagged_reference(
+    registry_v1, kind="picture", tag="later", value="later-v1",
+    content_hash="later-hash-v1")
+token_v1 = chain._reference_fingerprint_output(registry_v1)
+token_v2 = chain._reference_fingerprint_output(registry_v2)
+
+
+def reference_plan(token, first_prompt="@actor opens."):
+    return chain._normalize_plan(
+        json.dumps({"shots": [
+            {"id": "one", "prompt": first_prompt, "length": 39},
+            {"id": "two", "prompt": "@actor continues.", "length": 39},
+        ]}),
+        "reference-lineage-test", 64, 64, 5, "video", "head",
+        "disabled", "generated_audio", 5, 1.0, 8, 11, 18, token,
+        0, "guide")
+
+
+old_reference_dependency = chain._scene_dependency_record(
+    reference_plan(token_v1), 1, None)
+new_reference_dependency = chain._scene_dependency_record(
+    reference_plan(token_v2), 1, None)
+assert old_reference_dependency["scopes"]["global_generation"][
+    "generation_fingerprint"] == registry_v1["fingerprint"]
+assert chain._scene_dependency_diffs(
+    old_reference_dependency, new_reference_dependency) == []
+legacy_reference_dependency = json.loads(json.dumps(old_reference_dependency))
+legacy_reference_dependency.pop("generation_fingerprint_lineage", None)
+assert chain._scene_dependency_diffs(
+    legacy_reference_dependency, new_reference_dependency) == []
+
+# The same append is generation-significant when the old scene prompt activates
+# the newly registered tag.
+active_old_dependency = chain._scene_dependency_record(
+    reference_plan(token_v1, "@actor meets @later."), 1, None)
+active_new_dependency = chain._scene_dependency_record(
+    reference_plan(token_v2, "@actor meets @later."), 1, None)
+active_append_diffs = chain._scene_dependency_diffs(
+    active_old_dependency, active_new_dependency)
+assert any(item["scope"] == "global_generation"
+           and item["field"] == "generation_fingerprint"
+           for item in active_append_diffs)
+
+# Replacing an existing reference is not append-compatible and remains blocked.
+changed_registry = chain._append_tagged_reference(
+    None, kind="picture", tag="actor", value="actor-v2",
+    content_hash="actor-hash-v2")
+changed_registry = chain._append_tagged_reference(
+    changed_registry, kind="picture", tag="later", value="later-v1",
+    content_hash="later-hash-v1")
+changed_dependency = chain._scene_dependency_record(
+    reference_plan(chain._reference_fingerprint_output(changed_registry)),
+    1, None)
+assert any(item["field"] == "generation_fingerprint"
+           for item in chain._scene_dependency_diffs(
+               old_reference_dependency, changed_dependency))
+
+# Legacy scheduled references use their scene selectors rather than prompt tags.
+scheduled_v1 = chain._append_scheduled_reference(
+    None, kind="picture", tag="actor", scenes="all", value="actor",
+    content_hash="actor-hash")
+scheduled_future = chain._append_scheduled_reference(
+    scheduled_v1, kind="picture", tag="future", scenes="3:6",
+    value="future", content_hash="future-hash")
+scheduled_active = chain._append_scheduled_reference(
+    scheduled_v1, kind="picture", tag="now", scenes="1",
+    value="now", content_hash="now-hash")
+scheduled_old_dependency = chain._scene_dependency_record(
+    reference_plan(chain._reference_fingerprint_output(scheduled_v1)), 1,
+    None)
+scheduled_future_dependency = chain._scene_dependency_record(
+    reference_plan(chain._reference_fingerprint_output(scheduled_future)), 1,
+    None)
+scheduled_active_dependency = chain._scene_dependency_record(
+    reference_plan(chain._reference_fingerprint_output(scheduled_active)), 1,
+    None)
+assert chain._scene_dependency_diffs(
+    scheduled_old_dependency, scheduled_future_dependency) == []
+assert any(item["field"] == "generation_fingerprint"
+           for item in chain._scene_dependency_diffs(
+               scheduled_old_dependency, scheduled_active_dependency))
+
 samples = round(plan["total_delivered_frames"] / 24 * 48000)
 base = torch.linspace(-0.8, 0.8, samples)
 changed = base.clone()

@@ -22,13 +22,13 @@ import {
     setShotLengthMode,
     sharedPrompt,
     shotLengthMode,
-} from "./h3_chain_plan_core.mjs?v=0.6.4";
+} from "./h3_chain_plan_core.mjs?v=0.6.5";
 import {
     promptRevisionHelp,
     promptRevisionLabel,
     promptRevisionNavigation,
-} from "./h3_prompt_history_core.mjs?v=0.6.4";
-import {availableReferenceRecords} from "./h3_reference_preview_core.mjs?v=0.6.4";
+} from "./h3_prompt_history_core.mjs?v=0.6.5";
+import {availableReferenceRecords} from "./h3_reference_preview_core.mjs?v=0.6.5";
 import {
     applySceneAudioOverride,
     applySceneTransitionPreset,
@@ -37,12 +37,12 @@ import {
     sceneAudioPolicy,
     sceneTransitionPreset,
     transitionPresetLabel,
-} from "./h3_policy_core.mjs?v=0.6.4";
+} from "./h3_policy_core.mjs?v=0.6.5";
 import {
     resolveAudioContextLength,
     resolveAudioPolicy,
     resolveTransitionPolicy,
-} from "./h3_socket_presentation_core.mjs?v=0.6.4";
+} from "./h3_socket_presentation_core.mjs?v=0.6.5";
 import {
     locateStudioTimelineSecond,
     h3StudioGridMarkers,
@@ -54,8 +54,8 @@ import {
     studioSourceAudioSecond,
     studioSourceSecond,
     studioWaveformSceneSamples,
-} from "./h3_chain_plan_studio_core.mjs?v=0.6.4";
-import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.6.4";
+} from "./h3_chain_plan_studio_core.mjs?v=0.6.5";
+import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.6.5";
 
 const {connectedPromptEditors, publishCompanionScene} = promptCompanionSync;
 function publishCompanionPrompt(...args) {

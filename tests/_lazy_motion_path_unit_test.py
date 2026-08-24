@@ -118,7 +118,8 @@ with tempfile.TemporaryDirectory() as temporary:
         str(path), "performance", "<Subject 1>",
         "the exact body movement and action timing", "source", True,
         "performance_audio", "sequential")
-    assert len(fingerprint) == 64
+    assert chain._generation_fingerprint_value(fingerprint)[0] == (
+        references["fingerprint"])
     assert "lazy motion" in status
     entry = references["entries"][0]
     assert chain._is_lazy_motion_descriptor(entry["value"])
@@ -151,7 +152,8 @@ with tempfile.TemporaryDirectory() as temporary:
     assert "native VIDEO loader" in native_status
     assert native_preview["entry"] is native_refs["entries"][0]
     assert native_audio is loaded_audio
-    assert len(native_fingerprint) == 64
+    assert chain._generation_fingerprint_value(native_fingerprint)[0] == (
+        native_refs["fingerprint"])
     assert isinstance(node.IS_CHANGED(
         "", source_video=native_video), str)
 
@@ -241,7 +243,8 @@ with tempfile.TemporaryDirectory() as temporary:
     assert skipped_descriptor["frame_count"] == 20
     assert tuple(skipped_full_track["waveform"].shape) == (1, 1, 40000)
     assert "skip 10 source frames (0.400s)" in skipped_status
-    assert skipped_fingerprint != refs_25["fingerprint"]
+    assert chain._generation_fingerprint_value(skipped_fingerprint)[0] != (
+        refs_25["fingerprint"])
     skipped_video = chain._decode_lazy_motion_video(
         skipped_descriptor, 0, 5)
     skipped_audio = chain._decode_lazy_motion_audio(

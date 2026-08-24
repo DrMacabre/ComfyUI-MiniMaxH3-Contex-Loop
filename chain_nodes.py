@@ -212,6 +212,7 @@ PREFLIGHT_TYPE = "H3_PREFLIGHT_REPORT"
 BOUNDARY_ANCHOR_PREPASS_TYPE = "H3_BOUNDARY_ANCHOR_PREPASS"
 BOUNDARY_ANCHORS_TYPE = "H3_BOUNDARY_ANCHORS"
 REFERENCE_SCHEDULE_VERSION = 1
+REFERENCE_FINGERPRINT_LINEAGE_VERSION = 1
 LAZY_MOTION_SOURCE_VERSION = 3
 SEMANTIC_PRESENTATION_VERSION = 1
 BOUNDARY_ANCHOR_VERSION = 1
@@ -743,7 +744,7 @@ def _skipped_reference_result(
     message = "%s skipped because compliance is disabled: %s" % (
         label, str(reason))
     _LOG.warning("H3 scheduled-reference warning: %s", message)
-    return schedule, schedule["fingerprint"], message
+    return schedule, _reference_fingerprint_output(schedule), message
 
 
 def _skipped_tagged_reference_result(
@@ -756,7 +757,7 @@ def _skipped_tagged_reference_result(
     message = "%s skipped because reference policy is disabled: %s" % (
         label, str(reason))
     _LOG.warning("H3 tagged-reference warning: %s", message)
-    return references, references["fingerprint"], message
+    return references, _reference_fingerprint_output(references), message
 
 
 def _normalize_reference_tag(value: Any, label: str) -> str:
@@ -1104,6 +1105,101 @@ def _make_reference_schedule(
             "version": REFERENCE_SCHEDULE_VERSION,
             "entries": contracts,
         }),
+    }
+
+
+def _reference_fingerprint_lineage(value: Any) -> dict[str, Any]:
+    """Return a JSON-safe append history for one ordered reference registry."""
+    entries = _reference_schedule_entries(value)
+    prefixes = [{
+        "fingerprint": _make_reference_schedule([])["fingerprint"],
+        "entry": None,
+    }]
+    for index, entry in enumerate(entries, start=1):
+        prefixes.append({
+            "fingerprint": _make_reference_schedule(
+                entries[:index])["fingerprint"],
+            "entry": _reference_entry_contract(entry),
+        })
+    current = str(value.get("fingerprint") or "")
+    if not current or prefixes[-1]["fingerprint"] != current:
+        raise ValueError("H3 reference registry fingerprint is inconsistent.")
+    return {
+        "version": REFERENCE_FINGERPRINT_LINEAGE_VERSION,
+        "current": current,
+        "prefixes": prefixes,
+    }
+
+
+def _reference_fingerprint_output(
+        value: Any, *, wrapper_key: str = "",
+        wrapper_contract: dict[str, Any] | None = None) -> str:
+    """Encode the fingerprint plus safe append ancestry in a STRING socket."""
+    lineage = _reference_fingerprint_lineage(value)
+    if wrapper_key:
+        extras = dict(wrapper_contract or {})
+        prefixes = []
+        for item in lineage["prefixes"]:
+            fingerprint = _fingerprint({
+                wrapper_key: item["fingerprint"], **extras,
+            })
+            prefixes.append({
+                "fingerprint": fingerprint,
+                "entry": item["entry"],
+            })
+        lineage = {
+            "version": REFERENCE_FINGERPRINT_LINEAGE_VERSION,
+            "current": prefixes[-1]["fingerprint"],
+            "prefixes": prefixes,
+        }
+    return _canonical_json({
+        "h3_reference_fingerprint_lineage": lineage,
+    })
+
+
+def _generation_fingerprint_value(
+        value: Any) -> tuple[str, dict[str, Any] | None]:
+    """Decode a reference-lineage token or preserve a manual fingerprint."""
+    text = str(value or "").strip()
+    if not text.startswith("{"):
+        return text, None
+    try:
+        document = json.loads(text)
+    except json.JSONDecodeError:
+        return text, None
+    lineage = (document.get("h3_reference_fingerprint_lineage")
+               if isinstance(document, dict) else None)
+    if not isinstance(lineage, dict):
+        return text, None
+    if int(lineage.get("version", -1)) != (
+            REFERENCE_FINGERPRINT_LINEAGE_VERSION):
+        raise ValueError("Unsupported H3 reference fingerprint lineage version.")
+    current = str(lineage.get("current") or "")
+    prefixes = lineage.get("prefixes")
+    if (not re.fullmatch(r"[0-9a-f]{64}", current)
+            or not isinstance(prefixes, list) or not prefixes
+            or not isinstance(prefixes[-1], dict)
+            or str(prefixes[-1].get("fingerprint") or "") != current):
+        raise ValueError("H3 reference fingerprint lineage is malformed.")
+    normalized = []
+    for index, item in enumerate(prefixes):
+        if not isinstance(item, dict):
+            raise ValueError("H3 reference fingerprint lineage is malformed.")
+        fingerprint = str(item.get("fingerprint") or "")
+        entry = item.get("entry")
+        if not re.fullmatch(r"[0-9a-f]{64}", fingerprint):
+            raise ValueError("H3 reference fingerprint lineage is malformed.")
+        if index == 0:
+            if entry is not None:
+                raise ValueError(
+                    "H3 reference fingerprint lineage base must be empty.")
+        elif not isinstance(entry, dict):
+            raise ValueError("H3 reference fingerprint lineage is malformed.")
+        normalized.append({"fingerprint": fingerprint, "entry": entry})
+    return current, {
+        "version": REFERENCE_FINGERPRINT_LINEAGE_VERSION,
+        "current": current,
+        "prefixes": normalized,
     }
 
 
@@ -4329,13 +4425,20 @@ def _scene_dependency_record(
     generation_hash = _fingerprint({
         scope: fingerprints[scope]
         for scope in DEPENDENCY_SCOPES if scope != "assembly_only"})
-    return {
+    record = {
         "version": SCENE_DEPENDENCY_VERSION,
         "scene": index,
         "scopes": scopes,
         "fingerprints": fingerprints,
         "generation_hash": generation_hash,
     }
+    lineage = compatibility.get("generation_fingerprint_lineage")
+    if isinstance(lineage, dict):
+        # Comparison metadata, deliberately outside dependency scopes: it can
+        # explain an append-only registry change without changing what the
+        # already-generated scene depended on.
+        record["generation_fingerprint_lineage"] = _json_document(lineage)
+    return record
 
 
 def _dependency_value_diffs(
@@ -4350,6 +4453,60 @@ def _dependency_value_diffs(
     if saved != current:
         return [(prefix, saved, current)]
     return []
+
+
+def _lineage_reference_is_active(
+        entry: dict[str, Any], scene: int, active_tags: set[str]) -> bool:
+    tags = set(_reference_entry_tags(entry))
+    if str(entry.get("activation") or "schedule") == "prompt":
+        return bool(tags.intersection(active_tags))
+    try:
+        ranges = _parse_reference_selector(entry.get("scenes", "all"))
+    except ValueError:
+        # Malformed comparison metadata must never weaken strict resume.
+        return True
+    return not ranges or any(
+        int(start) <= int(scene) <= int(end) for start, end in ranges)
+
+
+def _reference_registry_append_is_scene_neutral(
+        saved: dict[str, Any], current: dict[str, Any]) -> bool:
+    """Prove that a registry mismatch only appended inactive references."""
+    saved_scopes = saved.get("scopes") or {}
+    current_scopes = current.get("scopes") or {}
+    saved_global = saved_scopes.get("global_generation") or {}
+    current_global = current_scopes.get("global_generation") or {}
+    saved_fingerprint = str(saved_global.get("generation_fingerprint") or "")
+    current_fingerprint = str(
+        current_global.get("generation_fingerprint") or "")
+    if not saved_fingerprint or saved_fingerprint == current_fingerprint:
+        return False
+    lineage = current.get("generation_fingerprint_lineage")
+    prefixes = lineage.get("prefixes") if isinstance(lineage, dict) else None
+    if (not isinstance(prefixes, list) or len(prefixes) < 2
+            or str(lineage.get("current") or "") != current_fingerprint
+            or not isinstance(prefixes[-1], dict)
+            or str(prefixes[-1].get("fingerprint") or "") !=
+                current_fingerprint):
+        return False
+    ancestor_index = next((
+        index for index, item in enumerate(prefixes)
+        if isinstance(item, dict)
+        and str(item.get("fingerprint") or "") == saved_fingerprint
+    ), None)
+    if ancestor_index is None or ancestor_index >= len(prefixes) - 1:
+        return False
+    scene = int(current.get("scene", 0))
+    current_scene = current_scopes.get("scene_generation") or {}
+    active_tags = {
+        str(tag) for tag in current_scene.get("active_reference_tags", ())
+    }
+    for item in prefixes[ancestor_index + 1:]:
+        entry = item.get("entry") if isinstance(item, dict) else None
+        if (not isinstance(entry, dict)
+                or _lineage_reference_is_active(entry, scene, active_tags)):
+            return False
+    return True
 
 
 def _scene_dependency_diffs(
@@ -4367,8 +4524,12 @@ def _scene_dependency_diffs(
             continue
         saved_scope = saved.get("scopes", {}).get(scope, {})
         current_scope = current.get("scopes", {}).get(scope, {})
-        for field, before, after in _dependency_value_diffs(
-                saved_scope, current_scope):
+        scope_diffs = _dependency_value_diffs(saved_scope, current_scope)
+        if scope == "global_generation" and (
+                _reference_registry_append_is_scene_neutral(saved, current)):
+            scope_diffs = [item for item in scope_diffs
+                           if item[0] != "generation_fingerprint"]
+        for field, before, after in scope_diffs:
             diffs.append({
                 "scope": scope, "scene": scene, "field": field,
                 "saved": before, "current": after,
@@ -4964,6 +5125,9 @@ def _normalize_plan(
     if len(raw_shots) > MAX_SHOTS:
         raise ValueError("H3 Chain Plan supports at most %d shots." % MAX_SHOTS)
 
+    generation_fingerprint, reference_fingerprint_lineage = (
+        _generation_fingerprint_value(generation_fingerprint))
+
     resolved_chain_policy = (
         _validate_chain_policy(chain_policy)
         if chain_policy is not None else None)
@@ -5312,6 +5476,9 @@ def _normalize_plan(
         # generation dependencies part of the resume contract.
         "generation_fingerprint": str(generation_fingerprint or "").strip(),
     }
+    if reference_fingerprint_lineage is not None:
+        compatibility["generation_fingerprint_lineage"] = (
+            reference_fingerprint_lineage)
     if audio_policy is not None:
         compatibility["audio_policy"] = resolved_audio_policy
     if transition_policy is not None:
@@ -7142,7 +7309,7 @@ class MiniMaxH3ScheduledPictureReference:
         status = "@%s picture on %s; %d sources; %s" % (
             entry["tag"], entry["scenes"], len(schedule["entries"]),
             schedule["fingerprint"][:12])
-        return schedule, schedule["fingerprint"], status
+        return schedule, _reference_fingerprint_output(schedule), status
 
 
 class MiniMaxH3ScheduledVideoReference:
@@ -7246,7 +7413,7 @@ class MiniMaxH3ScheduledVideoReference:
         status = "@%s%s video on %s; %s; %d sources; %s" % (
             entry["tag"], paired, entry["scenes"], entry["timeline_mode"],
             len(schedule["entries"]), schedule["fingerprint"][:12])
-        return schedule, schedule["fingerprint"], status
+        return schedule, _reference_fingerprint_output(schedule), status
 
 
 class MiniMaxH3ScheduledAudioReference:
@@ -7333,7 +7500,7 @@ class MiniMaxH3ScheduledAudioReference:
         status = "@%s audio on %s; %d sources; %s" % (
             entry["tag"], entry["scenes"], len(schedule["entries"]),
             schedule["fingerprint"][:12])
-        return schedule, schedule["fingerprint"], status
+        return schedule, _reference_fingerprint_output(schedule), status
 
 
 class MiniMaxH3TaggedPictureReference:
@@ -7398,7 +7565,7 @@ class MiniMaxH3TaggedPictureReference:
         status = "@%s picture; prompt activated; %d sources; %s" % (
             entry["tag"], len(references["entries"]),
             references["fingerprint"][:12])
-        return references, references["fingerprint"], status
+        return references, _reference_fingerprint_output(references), status
 
 
 class MiniMaxH3TaggedVideoReference:
@@ -7479,7 +7646,7 @@ class MiniMaxH3TaggedVideoReference:
         status = "@%s%s video; prompt activated; %s; %d sources; %s" % (
             entry["tag"], paired, entry["timeline_mode"],
             len(references["entries"]), references["fingerprint"][:12])
-        return references, references["fingerprint"], status
+        return references, _reference_fingerprint_output(references), status
 
 
 def _motion_reference_fields(
@@ -7646,7 +7813,7 @@ class MiniMaxH3TaggedMotionReference:
                 entry["motion_short_edge"], entry["timeline_mode"],
                 len(references["entries"]),
                 references["fingerprint"][:12]))
-        return references, references["fingerprint"], status
+        return references, _reference_fingerprint_output(references), status
 
 
 class MiniMaxH3SourceTimeline:
@@ -7950,7 +8117,8 @@ class MiniMaxH3TaggedMotionReferenceTimeline:
             "entry": entry,
             "reference_fingerprint": references["fingerprint"],
         }
-        return references, references["fingerprint"], status, source
+        return (references, _reference_fingerprint_output(references), status,
+                source)
 
 
 class MiniMaxH3TaggedMotionReferencePath:
@@ -8141,7 +8309,7 @@ class MiniMaxH3TaggedMotionReferencePath:
             "entry": entry,
             "reference_fingerprint": references["fingerprint"],
         }
-        return (references, references["fingerprint"], status, source,
+        return (references, _reference_fingerprint_output(references), status, source,
                 full_source_audio)
 
 
@@ -8395,7 +8563,7 @@ class MiniMaxH3TaggedAudioReference:
             entry["tag"], entry["timeline_mode"], aligned,
             len(references["entries"]),
             references["fingerprint"][:12])
-        return references, references["fingerprint"], status
+        return references, _reference_fingerprint_output(references), status
 
 
 class MiniMaxH3ScheduledReferenceToVideo:
@@ -8560,11 +8728,14 @@ class MiniMaxH3ScheduledReferenceToVideo:
         if isinstance(reference_schedule, dict) and reference_schedule.get(
                 "fingerprint"):
             fingerprint = str(reference_schedule["fingerprint"])
+            fingerprint_output = _reference_fingerprint_output(
+                reference_schedule)
         elif _reference_compliance_mode(prompt_compliance) == "disabled":
             fingerprint = _fingerprint({
                 "reference_schedule": "ignored",
                 "prompt_compliance": "disabled",
             })
+            fingerprint_output = fingerprint
         else:
             raise ValueError(
                 "Scheduled references have no valid schedule fingerprint.")
@@ -8594,7 +8765,8 @@ class MiniMaxH3ScheduledReferenceToVideo:
             summary += "; " + "; ".join(slice_details)
         return {
             "result": (
-                ref2va.out(0), ref2va.out(1), compiled, summary, fingerprint),
+                ref2va.out(0), ref2va.out(1), compiled, summary,
+                fingerprint_output),
             "expand": graph.finalize(),
         }
 
@@ -9376,11 +9548,13 @@ class MiniMaxH3TaggedReferenceToVideo:
                 slice_details.append(detail)
         if isinstance(references, dict) and references.get("fingerprint"):
             fingerprint = str(references["fingerprint"])
+            fingerprint_output = _reference_fingerprint_output(references)
         elif _reference_compliance_mode(reference_policy) == "disabled":
             fingerprint = _fingerprint({
                 "tagged_references": "ignored",
                 "reference_policy": "disabled",
             })
+            fingerprint_output = fingerprint
         else:
             raise ValueError(
                 "Tagged references have no valid reference fingerprint.")
@@ -9421,6 +9595,13 @@ class MiniMaxH3TaggedReferenceToVideo:
                 "semantic_anchor_mode": anchor_mode,
                 "semantic_anchor_size": anchor_size,
             })
+            fingerprint_output = _reference_fingerprint_output(
+                references,
+                wrapper_key="tagged_reference_fingerprint",
+                wrapper_contract={
+                    "semantic_anchor_mode": anchor_mode,
+                    "semantic_anchor_size": anchor_size,
+                })
         cache_runtime_ready = (
             callable(getattr(vae, "encode", None))
             and not isinstance(vae, (str, bytes))
@@ -9448,7 +9629,8 @@ class MiniMaxH3TaggedReferenceToVideo:
             summary += "; " + "; ".join(slice_details)
         return {
             "result": (
-                positive, ref2va.out(1), compiled, summary, fingerprint),
+                positive, ref2va.out(1), compiled, summary,
+                fingerprint_output),
             "expand": graph.finalize(),
         }
 
