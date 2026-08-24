@@ -15,6 +15,8 @@ export const TAGGED_MOTION_PATH_REF_TYPE =
 export const TAGGED_MOTION_TIMELINE_REF_TYPE =
     "MiniMaxH3TaggedMotionReferenceTimeline";
 export const TAGGED_AUDIO_REF_TYPE = "MiniMaxH3TaggedAudioReference";
+export const SEMANTIC_ANCHOR_BUNDLE_TYPE = "MiniMaxH3SemanticAnchorBundle";
+export const SEMANTIC_PICTURE_ANCHOR_TYPE = "MiniMaxH3SemanticPictureAnchor";
 
 const SCHEDULE_TYPES = new Set([
     PICTURE_REF_TYPE,
@@ -166,12 +168,32 @@ export function collectTaggedNodes(wrapper) {
     const result = [];
     const seen = new Set();
     let current = inputSource(wrapper, "references");
+    if (nodeType(current) === SEMANTIC_ANCHOR_BUNDLE_TYPE) {
+        current = inputSource(current, "references");
+    }
     while (current && TAGGED_TYPES.has(nodeType(current)) && !seen.has(current)) {
         seen.add(current);
         result.unshift(current);
         current = inputSource(current, "previous");
     }
     return result;
+}
+
+export function collectSemanticAnchorNodes(wrapper) {
+    const bundle = inputSource(wrapper, "semantic_anchors");
+    if (nodeType(bundle) !== SEMANTIC_ANCHOR_BUNDLE_TYPE) {
+        return {bundle: null, nodes: []};
+    }
+    const nodes = [];
+    const seen = new Set();
+    let current = inputSource(bundle, "anchors");
+    while (current && nodeType(current) === SEMANTIC_PICTURE_ANCHOR_TYPE
+            && !seen.has(current)) {
+        seen.add(current);
+        nodes.unshift(current);
+        current = inputSource(current, "previous");
+    }
+    return {bundle, nodes};
 }
 
 export function referenceIsActive(selector, scene) {
@@ -278,12 +300,14 @@ export function taggedReferenceRecords(editorNode, prompt = "") {
     const wrapper = findTaggedRef2VA(editorNode);
     if (!wrapper) return {wrapper: null, mode: null, records: []};
     const nodes = collectTaggedNodes(wrapper);
+    const dedicated = collectSemanticAnchorNodes(wrapper);
     const used = promptTagSet(prompt);
     const semanticUsed = semanticPromptTagSet(prompt);
     const pictures = [];
     const videos = [];
     const pairedAudios = [];
     const audios = [];
+    const semanticPictures = [];
 
     for (const node of nodes) {
         const type = nodeType(node);
@@ -348,6 +372,16 @@ export function taggedReferenceRecords(editorNode, prompt = "") {
         }
     }
 
+    for (const node of dedicated.nodes) {
+        const record = baseRecord(node, "picture", 1, "image");
+        record.selector = "semantic prompt tag";
+        record.nativeActive = false;
+        record.semanticActive = semanticUsed.has(record.tag);
+        record.active = record.semanticActive;
+        record.semanticOnly = true;
+        semanticPictures.push(record);
+    }
+
     let ordinal = 0;
     for (const item of pictures) {
         if (item.nativeActive) item.label = `<Picture ${++ordinal}>`;
@@ -376,18 +410,32 @@ export function taggedReferenceRecords(editorNode, prompt = "") {
     for (const item of audios) {
         if (item.active) item.label = `<Audio ${++ordinal}>`;
     }
+    const anchorMode = String(widgetValue(
+        dedicated.bundle, "semantic_anchor_mode", "timestamped_video"));
+    ordinal = anchorMode === "picture_storyboard"
+        ? pictures.filter((item) => item.nativeActive).length
+        : videos.filter((item) => item.active).length;
+    for (const item of semanticPictures) {
+        if (!item.active) continue;
+        item.label = anchorMode === "picture_storyboard"
+            ? `<Picture ${++ordinal}>` : `<Video ${++ordinal}>`;
+    }
     return {
         wrapper,
         mode: "tagged",
-        records: [...pictures, ...videos, ...pairedAudios, ...audios]
+        records: [
+            ...pictures, ...semanticPictures, ...videos, ...pairedAudios, ...audios,
+        ]
             .filter((item) => item.tag)
             .map((item) => ({
                 ...item,
-                token: `@${item.tag}`,
-                nativeToken: `@${item.tag}`,
+                token: item.semanticOnly
+                    ? taggedPictureReferenceToken(item.tag, "semantic")
+                    : `@${item.tag}`,
+                nativeToken: item.semanticOnly ? null : `@${item.tag}`,
                 semanticToken: item.kind === "picture"
                     ? taggedPictureReferenceToken(item.tag, "semantic") : null,
-                supportsSemantic: item.kind === "picture",
+                supportsSemantic: item.kind === "picture" && !item.semanticOnly,
             })),
     };
 }

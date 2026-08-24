@@ -88,7 +88,7 @@ from .nodes import (
 from .prompt_history import PromptHistoryStore
 from .prompt_optimizer import optimize_prompt_payload
 from .run_manager import RunArchiveManager, archive_policy_inputs
-from .asset_store import MAX_ASSET_BINDINGS, RunAssetStore
+from .asset_store import MAX_DIRECT_ASSET_BINDINGS, RunAssetStore
 from .av_timing import (
     AUDIO_TRIM_FRAMES_KEY,
     AUDIO_WITH_OVERLAP_FRAMES_KEY,
@@ -202,6 +202,8 @@ MANIFEST_TYPE = "H3_CHAIN_MANIFEST"
 EXTERNAL_CONTEXT_TYPE = "H3_CHAIN_EXTERNAL_CONTEXT"
 REFERENCE_SCHEDULE_TYPE = "H3_REFERENCE_SCHEDULE"
 TAGGED_REFERENCE_TYPE = "H3_TAGGED_REFERENCES"
+SEMANTIC_ANCHOR_DRAFT_TYPE = "H3_SEMANTIC_ANCHOR_DRAFT"
+SEMANTIC_ANCHOR_BUNDLE_TYPE = "H3_SEMANTIC_ANCHOR_BUNDLE"
 SEMANTIC_PRESENTATION_TYPE = "H3_SEMANTIC_PRESENTATION"
 LAZY_MOTION_SOURCE_TYPE = "H3_LAZY_MOTION_SOURCE"
 SOURCE_TIMELINE_TYPE = "H3_SOURCE_TIMELINE"
@@ -211,6 +213,7 @@ CHAIN_POLICY_TYPE = "H3_CHAIN_POLICY"
 PREFLIGHT_TYPE = "H3_PREFLIGHT_REPORT"
 REFERENCE_SCHEDULE_VERSION = 1
 REFERENCE_FINGERPRINT_LINEAGE_VERSION = 1
+SEMANTIC_ANCHOR_REGISTRY_VERSION = 1
 LAZY_MOTION_SOURCE_VERSION = 3
 SEMANTIC_PRESENTATION_VERSION = 1
 
@@ -1053,7 +1056,8 @@ def _reference_entry_contract(entry: dict[str, Any]) -> dict[str, Any]:
     keys = (
         "kind", "tag", "scenes", "content_hash", "audio_tag",
         "audio_hash", "paired_audio_policy", "semantic_role", "motion_target",
-        "motion_description", "motion_short_edge",
+        "motion_description", "motion_short_edge", "semantic_anchor_size",
+        "semantic_anchor_mode",
     )
     contract = {key: entry[key] for key in keys if key in entry}
     # Keep old schedules bit-identical. Timeline metadata enters the resume
@@ -1292,6 +1296,94 @@ def _make_tagged_references(
         [_reference_entry_contract(entry) for entry in entries],
         registry_mode="tagged")
     return result
+
+
+def _semantic_anchor_draft_entries(value: Any) -> list[dict[str, Any]]:
+    if (not isinstance(value, dict)
+            or int(value.get("version", -1)) !=
+                SEMANTIC_ANCHOR_REGISTRY_VERSION
+            or value.get("kind") not in ("draft", "bundle")
+            or not isinstance(value.get("entries"), list)):
+        raise ValueError(
+            "Semantic anchors must come from this pack's Semantic Picture "
+            "Anchor nodes.")
+    entries = list(value["entries"])
+    for entry in entries:
+        if (not isinstance(entry, dict)
+                or entry.get("kind") != "semantic_anchor"
+                or not isinstance(entry.get("tag"), str)
+                or not entry.get("tag")
+                or "value" not in entry
+                or not isinstance(entry.get("content_hash"), str)):
+            raise ValueError("Semantic anchor registry is malformed.")
+    return entries
+
+
+def _make_semantic_anchor_draft(
+        entries: list[dict[str, Any]]) -> dict[str, Any]:
+    contracts = [_reference_entry_contract(entry) for entry in entries]
+    return {
+        "version": SEMANTIC_ANCHOR_REGISTRY_VERSION,
+        "kind": "draft",
+        "entries": entries,
+        "fingerprint": _reference_contracts_fingerprint(
+            contracts, registry_mode="tagged"),
+    }
+
+
+def _semantic_anchor_bundle(value: Any) -> dict[str, Any]:
+    entries = _semantic_anchor_draft_entries(value)
+    if value.get("kind") != "bundle":
+        raise ValueError(
+            "Connect Semantic Picture Anchors through Semantic Anchor Bundle "
+            "before using them in Ref2VA, Plan Studio, or Run Manager.")
+    size = str(value.get("semantic_anchor_size") or "512")
+    mode = _semantic_anchor_mode(value.get("semantic_anchor_mode"))
+    if size not in SEMANTIC_ANCHOR_SIZES:
+        raise ValueError(
+            "Semantic anchor size must be one of %s." %
+            (SEMANTIC_ANCHOR_SIZES,))
+    expected = _make_semantic_anchor_bundle(entries, size, mode)
+    if str(value.get("fingerprint") or "") != expected["fingerprint"]:
+        raise ValueError("Semantic anchor bundle fingerprint is inconsistent.")
+    return value
+
+
+def _make_semantic_anchor_bundle(
+        entries: list[dict[str, Any]], size: Any,
+        mode: Any) -> dict[str, Any]:
+    size = str(size or "512")
+    mode = _semantic_anchor_mode(mode)
+    if size not in SEMANTIC_ANCHOR_SIZES:
+        raise ValueError(
+            "Semantic anchor size must be one of %s." %
+            (SEMANTIC_ANCHOR_SIZES,))
+    bundled_entries = []
+    for source in entries:
+        entry = dict(source)
+        entry["semantic_anchor_size"] = size
+        entry["semantic_anchor_mode"] = mode
+        bundled_entries.append(entry)
+    contracts = [_reference_entry_contract(entry) for entry in bundled_entries]
+    return {
+        "version": SEMANTIC_ANCHOR_REGISTRY_VERSION,
+        "kind": "bundle",
+        "entries": bundled_entries,
+        "semantic_anchor_size": size,
+        "semantic_anchor_mode": mode,
+        "fingerprint": _reference_contracts_fingerprint(
+            contracts, registry_mode="tagged"),
+    }
+
+
+def _combined_reference_registry(
+        references: Any, semantic_anchors: Any = None) -> dict[str, Any]:
+    """Build one lineage token while keeping native and Qwen media separate."""
+    entries = _tagged_reference_entries(references)
+    if semantic_anchors is not None:
+        bundle = _semantic_anchor_bundle(semantic_anchors)
+        entries = entries + _semantic_anchor_draft_entries(bundle)
+    return _make_tagged_references(entries)
 
 
 def _append_scheduled_reference(
@@ -2922,10 +3014,15 @@ def _compile_scheduled_reference_prompt(
 def _compile_tagged_reference_prompt(
         references: Any, scene: int, scene_count: int, prompt: Any,
         compliance_mode: str = "strict",
-        semantic_anchor_mode: str = "timestamped_video"
+        semantic_anchor_mode: str = "timestamped_video",
+        semantic_anchor_bundle: Any = None,
         ) -> tuple[str, str, dict[str, Any]]:
     """Activate prompt-used native references and Qwen-only image anchors."""
     mode = _reference_compliance_mode(compliance_mode)
+    dedicated_bundle = None
+    if semantic_anchor_bundle is not None:
+        dedicated_bundle = _semantic_anchor_bundle(semantic_anchor_bundle)
+        semantic_anchor_mode = dedicated_bundle["semantic_anchor_mode"]
     anchor_mode = _semantic_anchor_mode(semantic_anchor_mode)
     warnings: list[str] = []
     normalized_prompt = str(prompt or "").replace(
@@ -2950,7 +3047,10 @@ def _compile_tagged_reference_prompt(
     semantic_anchors: list[dict[str, Any]] = []
     if mode != "disabled" and semantic_matches:
         try:
-            tagged_entries = _tagged_reference_entries(references)
+            tagged_entries = (
+                _semantic_anchor_draft_entries(dedicated_bundle)
+                if dedicated_bundle is not None
+                else _tagged_reference_entries(references))
         except (TypeError, ValueError) as exc:
             if mode == "strict":
                 raise
@@ -2971,8 +3071,11 @@ def _compile_tagged_reference_prompt(
             message = None
             if entry is None:
                 message = "Prompt uses unknown semantic anchor #%s." % tag
-            elif entry.get("kind") != "picture":
+            elif entry.get("kind") not in ("picture", "semantic_anchor"):
                 message = (
+                    "Semantic anchor #%s must resolve to a Semantic Picture "
+                    "Anchor, not %s." % (tag, entry.get("kind", "unknown"))
+                    if dedicated_bundle is not None else
                     "Semantic anchor #%s must resolve to a Tagged Picture "
                     "Ref, not %s." % (tag, entry.get("kind", "unknown")))
             if message is not None:
@@ -7625,6 +7728,143 @@ class MiniMaxH3ScheduledAudioReference:
         return schedule, _reference_fingerprint_output(schedule), status
 
 
+class MiniMaxH3SemanticPictureAnchor:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "image": ("IMAGE", {
+                    "tooltip": "One Qwen-only semantic picture. It is never "
+                               "encoded as a native Ref2VA VAE reference and "
+                               "does not consume a native picture slot."}),
+                "tag": ("STRING", {
+                    "default": "story_beat",
+                    "tooltip": "Stable semantic name used as "
+                               "#story_beat[2.50s] in scene prompts. Do not "
+                               "include the # character here."}),
+            },
+            "optional": {
+                "previous": (SEMANTIC_ANCHOR_DRAFT_TYPE, {
+                    "tooltip": "Optional preceding Semantic Picture Anchor. "
+                               "Chain as many semantic pictures as needed, "
+                               "then connect the final draft to one Semantic "
+                               "Anchor Bundle."}),
+            },
+        }
+
+    RETURN_TYPES = (SEMANTIC_ANCHOR_DRAFT_TYPE, "STRING")
+    RETURN_NAMES = ("anchors", "status")
+    OUTPUT_TOOLTIPS = (
+        "Unscaled semantic-anchor draft for another Semantic Picture Anchor "
+        "or the final Semantic Anchor Bundle.",
+        "Registered semantic tag and draft size.",
+    )
+    FUNCTION = "add"
+    CATEGORY = "conditioning/minimax/contex_loop/references/semantic"
+    DESCRIPTION = (
+        "Register one Qwen-only semantic image under a #tag. These images are "
+        "kept outside the native Tagged Ref2VA registry, so any number of "
+        "inactive semantic anchors can remain available without consuming H3 "
+        "Picture slots.")
+
+    def add(self, image, tag, previous=None):
+        if (torch is None or not torch.is_tensor(image) or image.ndim != 4 or
+                int(image.shape[0]) < 1 or int(image.shape[-1]) < 3):
+            raise ValueError(
+                "H3 semantic picture anchor must be an IMAGE tensor with "
+                "shape [batch,height,width,channels].")
+        normalized_tag = _normalize_reference_tag(tag, "Semantic anchor tag")
+        entries = (_semantic_anchor_draft_entries(previous)
+                   if previous is not None else [])
+        if any(entry["tag"] == normalized_tag for entry in entries):
+            raise ValueError(
+                "Semantic anchor tag #%s is already in this chain." %
+                normalized_tag)
+        picture = image[:1, ..., :3]
+        entries.append({
+            "kind": "semantic_anchor",
+            "tag": normalized_tag,
+            "activation": "prompt",
+            "value": picture,
+            "content_hash": _tensor_fingerprint(picture),
+        })
+        draft = _make_semantic_anchor_draft(entries)
+        return draft, "#%s semantic picture; %d available" % (
+            normalized_tag, len(entries))
+
+
+class MiniMaxH3SemanticAnchorBundle:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "anchors": (SEMANTIC_ANCHOR_DRAFT_TYPE, {
+                    "tooltip": "Final Semantic Picture Anchor draft. This "
+                               "single bundle output connects to Tagged "
+                               "Ref2VA, Plan Studio, and Run Manager."}),
+                "semantic_anchor_size": (list(SEMANTIC_ANCHOR_SIZES), {
+                    "default": "512",
+                    "tooltip": "Central Qwen presentation resolution for all "
+                               "semantic pictures. Scaling happens only when "
+                               "an anchor is called by the current prompt."}),
+                "semantic_anchor_mode": (list(SEMANTIC_ANCHOR_MODES), {
+                    "default": "timestamped_video",
+                    "tooltip": "Present #tags as timestamped Qwen Video "
+                               "checkpoints or approximate Picture storyboard "
+                               "cues. Neither mode creates a native VAE ref."}),
+            },
+            "optional": {
+                "references": (TAGGED_REFERENCE_TYPE, {
+                    "tooltip": "Connect the final native Tagged reference "
+                               "registry to emit one combined, incremental "
+                               "generation fingerprint for the Plan."}),
+            },
+        }
+
+    RETURN_TYPES = (
+        SEMANTIC_ANCHOR_BUNDLE_TYPE, TAGGED_REFERENCE_TYPE, "STRING", "STRING")
+    RETURN_NAMES = (
+        "semantic_anchors", "references", "reference_fingerprint", "status")
+    OUTPUT_TOOLTIPS = (
+        "One scaled-on-demand semantic bundle for Tagged Ref2VA, Plan Studio, "
+        "and Run Manager.",
+        "Native Tagged references passed through unchanged for Tagged Ref2VA.",
+        "Combined native + semantic incremental fingerprint for H3 Chain Plan.",
+        "Semantic count, native count, mode, size, and fingerprint.",
+    )
+    FUNCTION = "bundle"
+    CATEGORY = "conditioning/minimax/contex_loop/references/semantic"
+    DESCRIPTION = (
+        "Finalize any number of Qwen-only semantic pictures behind one graph "
+        "socket, centralize their presentation scale/mode, optionally pass "
+        "the native Tagged registry through, and emit one resume-safe "
+        "generation fingerprint. Semantic pictures remain outside native H3 "
+        "picture/video/audio capacity.")
+
+    def bundle(self, anchors, semantic_anchor_size,
+               semantic_anchor_mode="timestamped_video", references=None):
+        entries = _semantic_anchor_draft_entries(anchors)
+        bundle = _make_semantic_anchor_bundle(
+            entries, semantic_anchor_size, semantic_anchor_mode)
+        native_registry = references
+        if native_registry is None:
+            native_registry = _make_tagged_references([])
+            combined = _make_tagged_references(
+                _semantic_anchor_draft_entries(bundle))
+        else:
+            combined = _combined_reference_registry(native_registry, bundle)
+        token = _reference_fingerprint_output(combined)
+        native_count = len(_tagged_reference_entries(native_registry))
+        status = (
+            "%d semantic pictures at %s (%s); %d native sources; %s" %
+            (len(entries), bundle["semantic_anchor_size"],
+             bundle["semantic_anchor_mode"], native_count,
+             combined["fingerprint"][:12]))
+        bundle["combined_reference_fingerprint"] = combined["fingerprint"]
+        bundle["reference_fingerprint_output"] = token
+        return bundle, native_registry, token, status
+
+
 class MiniMaxH3TaggedPictureReference:
     @classmethod
     def INPUT_TYPES(cls):
@@ -7635,10 +7875,11 @@ class MiniMaxH3TaggedPictureReference:
                                "first image when a batch is connected."}),
                 "tag": ("STRING", {
                     "default": "hero_face",
-                    "tooltip": "Stable picture alias. Write @hero_face for "
-                               "a native Ref2VA picture, #hero_face[2.50s] "
-                               "for a Qwen-only semantic checkpoint, or both. "
-                               "Semantic timestamps are local to the scene."}),
+                    "tooltip": "Stable native picture alias. Write "
+                               "@hero_face to activate a Ref2VA picture. Old "
+                               "workflows may still use #hero_face[2.50s], "
+                               "but new semantic-only images belong in "
+                               "Semantic Picture Anchor nodes."}),
             },
             "optional": {
                 "previous": (TAGGED_REFERENCE_TYPE, {
@@ -7660,11 +7901,10 @@ class MiniMaxH3TaggedPictureReference:
     )
     FUNCTION = "add"
     CATEGORY = "conditioning/minimax/contex_loop/references/prompt_driven"
-    DESCRIPTION = ("Register one picture under a stable tag. @tag activates "
-                   "a native Ref2VA picture and assigns compact <Picture N> "
-                   "numbering. #tag[2.50s] presents that picture to Qwen at "
-                   "an approximate scene-local semantic checkpoint without "
-                   "adding a VAE reference. Both forms may be used together.")
+    DESCRIPTION = ("Register one native Ref2VA picture under a stable @tag. "
+                   "Existing workflows can still present it through #tag as "
+                   "a compatibility path; use the separate Semantic Picture "
+                   "Anchor + Bundle nodes for new Qwen-only images.")
 
     def add(self, image, tag, previous=None, dynprompt=None, unique_id=None):
         mode = _downstream_reference_compliance(dynprompt, unique_id)
@@ -9011,6 +9251,11 @@ class MiniMaxH3TaggedReferenceToVideo:
                            "picture masters for target-resolution pass 2. "
                            "Deferred upscale discovers the cache from the "
                            "source checkpoint fingerprint."}),
+            "semantic_anchors": (SEMANTIC_ANCHOR_BUNDLE_TYPE, {
+                "tooltip": "Dedicated output from Semantic Anchor Bundle. "
+                           "Its Qwen-only pictures, centralized size, and "
+                           "presentation mode stay separate from native H3 "
+                           "picture/video/audio capacity."}),
         }
         return {"required": ordered, "optional": optional}
 
@@ -9058,13 +9303,19 @@ class MiniMaxH3TaggedReferenceToVideo:
               ref_image_size="match", state=None,
               reference_policy="strict", semantic_anchor_size="512",
               semantic_anchor_mode="timestamped_video",
-              cache_for_upscale=True):
+              cache_for_upscale=True, semantic_anchors=None):
         if GraphBuilder is None:
             raise RuntimeError(
                 "Tagged H3 Ref2VA requires ComfyUI GraphBuilder.")
+        anchor_bundle = (
+            _semantic_anchor_bundle(semantic_anchors)
+            if semantic_anchors is not None else None)
+        if anchor_bundle is not None:
+            semantic_anchor_size = anchor_bundle["semantic_anchor_size"]
+            semantic_anchor_mode = anchor_bundle["semantic_anchor_mode"]
         compiled, summary, bindings = _compile_tagged_reference_prompt(
             references, clip_index, clip_count, prompt, reference_policy,
-            semantic_anchor_mode)
+            semantic_anchor_mode, anchor_bundle)
         graph = GraphBuilder()
         ref2va = graph.node("MiniMaxH3ReferenceToVideo", "TaggedRef2VA")
         for key, value in (
@@ -9104,8 +9355,11 @@ class MiniMaxH3TaggedReferenceToVideo:
             if detail:
                 slice_details.append(detail)
         if isinstance(references, dict) and references.get("fingerprint"):
-            fingerprint = str(references["fingerprint"])
-            fingerprint_output = _reference_fingerprint_output(references)
+            fingerprint_registry = _combined_reference_registry(
+                references, anchor_bundle)
+            fingerprint = str(fingerprint_registry["fingerprint"])
+            fingerprint_output = _reference_fingerprint_output(
+                fingerprint_registry)
         elif _reference_compliance_mode(reference_policy) == "disabled":
             fingerprint = _fingerprint({
                 "tagged_references": "ignored",
@@ -9152,13 +9406,14 @@ class MiniMaxH3TaggedReferenceToVideo:
                 "semantic_anchor_mode": anchor_mode,
                 "semantic_anchor_size": anchor_size,
             })
-            fingerprint_output = _reference_fingerprint_output(
-                references,
-                wrapper_key="tagged_reference_fingerprint",
-                wrapper_contract={
-                    "semantic_anchor_mode": anchor_mode,
-                    "semantic_anchor_size": anchor_size,
-                })
+            if anchor_bundle is None:
+                fingerprint_output = _reference_fingerprint_output(
+                    references,
+                    wrapper_key="tagged_reference_fingerprint",
+                    wrapper_contract={
+                        "semantic_anchor_mode": anchor_mode,
+                        "semantic_anchor_size": anchor_size,
+                    })
         cache_runtime_ready = (
             callable(getattr(vae, "encode", None))
             and not isinstance(vae, (str, bytes))
@@ -10415,7 +10670,8 @@ def _preflight_chain(
         plan: Any, *, source_timeline: Any = None, source_audio: Any = None,
         start_clip: int = 1, scene_range: Any = "",
         verify_resume_history: bool = True, tagged_references: Any = None,
-        reference_schedule: Any = None) -> tuple[dict[str, Any], dict[str, Any]]:
+        reference_schedule: Any = None,
+        semantic_anchors: Any = None) -> tuple[dict[str, Any], dict[str, Any]]:
     report: dict[str, Any] = {
         "version": PREFLIGHT_VERSION, "ok": False, "status": "error",
         "errors": [], "warnings": [], "info": [], "scenes": [],
@@ -10496,64 +10752,58 @@ def _preflight_chain(
                       else reference_schedule)
         route = ("tagged" if tagged_references is not None else
                  "scheduled" if reference_schedule is not None else "none")
+        semantic_bundle = (
+            _semantic_anchor_bundle(semantic_anchors)
+            if semantic_anchors is not None else None)
         report["references"] = {"route": route, "fingerprint": "",
-                                "registered_tags": []}
-        if references is not None:
-            entries = (_tagged_reference_entries(references)
-                       if route == "tagged"
-                       else _reference_schedule_entries(references))
+                                "registered_tags": [],
+                                "semantic_route": (
+                                    "bundle" if semantic_bundle is not None
+                                    else "legacy_tagged"
+                                    if tagged_references is not None
+                                    else "none"),
+                                "registered_semantic_tags": []}
+        if references is not None or semantic_bundle is not None:
+            entries = (
+                _tagged_reference_entries(references)
+                if route == "tagged" else
+                _reference_schedule_entries(references)
+                if route == "scheduled" else [])
             registered = sorted({tag for entry in entries
                                  for tag in _reference_entry_tags(entry)})
             report["references"].update({
-                "fingerprint": str(references.get("fingerprint") or ""),
+                "fingerprint": str(
+                    (references or semantic_bundle or {}).get(
+                        "fingerprint") or ""),
                 "registered_tags": registered,
             })
+            semantic_entries = (
+                _semantic_anchor_draft_entries(semantic_bundle)
+                if semantic_bundle is not None
+                else entries if route == "tagged" else [])
+            report["references"]["registered_semantic_tags"] = sorted(
+                str(entry["tag"]) for entry in semantic_entries)
             for scene_record, shot in zip(report["scenes"], prepared["shots"]):
                 prompt_tags = set(scene_record["prompt_tags"])
                 semantic_anchors = list(scene_record["semantic_anchors"])
-                semantic_tags = {item["tag"] for item in semantic_anchors}
                 if route == "tagged":
-                    active_tags = prompt_tags | semantic_tags
-                    active = [entry for entry in entries if active_tags.intersection(
-                        _reference_entry_tags(entry))]
-                    entries_by_tag = {
-                        tag: entry for entry in entries
-                        for tag in _reference_entry_tags(entry)
-                    }
-                    for anchor in semantic_anchors:
-                        tag = anchor["tag"]
-                        entry = entries_by_tag.get(tag)
-                        if entry is None:
-                            _preflight_issue(
-                                report, "errors", "unresolved_semantic_anchor",
-                                "Scene %d uses unresolved semantic anchor #%s." %
-                                (int(shot["index"]), tag),
-                                "Register a Tagged Picture with that tag or "
-                                "remove the semantic anchor.",
-                                scene=int(shot["index"]), tag=tag)
-                        elif entry.get("kind") != "picture":
-                            _preflight_issue(
-                                report, "errors", "invalid_semantic_anchor_kind",
-                                "Scene %d semantic anchor #%s resolves to %s, "
-                                "not a Tagged Picture." % (
-                                    int(shot["index"]), tag,
-                                    str(entry.get("kind") or "unknown")),
-                                "Semantic anchors accept Tagged Picture refs only.",
-                                scene=int(shot["index"]), tag=tag)
-                        if float(anchor["timestamp_seconds"]) > (
-                                int(shot["raw_frames"]) / float(FPS)):
-                            _preflight_issue(
-                                report, "errors", "semantic_anchor_out_of_range",
-                                "Scene %d semantic anchor #%s[%.3fs] exceeds "
-                                "the %.3fs scene duration." % (
-                                    int(shot["index"]), tag,
-                                    float(anchor["timestamp_seconds"]),
-                                    int(shot["raw_frames"]) / float(FPS)),
-                                "Use a scene-local timestamp inside this scene.",
-                                scene=int(shot["index"]), tag=tag)
-                else:
-                    active = [entry for entry in entries if _reference_is_active(
-                        entry, int(shot["index"]))]
+                    # Native H3 capacity is exclusively driven by @tags.
+                    # Dedicated or legacy #anchors are Qwen presentation data
+                    # and never enter this active native list.
+                    native_bindings = _active_reference_bindings(
+                        references, int(shot["index"]), len(prepared["shots"]),
+                        activation_tags=prompt_tags)
+                    active = (
+                        native_bindings["pictures"] +
+                        native_bindings["videos"] +
+                        native_bindings["audios"])
+                elif route == "scheduled":
+                    native_bindings = _active_reference_bindings(
+                        references, int(shot["index"]), len(prepared["shots"]))
+                    active = (
+                        native_bindings["pictures"] +
+                        native_bindings["videos"] +
+                        native_bindings["audios"])
                     for anchor in semantic_anchors:
                         _preflight_issue(
                             report, "errors", "semantic_anchor_requires_tagged",
@@ -10572,6 +10822,55 @@ def _preflight_chain(
                             % (int(shot["index"]), tag),
                             "Register that tag or remove it from the scene prompt.",
                             scene=int(shot["index"]), tag=tag)
+                else:
+                    active = []
+                    for tag in sorted(prompt_tags):
+                        _preflight_issue(
+                            report, "errors", "unresolved_reference_tag",
+                            "Scene %d uses native reference @%s, but no native "
+                            "Tagged registry is connected." % (
+                                int(shot["index"]), tag),
+                            "Connect Semantic Anchor Bundle's references "
+                            "passthrough or remove the @tag.",
+                            scene=int(shot["index"]), tag=tag)
+                if route != "scheduled":
+                    entries_by_tag = {
+                        tag: entry for entry in semantic_entries
+                        for tag in _reference_entry_tags(entry)
+                    }
+                    for anchor in semantic_anchors:
+                        tag = anchor["tag"]
+                        entry = entries_by_tag.get(tag)
+                        if entry is None:
+                            _preflight_issue(
+                                report, "errors", "unresolved_semantic_anchor",
+                                "Scene %d uses unresolved semantic anchor #%s." %
+                                (int(shot["index"]), tag),
+                                "Register a Semantic Picture Anchor with that "
+                                "tag or remove the semantic anchor.",
+                                scene=int(shot["index"]), tag=tag)
+                        elif entry.get("kind") not in (
+                                "picture", "semantic_anchor"):
+                            _preflight_issue(
+                                report, "errors", "invalid_semantic_anchor_kind",
+                                "Scene %d semantic anchor #%s resolves to %s, "
+                                "not a semantic picture." % (
+                                    int(shot["index"]), tag,
+                                    str(entry.get("kind") or "unknown")),
+                                "Use a Semantic Picture Anchor (or a legacy "
+                                "Tagged Picture compatibility source).",
+                                scene=int(shot["index"]), tag=tag)
+                        if float(anchor["timestamp_seconds"]) > (
+                                int(shot["raw_frames"]) / float(FPS)):
+                            _preflight_issue(
+                                report, "errors", "semantic_anchor_out_of_range",
+                                "Scene %d semantic anchor #%s[%.3fs] exceeds "
+                                "the %.3fs scene duration." % (
+                                    int(shot["index"]), tag,
+                                    float(anchor["timestamp_seconds"]),
+                                    int(shot["raw_frames"]) / float(FPS)),
+                                "Use a scene-local timestamp inside this scene.",
+                                scene=int(shot["index"]), tag=tag)
                 for entry in active:
                     detail = {"tag": str(entry.get("tag") or ""),
                               "kind": str(entry.get("kind") or ""),
@@ -10952,6 +11251,12 @@ class MiniMaxH3ChainPlanStudio:
                     "tooltip": "Optional active prompt-driven reference registry."}),
                 "reference_schedule": (REFERENCE_SCHEDULE_TYPE, {
                     "tooltip": "Optional legacy scheduled reference registry."}),
+                # Append new sockets after the original optional inputs so
+                # older serialized workflows retain their positional layout.
+                "semantic_anchors": (SEMANTIC_ANCHOR_BUNDLE_TYPE, {
+                    "tooltip": "Optional dedicated Qwen-only semantic bundle. "
+                               "Its #tags are validated separately from "
+                               "native @tag capacity."}),
             },
         }
 
@@ -10973,13 +11278,15 @@ class MiniMaxH3ChainPlanStudio:
 
     def passthrough(self, plan, source_timeline=None, source_audio=None,
                     start_clip=1, scene_range="", verify_resume_history=True,
-                    tagged_references=None, reference_schedule=None):
+                    tagged_references=None, reference_schedule=None,
+                    semantic_anchors=None):
         prepared, report = _preflight_chain(
             plan, source_timeline=source_timeline, source_audio=source_audio,
             start_clip=start_clip, scene_range=scene_range,
             verify_resume_history=verify_resume_history,
             tagged_references=tagged_references,
-            reference_schedule=reference_schedule)
+            reference_schedule=reference_schedule,
+            semantic_anchors=semantic_anchors)
         try:
             source_previews = _register_plan_studio_source_previews(
                 prepared, report, tagged_references, reference_schedule,
@@ -11057,7 +11364,7 @@ class MiniMaxH3ChainRunManager:
             },
             "optional": {},
         }
-        for index in range(MAX_ASSET_BINDINGS):
+        for index in range(MAX_DIRECT_ASSET_BINDINGS):
             inputs["optional"]["asset_%d" % index] = ("*", {
                 "rawLink": True,
                 "lazy": True,
@@ -11069,6 +11376,12 @@ class MiniMaxH3ChainRunManager:
                        "automatic promotion; otherwise exactly one loader "
                        "asset assigned the Source track role becomes the "
                        "recoverable Source Timeline automatically."})
+        inputs["optional"]["semantic_anchors"] = (
+            SEMANTIC_ANCHOR_BUNDLE_TYPE, {
+                "tooltip": "One Semantic Anchor Bundle replaces individual "
+                           "Run Manager asset sockets for its Qwen-only "
+                           "pictures. The interface discovers and archives "
+                           "the bundle's upstream image loaders."})
         return inputs
 
     # The timeline output is appended so the established Plan output remains
@@ -11091,7 +11404,10 @@ class MiniMaxH3ChainRunManager:
                    "Source Timeline.")
 
     def passthrough(self, plan, archive_images, archive_audio, archive_video,
-                    asset_bindings_json, source_timeline=None, **_assets):
+                    asset_bindings_json, source_timeline=None,
+                    semantic_anchors=None, **_assets):
+        if semantic_anchors is not None:
+            _semantic_anchor_bundle(semantic_anchors)
         bindings = []
         try:
             bindings = json.loads(str(asset_bindings_json or "[]"))
@@ -17903,6 +18219,8 @@ CHAIN_NODE_CLASS_MAPPINGS = {
     "MiniMaxH3ScheduledVideoReference": MiniMaxH3ScheduledVideoReference,
     "MiniMaxH3ScheduledAudioReference": MiniMaxH3ScheduledAudioReference,
     "MiniMaxH3ScheduledReferenceToVideo": MiniMaxH3ScheduledReferenceToVideo,
+    "MiniMaxH3SemanticPictureAnchor": MiniMaxH3SemanticPictureAnchor,
+    "MiniMaxH3SemanticAnchorBundle": MiniMaxH3SemanticAnchorBundle,
     "MiniMaxH3TaggedPictureReference": MiniMaxH3TaggedPictureReference,
     "MiniMaxH3TaggedVideoReference": MiniMaxH3TaggedVideoReference,
     "MiniMaxH3TaggedMotionReference": MiniMaxH3TaggedMotionReference,
@@ -17953,6 +18271,8 @@ CHAIN_NODE_DISPLAY_NAME_MAPPINGS = {
     "MiniMaxH3ScheduledVideoReference": "MiniMax H3 Scheduled Video Ref",
     "MiniMaxH3ScheduledAudioReference": "MiniMax H3 Scheduled Audio Ref",
     "MiniMaxH3ScheduledReferenceToVideo": "MiniMax H3 Scheduled Ref2VA",
+    "MiniMaxH3SemanticPictureAnchor": "MiniMax H3 Semantic Picture Anchor",
+    "MiniMaxH3SemanticAnchorBundle": "MiniMax H3 Semantic Anchor Bundle",
     "MiniMaxH3TaggedPictureReference": "MiniMax H3 Tagged Picture Ref",
     "MiniMaxH3TaggedVideoReference": "MiniMax H3 Tagged Video Ref",
     "MiniMaxH3TaggedMotionReference": "MiniMax H3 Tagged Motion Ref",

@@ -355,6 +355,23 @@ function mount(node) {
             }
             source._h3AssetWatchers.add(sourceChanged);
         }
+        for (const binding of state.bindings) {
+            const source = node.graph?.getNodeById?.(binding.node_id)
+                ?? node.graph?.getNodeById?.(Number(binding.node_id));
+            if (!source || current.has(source)) continue;
+            current.add(source);
+            source._h3AssetWatchers ??= new Set();
+            if (!source._h3AssetWatchWrapped) {
+                source._h3AssetWatchWrapped = true;
+                const changed = source.onWidgetChanged;
+                source.onWidgetChanged = function () {
+                    const result = changed?.apply(this, arguments);
+                    for (const listener of this._h3AssetWatchers ?? []) listener();
+                    return result;
+                };
+            }
+            source._h3AssetWatchers.add(sourceChanged);
+        }
         for (const source of state.watchedSources) {
             if (!current.has(source)) source._h3AssetWatchers?.delete(sourceChanged);
         }
@@ -399,8 +416,8 @@ function mount(node) {
     }
 
     function syncAssetBindings() {
-        updateSourceWatches();
         state.bindings = collectAssetBindings(node);
+        updateSourceWatches();
         writeBindingsWidget();
         renderAssetBindings();
     }

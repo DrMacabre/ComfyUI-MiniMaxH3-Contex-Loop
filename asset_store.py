@@ -12,7 +12,11 @@ from datetime import datetime, timezone
 from typing import Any
 
 
-MAX_ASSET_BINDINGS = 12
+# The canvas keeps a small number of direct loader sockets. Semantic Anchor
+# Bundle contributes many loader bindings through one dedicated Run Manager
+# socket, so the persisted manifest accepts a larger bounded collection.
+MAX_DIRECT_ASSET_BINDINGS = 12
+MAX_ASSET_BINDINGS = 128
 ASSET_MANIFEST_FORMAT = "h3_chain_assets_v1"
 ASSET_ROLES = ("picture", "video", "audio_reference", "source_track")
 

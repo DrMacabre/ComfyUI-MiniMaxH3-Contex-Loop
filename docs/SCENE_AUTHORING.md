@@ -34,7 +34,8 @@ second prompt copy.
 - Typing `@` offers the connected Picture/Video/Audio aliases. In Tagged mode,
   inserting an inactive alias activates it; scheduled references remain limited
   to the selected scene.
-- Typing `#` offers valid Tagged Picture semantic/storyboard anchors only.
+- Typing `#` offers valid dedicated Semantic Picture Anchors (and legacy
+  Tagged Picture compatibility anchors) only.
 - Typing `<` offers H3 subjects, dialogue tags, and available native reference
   labels, plus `<scenetrans>` and `<cutoff>` dialogue-flow markers. Typing
   `[` filters 12 shot markers, multilingual dialogue markers, and canonical
@@ -57,9 +58,10 @@ second prompt copy.
   switch between the ordinary prompt source and rich H3 token presentation;
   this changes presentation only, never Plan text.
 - `#picture[2.50s]` adds a scene-local Qwen semantic checkpoint when the
-  picture is registered through Tagged Ref2VA. With Tagged Ref2VA set to
+  picture is supplied through Semantic Anchor Bundle. With the Bundle set to
   `picture_storyboard`, it instead becomes a separate Qwen-only Picture plus
-  an approximate scene-relative timing instruction.
+  an approximate scene-relative timing instruction. It never consumes a
+  native H3 reference slot.
 - `A−` and `A+` change persistent type size.
 - The node may sit inline before Loop Start or on an editor-only branch.
 

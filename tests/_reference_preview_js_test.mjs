@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import {
     availableReferenceRecords,
     collectScheduleNodes,
+    collectSemanticAnchorNodes,
     collectTaggedNodes,
     convertTaggedPictureReference,
     coreReferenceRecords,
@@ -244,6 +245,65 @@ assert.deepEqual(
     }).records.map(({tag}) => tag),
     ["hero_face", "hero_look", "performance", "motion", "lazy_motion",
         "performance_audio", "lazy_motion_audio"],
+);
+
+const semanticEditor = add(makeNode(80, "MiniMaxH3ChainScenePromptEditor"));
+const semanticRelay = add(makeNode(81, "MiniMaxH3ChainCurrent"));
+const semanticWrapper = add(makeNode(82, "MiniMaxH3TaggedReferenceToVideo"));
+const nativeImage = add(makeNode(83, "LoadImage", {image: "native.png"}));
+const nativePicture = add(makeNode(84, "MiniMaxH3TaggedPictureReference", {
+    tag: "native",
+}));
+const semanticImageA = add(makeNode(85, "LoadImage", {image: "beat-a.png"}));
+const semanticImageB = add(makeNode(86, "LoadImage", {image: "beat-b.png"}));
+const semanticAnchorA = add(makeNode(
+    87, "MiniMaxH3SemanticPictureAnchor", {tag: "beat_a"},
+));
+const semanticAnchorB = add(makeNode(
+    88, "MiniMaxH3SemanticPictureAnchor", {tag: "beat_b"},
+));
+const semanticBundle = add(makeNode(
+    89, "MiniMaxH3SemanticAnchorBundle", {
+        semantic_anchor_size: "768",
+        semantic_anchor_mode: "picture_storyboard",
+    },
+));
+connect(semanticEditor, semanticRelay, "state");
+connect(semanticRelay, semanticWrapper, "prompt");
+connect(nativeImage, nativePicture, "image");
+connect(semanticImageA, semanticAnchorA, "image");
+connect(semanticAnchorA, semanticAnchorB, "previous");
+connect(semanticImageB, semanticAnchorB, "image");
+connect(semanticAnchorB, semanticBundle, "anchors");
+connect(nativePicture, semanticBundle, "references");
+connect(semanticBundle, semanticWrapper, "references", 1);
+connect(semanticBundle, semanticWrapper, "semantic_anchors", 0);
+
+assert.deepEqual(collectTaggedNodes(semanticWrapper), [nativePicture]);
+assert.deepEqual(
+    collectSemanticAnchorNodes(semanticWrapper).nodes,
+    [semanticAnchorA, semanticAnchorB],
+);
+const separateRecords = taggedReferenceRecords(
+    semanticEditor, "Use @native and #beat_b[2.50s].",
+).records;
+assert.deepEqual(
+    separateRecords.map((item) => ({
+        tag: item.tag,
+        token: item.token,
+        label: item.label,
+        active: item.active,
+        semanticOnly: Boolean(item.semanticOnly),
+        supportsSemantic: item.supportsSemantic,
+    })),
+    [
+        {tag: "native", token: "@native", label: "<Picture 1>",
+            active: true, semanticOnly: false, supportsSemantic: true},
+        {tag: "beat_a", token: "#beat_a[0.00s]", label: null,
+            active: false, semanticOnly: true, supportsSemantic: false},
+        {tag: "beat_b", token: "#beat_b[0.00s]", label: "<Picture 2>",
+            active: true, semanticOnly: true, supportsSemantic: false},
+    ],
 );
 
 // The 0.5 Source Timeline motion node can be the final link in a tagged chain.

@@ -18,6 +18,14 @@ Newest first. This file keeps release history out of the onboarding README.
 
 ## v0.5.11 — Plan Studio transport hardening
 
+- Split Qwen-only `#semantic[timestamp]` pictures from native H3 `@reference`
+  media. New Semantic Picture Anchor nodes feed one Semantic Anchor Bundle
+  with centralized scale/mode controls; the bundle connects once to Tagged
+  Ref2VA, Plan Studio, and Run Manager. Semantic pictures no longer consume
+  native picture/video/audio capacity, while their source loaders remain
+  recoverable through the saved-run asset manifest and their combined
+  incremental fingerprint remains resume-safe.
+
 - The bundled LBH 3D deferred-upscale workflow now leaves the pass-2 prompt
   override blank, preserving the exact compiled scene prompt by default. The
   former neutral replacement text remains available in the How To Run note
