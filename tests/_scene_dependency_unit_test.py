@@ -176,6 +176,29 @@ assert any(item["field"] == "generation_fingerprint"
            for item in chain._scene_dependency_diffs(
                old_reference_dependency, changed_dependency))
 
+# Replacing an image which this completed scene never used is also neutral.
+# Unlike append-only growth, this proof uses the saved and current lineage
+# entries to compare the scene's effective tag->asset contracts directly.
+changed_inactive_registry = chain._append_tagged_reference(
+    None, kind="picture", tag="actor", value="actor-v1",
+    content_hash="actor-hash-v1")
+changed_inactive_registry = chain._append_tagged_reference(
+    changed_inactive_registry, kind="picture", tag="later",
+    value="later-v2", content_hash="later-hash-v2")
+changed_inactive_dependency = chain._scene_dependency_record(
+    reference_plan(chain._reference_fingerprint_output(
+        changed_inactive_registry)), 1, None)
+assert chain._scene_dependency_diffs(
+    new_reference_dependency, changed_inactive_dependency) == []
+changed_inactive_active_dependency = chain._scene_dependency_record(
+    reference_plan(
+        chain._reference_fingerprint_output(changed_inactive_registry),
+        "@actor meets @later."), 1, None)
+assert any(item["field"] == "generation_fingerprint"
+           for item in chain._scene_dependency_diffs(
+               active_new_dependency,
+               changed_inactive_active_dependency))
+
 # Dedicated Qwen-only semantic anchors share the incremental Plan fingerprint
 # without becoming native Ref2VA entries. Adding an unused #anchor must remain
 # resume-neutral; activating it in the old scene makes the change significant.
@@ -348,6 +371,11 @@ boundary_diffs = chain._scene_dependency_diffs(scene2_a, long_scene2)
 assert any(item["scope"] == "incoming_boundary"
            and item["field"] == "context_length"
            for item in boundary_diffs)
+assert chain._resume_context_predecessor(make_plan(5), 2) == 1
+independent_start_plan = make_plan(5)
+independent_start_plan["shots"][1]["context_length"] = 0
+independent_start_plan["shots"][1]["audio_context_length"] = 0
+assert chain._resume_context_predecessor(independent_start_plan, 2) is None
 
 formatted = chain._format_dependency_mismatches(boundary_diffs)
 assert "scene 2 incoming_boundary.context_length" in formatted
@@ -591,5 +619,18 @@ with tempfile.TemporaryDirectory() as temporary:
         "current": changed_plan["shots"][0]["prompt_hash"],
         "regeneration_required": True,
     }
+
+    # An explicitly independent selected scene consumes no predecessor state.
+    # Its earlier clips retain their saved identity for assembly, so editing a
+    # prior prompt cannot block the new zero-context sample.
+    independent_plan = json.loads(json.dumps(changed_plan))
+    independent_plan["shots"][1]["context_length"] = 0
+    independent_plan["shots"][1]["audio_context_length"] = 0
+    independent_report = {"errors": [], "warnings": []}
+    independent_resume = chain._preflight_resume(
+        independent_plan, 2, True, independent_report)
+    assert independent_resume["eligible"] is True
+    assert independent_resume["context_predecessor"] is None
+    assert independent_resume["predecessors"][0]["mismatches"] == []
 
 print("H3 structured resume preflight: field-level saved/current mismatch pass")
