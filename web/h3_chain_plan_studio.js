@@ -442,6 +442,13 @@ function mount(node) {
     root.tabIndex = 0;
     root.addEventListener("pointerenter", () => { state.keyboardHover = true; });
     root.addEventListener("pointerleave", () => { state.keyboardHover = false; });
+    const pausePlayerMonitors = () => {
+        for (const media of [
+            state.playerAudio, state.sourceAudioPlayer, state.sourcePlayer,
+        ]) {
+            try { media?.pause(); } catch (_error) {}
+        }
+    };
     const onPlayerKeydown = (event) => {
         if (event.code !== "Space" || event.repeat || state.view !== "player"
                 || !state.player || !state.player.dataset.source) return;
@@ -451,7 +458,10 @@ function mount(node) {
         if (!state.keyboardHover && !root.contains(document.activeElement)) return;
         event.preventDefault(); event.stopPropagation();
         if (state.player.paused) void state.player.play().catch(() => {});
-        else state.player.pause();
+        else {
+            state.player.pause();
+            pausePlayerMonitors();
+        }
     };
     document.addEventListener("keydown", onPlayerKeydown, true);
 
@@ -2149,7 +2159,10 @@ function mount(node) {
         const controls = element("div", "h3studio-player-controls");
         const play = button("▶", "Play or pause the delivered timeline from the current position", () => {
             if (video.paused) void video.play().catch(() => {});
-            else video.pause();
+            else {
+                video.pause();
+                pausePlayerMonitors();
+            }
         });
         const slider = element("input"); slider.type = "range"; slider.min = "0"; slider.max = String(timing().totalSeconds); slider.step = String(1 / 24); slider.value = "0";
         const clock = element("span", "", `0 / ${formatClock(timing().totalSeconds)}`);
@@ -2213,10 +2226,10 @@ function mount(node) {
         video.addEventListener("playing", releaseHandoffFrame);
         video.addEventListener("pause", () => {
             play.textContent = "▶";
-            generatedAudio.pause(); sourceVideo.pause();
-            const handingOff = video.ended &&
-                state.playerIndex + 1 < state.plan.shots.length;
-            if (!handingOff) sourceTimelineAudio.pause();
+            // The source track is a monitor slaved to the video transport.
+            // Always stop it on pause; automatic scene handoff will restart it
+            // from the next absolute timeline position when video fires play.
+            pausePlayerMonitors();
         });
         video.addEventListener("waiting", () => {
             generatedAudio.pause(); sourceTimelineAudio.pause(); sourceVideo.pause();
