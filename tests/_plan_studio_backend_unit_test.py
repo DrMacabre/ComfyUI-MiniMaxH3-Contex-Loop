@@ -182,13 +182,21 @@ async def check():
             "duration_seconds": 340 / 24,
             "media_fingerprint": "3" * 64,
         }
+        original_runtime_source_timeline = (
+            chain._plan_studio_runtime_source_timeline)
         original_source_audio_media = chain._plan_studio_source_audio_media
         try:
+            chain._plan_studio_runtime_source_timeline = (
+                lambda *_args, **_kwargs: {
+                    "audio": {"kind": "external_path"},
+                })
             chain._plan_studio_source_audio_media = (
                 lambda *_args, **_kwargs: dict(source_audio_record))
             audio_payload = chain._register_plan_studio_source_previews(
                 plan, report, None, None, object())
         finally:
+            chain._plan_studio_runtime_source_timeline = (
+                original_runtime_source_timeline)
             chain._plan_studio_source_audio_media = original_source_audio_media
         assert audio_payload["token"]
         assert audio_payload["scenes"] == []
@@ -196,6 +204,27 @@ async def check():
         assert audio_payload["source_audio"]["seek_seconds"] == 1.25
         assert chain._PLAN_STUDIO_SOURCE_PREVIEWS[
             audio_payload["token"]]["source_audio"] == source_audio_record
+
+        try:
+            chain._plan_studio_runtime_source_timeline = (
+                lambda *_args, **_kwargs: {"audio": {"kind": "none"}})
+            chain._plan_studio_source_audio_media = (
+                lambda *_args, **_kwargs: None)
+            no_audio_payload = chain._register_plan_studio_source_previews(
+                plan, {"scenes": []}, None, None, object())
+        finally:
+            chain._plan_studio_runtime_source_timeline = (
+                original_runtime_source_timeline)
+            chain._plan_studio_source_audio_media = original_source_audio_media
+        assert no_audio_payload["token"] == ""
+        assert no_audio_payload["scenes"] == []
+        assert no_audio_payload["source_audio"] == {
+            "available": False,
+            "timeline_available": True,
+            "has_audio": False,
+            "kind": "none",
+        }
+        assert "connected without audio" in no_audio_payload["status"]
 
         original_usable = chain._usable_ffmpeg
         original_capture = chain._run_ffmpeg_capture

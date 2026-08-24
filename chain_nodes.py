@@ -10940,7 +10940,7 @@ def _plan_studio_preview_media(
     }
 
 
-def _plan_studio_source_audio_media(
+def _plan_studio_runtime_source_timeline(
         plan: dict[str, Any], source_timeline: Any = None
         ) -> dict[str, Any] | None:
     source = source_timeline
@@ -10948,7 +10948,15 @@ def _plan_studio_source_audio_media(
         source = _source_timeline_from_recovery(plan["source_timeline"])
     if source is None:
         return None
-    source = _validate_source_timeline(source, require_runtime=True)
+    return _validate_source_timeline(source, require_runtime=True)
+
+
+def _plan_studio_source_audio_media(
+        plan: dict[str, Any], source_timeline: Any = None
+        ) -> dict[str, Any] | None:
+    source = _plan_studio_runtime_source_timeline(plan, source_timeline)
+    if source is None:
+        return None
     audio = source["audio"]
     if str(audio.get("kind") or "none") not in (
             "embedded", "external_path"):
@@ -10988,15 +10996,24 @@ def _register_plan_studio_source_previews(
         "route": route,
         "token": "",
         "scenes": [],
-        "source_audio": {"available": False},
+        "source_audio": {
+            "available": False,
+            "timeline_available": False,
+            "has_audio": False,
+            "kind": "none",
+        },
         "status": "No active path-backed motion reference is available.",
     }
     try:
-        source_audio = _plan_studio_source_audio_media(plan, source_timeline)
+        runtime_source_timeline = _plan_studio_runtime_source_timeline(
+            plan, source_timeline)
+        source_audio = _plan_studio_source_audio_media(
+            plan, runtime_source_timeline)
     except (OSError, TypeError, ValueError) as exc:
         _LOG.warning(
             "Plan Studio could not register Source Timeline audio: %s", exc)
         source_audio = None
+        runtime_source_timeline = None
     entries = (
         _tagged_reference_entries(references)
         if references is not None and route == "tagged"
@@ -11063,18 +11080,33 @@ def _register_plan_studio_source_previews(
                 "delivered_frames": int(shot["delivered_frames"]),
                 "references": public_refs,
             })
-    if not records and source_audio is None:
+    timeline_available = runtime_source_timeline is not None
+    source_audio_kind = (
+        str(runtime_source_timeline["audio"].get("kind") or "none")
+        if timeline_available else "none")
+    source_has_audio = source_audio_kind != "none"
+    if not records and source_audio is None and not timeline_available:
         return payload
-    _plan_studio_preview_cleanup()
-    _PLAN_STUDIO_SOURCE_PREVIEWS[token] = {
-        "created": time.monotonic(),
-        "records": records,
-        "source_audio": source_audio,
+    if records or source_audio is not None:
+        _plan_studio_preview_cleanup()
+        _PLAN_STUDIO_SOURCE_PREVIEWS[token] = {
+            "created": time.monotonic(),
+            "records": records,
+            "source_audio": source_audio,
+        }
+    else:
+        token = ""
+    source_audio_public = {
+        "available": False,
+        "timeline_available": timeline_available,
+        "has_audio": source_has_audio,
+        "kind": source_audio_kind,
     }
-    source_audio_public = {"available": False}
     if source_audio is not None:
         source_audio_public = {
             "available": True,
+            "timeline_available": True,
+            "has_audio": True,
             "kind": str(source_audio["audio_kind"]),
             "seek_seconds": float(source_audio["audio_seek_seconds"]),
             "frame_count": int(source_audio["frame_count"]),
@@ -11088,6 +11120,10 @@ def _register_plan_studio_source_previews(
             "%d scene source window(s) ready" % motion_count)
     if source_audio is not None:
         status_parts.append("Source Timeline audio ready")
+    elif timeline_available and not source_has_audio:
+        status_parts.append("Source Timeline connected without audio")
+    elif timeline_available:
+        status_parts.append("Source Timeline audio is not path-backed")
     payload.update({
         "token": token,
         "scenes": public_scenes,
@@ -11168,7 +11204,12 @@ class MiniMaxH3ChainPlanStudio:
                 "route": "none",
                 "token": "",
                 "scenes": [],
-                "source_audio": {"available": False},
+                "source_audio": {
+                    "available": False,
+                    "timeline_available": False,
+                    "has_audio": False,
+                    "kind": "none",
+                },
                 "status": "Source preview registration failed: %s" % exc,
             }
         result = (plan, report, bool(report["ok"]), report["summary"],
