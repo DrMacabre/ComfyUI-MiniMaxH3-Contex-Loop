@@ -79,14 +79,14 @@ def write_fixture(path, frame_count=50, source_fps=25):
         container.close()
 
 
-def make_plan(run_name):
+def make_plan(run_name, audio_mode="source_track"):
     return chain._normalize_plan(
         json.dumps({"shots": [
             {"id": "one", "prompt": "@motion begins.", "length": 22},
             {"id": "two", "prompt": "@motion continues.", "length": 22},
         ]}),
         run_name, 64, 64, 5, "video", "head", "disabled",
-        "source_track", 5, 1.0, 8, 7, 18, "model-stack", 0,
+        audio_mode, 5, 1.0, 8, 7, 18, "model-stack", 0,
         "guide")
 
 
@@ -188,6 +188,40 @@ with tempfile.TemporaryDirectory() as temporary:
         manager_timeline["video"]["path"])
     assert (root / "h3_chains" / "timeline-consumers" /
             "source_timeline.json").is_file()
+
+    promoted_plan = make_plan(
+        "timeline-promoted-source-track", "generated_audio")
+    source_binding = json.dumps([{
+        "binding_id": "original-song",
+        "label": "Original song",
+        "role": "source_track",
+        "node_id": "42",
+        "node_type": "LoadAudio",
+        "node_title": "Original song",
+        "output_slot": 0,
+        "output_type": "AUDIO",
+        "widget_name": "audio",
+        "original_value": path.name,
+    }])
+    original_input_root = chain._input_root
+    try:
+        chain._input_root = lambda: str(root)
+        promoted_plan, promoted_timeline = (
+            chain.MiniMaxH3ChainRunManager().passthrough(
+                promoted_plan, True, False, False, source_binding))
+    finally:
+        chain._input_root = original_input_root
+    assert chain._is_source_timeline(promoted_timeline)
+    assert promoted_timeline["video"] is None
+    assert promoted_timeline["audio"]["kind"] == "external_path"
+    assert promoted_timeline["recovery"]["source_route"] == (
+        "run_manager_source_track")
+    assert promoted_plan["source_timeline"]["fingerprints"] == (
+        promoted_timeline["fingerprints"])
+    studio_source = chain._register_plan_studio_source_previews(
+        promoted_plan, {"scenes": []})
+    assert studio_source["source_audio"]["available"] is True
+    assert studio_source["source_audio"]["timeline_available"] is True
 
     manifest = chain._manifest_from_segments(prepared, [
         {"index": 1, "id": "one", "delivered_frames": 22},
@@ -343,6 +377,6 @@ assert chain.CHAIN_NODE_CLASS_MAPPINGS[
         chain.MiniMaxH3SourceTimelineScenePreview)
 
 print(
-    "Source Timeline consumers: Run Manager, Loop Start state, Current Shot, "
-    "Tagged Motion, both previews, manifest recovery, and deferred-audio "
-    "materialization including one-wire legacy AUDIO promotion pass")
+    "Source Timeline consumers: Run Manager source-track promotion, Loop "
+    "Start state, Current Shot, Tagged Motion, both previews, manifest "
+    "recovery, and deferred-audio materialization pass")

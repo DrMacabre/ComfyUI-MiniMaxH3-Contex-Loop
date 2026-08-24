@@ -6,10 +6,13 @@ import {
     locateStudioTimelineSecond,
     h3StudioGridMarkers,
     matchingStudioCheckpoint,
+    matchingStudioSourceAudio,
     matchingStudioSourceScene,
     studioCheckpointSignature,
     studioSceneStartSeconds,
+    studioSourceAudioSecond,
     studioSourceSecond,
+    studioWaveformSceneSamples,
 } from "../web/h3_chain_plan_studio_core.mjs";
 import {
     applySceneTransitionPreset,
@@ -55,7 +58,10 @@ assert.notEqual(
     }]),
 );
 
-const sourceTimeline = {token:"opaque", scenes:[{
+const sourceTimeline = {token:"opaque", source_audio:{
+    available:true, frame_count:1042, seek_seconds:2,
+    duration_seconds:1042 / 24,
+}, scenes:[{
     scene:2, scene_id:"two", delivered_frames:340,
     references:[{frame_count:362, compare_offset_frames:22}],
 }]};
@@ -70,6 +76,25 @@ assert.equal(
 assert.ok(Math.abs(studioSourceSecond(
     sourceTimeline.scenes[0].references[0], 1,
 ) - (22 / 24 + 1)) < 1e-9);
+assert.equal(
+    matchingStudioSourceAudio(sourceTimeline, rows).frame_count, 1042,
+);
+assert.equal(
+    matchingStudioSourceAudio(
+        sourceTimeline, [{...rows[0], deliveredFrames:361}, ...rows.slice(1)],
+    ),
+    null,
+);
+assert.ok(Math.abs(
+    studioSourceAudioSecond(sourceTimeline.source_audio, 3) - 5,
+) < 1e-9);
+assert.deepEqual(
+    studioWaveformSceneSamples(
+        {points_per_second:2, samples:Array.from({length:90}, (_value, index) => index)},
+        rows, 1,
+    ).slice(0, 2),
+    [30, 31],
+);
 
 const exactGrid = h3StudioGridMarkers(345, 39, "masked_av");
 assert.deepEqual(exactGrid.raw, {
@@ -108,9 +133,28 @@ assert.match(source, /state\.planWidget\.value = value/);
 assert.match(source, /h3studio-timeline/);
 assert.match(source, /Scene prompt/);
 assert.match(source, /Shared prompt/);
-assert.match(source, /Generated ↔ motion-reference comparison/);
+assert.match(source, /Generated playback/);
 assert.match(source, /MOTION REF/);
 assert.match(source, /plan-studio\/source-preview/);
+assert.match(source, /plan-studio\/source-audio/);
+assert.match(source, /plan-studio\/source-waveform/);
+assert.match(source, /SOURCE AUDIO/);
+assert.match(source, /SOURCE_AUDIO_MUTES_PROPERTY/);
+assert.match(source, /studioSourceAudioSecond/);
+assert.match(source, /studioWaveformSceneSamples/);
+assert.match(source, /Source Timeline connected · no audio/);
+assert.match(source, /No active path-backed motion reference in this Plan/);
+assert.match(source, /state\.sourceLayer\.hidden = !hasMotion/);
+assert.match(source, /h3studio-audio-generated/);
+assert.match(source, /h3studio-audio-source/);
+assert.match(source, /GENERATED_VOLUME_PROPERTY/);
+assert.match(source, /h3studio-audio-volume/);
+assert.match(source, /primeNextSegment/);
+assert.match(source, /h3studio-handoff-frame/);
+assert.match(source, /event\.code !== "Space"/);
+assert.match(source, /document\.removeEventListener\("keydown", onPlayerKeydown/);
+assert.match(source, /Generated and Source Track can play together/);
+assert.doesNotMatch(source, /h3studio-audio-choice/);
 assert.match(source, /h3_plan_studio_source_timeline/);
 assert.match(source, /\/minimax_h3_context_loop\/checkpoints/);
 assert.match(source, /include_graph:"false"/);
@@ -124,11 +168,12 @@ assert.match(source, /preview_video/);
 assert.match(source, /item\.preview_video \? null : \(item\.audio \?\? null\)/);
 assert.match(source, /playerAudio/);
 assert.match(source, /synchronizeGeneratedAudio/);
-assert.match(source, /delivered-audio sidecar/);
+assert.match(source, /same delivered-video clock/);
 assert.match(source, /currentSettings === state\.lastSettingsSignature/);
 assert.match(source, /state\.timelinePosition = target/);
 assert.match(source, /state\.view !== "player"/);
-assert.match(source, /renderSourceTimeline\(\); updateTimelineSelection\(\)/);
+assert.match(source, /renderSourceTimeline\(\); renderSourceAudioTimeline\(\)/);
+assert.match(source, /updateTimelineSelection\(\)/);
 assert.match(source, /h3_chain_active_scene/);
 assert.match(source, /api\.removeEventListener\("executed", onPromptExecuted\)/);
 assert.match(source, /renderShell\(\)/);

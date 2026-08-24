@@ -24,6 +24,7 @@ import re
 import secrets
 import shutil
 import subprocess
+import struct
 import sys
 import time
 import uuid
@@ -151,6 +152,8 @@ MASKED_AUDIO_CONTRACT = "raw_source_window_v2"
 PLAN_STUDIO_PREVIEW_TTL_SECONDS = 6 * 60 * 60
 PLAN_STUDIO_PREVIEW_MAX_SESSIONS = 32
 PLAN_STUDIO_PREVIEW_MAX_HEIGHT = 480
+PLAN_STUDIO_WAVEFORM_SAMPLE_RATE = 192
+PLAN_STUDIO_WAVEFORM_POINTS_PER_SECOND = 12
 _PLAN_STUDIO_SOURCE_PREVIEWS: dict[str, dict[str, Any]] = {}
 _PLAN_STUDIO_PREVIEW_BUILD_LOOP: asyncio.AbstractEventLoop | None = None
 _PLAN_STUDIO_PREVIEW_BUILD_GATE: asyncio.Semaphore | None = None
@@ -5341,6 +5344,61 @@ def _input_root() -> str:
     return os.path.abspath(folder_paths.get_input_directory())
 
 
+def _run_manager_source_track_path(binding: Any) -> str:
+    if not isinstance(binding, dict):
+        raise ValueError("Run Manager source-track binding is invalid.")
+    value = str(binding.get("original_value") or "").strip()
+    if value.endswith("[input]"):
+        value = value[:-7].rstrip()
+    elif value.endswith("[output]") or value.endswith("[temp]"):
+        raise ValueError(
+            "Run Manager source_track must come from a ComfyUI input "
+            "loader, not output or temporary media.")
+    if not value:
+        raise ValueError(
+            "Run Manager source_track has no loader filename.")
+    root = os.path.realpath(_input_root())
+    path = os.path.realpath(os.path.abspath(os.path.join(root, value)))
+    try:
+        inside = os.path.commonpath((root, path)) == root
+    except ValueError:
+        inside = False
+    if not inside or not os.path.isfile(path):
+        raise ValueError(
+            "Run Manager source_track is missing from the ComfyUI input "
+            "folder: %s" % value)
+    return path
+
+
+def _run_manager_source_track_timeline(
+        bindings: Any) -> dict[str, Any] | None:
+    if not isinstance(bindings, list):
+        raise ValueError("asset_bindings_json must contain a list")
+    tracks = [
+        binding for binding in bindings
+        if isinstance(binding, dict)
+        and str(binding.get("role") or "") == "source_track"
+    ]
+    if not tracks:
+        return None
+    if len(tracks) != 1:
+        raise ValueError(
+            "Run Manager found %d source_track assets; exactly one is "
+            "required for automatic Source Timeline promotion." %
+            len(tracks))
+    binding = tracks[0]
+    timeline = _make_source_timeline(
+        audio_path=_run_manager_source_track_path(binding),
+        embedded_audio="ignore",
+        source_route="Run Manager source_track asset")
+    timeline["recovery"] = dict(timeline.get("recovery") or {})
+    timeline["recovery"].update({
+        "source_route": "run_manager_source_track",
+        "asset_binding_id": str(binding.get("binding_id") or ""),
+    })
+    return _validate_source_timeline(timeline, require_runtime=True)
+
+
 def _run_dir(plan: dict[str, Any]) -> str:
     root = _output_root()
     path = os.path.abspath(os.path.join(root, "h3_chains", plan["run_name"]))
@@ -10339,27 +10397,86 @@ def _plan_studio_preview_media(
     }
 
 
+def _plan_studio_runtime_source_timeline(
+        plan: dict[str, Any], source_timeline: Any = None
+        ) -> dict[str, Any] | None:
+    source = source_timeline
+    if source is None and isinstance(plan.get("source_timeline"), dict):
+        source = _source_timeline_from_recovery(plan["source_timeline"])
+    if source is None:
+        return None
+    return _validate_source_timeline(source, require_runtime=True)
+
+
+def _plan_studio_source_audio_media(
+        plan: dict[str, Any], source_timeline: Any = None
+        ) -> dict[str, Any] | None:
+    source = _plan_studio_runtime_source_timeline(plan, source_timeline)
+    if source is None:
+        return None
+    audio = source["audio"]
+    if str(audio.get("kind") or "none") not in (
+            "embedded", "external_path"):
+        return None
+    path = _resolved_media_path(
+        audio.get("path"), "Plan Studio Source Timeline audio")
+    frame_count = int(plan.get("total_delivered_frames") or sum(
+        int(shot.get("delivered_frames", 0))
+        for shot in plan.get("shots") or ()))
+    if frame_count < 1:
+        return None
+    return {
+        "audio_path": path,
+        "audio_seek_seconds": float(
+            audio.get("timeline_offset_seconds", 0.0)),
+        "audio_kind": str(audio["kind"]),
+        "frame_count": frame_count,
+        "duration_seconds": frame_count / float(FPS),
+        "media_fingerprint": str(
+            source["fingerprints"].get("audio")
+            or source["fingerprints"]["timeline"]),
+    }
+
+
 def _register_plan_studio_source_previews(
         plan: dict[str, Any], report: dict[str, Any],
         tagged_references: Any = None,
-        reference_schedule: Any = None) -> dict[str, Any]:
+        reference_schedule: Any = None,
+        source_timeline: Any = None) -> dict[str, Any]:
     references = (tagged_references if tagged_references is not None
                   else reference_schedule)
     route = ("tagged" if tagged_references is not None else
              "scheduled" if reference_schedule is not None else "none")
     payload: dict[str, Any] = {
-        "version": 1,
+        "version": 2,
         "run_name": str(plan.get("run_name") or ""),
         "route": route,
         "token": "",
         "scenes": [],
+        "source_audio": {
+            "available": False,
+            "timeline_available": False,
+            "has_audio": False,
+            "kind": "none",
+        },
         "status": "No active path-backed motion reference is available.",
     }
-    if references is None:
-        return payload
-    entries = (_tagged_reference_entries(references)
-               if route == "tagged"
-               else _reference_schedule_entries(references))
+    try:
+        runtime_source_timeline = _plan_studio_runtime_source_timeline(
+            plan, source_timeline)
+        source_audio = _plan_studio_source_audio_media(
+            plan, runtime_source_timeline)
+    except (OSError, TypeError, ValueError) as exc:
+        _LOG.warning(
+            "Plan Studio could not register Source Timeline audio: %s", exc)
+        source_audio = None
+        runtime_source_timeline = None
+    entries = (
+        _tagged_reference_entries(references)
+        if references is not None and route == "tagged"
+        else _reference_schedule_entries(references)
+        if references is not None and route == "scheduled"
+        else ())
     motion_entries: dict[str, dict[str, Any]] = {}
     for entry in entries:
         if (str(entry.get("kind") or "") != "video" or
@@ -10367,8 +10484,6 @@ def _register_plan_studio_source_previews(
             continue
         for alias in _reference_entry_tags(entry):
             motion_entries[str(alias)] = entry
-    if not motion_entries:
-        return payload
 
     token = secrets.token_urlsafe(24)
     records: dict[str, dict[str, Any]] = {}
@@ -10423,18 +10538,55 @@ def _register_plan_studio_source_previews(
                 "delivered_frames": int(shot["delivered_frames"]),
                 "references": public_refs,
             })
-    if not records:
+    timeline_available = runtime_source_timeline is not None
+    source_audio_kind = (
+        str(runtime_source_timeline["audio"].get("kind") or "none")
+        if timeline_available else "none")
+    source_has_audio = source_audio_kind != "none"
+    if not records and source_audio is None and not timeline_available:
         return payload
-    _plan_studio_preview_cleanup()
-    _PLAN_STUDIO_SOURCE_PREVIEWS[token] = {
-        "created": time.monotonic(),
-        "records": records,
+    if records or source_audio is not None:
+        _plan_studio_preview_cleanup()
+        _PLAN_STUDIO_SOURCE_PREVIEWS[token] = {
+            "created": time.monotonic(),
+            "records": records,
+            "source_audio": source_audio,
+        }
+    else:
+        token = ""
+    source_audio_public = {
+        "available": False,
+        "timeline_available": timeline_available,
+        "has_audio": source_has_audio,
+        "kind": source_audio_kind,
     }
+    if source_audio is not None:
+        source_audio_public = {
+            "available": True,
+            "timeline_available": True,
+            "has_audio": True,
+            "kind": str(source_audio["audio_kind"]),
+            "seek_seconds": float(source_audio["audio_seek_seconds"]),
+            "frame_count": int(source_audio["frame_count"]),
+            "duration_seconds": float(source_audio["duration_seconds"]),
+            "points_per_second": PLAN_STUDIO_WAVEFORM_POINTS_PER_SECOND,
+        }
+    motion_count = len(public_scenes)
+    status_parts = []
+    if motion_count:
+        status_parts.append(
+            "%d scene source window(s) ready" % motion_count)
+    if source_audio is not None:
+        status_parts.append("Source Timeline audio ready")
+    elif timeline_available and not source_has_audio:
+        status_parts.append("Source Timeline connected without audio")
+    elif timeline_available:
+        status_parts.append("Source Timeline audio is not path-backed")
     payload.update({
         "token": token,
         "scenes": public_scenes,
-        "status": "%d scene source window(s) ready for lazy preview." %
-                  len(public_scenes),
+        "source_audio": source_audio_public,
+        "status": "; ".join(status_parts) + ".",
     })
     return payload
 
@@ -10486,7 +10638,8 @@ class MiniMaxH3ChainPlanStudio:
     CATEGORY = "conditioning/minimax/contex_loop"
     DESCRIPTION = ("Optional timeline-oriented H3 Plan authoring studio with "
                    "scene navigation, prompt revisions, saved-segment status, "
-                   "and preview playback. The original Plan node is unchanged.")
+                   "source-audio waveform, and synchronized preview playback. "
+                   "The original Plan node is unchanged.")
 
     def passthrough(self, plan, source_timeline=None, source_audio=None,
                     start_clip=1, scene_range="", verify_resume_history=True,
@@ -10499,15 +10652,22 @@ class MiniMaxH3ChainPlanStudio:
             reference_schedule=reference_schedule)
         try:
             source_previews = _register_plan_studio_source_previews(
-                prepared, report, tagged_references, reference_schedule)
+                prepared, report, tagged_references, reference_schedule,
+                source_timeline)
         except Exception as exc:
             _LOG.warning("Plan Studio source-preview registration failed: %s", exc)
             source_previews = {
-                "version": 1,
+                "version": 2,
                 "run_name": str(plan.get("run_name") or ""),
                 "route": "none",
                 "token": "",
                 "scenes": [],
+                "source_audio": {
+                    "available": False,
+                    "timeline_available": False,
+                    "has_audio": False,
+                    "kind": "none",
+                },
                 "status": "Source preview registration failed: %s" % exc,
             }
         result = (plan, report, bool(report["ok"]), report["summary"],
@@ -10575,9 +10735,10 @@ class MiniMaxH3ChainRunManager:
                            "file for this run. The manager reads the graph "
                            "link without decoding or retaining the media."})
         inputs["optional"]["source_timeline"] = (SOURCE_TIMELINE_TYPE, {
-            "tooltip": "Primary 0.5 media wire. The manager materializes "
-                       "deferred AUDIO once, persists recovery metadata, and "
-                       "passes the path-backed timeline onward."})
+            "tooltip": "Optional explicit media wire. It takes priority over "
+                       "automatic promotion; otherwise exactly one loader "
+                       "asset assigned the Source track role becomes the "
+                       "recoverable Source Timeline automatically."})
         return inputs
 
     # The timeline output is appended so the established Plan output remains
@@ -10586,7 +10747,8 @@ class MiniMaxH3ChainRunManager:
     RETURN_NAMES = ("plan", "source_timeline")
     OUTPUT_TOOLTIPS = (
         "The connected Plan with JSON-safe Source Timeline recovery metadata "
-        "when the primary media wire is connected.",
+        "from either the explicit media wire or the promoted Source track "
+        "asset.",
         "Path-backed Source Timeline for Loop Start, Tagged Motion, preview, "
         "and final assembly.",
     )
@@ -10594,12 +10756,31 @@ class MiniMaxH3ChainRunManager:
     CATEGORY = "conditioning/minimax/contex_loop"
     DESCRIPTION = ("Browse output/h3_chains projects; restore a saved run's "
                    "Plan and loader-backed reference assets; optionally keep "
-                   "content-addressed image, audio, and video fallbacks.")
+                   "content-addressed image, audio, and video fallbacks; and "
+                   "promote one Source track asset into the Plan's recoverable "
+                   "Source Timeline.")
 
     def passthrough(self, plan, archive_images, archive_audio, archive_video,
                     asset_bindings_json, source_timeline=None, **_assets):
+        bindings = []
+        try:
+            bindings = json.loads(str(asset_bindings_json or "[]"))
+            if not isinstance(bindings, list):
+                raise ValueError("asset_bindings_json must contain a list")
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            _LOG.warning(
+                "H3 Run Manager could not read asset bindings: %s", exc)
+            bindings = []
         managed_plan = plan
         managed_timeline = source_timeline
+        if managed_timeline is None:
+            try:
+                managed_timeline = _run_manager_source_track_timeline(
+                    bindings)
+            except (OSError, TypeError, ValueError) as exc:
+                _LOG.warning(
+                    "H3 Run Manager could not promote source_track to "
+                    "Source Timeline: %s", exc)
         if managed_timeline is None and isinstance(
                 plan.get("source_timeline"), dict):
             managed_timeline = _source_timeline_from_recovery(
@@ -10618,9 +10799,6 @@ class MiniMaxH3ChainRunManager:
                 os.path.join(_run_dir(plan), "source_timeline.json"),
                 managed_plan["source_timeline"])
         try:
-            bindings = json.loads(str(asset_bindings_json or "[]"))
-            if not isinstance(bindings, list):
-                raise ValueError("asset_bindings_json must contain a list")
             if bindings:
                 result = RunAssetStore(_output_root(), _input_root()).save(
                     plan["run_name"], bindings, {
@@ -10632,7 +10810,7 @@ class MiniMaxH3ChainRunManager:
                     _LOG.warning(
                         "H3 Run Manager asset archive warnings for %s: %s",
                         plan["run_name"], "; ".join(result["warnings"]))
-        except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        except (OSError, TypeError, ValueError) as exc:
             # Recovery metadata is supplementary and must never waste a long
             # H3 generation that already reached this pass-through.
             _LOG.warning("H3 Run Manager could not archive assets: %s", exc)
@@ -16971,6 +17149,111 @@ def _plan_studio_source_preview_path(record: dict[str, Any]) -> str:
     return os.path.join(cache_dir, "%s.mp4" % cache_key)
 
 
+def _plan_studio_source_waveform_path(record: dict[str, Any]) -> str:
+    cache_key = _fingerprint({
+        "version": 1,
+        "media": record["media_fingerprint"],
+        "audio_seek": round(float(record["audio_seek_seconds"]), 9),
+        "frame_count": int(record["frame_count"]),
+        "sample_rate": PLAN_STUDIO_WAVEFORM_SAMPLE_RATE,
+        "points_per_second": PLAN_STUDIO_WAVEFORM_POINTS_PER_SECOND,
+    })
+    cache_dir = os.path.join(
+        _output_root(), "h3_chains", ".plan_studio_source_previews")
+    os.makedirs(cache_dir, exist_ok=True)
+    return os.path.join(cache_dir, "%s.waveform.json" % cache_key)
+
+
+def _run_ffmpeg_capture(
+        command: list[str], timeout_seconds: float | None = None) -> bytes:
+    try:
+        result = subprocess.run(
+            command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            timeout=timeout_seconds)
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            "ffmpeg timed out after %.1f seconds" %
+            float(timeout_seconds)) from exc
+    except OSError as exc:
+        executable = str(command[0]) if command else "ffmpeg"
+        raise RuntimeError(
+            "ffmpeg could not start (%s): %s" % (executable, exc)) from exc
+    if result.returncode:
+        detail = result.stderr.decode(
+            "utf-8", errors="replace").splitlines()[-20:]
+        raise RuntimeError(
+            "ffmpeg failed (%d):\n%s" %
+            (int(result.returncode), "\n".join(detail)))
+    return bytes(result.stdout)
+
+
+def _build_plan_studio_source_waveform(
+        record: dict[str, Any]) -> str:
+    output_path = _plan_studio_source_waveform_path(record)
+    if os.path.isfile(output_path) and os.path.getsize(output_path) > 0:
+        return output_path
+    ffmpeg = _usable_ffmpeg()
+    if ffmpeg is None:
+        raise RuntimeError(
+            "Plan Studio source waveform requires a working ffmpeg.")
+    duration = int(record["frame_count"]) / float(FPS)
+    command = [
+        ffmpeg, "-hide_banner", "-loglevel", "error",
+        "-ss", "%.9f" % float(record["audio_seek_seconds"]),
+        "-i", str(record["audio_path"]),
+        "-t", "%.9f" % duration,
+        "-map", "0:a:0", "-vn",
+        "-af", (
+            "aformat=sample_fmts=flt:channel_layouts=mono,"
+            "aeval=abs(val(0)),aresample=%d" %
+            PLAN_STUDIO_WAVEFORM_SAMPLE_RATE),
+        "-f", "f32le", "pipe:1",
+    ]
+    raw = _run_ffmpeg_capture(
+        command, timeout_seconds=max(60.0, duration * 3.0))
+    usable = len(raw) - len(raw) % 4
+    values = (
+        struct.unpack("<%df" % (usable // 4), raw[:usable])
+        if usable else ())
+    point_count = max(
+        1, int(math.ceil(
+            duration * PLAN_STUDIO_WAVEFORM_POINTS_PER_SECOND)))
+    samples = []
+    for index in range(point_count):
+        start = int(math.floor(
+            index * PLAN_STUDIO_WAVEFORM_SAMPLE_RATE /
+            PLAN_STUDIO_WAVEFORM_POINTS_PER_SECOND))
+        end = int(math.floor(
+            (index + 1) * PLAN_STUDIO_WAVEFORM_SAMPLE_RATE /
+            PLAN_STUDIO_WAVEFORM_POINTS_PER_SECOND))
+        samples.append(max(values[start:min(end, len(values))], default=0.0))
+    nonzero = sorted(value for value in samples if value > 1e-8)
+    reference = (
+        nonzero[min(len(nonzero) - 1, int(len(nonzero) * 0.98))]
+        if nonzero else 1.0)
+    normalized = [
+        round(min(1.0, max(0.0, value / reference)), 4)
+        for value in samples]
+    payload = {
+        "version": 1,
+        "points_per_second": PLAN_STUDIO_WAVEFORM_POINTS_PER_SECOND,
+        "frame_count": int(record["frame_count"]),
+        "duration_seconds": duration,
+        "samples": normalized,
+    }
+    temporary = "%s.%s.tmp" % (output_path, uuid.uuid4().hex)
+    try:
+        with open(temporary, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(
+                payload, ensure_ascii=False, separators=(",", ":")))
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, output_path)
+    finally:
+        _safe_unlink(temporary)
+    return output_path
+
+
 def _build_plan_studio_source_preview(record: dict[str, Any]) -> str:
     return _build_plan_studio_source_preview_unlocked(record)
 
@@ -17088,6 +17371,88 @@ async def _ensure_plan_studio_source_preview(
     return await asyncio.shield(task)
 
 
+async def _ensure_plan_studio_source_waveform(
+        record: dict[str, Any]) -> str:
+    path = _plan_studio_source_waveform_path(record)
+    if os.path.isfile(path) and os.path.getsize(path) > 0:
+        return path
+    gate, tasks = _plan_studio_preview_async_state()
+    task = tasks.get(path)
+    if task is None:
+        async def build() -> str:
+            async with gate:
+                if os.path.isfile(path) and os.path.getsize(path) > 0:
+                    return path
+                return await asyncio.to_thread(
+                    _build_plan_studio_source_waveform, dict(record))
+
+        task = asyncio.create_task(build())
+        tasks[path] = task
+
+        def finished(completed: asyncio.Task[str]) -> None:
+            if tasks.get(path) is completed:
+                tasks.pop(path, None)
+            if completed.cancelled():
+                return
+            try:
+                completed.exception()
+            except Exception:
+                pass
+
+        task.add_done_callback(finished)
+    return await asyncio.shield(task)
+
+
+def _plan_studio_source_audio_record(
+        token: str) -> tuple[dict[str, Any] | None, str | None]:
+    if not re.fullmatch(r"[A-Za-z0-9_-]{24,64}", token):
+        return None, "Source audio token is invalid."
+    _plan_studio_preview_cleanup()
+    session = _PLAN_STUDIO_SOURCE_PREVIEWS.get(token)
+    if session is None:
+        return None, (
+            "Source audio preview expired. Queue Plan Studio once to refresh it.")
+    record = session.get("source_audio")
+    if not isinstance(record, dict):
+        return None, "No path-backed Source Timeline audio is available."
+    session["created"] = time.monotonic()
+    return record, None
+
+
+async def _plan_studio_source_audio(request):
+    token = str(request.query.get("token") or "")
+    record, error = _plan_studio_source_audio_record(token)
+    if record is None:
+        return web.json_response(
+            {"error": error}, status=400 if "invalid" in str(error) else 410)
+    path = str(record["audio_path"])
+    if not os.path.isfile(path):
+        return web.json_response(
+            {"error": "Source Timeline audio path is unavailable."}, status=404)
+    return web.FileResponse(path, headers={
+        "Cache-Control": "private, max-age=21600, immutable",
+    })
+
+
+async def _plan_studio_source_waveform(request):
+    token = str(request.query.get("token") or "")
+    record, error = _plan_studio_source_audio_record(token)
+    if record is None:
+        return web.json_response(
+            {"error": error}, status=400 if "invalid" in str(error) else 410)
+    try:
+        path = await _ensure_plan_studio_source_waveform(record)
+    except asyncio.CancelledError:
+        raise
+    except (OSError, RuntimeError, TypeError, ValueError) as exc:
+        _LOG.warning("Plan Studio source waveform failed: %s", exc)
+        return web.json_response({"error": str(exc)}, status=500)
+    return web.FileResponse(path, headers={
+        "Cache-Control": "private, max-age=21600, immutable",
+        "Content-Type": "application/json; charset=utf-8",
+    })
+
+
 async def _plan_studio_source_preview(request):
     token = str(request.query.get("token") or "")
     try:
@@ -17180,6 +17545,12 @@ if (PromptServer is not None and web is not None and
     PromptServer.instance.routes.get(
         "/minimax_h3_context_loop/plan-studio/source-preview")(
             _plan_studio_source_preview)
+    PromptServer.instance.routes.get(
+        "/minimax_h3_context_loop/plan-studio/source-audio")(
+            _plan_studio_source_audio)
+    PromptServer.instance.routes.get(
+        "/minimax_h3_context_loop/plan-studio/source-waveform")(
+            _plan_studio_source_waveform)
     PromptServer.instance.routes.post(
         "/minimax_h3_context_loop/prompt-optimize")(_optimize_scene_prompt)
 

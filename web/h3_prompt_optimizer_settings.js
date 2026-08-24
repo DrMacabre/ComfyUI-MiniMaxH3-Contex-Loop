@@ -2,7 +2,7 @@ import {app} from "/scripts/app.js";
 import {
     normalizePromptOptimizerApiFormat,
     normalizePromptOptimizerBackend,
-} from "./h3_prompt_optimizer_core.mjs?v=0.5.13";
+} from "./h3_prompt_optimizer_core.mjs?v=0.5.15";
 
 export const PROMPT_OPTIMIZER_SETTING_IDS = Object.freeze({
     backend: "MiniMaxH3ContexLoop.PromptOptimizer.Backend",

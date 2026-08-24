@@ -86,6 +86,39 @@ export function matchingStudioSourceScene(payload, index, timingRow) {
     return references.length ? item : null;
 }
 
+export function matchingStudioSourceAudio(payload, timingRows) {
+    const audio = payload?.source_audio;
+    if (!payload?.token || !audio?.available) return null;
+    const rows = Array.isArray(timingRows) ? timingRows : [];
+    const plannedFrames = rows.reduce(
+        (total, row) => total + Math.max(0, Number(row?.deliveredFrames) || 0),
+        0,
+    );
+    if (Number(audio.frame_count) !== plannedFrames) return null;
+    return audio;
+}
+
+export function studioSourceAudioSecond(sourceAudio, timelineSeconds) {
+    const start = Math.max(0, Number(sourceAudio?.seek_seconds) || 0);
+    const duration = Math.max(0, Number(sourceAudio?.duration_seconds) || 0);
+    const local = Math.max(0, Number(timelineSeconds) || 0);
+    return start + Math.min(Math.max(0, duration - 0.02), local);
+}
+
+export function studioWaveformSceneSamples(waveform, rows, index) {
+    const scenes = Array.isArray(rows) ? rows : [];
+    const samples = Array.isArray(waveform?.samples) ? waveform.samples : [];
+    const rate = Math.max(1, Number(waveform?.points_per_second) || 1);
+    if (!samples.length || index < 0 || index >= scenes.length) return [];
+    const start = studioSceneStartSeconds(scenes, index);
+    const end = start + Math.max(
+        0, Number(scenes[index]?.deliveredSeconds) || 0);
+    return samples.slice(
+        Math.max(0, Math.floor(start * rate)),
+        Math.min(samples.length, Math.max(1, Math.ceil(end * rate))),
+    );
+}
+
 export function studioSourceSecond(reference, deliveredLocalSeconds, fps = 24) {
     const rate = Math.max(1, Number(fps) || 24);
     const offset = Math.max(0, Number(reference?.compare_offset_frames) || 0) / rate;
