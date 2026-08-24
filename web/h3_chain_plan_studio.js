@@ -22,13 +22,13 @@ import {
     setShotLengthMode,
     sharedPrompt,
     shotLengthMode,
-} from "./h3_chain_plan_core.mjs?v=0.6.3";
+} from "./h3_chain_plan_core.mjs?v=0.6.4";
 import {
     promptRevisionHelp,
     promptRevisionLabel,
     promptRevisionNavigation,
-} from "./h3_prompt_history_core.mjs?v=0.6.3";
-import {availableReferenceRecords} from "./h3_reference_preview_core.mjs?v=0.6.3";
+} from "./h3_prompt_history_core.mjs?v=0.6.4";
+import {availableReferenceRecords} from "./h3_reference_preview_core.mjs?v=0.6.4";
 import {
     applySceneAudioOverride,
     applySceneTransitionPreset,
@@ -37,12 +37,12 @@ import {
     sceneAudioPolicy,
     sceneTransitionPreset,
     transitionPresetLabel,
-} from "./h3_policy_core.mjs?v=0.6.3";
+} from "./h3_policy_core.mjs?v=0.6.4";
 import {
     resolveAudioContextLength,
     resolveAudioPolicy,
     resolveTransitionPolicy,
-} from "./h3_socket_presentation_core.mjs?v=0.6.3";
+} from "./h3_socket_presentation_core.mjs?v=0.6.4";
 import {
     locateStudioTimelineSecond,
     h3StudioGridMarkers,
@@ -54,8 +54,8 @@ import {
     studioSourceAudioSecond,
     studioSourceSecond,
     studioWaveformSceneSamples,
-} from "./h3_chain_plan_studio_core.mjs?v=0.6.3";
-import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.6.3";
+} from "./h3_chain_plan_studio_core.mjs?v=0.6.4";
+import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.6.4";
 
 const {connectedPromptEditors, publishCompanionScene} = promptCompanionSync;
 function publishCompanionPrompt(...args) {
@@ -67,8 +67,17 @@ const PLAN_NAME = "MiniMaxH3ChainPlan";
 const ACTIVE_PROPERTY = "h3_plan_studio_active_scene";
 const VIEW_PROPERTY = "h3_plan_studio_view";
 const SOURCE_AUDIO_MUTES_PROPERTY = "h3_plan_studio_source_audio_mutes";
+const GENERATED_VOLUME_PROPERTY = "h3_plan_studio_generated_volume";
+const SOURCE_VOLUME_PROPERTY = "h3_plan_studio_source_volume";
+const MOTION_VOLUME_PROPERTY = "h3_plan_studio_motion_volume";
 const MIN_WIDTH = 820;
 const MIN_HEIGHT = 690;
+
+function monitorVolume(value, fallback = 1) {
+    const number = Number(value);
+    return Number.isFinite(number)
+        ? Math.max(0, Math.min(1, number)) : fallback;
+}
 
 function injectStyles() {
     if (document.getElementById("h3-plan-studio-style")) return;
@@ -184,6 +193,9 @@ function injectStyles() {
         .h3studio-compare-stage { position:relative; flex:1 1 auto; min-height:260px; overflow:hidden;
             background:#050608; border-radius:6px; }
         .h3studio-compare-stage video { position:absolute; inset:0; width:100%; height:100%; background:#050608; object-fit:contain; }
+        .h3studio-handoff-frame { position:absolute; inset:0; width:100%; height:100%; opacity:1;
+            pointer-events:none; transition:opacity .16s ease-out; }
+        .h3studio-handoff-frame.h3studio-handoff-release { opacity:0; }
         .h3studio-source-layer { position:absolute; inset:0; overflow:hidden; pointer-events:none; }
         .h3studio-source-layer video { width:100%; height:100%; }
         .h3studio-wipe-line { position:absolute; top:0; bottom:0; width:2px; background:#d2b8ff;
@@ -196,8 +208,11 @@ function injectStyles() {
         .h3studio-compare-controls { display:grid; grid-template-columns:auto minmax(100px,1fr) auto; gap:6px; align-items:center; }
         .h3studio-compare-controls.h3studio-no-motion { grid-template-columns:1fr; }
         .h3studio-audio-mix { display:flex; align-items:center; justify-content:flex-end; gap:8px; flex-wrap:wrap; }
+        .h3studio-audio-control { display:flex; align-items:center; gap:4px; }
         .h3studio-audio-toggle { display:flex; align-items:center; gap:4px; color:var(--hs-muted); white-space:nowrap; }
         .h3studio-audio-toggle input { width:auto; margin:0; padding:0; }
+        .h3studio-audio-volume { width:68px !important; min-width:48px !important; padding:0 !important; }
+        .h3studio-audio-level { width:31px; color:var(--hs-muted); font-size:9px; text-align:right; }
         .h3studio-refs { display:none; gap:5px; padding:7px; border:1px solid var(--hs-border);
             border-radius:6px; background:var(--hs-bg); flex-wrap:wrap; }
         .h3studio-refs.h3studio-open { display:flex; }
@@ -377,6 +392,12 @@ function mount(node) {
         playhead:null, player:null, playerAudio:null, sourceAudioPlayer:null,
         sourcePlayer:null, sourceLayer:null,
         playerSlider:null, playerIndex:-1,
+        playerPreloadVideo:null, playerPreloadAudio:null,
+        primePlayerNext:null, keyboardHover:false,
+        generatedVolume:monitorVolume(
+            node.properties[GENERATED_VOLUME_PROPERTY]),
+        sourceVolume:monitorVolume(node.properties[SOURCE_VOLUME_PROPERTY]),
+        motionVolume:monitorVolume(node.properties[MOTION_VOLUME_PROPERTY]),
         timelinePosition:null, pendingSeek:0,
         history:{sceneKey:"", data:null, revisionId:null, host:null, textarea:null,
             status:null, loadToken:0, loadPromise:null, saveTimer:null,
@@ -384,6 +405,22 @@ function mount(node) {
         promptEditors:[], lastPromptEditorsSignature:"",
     };
     node._h3PlanStudioState = state;
+
+    root.tabIndex = 0;
+    root.addEventListener("pointerenter", () => { state.keyboardHover = true; });
+    root.addEventListener("pointerleave", () => { state.keyboardHover = false; });
+    const onPlayerKeydown = (event) => {
+        if (event.code !== "Space" || event.repeat || state.view !== "player"
+                || !state.player || !state.player.dataset.source) return;
+        const target = event.target;
+        if (target instanceof Element && target.closest(
+            "input,textarea,select,button,[contenteditable=true]")) return;
+        if (!state.keyboardHover && !root.contains(document.activeElement)) return;
+        event.preventDefault(); event.stopPropagation();
+        if (state.player.paused) void state.player.play().catch(() => {});
+        else state.player.pause();
+    };
+    document.addEventListener("keydown", onPlayerKeydown, true);
 
     function dirty() {
         node.graph?.setDirtyCanvas?.(true, true);
@@ -1497,14 +1534,20 @@ function mount(node) {
         const generatedAudio = state.playerAudio;
         const sourceAudioCurrent = state.sourceAudioPlayer;
         const sourceCurrent = state.sourcePlayer;
+        const preloadVideo = state.playerPreloadVideo;
+        const preloadAudio = state.playerPreloadAudio;
         state.player = null;
         state.playerAudio = null;
         state.sourceAudioPlayer = null;
         state.sourcePlayer = null;
         state.sourceLayer = null;
         state.playerSlider = null;
+        state.playerPreloadVideo = null;
+        state.playerPreloadAudio = null;
+        state.primePlayerNext = null;
         for (const media of [
             current, generatedAudio, sourceAudioCurrent, sourceCurrent,
+            preloadVideo, preloadAudio,
         ]) {
             if (!media) continue;
             try { media.pause(); } catch (_error) {}
@@ -1611,8 +1654,11 @@ function mount(node) {
             const applySourceAudioSeek = () => {
                 if (state.sourceAudioPlayer !== targetSourceAudio ||
                         !targetSourceAudio?.isConnected) return;
-                try { targetSourceAudio.currentTime = requestedAudioSeek; }
-                catch (_error) {}
+                if (Math.abs((Number(targetSourceAudio.currentTime) || 0) -
+                        requestedAudioSeek) > .12) {
+                    try { targetSourceAudio.currentTime = requestedAudioSeek; }
+                    catch (_error) {}
+                }
             };
             if (!timelineAudioUrl) {
                 targetSourceAudio.pause();
@@ -1636,7 +1682,8 @@ function mount(node) {
         if (motionAudioToggle) {
             motionAudioToggle.disabled = !reference?.has_audio;
             if (!reference?.has_audio) motionAudioToggle.checked = false;
-            const wrapper = motionAudioToggle.closest("label");
+            const wrapper = motionAudioToggle.closest(
+                ".h3studio-audio-control");
             if (wrapper) wrapper.hidden = !reference?.has_audio;
         }
         const timelineAudioToggle = root.querySelector(".h3studio-audio-source");
@@ -1650,6 +1697,11 @@ function mount(node) {
                 timelineAudioToggle.checked = false;
             }
             timelineAudioToggle.dataset.available = String(timelineAudioAvailable);
+            const audioControl = timelineAudioToggle.closest(
+                ".h3studio-audio-control");
+            const volume = audioControl?.querySelector(
+                ".h3studio-audio-volume");
+            if (volume) volume.disabled = !timelineAudioAvailable;
             const text = timelineAudioToggle.closest("label")?.querySelector("span");
             if (text) text.textContent = sourceAudioMuted(index)
                 ? "Source track (scene muted)" : "Source track";
@@ -1664,6 +1716,7 @@ function mount(node) {
         root.querySelector(".h3studio-audio-generated")?.dispatchEvent(
             new Event("change"),
         );
+        state.primePlayerNext?.(index + 1);
     }
 
     function renderPlayerPanel() {
@@ -1671,6 +1724,8 @@ function mount(node) {
         const label = element("div", "h3studio-player-label", "Generated playback");
         const stage = element("div", "h3studio-compare-stage");
         const video = element("video"); video.playsInline = true; video.preload = "metadata";
+        const handoffFrame = element("canvas", "h3studio-handoff-frame");
+        handoffFrame.hidden = true;
         const generatedAudio = element("audio");
         generatedAudio.preload = "metadata"; generatedAudio.hidden = true;
         const sourceTimelineAudio = element("audio");
@@ -1693,8 +1748,76 @@ function mount(node) {
         generatedLabel.hidden = true;
         sourceLayer.append(sourceVideo);
         stage.append(
-            video, sourceLayer, wipeLine, sourceLabel, generatedLabel,
+            video, handoffFrame, sourceLayer, wipeLine, sourceLabel,
+            generatedLabel,
         );
+        const preloadVideo = element("video");
+        preloadVideo.preload = "auto"; preloadVideo.muted = true;
+        preloadVideo.playsInline = true; preloadVideo.hidden = true;
+        const preloadAudio = element("audio");
+        preloadAudio.preload = "auto"; preloadAudio.muted = true;
+        preloadAudio.hidden = true;
+        const clearPreload = (media) => {
+            if (!media.dataset.source) return;
+            delete media.dataset.source;
+            media.removeAttribute("src"); media.load();
+        };
+        const primeNextSegment = (index) => {
+            const media = index >= 0 && index < state.plan.shots.length
+                ? playerCheckpoint(index) : null;
+            const videoSource = media?.video ? videoUrl(media.video) : "";
+            const audioSource = media?.audio ? videoUrl(media.audio) : "";
+            if (!videoSource) clearPreload(preloadVideo);
+            else if (preloadVideo.dataset.source !== videoSource) {
+                preloadVideo.dataset.source = videoSource;
+                preloadVideo.src = videoSource; preloadVideo.load();
+            }
+            if (!audioSource) clearPreload(preloadAudio);
+            else if (preloadAudio.dataset.source !== audioSource) {
+                preloadAudio.dataset.source = audioSource;
+                preloadAudio.src = audioSource; preloadAudio.load();
+            }
+        };
+        const captureHandoffFrame = () => {
+            if (!video.videoWidth || !video.videoHeight ||
+                    !stage.clientWidth || !stage.clientHeight) return;
+            const ratio = Math.max(1, Number(window.devicePixelRatio) || 1);
+            handoffFrame.width = Math.round(stage.clientWidth * ratio);
+            handoffFrame.height = Math.round(stage.clientHeight * ratio);
+            const context = handoffFrame.getContext("2d");
+            if (!context) return;
+            context.fillStyle = "#050608";
+            context.fillRect(0, 0, handoffFrame.width, handoffFrame.height);
+            const scale = Math.min(
+                handoffFrame.width / video.videoWidth,
+                handoffFrame.height / video.videoHeight,
+            );
+            const width = video.videoWidth * scale;
+            const height = video.videoHeight * scale;
+            try {
+                context.drawImage(
+                    video,
+                    (handoffFrame.width - width) / 2,
+                    (handoffFrame.height - height) / 2,
+                    width, height,
+                );
+                handoffFrame.classList.remove("h3studio-handoff-release");
+                handoffFrame.hidden = false;
+            } catch (_error) {}
+        };
+        const releaseHandoffFrame = () => {
+            if (handoffFrame.hidden) return;
+            requestAnimationFrame(() => {
+                handoffFrame.classList.add("h3studio-handoff-release");
+            });
+            window.setTimeout(() => {
+                if (!handoffFrame.isConnected) return;
+                handoffFrame.hidden = true;
+            }, 180);
+        };
+        state.playerPreloadVideo = preloadVideo;
+        state.playerPreloadAudio = preloadAudio;
+        state.primePlayerNext = primeNextSegment;
         const controls = element("div", "h3studio-player-controls");
         const play = button("▶", "Play or pause the delivered timeline from the current position", () => {
             if (video.paused) void video.play().catch(() => {});
@@ -1759,9 +1882,13 @@ function mount(node) {
             synchronizeSourceTimelineAudio(true);
             if (sourceVideo.dataset.source) void sourceVideo.play().catch(() => {});
         });
+        video.addEventListener("playing", releaseHandoffFrame);
         video.addEventListener("pause", () => {
             play.textContent = "▶";
-            generatedAudio.pause(); sourceTimelineAudio.pause(); sourceVideo.pause();
+            generatedAudio.pause(); sourceVideo.pause();
+            const handingOff = video.ended &&
+                state.playerIndex + 1 < state.plan.shots.length;
+            if (!handingOff) sourceTimelineAudio.pause();
         });
         video.addEventListener("waiting", () => {
             generatedAudio.pause(); sourceTimelineAudio.pause(); sourceVideo.pause();
@@ -1804,9 +1931,13 @@ function mount(node) {
             synchronizeSourceTimelineAudio(false, current); syncSource();
         });
         video.addEventListener("ended", () => {
-            generatedAudio.pause(); sourceTimelineAudio.pause(); sourceVideo.pause();
+            captureHandoffFrame();
+            generatedAudio.pause(); sourceVideo.pause();
             const next = state.playerIndex + 1;
-            if (next >= state.plan.shots.length) return;
+            if (next >= state.plan.shots.length) {
+                sourceTimelineAudio.pause();
+                return;
+            }
             const result = timing();
             const start = studioSceneStartSeconds(result.shots, next);
             seekTimeline(start, true);
@@ -1822,27 +1953,59 @@ function mount(node) {
             wipeLine.style.left = `${percent}%`;
         });
         const audioMix = element("div", "h3studio-audio-mix");
-        const audioToggle = (className, text, checked) => {
+        const applyAudioVolumes = () => {
+            video.volume = state.generatedVolume;
+            generatedAudio.volume = state.generatedVolume;
+            sourceTimelineAudio.volume = state.sourceVolume;
+            sourceVideo.volume = state.motionVolume;
+        };
+        const audioToggle = (
+            className, text, checked, propertyName, stateName,
+        ) => {
+            const control = element("div", "h3studio-audio-control");
             const wrapper = element("label", "h3studio-audio-toggle");
             const input = element("input", className);
             input.type = "checkbox"; input.checked = checked;
             const copy = element("span", "", text);
             wrapper.append(input, copy);
-            return {wrapper, input, copy};
+            const volume = element("input", "h3studio-audio-volume");
+            volume.type = "range"; volume.min = "0"; volume.max = "1";
+            volume.step = ".01"; volume.value = String(state[stateName]);
+            volume.title = `${text} monitor volume`;
+            const level = element(
+                "span", "h3studio-audio-level",
+                `${Math.round(state[stateName] * 100)}%`,
+            );
+            volume.addEventListener("input", () => {
+                state[stateName] = Math.max(0, Math.min(1,
+                    Number(volume.value) || 0));
+                level.textContent = `${Math.round(state[stateName] * 100)}%`;
+                applyAudioVolumes();
+            });
+            volume.addEventListener("change", () => {
+                node.properties[propertyName] = state[stateName];
+                dirty();
+            });
+            control.append(wrapper, volume, level);
+            return {wrapper:control, input, copy, volume};
         };
         const generatedControl = audioToggle(
             "h3studio-audio-generated", "Generated", true,
+            GENERATED_VOLUME_PROPERTY, "generatedVolume",
         );
         const sourceControl = audioToggle(
             "h3studio-audio-source", "Source track", true,
+            SOURCE_VOLUME_PROPERTY, "sourceVolume",
         );
         const motionControl = audioToggle(
             "h3studio-audio-motion", "Motion-ref", false,
+            MOTION_VOLUME_PROPERTY, "motionVolume",
         );
         const generatedToggle = generatedControl.input;
         const sourceToggle = sourceControl.input;
         const motionToggle = motionControl.input;
         const applyAudioMix = () => {
+            applyAudioVolumes();
             video.muted = !generatedToggle.checked ||
                 Boolean(generatedAudio.dataset.source);
             generatedAudio.muted = !generatedToggle.checked;
@@ -1866,6 +2029,7 @@ function mount(node) {
             control.input.addEventListener("change", applyAudioMix);
             audioMix.append(control.wrapper);
         }
+        applyAudioVolumes();
         compareControls.append(wipeLabel, wipe, audioMix);
         state.player = video; state.playerAudio = generatedAudio;
         state.sourceAudioPlayer = sourceTimelineAudio;
@@ -1876,8 +2040,9 @@ function mount(node) {
         }));
         wrapper.append(
             label, stage, generatedAudio, sourceTimelineAudio,
+            preloadVideo, preloadAudio,
             compareControls, controls,
-            element("div", "h3studio-message", "Generated and Source Track can play together on the same delivered-video clock. Toggle either independently; the waveform speaker buttons mute only the Source Track for that scene. Motion-ref audio is an optional third monitor when available."),
+            element("div", "h3studio-message", "Generated and Source Track can play together on the same delivered-video clock. Each monitor has independent volume; waveform speaker buttons mute only the Source Track for that scene. Click the player and press Space to play or pause. Motion-ref audio is optional when available."),
         );
         setTimeout(() => {
             if (state.player !== video || !video.isConnected) return;
@@ -2121,6 +2286,7 @@ function mount(node) {
         if (state.checkpointTimer != null) clearInterval(state.checkpointTimer);
         if (state.planNotifyTimer != null) clearTimeout(state.planNotifyTimer);
         api.removeEventListener("executed", onPromptExecuted);
+        document.removeEventListener("keydown", onPlayerKeydown, true);
         delete node._h3PromptCompanionSetActiveScene;
         delete node._h3PromptCompanionSetScenePrompt;
         disposePlayer();
