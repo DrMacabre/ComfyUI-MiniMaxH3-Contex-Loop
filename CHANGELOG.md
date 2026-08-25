@@ -4,6 +4,11 @@ Newest first. This file keeps release history out of the onboarding README.
 
 ## Unreleased
 
+- Review Gate candidate polling no longer reloads an unchanged preview or
+  jumps back to the newest take when a live candidate batch reaches its final
+  review token. The selected take, playback position, and playing/paused state
+  survive progress refreshes and synchronized-audio preview upgrades.
+
 - Live generation can now route **Current Shot** directly through the four
   H3 de-rope adapter nodes, recover the exact AV clock, and save that recovered
   latent back into the normal chain. The same nodes still accept deferred

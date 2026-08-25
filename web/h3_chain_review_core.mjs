@@ -9,7 +9,7 @@ import {
     sceneVideoBlendFrames,
     sceneVisualContextSource,
     sharedPrompt,
-} from "./h3_chain_plan_core.mjs?v=0.5.20";
+} from "./h3_chain_plan_core.mjs?v=0.5.22";
 
 const FPS = 24;
 const MAX_H3_FRAMES = 3592;
