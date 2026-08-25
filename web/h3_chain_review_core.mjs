@@ -3,10 +3,13 @@ import {
     promptValueToText,
     promptTextToLines,
     sceneAudioContextLength,
+    sceneContinuationMode,
     sceneContextLength,
+    sceneLoRARoute,
+    sceneVideoBlendFrames,
     sceneVisualContextSource,
     sharedPrompt,
-} from "./h3_chain_plan_core.mjs?v=0.6.16";
+} from "./h3_chain_plan_core.mjs?v=0.6.18";
 
 const FPS = 24;
 const MAX_H3_FRAMES = 3592;
@@ -174,7 +177,10 @@ export function checkpointRevisionChain(revisions, resumeScene) {
     return chain;
 }
 
-export function applyCheckpointRevisionSet(plan, revisions) {
+export function applyCheckpointRevisionSet(plan, revisions, {
+    useEffectivePrompts = false,
+    useTipSharedPrompt = false,
+} = {}) {
     if (!plan || !Array.isArray(plan.shots)) {
         throw new Error("The active Plan has no scenes.");
     }
@@ -195,13 +201,16 @@ export function applyCheckpointRevisionSet(plan, revisions) {
             throw new Error(`Restored scene ${scene} has an invalid step count.`);
         }
         const prefix = String(revision.prompt_prefix ?? "");
-        if (shared === null) shared = prefix;
-        if (prefix !== shared) {
+        if (shared === null || useTipSharedPrompt) shared = prefix;
+        if (!useTipSharedPrompt && prefix !== shared) {
             throw new Error("Restored checkpoint revisions use different shared prompts.");
         }
         const shot = plan.shots[index];
         if (revision.scene_id) shot.id = String(revision.scene_id);
-        shot.prompt = promptTextToLines(revision.scene_prompt ?? "");
+        const prompt = useEffectivePrompts
+            ? revision.effective_scene_prompt ?? revision.scene_prompt ?? ""
+            : revision.scene_prompt ?? revision.effective_scene_prompt ?? "";
+        shot.prompt = promptTextToLines(prompt);
         shot.seed = reviewSeed(revision.seed);
         shot.length = length;
         shot.steps = steps;
@@ -226,6 +235,68 @@ export function applyCheckpointRevisionSet(plan, revisions) {
             sceneVisualContextSource(plan, scene);
         } else {
             delete shot.visual_context_source;
+        }
+        if (Object.hasOwn(revision, "continuation_mode")) {
+            shot.continuation_mode = String(revision.continuation_mode);
+            sceneContinuationMode(shot);
+        } else {
+            delete shot.continuation_mode;
+        }
+        if (Object.hasOwn(revision, "video_blend_frames")) {
+            shot.video_blend_frames = Number(revision.video_blend_frames);
+            sceneVideoBlendFrames(shot, 0, sceneContextLength(shot));
+        } else {
+            delete shot.video_blend_frames;
+        }
+        if (Object.hasOwn(revision, "context_spatial_proxy")) {
+            const proxy = String(revision.context_spatial_proxy ?? "")
+                .trim().toLowerCase();
+            if (!["rgb_5_6", "latent_5_6"].includes(proxy)) {
+                throw new Error(`Restored scene ${scene} has an invalid context spatial proxy.`);
+            }
+            shot.context_spatial_proxy = proxy;
+        } else {
+            delete shot.context_spatial_proxy;
+        }
+        for (const [key, allowed] of [
+            ["source_reference", ["on", "off"]],
+            ["generated_continuity", ["on", "off"]],
+            ["source_audio_target", ["locked", "off"]],
+        ]) {
+            if (!Object.hasOwn(revision, key)) {
+                delete shot[key];
+                continue;
+            }
+            const value = String(revision[key] ?? "").trim().toLowerCase();
+            if (!allowed.includes(value)) {
+                throw new Error(`Restored scene ${scene} has an invalid ${key}.`);
+            }
+            shot[key] = value;
+        }
+        if (Object.hasOwn(revision, "lora_route")) {
+            shot.lora_route = String(revision.lora_route);
+            if (sceneLoRARoute(shot) === "base") delete shot.lora_route;
+        } else {
+            delete shot.lora_route;
+        }
+        if (Object.hasOwn(revision, "prompt_seed_mode")) {
+            const mode = String(revision.prompt_seed_mode ?? "")
+                .trim().toLowerCase();
+            if (mode === "fixed") {
+                shot.prompt_seed_mode = "fixed";
+                shot.prompt_seed = reviewSeed(revision.prompt_seed);
+            } else if (mode === "randomize") {
+                shot.prompt_seed_mode = "randomize";
+                delete shot.prompt_seed;
+            } else if (mode === "inherit") {
+                delete shot.prompt_seed_mode;
+                delete shot.prompt_seed;
+            } else {
+                throw new Error(`Restored scene ${scene} has an invalid prompt seed mode.`);
+            }
+        } else {
+            delete shot.prompt_seed_mode;
+            delete shot.prompt_seed;
         }
         delete shot.frames;
         delete shot.duration_seconds;

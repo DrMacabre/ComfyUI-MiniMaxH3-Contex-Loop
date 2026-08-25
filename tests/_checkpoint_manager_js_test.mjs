@@ -16,6 +16,7 @@ import {
 const a = "a".repeat(32);
 const b = "b".repeat(32);
 const c = "c".repeat(32);
+const d = "d".repeat(32);
 const payload = {
     revisions: [
         {scene:1, scene_id:"arrival", revision:a, active:true,
@@ -28,12 +29,18 @@ const payload = {
             created_at:"2026-08-20T10:20:00Z", context_length:0,
             audio_context_length:0, continuation_mode:"guide", ready:true,
             parent:{scene:1, revision:a}},
+        {scene:3, scene_id:"room", revision:d, active:false,
+            created_at:"2026-08-20T10:30:00Z", context_length:0,
+            audio_context_length:0, continuation_mode:"guide", ready:true,
+            parent:{scene:2, revision:b}},
     ],
     branches: [
         {id:"active", label:"Active branch", active:true,
             path:[{scene:1, revision:a}, {scene:2, revision:b}]},
         {id:"alternate", label:"Branch alternate", active:false,
-            path:[{scene:1, revision:a}, {scene:2, revision:c}]},
+            path:[{scene:1, revision:a}, {scene:2, revision:c}],
+            attribution_slot:{scene:3, parent_scene:2,
+                parent_revision:c, candidates:[{scene:3, revision:d}]}},
     ],
 };
 
@@ -48,6 +55,11 @@ assert.equal(selectedCheckpointRevision(payload).revision, b,
 assert.equal(checkpointBranchRows(payload)[0].revisions[1].revision, b);
 assert.equal(checkpointBranchRows(payload)[1].revisions[0].revision, a,
     "a shared ancestor appears in every inferred branch that uses it");
+assert.equal(
+    checkpointBranchRows(payload)[1].attribution_slot.candidates[0].revision,
+    d,
+    "attribution slots resolve their lightweight candidate keys to records",
+);
 assert.deepEqual(
     checkpointRevisionLineage(payload, payload.revisions[1]),
     [{scene:1, revision:a}, {scene:2, revision:b}],
@@ -85,19 +97,25 @@ assert.match(source, /Select this branch through scene/);
 assert.match(source, /checkpoint-revisions\/delete-preview/);
 assert.match(source, /checkpoint-revisions\/delete/);
 assert.match(source, /checkpoint-revisions\/restore/);
+assert.match(source, /checkpoint-revisions\/attribute/);
 assert.match(source, /Load selected branch/);
 assert.match(source, /Make branch active/);
+assert.match(source, /S\$\{slot\.scene\} · empty/);
+assert.match(source, /Attach selected candidate/);
+assert.match(source, /async function attributeCandidate/);
+assert.match(source, /Nothing is regenerated or copied/);
 assert.match(source, /function canActivateSelected/);
 assert.match(source, /async function activateSelected/);
 assert.match(source, /resume_scene:Number\(record\.scene\) \+ 1/);
 assert.match(source, /revisions:lineage/);
 assert.match(source, /activate_only:true/);
-assert.match(source, /applyCheckpointRevisionSeeds/);
-assert.match(source, /applyActivatedRevisionSeeds\(planNode, payload\.restored \?\? \[\]\)/);
-assert.match(source, /connected Plan seeds were synchronized/);
+assert.match(source, /applyActivatedRevisions\(planNode, payload\.restored \?\? \[\]\)/);
+assert.match(source, /useEffectivePrompts:\s*true/);
+assert.match(source, /useTipSharedPrompt:\s*true/);
+assert.match(source, /connected Plan scene settings were restored/);
 assert.match(source, /cache_bust:String\(Date\.now\(\)\)/);
 assert.match(source, /\{cache:"no-store"\}/);
-assert.match(source, /No saved revision, Plan, workflow, reference, or assembled video is deleted or changed/);
+assert.match(source, /No saved revision, workflow, reference, or assembled video is deleted/);
 assert.match(source, /later active pointers will be cleared/);
 assert.match(source, /prepareResume\(resumeScene\)/);
 assert.match(source, /snapshot:plan\.snapshot/);

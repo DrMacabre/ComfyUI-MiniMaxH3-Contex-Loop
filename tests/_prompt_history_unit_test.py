@@ -61,6 +61,16 @@ def main():
         assert alternate["revision"]["parent_id"] == first_id
         assert len(alternate["history"]["revisions"]) == 3
 
+        # Restoring an already executed branch prompt navigates to its exact
+        # history revision. Checkpoint activation must not append another
+        # prompt merely because the Plan editor is being synchronized.
+        reselected = store.save_draft(
+            "project", "scene_one", "First executed prompt.", alternate_id)
+        assert reselected["revision"]["id"] == first_id
+        assert reselected["history"]["active_revision"] == first_id
+        assert len(reselected["history"]["revisions"]) == 3
+        store.activate("project", "scene_one", alternate_id)
+
         labeled = store.set_label(
             "project", "scene_one", first_id, "  Opening   performance  ")
         assert labeled["revision"]["label"] == "Opening performance"

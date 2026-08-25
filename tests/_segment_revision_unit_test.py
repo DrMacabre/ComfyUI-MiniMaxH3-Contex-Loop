@@ -105,6 +105,9 @@ def main():
                 "delivered_frames": 5,
                 "generation_start_frame": 0,
                 "lora_route": "c",
+                "prompt_seed_mode": "fixed",
+                "prompt_seed": 9001,
+                "source_audio_target": "off",
             }],
         }
         state = {"plan": plan, "index": 1}
@@ -151,8 +154,15 @@ def main():
         assert first["resolved_context_length"] == 0
         assert first["resolved_audio_context_length"] == 0
         assert first["lora_route"] == "c"
+        assert first["prompt_seed_mode"] == "fixed"
+        assert first["prompt_seed"] == 9001
+        assert first["source_audio_target"] == "off"
         assert chain._public_segment(first)["lora_route"] == "c"
-        assert chain._checkpoint_plan_revision(first)["lora_route"] == "c"
+        restored_revision = chain._checkpoint_plan_revision(first)
+        assert restored_revision["lora_route"] == "c"
+        assert restored_revision["prompt_seed_mode"] == "fixed"
+        assert restored_revision["prompt_seed"] == "9001"
+        assert restored_revision["source_audio_target"] == "off"
         checkpoint_metadata = json.loads(
             first_paths["checkpoint"].read_text(encoding="utf-8"))
         assert checkpoint_metadata["lora_route"] == "c"

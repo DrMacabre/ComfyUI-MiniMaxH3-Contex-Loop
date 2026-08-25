@@ -154,13 +154,26 @@ following scenes consume. Older checkpoints derive this graph from predecessor
 revision and checkpoint hashes; newly saved checkpoints also carry a stable
 branch id and effective context fields.
 
+If a branch ends with an empty next-scene slot and a compatible saved candidate
+exists elsewhere, the graph displays a dashed empty card. Click it to preview
+the available candidates and choose **Attach selected candidate**. This is
+offered only when the candidate consumes neither predecessor video context nor
+generated-audio continuity. The manager creates a new immutable lineage record
+pointing at the chosen parent; the original video, audio, prompt, and checkpoint
+files remain shared and are not regenerated or copied. Shared-file deletion is
+reference-aware, so those files are retained until the last lineage record that
+uses them is deleted.
+
 If deleting the active branch tip rolls the run back while alternate leaf
 revisions remain, select the surviving branch and click **Make branch active**.
 The manager validates and promotes that revision's complete lineage directly,
-including when no Plan is connected. It only changes the run's canonical active
-checkpoint pointers; immutable revisions, Plan values, workflow state,
-references, and assembled videos are left untouched. You can then keep the
-chosen candidate active and continue deleting the rejected inactive leaves.
+including when no Plan is connected. With an editable Plan connected, it also
+restores the lineage's saved scene prompts, seeds, lengths, steps, context,
+LoRA route, and boundary/audio overrides. Exact saved prompts reactivate their
+existing Prompt Editor history revisions instead of adding duplicates.
+Immutable revisions, workflow state, references, and assembled videos are left
+untouched. You can then keep the chosen candidate active and continue deleting
+the rejected inactive leaves.
 **Load selected branch** remains the separate resume operation: it also restores
 saved Plan inputs and arms Loop Start for the following scene.
 

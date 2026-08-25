@@ -112,6 +112,23 @@ class CheckpointGraphManager:
             return json.load(handle)
 
     @staticmethod
+    def _atomic_json(path: str, value: Any) -> None:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        temporary = "%s.write.%s.tmp" % (path, uuid.uuid4().hex)
+        try:
+            with open(temporary, "w", encoding="utf-8") as handle:
+                json.dump(value, handle, ensure_ascii=False, indent=2)
+                handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, path)
+        finally:
+            try:
+                os.unlink(temporary)
+            except FileNotFoundError:
+                pass
+
+    @staticmethod
     def _integer(value: Any, fallback: int = 0) -> int:
         try:
             return int(value)
@@ -211,6 +228,9 @@ class CheckpointGraphManager:
                     compatibility = metadata.get("compatibility")
                     if not isinstance(compatibility, dict):
                         compatibility = {}
+                    adoption = metadata.get("adoption")
+                    if not isinstance(adoption, dict):
+                        adoption = {}
                     continuation, context, audio_context = (
                         self._effective_context(scene, segment, compatibility))
                     segment_path = self._artifact_path(segment.get("segment"))
@@ -234,6 +254,9 @@ class CheckpointGraphManager:
                         "branch_id": str(segment.get("branch_id") or ""),
                         "forked_from_branch_id": str(
                             segment.get("forked_from_branch_id") or ""),
+                        "adopted_from_revision": str(
+                            segment.get("adopted_from_revision") or
+                            adoption.get("source_revision") or "").lower(),
                         "predecessor_revision": str(
                             segment.get("predecessor_revision") or "").lower(),
                         "predecessor_checkpoint_sha256": str(
@@ -306,9 +329,18 @@ class CheckpointGraphManager:
         except OSError:
             review_names = []
         segment_hash_counts: dict[str, int] = defaultdict(int)
+        artifact_path_counts: dict[str, int] = defaultdict(int)
         for record in records.values():
             if record["segment_sha256"]:
                 segment_hash_counts[record["segment_sha256"]] += 1
+            for artifact_key in _ARTIFACT_KEYS:
+                artifact_value = record["_segment"].get(artifact_key)
+                if not isinstance(artifact_value, str) or not artifact_value:
+                    continue
+                try:
+                    artifact_path_counts[self._artifact_path(artifact_value)] += 1
+                except ValueError:
+                    continue
         return {
             "run_dir": run_dir,
             "run_name": run,
@@ -317,7 +349,33 @@ class CheckpointGraphManager:
             "review_names": review_names,
             "records": records,
             "segment_hash_counts": segment_hash_counts,
+            "artifact_path_counts": artifact_path_counts,
         }
+
+    @staticmethod
+    def _attribution_source(record: dict[str, Any]) -> str:
+        return str(record.get("adopted_from_revision") or
+                   record.get("revision") or "").lower()
+
+    def _attributable_without_predecessor(
+            self, record: dict[str, Any]) -> bool:
+        """Return whether a saved scene can safely receive another parent."""
+        dependency = record["_metadata"].get("scene_dependency")
+        if not isinstance(dependency, dict):
+            dependency = record["_segment"].get("scene_dependency")
+        scopes = dependency.get("scopes") if isinstance(dependency, dict) else None
+        incoming = (scopes.get("incoming_boundary")
+                    if isinstance(scopes, dict) else None)
+        if isinstance(incoming, dict):
+            visual = max(0, self._integer(incoming.get("context_length")))
+            generated = str(
+                incoming.get("generated_continuity") or "off").lower()
+            audio = max(0, self._integer(
+                incoming.get("audio_context_length")))
+            return visual == 0 and not (generated == "on" and audio > 0)
+        # Legacy metadata cannot prove that a non-zero boundary was unused.
+        return (int(record.get("context_length") or 0) == 0 and
+                int(record.get("audio_context_length") or 0) == 0)
 
     def _artifacts(self, scan: dict[str, Any], record: dict[str, Any]
                    ) -> list[dict[str, Any]]:
@@ -356,8 +414,16 @@ class CheckpointGraphManager:
                 raise ValueError("Refusing to manage an active checkpoint pointer.")
             if not any(self._inside(root, path) for root in allowed_roots):
                 raise ValueError("Checkpoint revision owns an unexpected path.")
+            path_references = scan["artifact_path_counts"].get(path, 0)
+            shared = bool(shared or path_references > 1)
+            adopted_prefix = "clip_%04d.%s" % (
+                record["scene"], record.get("adopted_from_revision") or "")
+            owns_named_path = os.path.basename(path).startswith(expected_prefix)
+            adopts_named_path = bool(
+                record.get("adopted_from_revision") and
+                os.path.basename(path).startswith(adopted_prefix))
             if (not self._inside(scan["review_dir"], path) and
-                    not os.path.basename(path).startswith(expected_prefix)):
+                    not owns_named_path and not adopts_named_path):
                 raise ValueError(
                     "Checkpoint revision references a file owned by another revision.")
             try:
@@ -381,6 +447,43 @@ class CheckpointGraphManager:
                 "_mtime_ns": mtime_ns,
             })
         return artifacts
+
+    def _attribution_slot(
+            self, records: dict[tuple[int, str], dict[str, Any]],
+            leaf_key: tuple[int, str]) -> dict[str, Any] | None:
+        leaf = records[leaf_key]
+        scene = int(leaf["scene"]) + 1
+        already_attached = {
+            self._attribution_source(records[key])
+            for key in leaf["_children"] if key in records
+        }
+        candidates: dict[str, dict[str, Any]] = {}
+        for key, candidate in records.items():
+            if key[0] != scene or key == leaf_key or not candidate["ready"]:
+                continue
+            if candidate["_parent"] == leaf_key:
+                continue
+            if not self._attributable_without_predecessor(candidate):
+                continue
+            source = self._attribution_source(candidate)
+            if not source or source in already_attached:
+                continue
+            previous = candidates.get(source)
+            if previous is None or candidate["revision"] == source:
+                candidates[source] = candidate
+        if not candidates:
+            return None
+        ordered = sorted(candidates.values(), key=lambda item: (
+            str(item.get("created_at") or ""), item["revision"]), reverse=True)
+        return {
+            "scene": scene,
+            "parent_scene": leaf["scene"],
+            "parent_revision": leaf["revision"],
+            "candidates": [
+                {"scene": item["scene"], "revision": item["revision"]}
+                for item in ordered
+            ],
+        }
 
     def _active_pointer_artifact(
             self, scan: dict[str, Any], record: dict[str, Any]
@@ -445,6 +548,9 @@ class CheckpointGraphManager:
                 "leaf_revision": leaf["revision"],
                 "path": [{"scene": key[0], "revision": key[1]} for key in path],
             }
+            slot = self._attribution_slot(records, leaf_key)
+            if slot is not None:
+                branch["attribution_slot"] = slot
             branch_paths.append(branch)
             membership = {"id": branch["id"], "label": branch["label"],
                           "active": active}
@@ -454,9 +560,16 @@ class CheckpointGraphManager:
             not item["active"], -int(item["leaf_scene"]), item["id"]))
 
         public_records = []
+        artifact_sizes: dict[str, int] = {}
+        record_artifact_paths: dict[tuple[int, str], dict[str, int]] = {}
         for key in sorted(records):
             record = records[key]
             artifacts = self._artifacts(scan, record)
+            record_artifact_paths[key] = {
+                part["path"]: int(part["size_bytes"])
+                for part in artifacts if part["exists"]
+            }
+            artifact_sizes.update(record_artifact_paths[key])
             reviews = [item for item in artifacts
                        if item["kind"] == "review_preview" and item["exists"]]
             video = (self._output_item(record["_segment_path"])
@@ -483,15 +596,19 @@ class CheckpointGraphManager:
                 "scene", "scene_id", "revision", "active", "ready",
                 "raw_frames", "delivered_frames", "seed", "steps",
                 "created_at", "branch_id", "forked_from_branch_id",
+                "adopted_from_revision",
                 "predecessor_revision",
                 "predecessor_checkpoint_sha256", "checkpoint_sha256",
                 "continuation_mode", "context_length", "audio_context_length",
                 "compatibility", "prompt_preview", "prompt")}
             item.update({
-                "size_bytes": sum(part["size_bytes"] for part in artifacts
-                                  if part["owned"]),
+                "size_bytes": sum(part["size_bytes"] for part in artifacts),
+                "owned_size_bytes": sum(
+                    part["size_bytes"] for part in artifacts if part["owned"]),
+                "shared_size_bytes": sum(
+                    part["size_bytes"] for part in artifacts if part["shared"]),
                 "missing_files": [part["label"] for part in artifacts
-                                  if part["owned"] and not part["exists"]],
+                                  if not part["exists"]],
                 "video": video,
                 "audio": audio,
                 "preview_video": (
@@ -513,6 +630,10 @@ class CheckpointGraphManager:
             grouped[item["scene"]].append(item)
         for scene in sorted(grouped):
             revisions = grouped[scene]
+            scene_artifacts: dict[str, int] = {}
+            for revision in revisions:
+                scene_artifacts.update(record_artifact_paths.get(
+                    (int(revision["scene"]), str(revision["revision"])), {}))
             scenes.append({
                 "scene": scene,
                 "scene_id": next((item["scene_id"] for item in revisions
@@ -520,7 +641,7 @@ class CheckpointGraphManager:
                 "revision_count": len(revisions),
                 "active_revision": next((item["revision"] for item in revisions
                                          if item["active"]), ""),
-                "bytes": sum(item["size_bytes"] for item in revisions),
+                "bytes": sum(scene_artifacts.values()),
                 "broken_count": sum(not item["ready"] for item in revisions),
             })
         graph_hash = _fingerprint([{
@@ -538,7 +659,7 @@ class CheckpointGraphManager:
                 "scene_count": len(scenes),
                 "revision_count": len(public_records),
                 "branch_count": len(branch_paths),
-                "bytes": sum(item["size_bytes"] for item in public_records),
+                "bytes": sum(artifact_sizes.values()),
                 "broken_count": sum(not item["ready"] for item in public_records),
             },
         }
@@ -548,6 +669,125 @@ class CheckpointGraphManager:
         if not os.path.isdir(run_dir):
             raise FileNotFoundError("H3 run %r does not exist." % run)
         return self._public_graph(self._scan(run))
+
+    def attribute(
+            self, run_name: Any, parent_scene: Any, parent_revision: Any,
+            candidate_scene: Any, candidate_revision: Any) -> dict[str, Any]:
+        """Attach an independent saved candidate to another branch tip.
+
+        Only metadata is created. Video, audio, prompt, and checkpoint files
+        remain shared with the original immutable candidate revision.
+        """
+        run_dir, run = self._run_dir(run_name)
+        parent_scene_number = int(parent_scene)
+        candidate_scene_number = int(candidate_scene)
+        parent_token = str(parent_revision or "").strip().lower()
+        candidate_token = str(candidate_revision or "").strip().lower()
+        if not re.fullmatch(r"[0-9a-f]{32}", parent_token):
+            raise ValueError("Parent revision must be a 32-character revision id.")
+        if not re.fullmatch(r"[0-9a-f]{32}", candidate_token):
+            raise ValueError("Candidate revision must be a 32-character revision id.")
+        if candidate_scene_number != parent_scene_number + 1:
+            raise ValueError(
+                "A candidate can only be attributed to the immediately preceding scene slot.")
+        with checkpoint_run_lock(self.output_root, run):
+            if not os.path.isdir(run_dir):
+                raise FileNotFoundError("H3 run %r does not exist." % run)
+            scan = self._scan(run)
+            records = scan["records"]
+            parent_key = (parent_scene_number, parent_token)
+            candidate_key = (candidate_scene_number, candidate_token)
+            parent = records.get(parent_key)
+            candidate = records.get(candidate_key)
+            if parent is None:
+                raise FileNotFoundError(
+                    "Parent scene %d revision %s is no longer available." %
+                    (parent_scene_number, parent_token[:8]))
+            if candidate is None:
+                raise FileNotFoundError(
+                    "Candidate scene %d revision %s is no longer available." %
+                    (candidate_scene_number, candidate_token[:8]))
+            if not parent["ready"] or not candidate["ready"]:
+                raise ValueError(
+                    "Both the target branch tip and candidate must have intact video and checkpoint files.")
+            if candidate["_parent"] == parent_key:
+                raise ValueError("This candidate is already attached to that branch.")
+            if not self._attributable_without_predecessor(candidate):
+                raise ValueError(
+                    "This candidate consumes predecessor video or generated-audio context and cannot be safely attributed to another branch.")
+
+            source_revision = self._attribution_source(candidate)
+            for record in records.values():
+                adoption = record["_metadata"].get("adoption")
+                if not isinstance(adoption, dict):
+                    continue
+                if (record["scene"] == candidate_scene_number and
+                        str(adoption.get("source_revision") or "").lower() ==
+                        source_revision and
+                        str(adoption.get("parent_revision") or "").lower() ==
+                        parent_token):
+                    return {
+                        "ok": True,
+                        "created": False,
+                        "run_name": run,
+                        "scene": record["scene"],
+                        "revision": record["revision"],
+                        "source_revision": source_revision,
+                        "parent_scene": parent_scene_number,
+                        "parent_revision": parent_token,
+                        "message": "Candidate is already attributed to this branch.",
+                    }
+
+            revision = uuid.uuid4().hex
+            created_at = datetime.now(timezone.utc).isoformat(
+                timespec="seconds").replace("+00:00", "Z")
+            metadata = json.loads(_canonical_json(candidate["_metadata"]))
+            segment = metadata.get("segment")
+            if not isinstance(segment, dict):
+                raise ValueError("Candidate revision metadata has no segment record.")
+            metadata_path = os.path.join(
+                scan["checkpoint_dir"],
+                "clip_%04d.%s.json" % (candidate_scene_number, revision))
+            segment.update({
+                "revision": revision,
+                "revision_metadata": os.path.relpath(
+                    metadata_path, self.output_root),
+                "predecessor_revision": parent_token,
+                "predecessor_checkpoint_sha256": str(
+                    parent.get("checkpoint_sha256") or ""),
+                "branch_id": str(parent.get("branch_id") or parent_token),
+                "forked_from_branch_id": str(
+                    candidate.get("branch_id") or candidate_token),
+                "adopted_from_revision": source_revision,
+                "adopted_from_branch_id": str(
+                    candidate.get("branch_id") or candidate_token),
+            })
+            metadata["created_at"] = created_at
+            metadata["adoption"] = {
+                "version": 1,
+                "created_at": created_at,
+                "source_scene": candidate_scene_number,
+                "source_revision": source_revision,
+                "candidate_revision": candidate_token,
+                "parent_scene": parent_scene_number,
+                "parent_revision": parent_token,
+                "shared_artifacts": True,
+            }
+            self._atomic_json(metadata_path, metadata)
+            return {
+                "ok": True,
+                "created": True,
+                "run_name": run,
+                "scene": candidate_scene_number,
+                "revision": revision,
+                "source_revision": source_revision,
+                "parent_scene": parent_scene_number,
+                "parent_revision": parent_token,
+                "message": (
+                    "Attributed scene %d candidate %s to branch tip %s; saved media and checkpoint files remain shared." %
+                    (candidate_scene_number, candidate_token[:8],
+                     parent_token[:8])),
+            }
 
     def deletion_preview(self, run_name: Any, scene: Any,
                          revision: Any) -> dict[str, Any]:

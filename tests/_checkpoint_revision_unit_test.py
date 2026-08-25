@@ -62,7 +62,9 @@ def digest(path):
 
 
 def write_revision(run, scene, token, seed, active=False, predecessor=None,
-                   run_name="revision_test", compatibility=None):
+                   run_name="revision_test", compatibility=None,
+                   context_length=None, audio_context_length=None,
+                   generated_continuity=None):
     segments = run / "segments"
     checkpoints = run / "checkpoints"
     reviews = run / "reviews"
@@ -76,6 +78,12 @@ def write_revision(run, scene, token, seed, active=False, predecessor=None,
     segment_path.write_bytes(("video-%d-%s" % (scene, token)).encode())
     prompt_path.write_text("prompt %d %s" % (scene, seed), encoding="utf-8")
     checkpoint_path.write_bytes(("latent-%d-%s" % (scene, token)).encode())
+    context_length = (0 if scene == 1 else 39) if context_length is None else int(
+        context_length)
+    audio_context_length = (33 if scene == 1 else 44) if (
+        audio_context_length is None) else int(audio_context_length)
+    generated_continuity = ("on" if audio_context_length > 0 else "off") if (
+        generated_continuity is None) else str(generated_continuity)
     segment = {
         "index": scene,
         "id": "scene_%d" % scene,
@@ -97,8 +105,8 @@ def write_revision(run, scene, token, seed, active=False, predecessor=None,
             ("shared\nprompt %d %s" % (scene, seed)).encode()).hexdigest(),
         "seed": str(seed),
         "steps": 8,
-        "context_length": 0 if scene == 1 else 39,
-        "audio_context_length": 33 if scene == 1 else 44,
+        "context_length": context_length,
+        "audio_context_length": audio_context_length,
         "segment_sha256": digest(segment_path),
         "checkpoint_sha256": digest(checkpoint_path),
         "prompt_file_sha256": digest(prompt_path),
@@ -115,6 +123,15 @@ def write_revision(run, scene, token, seed, active=False, predecessor=None,
             "context_length": 22,
             "audio_context_length": 22,
             "audio_mode": "generated_audio",
+        },
+        "scene_dependency": {
+            "scopes": {
+                "incoming_boundary": {
+                    "context_length": context_length,
+                    "audio_context_length": audio_context_length,
+                    "generated_continuity": generated_continuity,
+                },
+            },
         },
         "segment": segment,
     }
@@ -145,8 +162,9 @@ async def check():
         new_two_meta, new_two_files = write_revision(
             run, 2, new_two, 202, active=True, predecessor=new_one_meta)
 
-        response = await chain._list_saved_checkpoints(GetRequest())
-        payload = json.loads(response.text)
+        # Exercise the listing worker synchronously in this fake server; the
+        # route's asyncio.to_thread wakeup depends on ComfyUI's real event loop.
+        payload = chain._saved_checkpoint_listing("revision_test")
         assert [item["revision"] for item in payload["checkpoints"]] == [
             new_one, new_two]
         assert len(payload["revisions"]) == 4
@@ -354,6 +372,111 @@ async def check():
         empty_graph = chain.CheckpointGraphManager(
             folder_paths.output_directory).graph("revision_test")
         assert empty_graph["summary"]["revision_count"] == 0
+
+        # A next-scene take with no predecessor picture or generated-audio
+        # dependency can be attributed to another empty branch slot without
+        # copying its immutable media/checkpoint artifacts.
+        attribution_run = pathlib.Path(temporary) / "h3_chains" / "attrib_test"
+        parent_a = "6" * 32
+        parent_b = "7" * 32
+        candidate_token = "8" * 32
+        blocked_token = "9" * 32
+        parent_a_meta, _parent_a_files = write_revision(
+            attribution_run, 1, parent_a, 601, active=True,
+            run_name="attrib_test")
+        _parent_b_meta, _parent_b_files = write_revision(
+            attribution_run, 1, parent_b, 701, run_name="attrib_test")
+        candidate_meta, candidate_files = write_revision(
+            attribution_run, 2, candidate_token, 801,
+            predecessor=parent_a_meta, run_name="attrib_test",
+            context_length=0, audio_context_length=44,
+            generated_continuity="off")
+        write_revision(
+            attribution_run, 2, blocked_token, 901,
+            predecessor=parent_a_meta, run_name="attrib_test",
+            context_length=12, audio_context_length=0,
+            generated_continuity="off")
+
+        manager = chain.CheckpointGraphManager(folder_paths.output_directory)
+        attribution_graph = manager.graph("attrib_test")
+        parent_b_branch = next(
+            branch for branch in attribution_graph["branches"]
+            if branch["leaf_revision"] == parent_b)
+        slot = parent_b_branch["attribution_slot"]
+        assert slot["scene"] == 2
+        assert [item["revision"] for item in slot["candidates"]] == [
+            candidate_token]
+
+        attached = manager.attribute(
+            "attrib_test", 1, parent_b, 2, candidate_token)
+        assert attached["created"]
+        alias_token = attached["revision"]
+        alias_path = attribution_run / "checkpoints" / (
+            "clip_0002.%s.json" % alias_token)
+        alias = json.loads(alias_path.read_text(encoding="utf-8"))
+        assert alias["segment"]["predecessor_revision"] == parent_b
+        assert alias["segment"]["adopted_from_revision"] == candidate_token
+        assert alias["segment"]["segment"] == candidate_meta["segment"]["segment"]
+        assert alias["segment"]["checkpoint"] == candidate_meta["segment"]["checkpoint"]
+
+        repeated = manager.attribute(
+            "attrib_test", 1, parent_b, 2, candidate_token)
+        assert not repeated["created"]
+        assert repeated["revision"] == alias_token
+
+        attached_graph = manager.graph("attrib_test")
+        alias_record = next(item for item in attached_graph["revisions"]
+                            if item["revision"] == alias_token)
+        assert alias_record["parent"] == {
+            "scene": 1, "revision": parent_b}
+        assert alias_record["adopted_from_revision"] == candidate_token
+        assert not any(
+            branch.get("attribution_slot")
+            for branch in attached_graph["branches"]
+            if branch["leaf_revision"] == parent_b)
+
+        activate_alias = await chain._restore_checkpoint_revisions(JsonRequest({
+            "run_name": "attrib_test",
+            "resume_scene": 3,
+            "activate_only": True,
+            "revisions": [
+                {"scene": 1, "revision": parent_b},
+                {"scene": 2, "revision": alias_token},
+            ],
+        }))
+        assert activate_alias.status == 200
+        assert json.loads((attribution_run / "checkpoints" /
+                           "clip_0002.json").read_text())["segment"][
+                               "revision"] == alias_token
+
+        # The original metadata can be removed while the attributed lineage
+        # continues to reference and preview the same media files.
+        original_preview = manager.deletion_preview(
+            "attrib_test", 2, candidate_token)
+        assert original_preview["allowed"]
+        assert any(item["shared"] for item in original_preview["files"])
+        manager.delete(
+            "attrib_test", 2, candidate_token,
+            original_preview["snapshot"])
+        assert all(path.exists() for path in candidate_files
+                   if path.name != "clip_0002.%s.json" % candidate_token)
+        assert manager.graph("attrib_test")["summary"]["revision_count"] == 4
+
+        try:
+            manager.attribute(
+                "attrib_test", 1, parent_b, 2, blocked_token)
+        except ValueError as exc:
+            assert "context" in str(exc)
+        else:
+            raise AssertionError("dependent candidate attribution was accepted")
+
+        alias_preview = manager.deletion_preview(
+            "attrib_test", 2, alias_token)
+        assert alias_preview["allowed"] and alias_preview["rollback"]
+        manager.delete(
+            "attrib_test", 2, alias_token, alias_preview["snapshot"])
+        assert not alias_path.exists()
+        assert not any(path.exists() for path in candidate_files)
 
 if __name__ == "__main__":
     asyncio.run(check())

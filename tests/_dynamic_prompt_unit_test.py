@@ -91,6 +91,9 @@ fixed_scene = normalize(prompt_seed_mode="fixed", prompt_seed="42")
 assert fixed_scene["shots"][0]["prompt_seed_mode"] == "fixed"
 assert fixed_scene["shots"][0]["prompt_seed"] == 42
 assert fixed_scene["shots"][0]["prompt_choice_seed"] == 42
+fixed_editor_scene = chain._effective_editor_plan(fixed_scene)["shots"][0]
+assert fixed_editor_scene["prompt_seed_mode"] == "fixed"
+assert fixed_editor_scene["prompt_seed"] == "42"
 assert fixed_scene["plan_hash"] == first["plan_hash"]
 assert chain._history_hash(fixed_scene, 1) == chain._history_hash(first, 1)
 assert chain._scene_dependency_diffs(
@@ -111,6 +114,10 @@ finally:
 assert randomized_scene["shots"][0]["prompt_seed_mode"] == "randomize"
 assert "prompt_seed" not in randomized_scene["shots"][0]
 assert randomized_scene["shots"][0]["prompt_choice_seed"] == 777
+randomized_editor_scene = chain._effective_editor_plan(
+    randomized_scene)["shots"][0]
+assert randomized_editor_scene["prompt_seed_mode"] == "randomize"
+assert "prompt_seed" not in randomized_editor_scene
 assert randomized_scene["plan_hash"] == first["plan_hash"]
 assert chain._history_hash(randomized_scene, 1) == chain._history_hash(first, 1)
 assert chain._scene_dependency_diffs(
