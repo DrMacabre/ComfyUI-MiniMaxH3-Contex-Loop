@@ -4,6 +4,23 @@ Newest first. This file keeps release history out of the onboarding README.
 
 ## Unreleased
 
+## v0.5.20 — Candidate review and flexible branches
+
+- Reworked multi-candidate review into a live carousel. Completed candidates
+  remain reviewable while later takes render, multiple alternatives can be
+  retained, and approving a saved take stops its speculative successor before
+  continuing from the selected immutable checkpoint.
+
+- Added per-scene non-linear visual context selection. A hard-cut scene may
+  reuse picture context from an earlier scene while generated-audio continuity
+  still follows the direct predecessor; resume verification now follows only
+  the visual and audio dependencies the scene actually consumes.
+
+- Expanded Checkpoint Manager recovery. Saved inactive branches can become
+  active again with their Plan settings restored, and compatible independent
+  candidates can be attributed to empty branch slots without regenerating or
+  duplicating their media.
+
 ## v0.5.19 — Per-scene prompt authoring
 
 - Reference insertion from the Scene Prompt Editor's top menu now preserves
