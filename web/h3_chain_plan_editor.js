@@ -20,6 +20,7 @@ import {
     sceneContextLength,
     sceneContinuationMode,
     sceneLoRARoute,
+    sceneVisualContextSource,
     scenePromptSeedMode,
     sceneVideoBlendFrames,
     setScenePromptSeedMode,
@@ -1014,6 +1015,76 @@ function mountEditor(node) {
             refreshIncomingTransition();
             syncPlan();
         });
+        const visualSource = element("select", "h3c-visual-source");
+        if (index === 0) {
+            const option = element(
+                "option", "", "Existing Video Context (if connected)",
+            );
+            option.value = "";
+            visualSource.append(option);
+            visualSource.disabled = true;
+        } else {
+            const previous = element(
+                "option", "",
+                `Previous scene · ${index} ${safeShotId(
+                    state.plan.shots[index - 1]?.id,
+                    `clip_${String(index).padStart(4, "0")}`,
+                )}`,
+            );
+            previous.value = "";
+            visualSource.append(previous);
+            for (let sourceOffset = 0;
+                sourceOffset < index - 1; sourceOffset += 1) {
+                const sourceId = safeShotId(
+                    state.plan.shots[sourceOffset]?.id,
+                    `clip_${String(sourceOffset + 1).padStart(4, "0")}`,
+                );
+                const option = element(
+                    "option", "",
+                    `Scene ${sourceOffset + 1} · ${sourceId}`,
+                );
+                option.value = sourceId;
+                visualSource.append(option);
+            }
+            const rawSource = shot.visual_context_source;
+            if (rawSource === undefined || rawSource === null
+                    || ["", "previous", "immediate"].includes(
+                        String(rawSource).trim().toLowerCase())) {
+                visualSource.value = "";
+            } else {
+                try {
+                    const resolved = sceneVisualContextSource(
+                        state.plan, index + 1,
+                    );
+                    visualSource.value = resolved === index ? ""
+                        : safeShotId(
+                            state.plan.shots[resolved - 1]?.id,
+                            `clip_${String(resolved).padStart(4, "0")}`,
+                        );
+                } catch (_error) {
+                    const invalid = element(
+                        "option", "",
+                        `Invalid · ${String(rawSource)}`,
+                    );
+                    invalid.value = String(rawSource);
+                    visualSource.append(invalid);
+                    visualSource.value = String(rawSource);
+                }
+            }
+        }
+        visualSource.title = index === 0
+            ? "Scene 1 visual context comes from Existing Video Context."
+            : "Choose which earlier saved scene supplies the video/RGB context. Generated-audio continuity always comes from the immediately previous timeline scene. A non-linear source is a hard cut in final assembly.";
+        visualSource.addEventListener("change", () => {
+            if (!visualSource.value) {
+                delete shot.visual_context_source;
+            } else {
+                shot.visual_context_source = visualSource.value;
+                shot.video_blend_frames = 0;
+            }
+            refreshBlendControl();
+            syncPlan();
+        });
         const audioContext = numberInput(shot.audio_context_length ?? "", {
             min: "0", max: "240", step: "1",
         });
@@ -1175,6 +1246,7 @@ function mountEditor(node) {
         advanced.append(
             field("Steps (blank = default)", steps),
             field("Advanced visual context", context),
+            field("Visual context source", visualSource),
             field("Advanced audio context", audioContext),
             field("Advanced implementation", continuation),
             field("Boundary spatial proxy", spatialProxy),

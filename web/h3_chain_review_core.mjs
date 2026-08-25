@@ -4,6 +4,7 @@ import {
     promptTextToLines,
     sceneAudioContextLength,
     sceneContextLength,
+    sceneVisualContextSource,
     sharedPrompt,
 } from "./h3_chain_plan_core.mjs?v=0.5.19";
 
@@ -217,6 +218,14 @@ export function applyCheckpointRevisionSet(plan, revisions) {
             );
         } else {
             delete shot.audio_context_length;
+        }
+        if (Object.hasOwn(revision, "visual_context_source")) {
+            shot.visual_context_source = String(
+                revision.visual_context_source,
+            );
+            sceneVisualContextSource(plan, scene);
+        } else {
+            delete shot.visual_context_source;
         }
         delete shot.frames;
         delete shot.duration_seconds;

@@ -25,6 +25,7 @@ import {
     sceneContinuationMode,
     sceneLoRARoute,
     scenePromptSeedMode,
+    sceneVisualContextSource,
     sceneVideoBlendFrames,
     setScenePromptSeedMode,
     setShotLengthMode,
@@ -644,6 +645,38 @@ assert.equal(longTiming.totalFrames, 4544);
 assert.equal(longTiming.totalSeconds, 189 + 1 / 3);
 assert.deepEqual(longTiming.errors, []);
 
+const nonlinearPlan = parsePlanJson(JSON.stringify({
+    shots: [
+        {id:"one", prompt:"one", length:39},
+        {id:"two", prompt:"two", length:39},
+        {id:"three", prompt:"three", length:39},
+        {id:"four", prompt:"four", length:39},
+        {id:"five", prompt:"five", length:39,
+         visual_context_source:"three", video_blend_frames:0},
+    ],
+}));
+assert.equal(sceneVisualContextSource(nonlinearPlan, 4), 3);
+assert.equal(sceneVisualContextSource(nonlinearPlan, 5), 3);
+const nonlinearTiming = calculatePlanTiming(nonlinearPlan, {
+    contextLength:5, videoBlendFrames:0, anchorMode:"head",
+    defaultDurationSeconds:5, defaultSteps:10,
+});
+assert.deepEqual(nonlinearTiming.errors, []);
+assert.equal(nonlinearTiming.shots[4].visualContextSource, 3);
+assert.equal(nonlinearTiming.shots[4].visualContextSourceId, "three");
+const invalidNonlinearPlan = structuredClone(nonlinearPlan);
+invalidNonlinearPlan.shots[4].visual_context_source = "missing";
+assert.match(calculatePlanTiming(invalidNonlinearPlan, {
+    contextLength:5, videoBlendFrames:0, anchorMode:"head",
+    defaultDurationSeconds:5, defaultSteps:10,
+}).errors.join("\n"), /does not match a scene ID/i);
+const blendedNonlinearPlan = structuredClone(nonlinearPlan);
+blendedNonlinearPlan.shots[4].video_blend_frames = 2;
+assert.match(calculatePlanTiming(blendedNonlinearPlan, {
+    contextLength:5, videoBlendFrames:0, anchorMode:"head",
+    defaultDurationSeconds:5, defaultSteps:10,
+}).errors.join("\n"), /non-linear visual context requires 0 assembly blend/i);
+
 duplicateShot(plan.shots, 0);
 assert.equal(plan.shots.length, 3);
 assert.equal(plan.shots[1].id, "one_copy");
@@ -695,6 +728,7 @@ assert.match(editorSource, /field\("Generated continuity", generatedContinuity\)
 assert.match(editorSource, /field\("Lock source audio", lockSourceAudio\)/);
 assert.match(editorSource, /applySceneAudioOverride/);
 assert.match(editorSource, /Advanced visual context/);
+assert.match(editorSource, /Visual context source/);
 assert.match(editorSource, /Advanced audio context/);
 assert.match(editorSource, /Advanced implementation/);
 assert.match(editorSource, /applySceneTransitionPreset/);

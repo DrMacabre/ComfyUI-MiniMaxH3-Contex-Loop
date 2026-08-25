@@ -24,6 +24,7 @@ import {
     sceneContinuationMode,
     sceneLoRARoute,
     scenePromptSeedMode,
+    sceneVisualContextSource,
     sceneVideoBlendFrames,
     setScenePromptSeedMode,
     setSharedPrompt,
@@ -1483,6 +1484,78 @@ function mount(node) {
             writePlan();
             renderStatus();
         });
+        const visualSource = element("select");
+        if (state.active === 0) {
+            const option = element(
+                "option", "", "Existing Video Context (if connected)",
+            );
+            option.value = "";
+            visualSource.append(option);
+            visualSource.disabled = true;
+        } else {
+            const previousIndex = state.active;
+            const previousId = safeShotId(
+                state.plan.shots[previousIndex - 1]?.id,
+                `clip_${String(previousIndex).padStart(4, "0")}`,
+            );
+            const previous = element(
+                "option", "",
+                `Previous scene · ${previousIndex} ${previousId}`,
+            );
+            previous.value = "";
+            visualSource.append(previous);
+            for (let sourceOffset = 0;
+                sourceOffset < state.active - 1; sourceOffset += 1) {
+                const sourceId = safeShotId(
+                    state.plan.shots[sourceOffset]?.id,
+                    `clip_${String(sourceOffset + 1).padStart(4, "0")}`,
+                );
+                const option = element(
+                    "option", "",
+                    `Scene ${sourceOffset + 1} · ${sourceId}`,
+                );
+                option.value = sourceId;
+                visualSource.append(option);
+            }
+            const rawSource = shot.visual_context_source;
+            if (rawSource === undefined || rawSource === null
+                    || ["", "previous", "immediate"].includes(
+                        String(rawSource).trim().toLowerCase())) {
+                visualSource.value = "";
+            } else {
+                try {
+                    const resolved = sceneVisualContextSource(
+                        state.plan, state.active + 1,
+                    );
+                    visualSource.value = resolved === state.active ? ""
+                        : safeShotId(
+                            state.plan.shots[resolved - 1]?.id,
+                            `clip_${String(resolved).padStart(4, "0")}`,
+                        );
+                } catch (_error) {
+                    const invalid = element(
+                        "option", "", `Invalid · ${String(rawSource)}`,
+                    );
+                    invalid.value = String(rawSource);
+                    visualSource.append(invalid);
+                    visualSource.value = String(rawSource);
+                }
+            }
+        }
+        visualSource.title = state.active === 0
+            ? "Scene 1 visual context comes from Existing Video Context."
+            : "Select any earlier saved scene for video/RGB context. Generated-audio continuity still uses the immediately previous timeline scene. Non-linear visual context forces a hard assembly cut.";
+        visualSource.addEventListener("change", () => {
+            if (!visualSource.value) {
+                delete shot.visual_context_source;
+            } else {
+                shot.visual_context_source = visualSource.value;
+                shot.video_blend_frames = 0;
+            }
+            refreshBlendControl();
+            writePlan();
+            renderStatus();
+        });
         const audioContext = element("input");
         audioContext.type = "number";
         audioContext.min = "0";
@@ -1660,6 +1733,7 @@ function mount(node) {
         const advancedGrid = element("div", "h3studio-advanced-grid");
         advancedGrid.append(
             field("Visual / audio context", contextPair),
+            field("Visual context source", visualSource),
             field("Implementation", continuation),
             field("Boundary spatial proxy", spatialProxy),
         );

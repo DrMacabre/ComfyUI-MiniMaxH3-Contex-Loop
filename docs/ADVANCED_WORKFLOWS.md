@@ -61,6 +61,34 @@ deliberately needs different visual and audio overlap lengths.
 every continuation. Start with `22`; use `56` when a long clip's camera move or
 performance genuinely needs more history.
 
+## Non-linear visual context
+
+Scenes 2 and later normally take visual context from the immediately previous
+timeline scene. **Visual context source** in Plan or Plan Studio can instead
+select any earlier saved scene by stable scene ID:
+
+```json
+{
+  "id": "scene_5",
+  "visual_context_source": "scene_3",
+  "context_length": 39,
+  "video_blend_frames": 0
+}
+```
+
+This changes only the picture-side continuation edge. In this example scene 5
+uses scene 3's retained RGB/video latent, while Generated continuity still
+uses scene 4's audio latent. The timeline, branch ancestry, soundtrack clock,
+and final ordering remain 1 → 2 → 3 → 4 → 5. With head anchoring, the repeated
+scene-3 prefix is removed by Loop Trim, so `video_blend_frames: 0` delivers a
+hard cut from scene 4 to the newly generated part of scene 5.
+
+Non-linear visual context requires a zero assembly blend because the visible
+incoming timeline boundary is still scene 4 → scene 5. Checkpoint preflight
+verifies both consumed dependencies independently: the selected visual scene
+and, when enabled, the immediate generated-audio predecessor. Other earlier
+scenes remain assembly-only and do not become false resume blockers.
+
 ## Last-frame destinations
 
 When stock H3 Image to Video supplies `last_frame`, Motion Context preserves
