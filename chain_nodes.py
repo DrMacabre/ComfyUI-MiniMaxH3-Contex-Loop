@@ -225,6 +225,7 @@ BOUNDARY_ANCHOR_LEAD_FRAMES = 5
 BOUNDARY_ANCHOR_SLOT_FRAMES = 17
 
 _PENDING_REVIEWS: dict[str, dict[str, Any]] = {}
+_ACTIVE_CANDIDATE_BATCHES: dict[str, dict[str, Any]] = {}
 _PENDING_FINAL_REVIEW_PREVIEWS: dict[
     tuple[str, str], dict[str, Any]
 ] = {}
@@ -14578,6 +14579,23 @@ def _review_batch_candidates(state: dict[str, Any], index: int,
     return valid
 
 
+def _review_batch_token(state: dict[str, Any], index: int,
+                        target: int) -> str:
+    batch = state.get("candidate_batch")
+    if (not isinstance(batch, dict) or int(batch.get("scene", -1)) != index
+            or int(batch.get("target", -1)) != target):
+        return ""
+    token = str(batch.get("batch_token") or "")
+    return token if re.fullmatch(r"[0-9a-f]{32}", token) else ""
+
+
+def _review_candidate_batch_cleanup(max_age_seconds: float = 21600.0) -> None:
+    cutoff = time.monotonic() - max(60.0, float(max_age_seconds))
+    for token, entry in list(_ACTIVE_CANDIDATE_BATCHES.items()):
+        if float(entry.get("updated", 0.0)) < cutoff:
+            _ACTIVE_CANDIDATE_BATCHES.pop(token, None)
+
+
 def _review_candidate_record(segment: dict[str, Any], video: dict[str, str],
                              has_audio: bool, warning: str) -> dict[str, Any]:
     return {
@@ -14992,14 +15010,20 @@ class MiniMaxH3ChainReview:
                     "min": 1,
                     "max": MAX_REVIEW_CANDIDATES,
                     "step": 1,
-                    "tooltip": "Offer up to this many different-seed takes "
-                               "for each scene. Review Gate pauses after every "
-                               "saved take, so you can accept early or request "
-                               "the next candidate. Mark one or more takes to "
-                               "keep and choose which exact checkpoint continues "
-                               "the chain; unkept alternatives are deleted. "
+                    "tooltip": "Generate this many different-seed takes in a "
+                               "row before Review Gate pauses. Mark one or more "
+                               "takes to keep and choose which exact checkpoint "
+                               "continues the chain; unkept alternatives are "
+                               "deleted. "
                                "Convert this widget to an input to drive it from "
                                "an INT node."}),
+                "review_each_candidate": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Optional inspection mode. Pause after every "
+                               "saved take so the candidate run can be accepted "
+                               "early or advanced manually. Leave off to generate "
+                               "the full candidate_count batch automatically and "
+                               "review it once at the end."}),
             },
             "hidden": {
                 "dynprompt": "DYNPROMPT",
@@ -15030,6 +15054,7 @@ class MiniMaxH3ChainReview:
                      auto_continue_timeout_minutes, unload_models_while_waiting,
                      assemble_partial_on_stop, partial_audio_source, audio=None,
                      source_audio=None, candidate_count=1,
+                     review_each_candidate=False,
                      dynprompt=None, unique_id=None):
         plan = state["plan"]
         index = int(state["index"])
@@ -15054,21 +15079,188 @@ class MiniMaxH3ChainReview:
         candidate_target = _review_candidate_target(candidate_count)
         previous_candidates = _review_batch_candidates(
             state, index, candidate_target)
+        batch_token = _review_batch_token(state, index, candidate_target)
         candidate_index = len(previous_candidates) + 1
         if candidate_index > candidate_target:
             previous_candidates = []
+            batch_token = ""
             candidate_index = 1
-        candidates = previous_candidates + [_review_candidate_record(
-            segment, video, False, no_audio_warning)]
+        candidate_preview_ready = False
+        if candidate_index < candidate_target and not review_each_candidate:
+            try:
+                candidate_video, candidate_has_audio, candidate_warning = (
+                    _review_video(
+                        plan, segment, audio, retain_previous=True))
+            except Exception as exc:
+                _LOG.exception(
+                    "H3 Chain candidate synchronized preview failed")
+                candidate_video, candidate_has_audio, candidate_warning = (
+                    video, False,
+                    "Candidate audio preview is unavailable (%s)." % exc)
+            current_candidate = _review_candidate_record(
+                segment, candidate_video, candidate_has_audio,
+                candidate_warning)
+            candidate_preview_ready = True
+        else:
+            current_candidate = _review_candidate_record(
+                segment, video, False, no_audio_warning)
+        candidates = previous_candidates + [current_candidate]
         kept_revisions = _review_batch_kept_revisions(
             state, index, candidate_target, previous_candidates)
+
+        queued_decision = None
+        batch_entry = (_ACTIVE_CANDIDATE_BATCHES.get(batch_token)
+                       if batch_token else None)
+        if isinstance(batch_entry, dict):
+            available_before_current = {
+                str(candidate.get("segment", {}).get("revision") or "")
+                for candidate in candidates if isinstance(candidate, dict)
+            }
+            entry_kept = batch_entry.get("kept_revisions")
+            if isinstance(entry_kept, list):
+                kept_revisions = list(dict.fromkeys(
+                    str(revision) for revision in entry_kept
+                    if str(revision) in available_before_current))
+        batch_command = (batch_entry.get("command")
+                         if isinstance(batch_entry, dict) else None)
+        if isinstance(batch_command, dict):
+            requested_kept = [
+                str(value) for value in batch_command.get(
+                    "kept_revisions", ())]
+            available = {
+                str(candidate.get("segment", {}).get("revision") or "")
+                for candidate in candidates if isinstance(candidate, dict)
+            }
+            kept_revisions = list(dict.fromkeys(
+                revision for revision in requested_kept
+                if revision in available))
+            if batch_command.get("action") == "pause":
+                review_each_candidate = True
+            elif batch_command.get("action") == "accept":
+                requested_revision = str(
+                    batch_command.get("candidate_revision") or "")
+                selected_number = next((
+                    number for number, candidate in enumerate(
+                        candidates, start=1)
+                    if str(candidate.get("segment", {}).get(
+                        "revision") or "") == requested_revision
+                ), 0)
+                if selected_number:
+                    if requested_revision not in kept_revisions:
+                        kept_revisions.append(requested_revision)
+                    queued_decision = {
+                        "action": "approve",
+                        "candidate_revision": requested_revision,
+                        "candidate_number": selected_number,
+                        "candidate_count": candidate_target,
+                        "candidate_generated_count": len(candidates),
+                        "kept_candidate_revisions": kept_revisions,
+                        "candidate_batch_command": True,
+                        "candidate_batch_token": batch_token,
+                    }
+
+        if (candidate_index < candidate_target
+                and not review_each_candidate
+                and queued_decision is None):
+            if not batch_token:
+                _review_candidate_batch_cleanup()
+                for stale_token, stale in list(
+                        _ACTIVE_CANDIDATE_BATCHES.items()):
+                    if (str(stale.get("run_name") or "") == str(
+                            plan["run_name"])
+                            and int(stale.get("scene", -1)) == index):
+                        _ACTIVE_CANDIDATE_BATCHES.pop(stale_token, None)
+                batch_token = uuid.uuid4().hex
+                batch_entry = {}
+            elif not isinstance(batch_entry, dict):
+                batch_entry = {}
+
+            display_id = _review_display_id(unique_id, dynprompt)
+            progress_payload = {
+                "token": batch_token,
+                "node_id": display_id,
+                "execution_id": str(unique_id),
+                "run_name": str(plan["run_name"]),
+                "clip_index": index,
+                "clip_count": len(plan["shots"]),
+                "shot_id": shot["id"],
+                "scene_prompt": shot.get("scene_prompt", shot["prompt"]),
+                "prompt_prefix": str(plan.get("prompt_prefix") or ""),
+                "seed": str(shot["seed"]),
+                "raw_frames": int(shot["raw_frames"]),
+                "duration_seconds": int(shot["raw_frames"]) / float(FPS),
+                "video": candidate_video,
+                "has_audio": candidate_has_audio,
+                "warning": candidate_warning,
+                "preview_pending": False,
+                "preview_revision": candidate_index * 2 + 1,
+                "candidate_index": candidate_index,
+                "candidate_count": candidate_target,
+                "candidate_generation_complete": False,
+                "candidate_batch_active": True,
+                "pending_decision": False,
+                "review_each_candidate": False,
+                "candidate_remaining": candidate_target - candidate_index,
+                "candidates": _review_public_candidates(candidates),
+                "kept_candidate_revisions": kept_revisions,
+                "play_notification_sound": bool(play_notification_sound),
+                "unload_models_while_waiting": False,
+                "assemble_partial_on_stop": bool(assemble_partial_on_stop),
+                "timeout_seconds": 0.0,
+                "deadline": None,
+                "server_now": time.time(),
+            }
+            batch_entry.update({
+                "updated": time.monotonic(),
+                "run_name": str(plan["run_name"]),
+                "scene": index,
+                "target": candidate_target,
+                "candidates": candidates,
+                "kept_revisions": kept_revisions,
+                "public": progress_payload,
+            })
+            _ACTIVE_CANDIDATE_BATCHES[batch_token] = batch_entry
+            PromptServer.instance.send_sync(
+                "minimax_h3_context_loop_review", dict(progress_payload),
+                PromptServer.instance.client_id)
+
+            next_seed = _review_next_candidate_seed(
+                candidates, int(shot["seed"]))
+            revised_segment = dict(segment)
+            revised_segment["_h3_review_decision"] = {
+                "action": "retry",
+                "scene_prompt": shot.get(
+                    "scene_prompt_template",
+                    shot.get("scene_prompt", shot["prompt"])),
+                "seed": next_seed,
+                "raw_frames": int(shot["raw_frames"]),
+                "candidate_batch": {
+                    "scene": index,
+                    "target": candidate_target,
+                    "candidates": candidates,
+                    "kept_revisions": kept_revisions,
+                    "batch_token": batch_token,
+                },
+            }
+            status = (
+                "saved candidate %d/%d for clip %d; automatically generating "
+                "candidate %d with seed %d" %
+                (candidate_index, candidate_target, index,
+                 candidate_index + 1, next_seed))
+            return {"ui": {"text": [status]},
+                    "result": (revised_segment, status)}
+
+        if batch_token:
+            _ACTIVE_CANDIDATE_BATCHES.pop(batch_token, None)
         timeout_seconds = _review_timeout_seconds(
             auto_continue_timeout_minutes)
         server_now = time.time()
         deadline = server_now + timeout_seconds if timeout_seconds > 0 else None
-        token = uuid.uuid4().hex
+        token = (batch_token if queued_decision is not None
+                 else uuid.uuid4().hex)
         loop = asyncio.get_running_loop()
         future = loop.create_future()
+        preview_base = candidate_index * 2 if batch_token else 0
         payload = {
             "token": token,
             "node_id": _review_display_id(unique_id, dynprompt),
@@ -15087,11 +15279,14 @@ class MiniMaxH3ChainReview:
             "warning": ("Preparing synchronized audio preview…"
                         if audio is not None else no_audio_warning),
             "preview_pending": audio is not None,
-            "preview_revision": 0,
+            "preview_revision": preview_base,
             "candidate_index": candidate_index,
             "candidate_count": candidate_target,
             "candidate_generation_complete": (
                 candidate_index >= candidate_target),
+            "candidate_batch_active": False,
+            "pending_decision": queued_decision is None,
+            "review_each_candidate": bool(review_each_candidate),
             "candidate_remaining": max(
                 0, candidate_target - candidate_index),
             "candidates": _review_public_candidates(candidates),
@@ -15141,7 +15336,7 @@ class MiniMaxH3ChainReview:
                 "has_audio": has_audio,
                 "warning": warning,
                 "preview_pending": False,
-                "preview_revision": 1,
+                "preview_revision": preview_base + 1,
                 "server_now": time.time(),
             })
             candidates[-1] = _review_candidate_record(
@@ -15151,7 +15346,10 @@ class MiniMaxH3ChainReview:
                 "minimax_h3_context_loop_review", dict(payload),
                 PromptServer.instance.client_id)
 
-        if unload_models_while_waiting:
+        if queued_decision is not None and not future.done():
+            future.set_result(queued_decision)
+
+        if unload_models_while_waiting and queued_decision is None:
             try:
                 import comfy.model_management as model_management
                 model_management.unload_all_models()
@@ -15251,6 +15449,25 @@ class MiniMaxH3ChainReview:
                     "minimax_h3_context_loop_review_resolved",
                     {"token": token, "node_id": payload["node_id"],
                      "action": "timeout_approve", "status": status},
+                    PromptServer.instance.client_id)
+            elif decision.get("candidate_batch_command"):
+                PromptServer.instance.send_sync(
+                    "minimax_h3_context_loop_review_resolved",
+                    {
+                        "token": token,
+                        "node_id": payload["node_id"],
+                        "action": "candidate_batch_approve",
+                        "status": status,
+                        "clip_index": index,
+                        "scene_prompt": str(accepted_segment.get(
+                            "scene_prompt_template",
+                            accepted_segment.get("scene_prompt")) or ""),
+                        "seed": str(accepted_segment.get("seed") or "0"),
+                        "raw_frames": int(accepted_segment.get(
+                            "raw_frames", shot["raw_frames"])),
+                        "candidate_number": candidate_number,
+                        "candidate_count": candidate_total,
+                    },
                     PromptServer.instance.client_id)
             return {"ui": {"text": [status]},
                     "result": (accepted_segment, status)}
@@ -18615,6 +18832,87 @@ def _assemble_review_partial(
     return str(result["result"][0]), warning
 
 
+async def _submit_candidate_batch_command(request):
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "Expected a JSON request body."},
+                                 status=400)
+    token = str(body.get("token") or "")
+    entry = _ACTIVE_CANDIDATE_BATCHES.get(token)
+    if entry is None:
+        return web.json_response(
+            {"error": "This H3 candidate batch is no longer running."},
+            status=404)
+    if entry.get("command") is not None:
+        return web.json_response(
+            {"error": "This H3 candidate batch already has a stop command."},
+            status=409)
+    action = str(body.get("action") or "")
+    if action not in ("accept", "pause", "update"):
+        return web.json_response(
+            {"error": "Unknown H3 candidate batch action."}, status=400)
+    candidates = entry.get("candidates")
+    if not isinstance(candidates, list) or not candidates:
+        return web.json_response(
+            {"error": "This H3 candidate batch has no completed takes."},
+            status=409)
+    requested_revision = str(body.get("candidate_revision") or "")
+    selected_segment = None
+    selected_number = 0
+    if action == "accept":
+        for number, candidate in enumerate(candidates, start=1):
+            segment = candidate.get("segment") if isinstance(
+                candidate, dict) else None
+            if (isinstance(segment, dict) and str(
+                    segment.get("revision") or "") == requested_revision):
+                selected_segment = segment
+                selected_number = number
+                break
+        if selected_segment is None:
+            return web.json_response(
+                {"error": "The selected H3 candidate is not part of this "
+                          "running batch."}, status=400)
+    try:
+        kept = _review_requested_kept_revisions(
+            body, candidates,
+            requested_revision if action == "accept" else "")
+    except ValueError as exc:
+        return web.json_response({"error": str(exc)}, status=400)
+    entry["kept_revisions"] = kept
+    if action != "update":
+        entry["command"] = {
+            "action": action,
+            "candidate_revision": requested_revision,
+            "kept_revisions": kept,
+        }
+    entry["updated"] = time.monotonic()
+    public = entry.get("public")
+    if isinstance(public, dict):
+        public["kept_candidate_revisions"] = kept
+        if action != "update":
+            public["candidate_batch_command_pending"] = action
+        public["server_now"] = time.time()
+    response = {
+        "ok": True,
+        "action": action,
+        "candidate_revision": requested_revision,
+        "candidate_number": selected_number,
+        "candidate_count": int(entry.get("target", 0)),
+        "candidate_generated_count": len(candidates),
+        "kept_candidate_count": len(kept),
+    }
+    if isinstance(selected_segment, dict):
+        response.update({
+            "scene_prompt": str(selected_segment.get(
+                "scene_prompt_template",
+                selected_segment.get("scene_prompt")) or ""),
+            "seed": str(selected_segment.get("seed") or "0"),
+            "length": int(selected_segment.get("raw_frames", 0)),
+        })
+    return web.json_response(response)
+
+
 async def _submit_review_decision(request):
     try:
         body = await request.json()
@@ -18807,6 +19105,14 @@ async def _submit_review_decision(request):
 
 async def _list_pending_reviews(_request):
     reviews = []
+    _review_candidate_batch_cleanup()
+    for entry in list(_ACTIVE_CANDIDATE_BATCHES.values()):
+        payload = entry.get("public")
+        if not isinstance(payload, dict):
+            continue
+        payload = dict(payload)
+        payload["server_now"] = time.time()
+        reviews.append(payload)
     # HTTP and execution can run on different threads/loops. Snapshot first so
     # a review resolving during recovery cannot invalidate this iteration and
     # turn a browser's reconnect GET into an intermittent 500 response.
@@ -19915,6 +20221,9 @@ if (PromptServer is not None and web is not None and
         getattr(PromptServer, "instance", None) is not None):
     PromptServer.instance.routes.post(
         "/minimax_h3_context_loop/review")(_submit_review_decision)
+    PromptServer.instance.routes.post(
+        "/minimax_h3_context_loop/review-candidate-batch")(
+            _submit_candidate_batch_command)
     PromptServer.instance.routes.get(
         "/minimax_h3_context_loop/reviews")(_list_pending_reviews)
     PromptServer.instance.routes.get(

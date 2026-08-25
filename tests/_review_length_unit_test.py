@@ -220,6 +220,7 @@ async def check_candidate_batch():
     original_review_video = chain._review_video
     original_load_revision = chain._load_checkpoint_revision
     original_prune_candidates = chain._prune_review_candidates
+    original_select_candidate = chain._select_review_candidate
     cleanup_calls = []
     chain.PromptServer = type(
         "BatchServer", (), {"instance": BatchServerInstance()})
@@ -234,12 +235,125 @@ async def check_candidate_batch():
                 "reclaimed_bytes": 0,
                 "warnings": [],
             }))
+    automatic = candidate_segment("d" * 32, 2)
+    automatic_result = await asyncio.wait_for(
+        chain.MiniMaxH3ChainReview().review(
+            {"plan": plan, "index": 2,
+             "segments": [{"revision": "parent"}]},
+            automatic, True, False, 0.0, False, False, "none",
+            candidate_count=2, unique_id="review-node"),
+        timeout=2.0)
+    assert not chain._PENDING_REVIEWS
+    automatic_decision = automatic_result["result"][0][
+        "_h3_review_decision"]
+    assert automatic_decision["action"] == "retry"
+    assert automatic_decision["candidate_batch"]["target"] == 2
+    assert len(automatic_decision["candidate_batch"]["candidates"]) == 1
+    assert automatic_decision["candidate_batch"]["kept_revisions"] == []
+    automatic_token = automatic_decision["candidate_batch"]["batch_token"]
+    assert automatic_token in chain._ACTIVE_CANDIDATE_BATCHES
+    progress = chain._ACTIVE_CANDIDATE_BATCHES[automatic_token]["public"]
+    assert progress["candidate_batch_active"] is True
+    assert progress["pending_decision"] is False
+    assert progress["candidate_index"] == 1
+    assert [item["revision"] for item in progress["candidates"]] == [
+        automatic["revision"]]
+    assert "automatically generating candidate 2" in automatic_result[
+        "result"][1]
+
+    class KeepAutomaticCandidate:
+        async def json(self):
+            return {
+                "token": automatic_token,
+                "action": "update",
+                "candidate_revisions": [automatic["revision"]],
+            }
+
+    keep_response = await chain._submit_candidate_batch_command(
+        KeepAutomaticCandidate())
+    assert keep_response.status == 200
+    assert chain._ACTIVE_CANDIDATE_BATCHES[automatic_token][
+        "kept_revisions"] == [automatic["revision"]]
+
+    class PauseAutomaticBatch:
+        async def json(self):
+            return {
+                "token": automatic_token,
+                "action": "pause",
+                "candidate_revisions": [automatic["revision"]],
+            }
+
+    pause_response = await chain._submit_candidate_batch_command(
+        PauseAutomaticBatch())
+    assert pause_response.status == 200
+    assert chain._ACTIVE_CANDIDATE_BATCHES[automatic_token]["command"] == {
+        "action": "pause",
+        "candidate_revision": "",
+        "kept_revisions": [automatic["revision"]],
+    }
+    chain._ACTIVE_CANDIDATE_BATCHES.clear()
+
+    early_automatic = candidate_segment("e" * 32, 2)
+    early_automatic_result = await chain.MiniMaxH3ChainReview().review(
+        {"plan": plan, "index": 2,
+         "segments": [{"revision": "parent"}]},
+        early_automatic, True, False, 0.0, False, False, "none",
+        candidate_count=2, unique_id="review-node")
+    early_decision = early_automatic_result["result"][0][
+        "_h3_review_decision"]
+    early_token = early_decision["candidate_batch"]["batch_token"]
+
+    class AcceptAutomaticBatch:
+        async def json(self):
+            return {
+                "token": early_token,
+                "action": "accept",
+                "candidate_revision": early_automatic["revision"],
+                "candidate_revisions": [],
+            }
+
+    accept_response = await chain._submit_candidate_batch_command(
+        AcceptAutomaticBatch())
+    assert accept_response.status == 200
+    next_plan = chain._plan_with_review_revision(
+        plan, 2, "Scene 2.", early_decision["seed"], 56)
+    next_candidate = candidate_segment("f" * 32, early_decision["seed"])
+
+    def select_automatic(selected_state, current_segment, decision):
+        assert current_segment == next_candidate
+        assert decision["candidate_revision"] == early_automatic["revision"]
+        accepted_state = dict(selected_state)
+        accepted_state["plan"] = chain._plan_with_review_revision(
+            plan, 2, "Scene 2.", 2, 56)
+        accepted_state.pop("candidate_batch", None)
+        return early_automatic, accepted_state
+
+    chain._select_review_candidate = select_automatic
+    accepted_early_result = await asyncio.wait_for(
+        chain.MiniMaxH3ChainReview().review(
+            {"plan": next_plan, "index": 2,
+             "segments": [{"revision": "parent"}],
+             "candidate_batch": early_decision["candidate_batch"]},
+            next_candidate, True, False, 0.0, False, False, "none",
+            candidate_count=2, unique_id="review-node"),
+        timeout=2.0)
+    assert accepted_early_result["result"][0]["revision"] == (
+        early_automatic["revision"])
+    assert not chain._PENDING_REVIEWS
+    assert early_token not in chain._ACTIVE_CANDIDATE_BATCHES
+    assert any(
+        event == "minimax_h3_context_loop_review_resolved"
+        and payload.get("action") == "candidate_batch_approve"
+        for event, payload, _client in sent)
+    chain._select_review_candidate = original_select_candidate
+
     first = candidate_segment("a" * 32, 2)
     try:
         first_task = asyncio.create_task(chain.MiniMaxH3ChainReview().review(
             {"plan": plan, "index": 2, "segments": [{"revision": "parent"}]},
             first, True, False, 0.0, False, False, "none",
-            candidate_count=2, unique_id="review-node"))
+            candidate_count=2, review_each_candidate=True,
+            unique_id="review-node"))
         for _ in range(100):
             if chain._PENDING_REVIEWS:
                 break
@@ -323,7 +437,8 @@ async def check_candidate_batch():
         early_task = asyncio.create_task(chain.MiniMaxH3ChainReview().review(
             {"plan": plan, "index": 2, "segments": [{"revision": "parent"}]},
             early, True, False, 0.0, False, False, "none",
-            candidate_count=3, unique_id="review-node"))
+            candidate_count=3, review_each_candidate=True,
+            unique_id="review-node"))
         for _ in range(100):
             if chain._PENDING_REVIEWS:
                 break
@@ -352,10 +467,12 @@ async def check_candidate_batch():
         assert cleanup_calls[-1][3] == [early["revision"]]
     finally:
         chain._PENDING_REVIEWS.clear()
+        chain._ACTIVE_CANDIDATE_BATCHES.clear()
         chain.PromptServer = original_server
         chain._review_video = original_review_video
         chain._load_checkpoint_revision = original_load_revision
         chain._prune_review_candidates = original_prune_candidates
+        chain._select_review_candidate = original_select_candidate
 
 
 asyncio.run(check_candidate_batch())
