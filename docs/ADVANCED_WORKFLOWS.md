@@ -92,10 +92,10 @@ scenes remain assembly-only and do not become false resume blockers.
 ## Composed visual context
 
 A continuation can use two saved picture histories back to back. In Plan or
-Plan Studio, **Additional visual context** selects the scene placed first;
-**Additional context span** selects its independent H3 run. The ordinary
-**Visual context source** keeps its complete configured context and supplies
-the block immediately before the new generation:
+Plan Studio, **Composed context first source** selects the scene placed first;
+**Composed total / split** selects both the native H3 context total and how it
+is divided. The ordinary **Visual context source** supplies the second block
+immediately before the new generation:
 
 ```json
 {
@@ -108,26 +108,25 @@ the block immediately before the new generation:
 }
 ```
 
-This example gives scene 5 two visual-context runs:
+This example constructs one 39-frame visual prefix:
 
 ```text
-scene 4 tail:  +5 RGB frames /  2 video-latent steps
-scene 3 tail:  39 RGB frames / 12 video-latent steps
-history:       5 + 39 frames in two independent runs
+scene 4 tail:  5 RGB frames /  2 video-latent steps
+scene 3 tail: 34 RGB frames / 10 video-latent steps
+result:       39 RGB frames / 12 video-latent steps
 ```
 
-The blocks are placed in their authored order; they are not blended or treated
-as a split inside one VAE run. Both sources may be any distinct earlier scenes
-on the active branch—the additional source does not have to have a lower scene
-number than the normal source. Each block independently uses a native H3
-temporal run, so a normal 22-frame context can receive `+5`, `+22`, `+39`, and
-the remaining native choices without shrinking that 22-frame context.
+The selector groups every valid split under its resulting total: `39` offers
+`5+34` and `22+17`; `56` offers `5+51`, `22+34`, and `39+17`; longer native
+totals continue the same phase-safe pattern. Choosing one combination writes
+that total to the scene's `context_length` and the first span to
+`visual_context_lead_frames`.
 
-The additional run occupies Guide coordinates immediately before the ordinary
-context. In head mode only the ordinary context is reproduced and trimmed; the
-addition does not shorten the delivered scene. In AV modes the ordinary source
-remains the protected target-latent prefix and the addition remains a separate
-Guide, so it does not alter the AV mask or audio boundary.
+The blocks are concatenated in their authored order; they are not blended,
+interpolated, decoded, or re-encoded. Both sources may be any distinct earlier
+scenes on the active branch—the first source does not have to have a lower
+scene number than the second. The composed prefix remains one context, so its
+normal head trim or AV mask uses the selected total exactly once.
 
 Composition changes only picture context. Generated audio remains one complete
 latent tail from the immediately previous timeline scene, so there is no audio

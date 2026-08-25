@@ -591,15 +591,33 @@ export function sceneVisualContextLeadFrames(shot, contextLength) {
     if (raw === undefined || raw === null
             || (typeof raw === "string" && !raw.trim())) return 0;
     const resolved = Number(raw);
-    void contextLength;
-    const allowed = H3_CONTEXT_LENGTHS.filter((value) => value >= 5);
+    const allowed = H3_CONTEXT_LENGTHS.filter(
+        (value) => value >= 5 && value < Number(contextLength),
+    );
     if (typeof raw === "boolean" || !Number.isInteger(resolved)
             || !allowed.includes(resolved)) {
         throw new Error(
-            `Additional visual context frames must be one of ${allowed.join(", ")}.`,
+            `Composed context lead frames must be one of ${allowed.join(", ")} and smaller than this scene's ${contextLength}-frame total.`,
         );
     }
     return resolved;
+}
+
+export function visualContextCompositions() {
+    const compositions = [];
+    for (const total of H3_CONTEXT_LENGTHS) {
+        for (const lead of H3_CONTEXT_LENGTHS) {
+            if (lead < 5 || lead >= total) continue;
+            compositions.push(Object.freeze({
+                total,
+                lead,
+                recent: total - lead,
+                value: `${total}:${lead}`,
+                label: `${total} total · ${lead} + ${total - lead}`,
+            }));
+        }
+    }
+    return Object.freeze(compositions);
 }
 
 export function sceneAudioContextLength(
@@ -776,7 +794,7 @@ export function calculatePlanTiming(plan, settings = {}) {
                 );
                 if (!visualContextLeadFrames) {
                     rowErrors.push(
-                        "Additional visual context source requires an independent H3 frame span.",
+                        "Composed context lead source requires a phase-safe total/split combination.",
                     );
                 }
                 if (visualContextSource !== null
@@ -996,9 +1014,11 @@ export function calculatePlanTiming(plan, settings = {}) {
         const target = rows[offset];
         const source = target.visualContextSource === null ? null
             : rows[target.visualContextSource - 1];
-        if (source && source.deliveredFrames < target.contextLength) {
+        const recentFrames = target.contextLength
+            - target.visualContextLeadFrames;
+        if (source && source.deliveredFrames < recentFrames) {
             target.errors.push(
-                `Selected visual source scene ${source.index} delivers fewer than the full ${target.contextLength} required context frames.`,
+                `Selected second visual source scene ${source.index} delivers fewer than ${recentFrames} required context frames.`,
             );
         }
         const lead = target.visualContextLeadSource === null ? null

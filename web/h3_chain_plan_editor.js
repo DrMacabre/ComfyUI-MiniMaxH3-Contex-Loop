@@ -30,8 +30,9 @@ import {
     setSharedPrompt,
     shotLengthMode,
     sharedPrompt,
-} from "./h3_chain_plan_core.mjs?v=0.6.23";
-import {availableReferenceRecords} from "./h3_reference_preview_core.mjs?v=0.6.23";
+    visualContextCompositions,
+} from "./h3_chain_plan_core.mjs?v=0.6.24";
+import {availableReferenceRecords} from "./h3_reference_preview_core.mjs?v=0.6.24";
 import {
     applySceneAudioOverride,
     applySceneTransitionPreset,
@@ -40,12 +41,12 @@ import {
     sceneAudioPolicy,
     sceneTransitionPreset,
     transitionPresetLabel,
-} from "./h3_policy_core.mjs?v=0.6.23";
+} from "./h3_policy_core.mjs?v=0.6.24";
 import {
     resolveAudioContextLength,
     resolveAudioPolicy,
     resolveTransitionPolicy,
-} from "./h3_socket_presentation_core.mjs?v=0.6.23";
+} from "./h3_socket_presentation_core.mjs?v=0.6.24";
 
 // This scene editor is an original implementation. Its quick @ reference and
 // # dialogue interactions are inspired by nkxx188/ComfyUI-MiniMaxH3-Easy,
@@ -952,7 +953,14 @@ function mountEditor(node) {
         function normalizeVisualLeadSpan() {
             if (!Object.hasOwn(shot, "visual_context_lead_source")) return;
             const resolved = sceneContextLength(shot, planContextLength);
-            const allowed = H3_CONTEXT_LENGTHS.filter((value) => value >= 5);
+            const allowed = H3_CONTEXT_LENGTHS.filter(
+                (value) => value >= 5 && value < resolved,
+            );
+            if (!allowed.length) {
+                delete shot.visual_context_lead_source;
+                delete shot.visual_context_lead_frames;
+                return;
+            }
             try {
                 sceneVisualContextLeadFrames(shot, resolved);
             } catch (_error) {
@@ -1150,41 +1158,64 @@ function mountEditor(node) {
         } catch (_error) {
             visualLeadSource.value = "";
         }
-        visualLeadSource.title = "Optional independent visual-context run placed immediately before the full normal Visual context source. Either source may be chronologically newer, but they must differ; audio remains one continuous tail from the immediate timeline scene.";
+        visualLeadSource.title = "Optional first scene in one composed visual context. Visual context source supplies the second block nearest generation. Either source may be chronologically newer, but they must differ; audio remains one continuous tail from the immediate timeline scene.";
 
         const visualLeadFrames = element("select", "h3c-visual-lead-frames");
         const resolvedVisualContext = sceneContextLength(
             shot, planContextLength,
         );
-        const leadChoices = H3_CONTEXT_LENGTHS.filter((value) => value >= 5);
+        const compositionChoices = visualContextCompositions();
+        const defaultComposition = compositionChoices.find(
+            (choice) => choice.total === resolvedVisualContext,
+        ) ?? compositionChoices[0];
         visualLeadSource.disabled = visualLeadSource.disabled
-            || !leadChoices.length;
-        for (const value of leadChoices) {
-            const option = element("option", "", `+ ${value} frames`);
-            option.value = String(value);
-            visualLeadFrames.append(option);
+            || !compositionChoices.length;
+        for (const total of H3_CONTEXT_LENGTHS) {
+            const groupChoices = compositionChoices.filter(
+                (choice) => choice.total === total,
+            );
+            if (!groupChoices.length) continue;
+            const group = element("optgroup", "");
+            group.label = `${total} total frames`;
+            for (const choice of groupChoices) {
+                const option = element("option", "", choice.label);
+                option.value = choice.value;
+                group.append(option);
+            }
+            visualLeadFrames.append(group);
         }
         visualLeadFrames.disabled = !visualLeadSource.value
-            || !leadChoices.length;
+            || !compositionChoices.length;
         if (visualLeadSource.value) {
             try {
-                visualLeadFrames.value = String(
-                    sceneVisualContextLeadFrames(shot, resolvedVisualContext),
+                const lead = sceneVisualContextLeadFrames(
+                    shot, resolvedVisualContext,
                 );
+                visualLeadFrames.value = `${resolvedVisualContext}:${lead}`;
             } catch (_error) {
-                visualLeadFrames.value = String(leadChoices[0] ?? "");
+                visualLeadFrames.value = defaultComposition?.value ?? "";
             }
+        } else {
+            visualLeadFrames.value = defaultComposition?.value ?? "";
         }
-        visualLeadFrames.title = `Independent H3 run added before the full ${resolvedVisualContext}-frame Visual context source. For example, +5 gives 5 + ${resolvedVisualContext}; +22 gives 22 + ${resolvedVisualContext}. It does not reduce the normal context or add output trim.`;
+        visualLeadFrames.title = "Select the total H3 context and its phase-safe two-scene split. For example, 39 total offers 5+34 and 22+17; 56 total offers 5+51, 22+34, and 39+17.";
+        function applyVisualComposition() {
+            const [totalRaw, leadRaw] = visualLeadFrames.value.split(":");
+            const total = Number(totalRaw);
+            const lead = Number(leadRaw);
+            if (!Number.isInteger(total) || !Number.isInteger(lead)) return;
+            shot.context_length = total;
+            shot.visual_context_lead_frames = lead;
+            sceneVisualContextLeadFrames(shot, total);
+            shot.video_blend_frames = 0;
+        }
         visualLeadSource.addEventListener("change", () => {
             if (!visualLeadSource.value) {
                 delete shot.visual_context_lead_source;
                 delete shot.visual_context_lead_frames;
             } else {
                 shot.visual_context_lead_source = visualLeadSource.value;
-                shot.visual_context_lead_frames = Number(
-                    visualLeadFrames.value || leadChoices[0]);
-                shot.video_blend_frames = 0;
+                applyVisualComposition();
             }
             refreshBlendControl();
             syncPlan();
@@ -1192,13 +1223,11 @@ function mountEditor(node) {
         });
         visualLeadFrames.addEventListener("change", () => {
             if (visualLeadSource.value) {
-                shot.visual_context_lead_frames = Number(
-                    visualLeadFrames.value);
-                sceneVisualContextLeadFrames(shot, resolvedVisualContext);
-                shot.video_blend_frames = 0;
+                applyVisualComposition();
             }
             refreshBlendControl();
             syncPlan();
+            render();
         });
         const audioContext = numberInput(shot.audio_context_length ?? "", {
             min: "0", max: "240", step: "1",
@@ -1362,8 +1391,8 @@ function mountEditor(node) {
             field("Steps (blank = default)", steps),
             field("Advanced visual context", context),
             field("Visual context source", visualSource),
-            field("Additional visual context", visualLeadSource),
-            field("Additional context span", visualLeadFrames),
+            field("Composed context first source", visualLeadSource),
+            field("Composed total / split", visualLeadFrames),
             field("Advanced audio context", audioContext),
             field("Advanced implementation", continuation),
             field("Boundary spatial proxy", spatialProxy),

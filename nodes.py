@@ -594,8 +594,7 @@ class MiniMaxH3MotionContext:
               audio_mode="timeline", context_latent=None, audio_vae=None,
               context_audio=None, video_context_latent=None,
               visual_cond_noise_aug=VISUAL_COND_NOISE_AUG_DEFAULT,
-              future_end_anchor=False, context_frame_offset=0,
-              preserve_existing_guides=False):
+              future_end_anchor=False):
         guide_api = _activate_inline_patches()
         native_guides = guide_api == "native"
         visual_cond_noise_aug = _validate_visual_cond_noise_aug(
@@ -699,11 +698,10 @@ class MiniMaxH3MotionContext:
                 offsets.append(i)
             span = n
 
-        context_frame_offset = int(context_frame_offset)
         if anchor_mode == "before":
-            indices = [o - span + context_frame_offset for o in offsets]
+            indices = [o - span for o in offsets]
         else:
-            indices = [o + context_frame_offset for o in offsets]
+            indices = list(offsets)
 
         keyframes = []
         for p, blk in zip(indices, blocks):
@@ -841,8 +839,7 @@ class MiniMaxH3MotionContext:
             for prior_keyframe in prior:
                 position = float(prior_keyframe.get(
                     MC_KEY, prior_keyframe.get("resolved_frame_index", 0)))
-                if position < head_end and not bool(
-                        preserve_existing_guides):
+                if position < head_end:
                     dropped.append(position)
                     continue
                 retained = dict(prior_keyframe)

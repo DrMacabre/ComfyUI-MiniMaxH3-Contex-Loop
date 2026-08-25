@@ -338,23 +338,6 @@ def main():
     assert tuple(keyframes[1]["audio_latent"].shape)[-1] == 37
     assert abs(keyframes[1]["resolved_frame_index"]) < 1e-6
 
-    # A second independent native run can be placed immediately before the
-    # ordinary 22-frame context without being spliced into its VAE phase.
-    additive_output, additive_trim = nodes.MiniMaxH3MotionContext().apply(
-        conditioning=output,
-        vae=VAE(), latent=target, context_frames=context, context_length=5,
-        encode_mode="video", anchor_mode="before", crop="disabled",
-        audio_context_length=0, context_frame_offset=0,
-        preserve_existing_guides=True,
-    )
-    assert additive_trim == 0
-    additive_keyframes = additive_output[0][1]["minimax_keyframes"]
-    assert additive_keyframes[-1]["resolved_frame_index"] == -5
-    assert tuple(additive_keyframes[-1]["latent"].shape)[2] == 2
-    assert additive_keyframes[-1]["h3_chain_context_visual"] is True
-    assert any(value.get("audio_latent") is not None
-               for value in additive_keyframes)
-
     suffix_output, suffix_trim = nodes.MiniMaxH3MotionContext().apply(
         conditioning=[["conditioning", {"minimax_refs": refs}]],
         vae=VAE(), latent=target, context_frames=context, context_length=22,
