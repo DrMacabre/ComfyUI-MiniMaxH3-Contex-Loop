@@ -765,9 +765,12 @@ function mount(node) {
     const nextCandidateButton = actionButton(
         "Generate next candidate", "h3r-retry", "next_candidate");
     nextCandidateButton.hidden = true;
-    actionButton("Retry scene / seed / length", "h3r-retry", "retry");
-    actionButton("Reroll seed", "h3r-retry", "reroll");
-    actionButton("Approve & stop", "h3r-stop", "stop");
+    const retryButton = actionButton(
+        "Retry scene / seed / length", "h3r-retry", "retry");
+    const rerollButton = actionButton(
+        "Reroll seed", "h3r-retry", "reroll");
+    const stopButton = actionButton(
+        "Approve & stop", "h3r-stop", "stop");
 
     const status = document.createElement("div");
     status.className = "h3r-status";
@@ -828,6 +831,11 @@ function mount(node) {
 
     function setActionsEnabled(enabled) {
         for (const button of actionButtons) button.disabled = !enabled;
+        if (enabled && current?.candidate_batch_active) {
+            retryButton.disabled = true;
+            rerollButton.disabled = true;
+            stopButton.disabled = true;
+        }
     }
 
     function selectedCandidate() {
@@ -904,9 +912,17 @@ function mount(node) {
         candidateRow.hidden = !batch;
         const complete = Boolean(current?.candidate_generation_complete) ||
             candidates.length >= Number(current?.candidate_count);
-        nextCandidateButton.hidden = !batch || complete;
+        const running = Boolean(current?.candidate_batch_active) && !complete;
+        nextCandidateButton.hidden = !running && (
+            !batch || complete || !current?.review_each_candidate);
+        nextCandidateButton.textContent = running
+            ? "Pause candidate run" : "Generate next candidate";
+        nextCandidateButton.title = running
+            ? "Let the current in-flight take finish, then pause before another candidate starts."
+            : "Keep any marked takes, resume the workflow, and generate the next candidate for this scene.";
         approveButton.textContent = batch
-            ? complete ? "Use this take & continue" : "Accept now & continue"
+            ? running ? "Use this take & stop batch"
+                : complete ? "Use this take & continue" : "Accept now & continue"
             : "Approve & continue";
         if (!batch || !candidates.length) return null;
         if (!candidates.some(
@@ -945,6 +961,26 @@ function mount(node) {
         else keptCandidateRevisions.delete(candidate.revision);
         renderCandidateDots();
         renderCandidateProgress();
+        if (current?.candidate_batch_active && current?.token) {
+            void api.fetchApi(
+                "/minimax_h3_context_loop/review-candidate-batch", {
+                    method: "POST",
+                    headers: {"Content-Type": "application/json"},
+                    body: JSON.stringify({
+                        token: current.token,
+                        action: "update",
+                        candidate_revisions: [...keptCandidateRevisions],
+                    }),
+                },
+            ).then(async (response) => {
+                if (response.ok) return;
+                const body = await response.json().catch(() => ({}));
+                throw new Error(body.error || `HTTP ${response.status}`);
+            }).catch((error) => {
+                status.className = "h3r-status h3r-warning";
+                status.textContent = `Could not retain the live keep marks: ${error.message}`;
+            });
+        }
     });
 
     function selectedRevisionChain() {
@@ -1239,10 +1275,17 @@ function mount(node) {
         const target = Number(current.candidate_count) || generated;
         const complete = Boolean(current.candidate_generation_complete) ||
             generated >= target;
-        const message = current.warning || (target > 1
+        const batchCommand = current.candidate_batch_command_pending;
+        const message = batchCommand
+            ? batchCommand === "accept"
+                ? "Selected take queued. The current in-flight candidate will finish, then the batch will stop."
+                : "Pause queued. The current in-flight candidate will finish, then Review Gate will wait here."
+            : current.warning || (target > 1
             ? complete
                 ? `All ${target} candidates are saved. Choose the active continuation and mark every take you want to retain.`
-                : `Candidate ${generated}/${target} is ready. Keep it if wanted, accept a take now, or generate the next candidate.`
+                : current.review_each_candidate
+                    ? `Candidate ${generated}/${target} is ready in per-candidate review mode. Keep it if wanted, accept a take now, or generate the next candidate.`
+                    : `Candidate ${generated}/${target} is ready in the live carousel. Candidate ${generated + 1} is generating automatically; choose a take to stop early or pause the run.`
             : "Review the synchronized picture and sound, then choose an action.");
         const countdown = reviewCountdown(current.local_deadline);
         status.className = `h3r-status${current.warning ? " h3r-warning" : ""}`;
@@ -1282,6 +1325,14 @@ function mount(node) {
             const submittedToken = submittedReview.token;
             const submittedIndex = submittedReview.clip_index;
             const submittedCandidate = selectedCandidate();
+            const liveCandidateBatch = Boolean(
+                submittedReview.candidate_batch_active) &&
+                !submittedReview.candidate_generation_complete;
+            const candidateBatchAction = liveCandidateBatch
+                ? action === "approve" ? "accept"
+                    : action === "next_candidate" ? "pause" : ""
+                : "";
+            if (liveCandidateBatch && !candidateBatchAction) return;
             const submittedPrompt = reviewPromptEditorEnabled() && promptEditedInGate
                 ? prompt.value
                 : (planScenePrompt(node, submittedReview)
@@ -1294,19 +1345,26 @@ function mount(node) {
             root.classList.add("h3r-busy");
             setActionsEnabled(false);
             status.className = "h3r-status";
-            status.textContent = action === "approve" ? "Sending approval…" :
+            status.textContent = candidateBatchAction === "accept"
+                ? "Queuing this take and stopping after the in-flight candidate…"
+                : candidateBatchAction === "pause"
+                    ? "Queuing a pause after the in-flight candidate…"
+                : action === "approve" ? "Sending approval…" :
                 action === "next_candidate" ? "Resuming to generate the next candidate…" :
                 action === "stop" ? "Sending stop decision…" : "Sending retry decision…";
-            const response = await api.fetchApi("/minimax_h3_context_loop/review", {
+            const response = await api.fetchApi(candidateBatchAction
+                ? "/minimax_h3_context_loop/review-candidate-batch"
+                : "/minimax_h3_context_loop/review", {
                 method: "POST",
                 headers: {"Content-Type": "application/json"},
                 body: JSON.stringify({
                     token: submittedToken,
-                    action,
+                    action: candidateBatchAction || action,
                     scene_prompt: submittedPrompt,
                     seed: normalizedSeed,
                     length: normalizedDuration?.length,
-                    candidate_revision: (action === "approve" || action === "stop") &&
+                    candidate_revision: (candidateBatchAction === "accept" ||
+                            action === "approve" || action === "stop") &&
                             Number(submittedReview.candidate_count) > 1
                         ? submittedCandidate?.revision ?? "" : "",
                     candidate_revisions: [...keptCandidateRevisions],
@@ -1314,7 +1372,15 @@ function mount(node) {
             });
             const body = await response.json();
             if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
-            if (action === "next_candidate") {
+            if (candidateBatchAction) {
+                if (current?.token === submittedToken) {
+                    current.candidate_batch_command_pending = candidateBatchAction;
+                }
+                status.textContent = candidateBatchAction === "accept"
+                    ? `Candidate ${body.candidate_number}/${body.candidate_count} selected. ` +
+                        "The current in-flight take will finish, then this candidate becomes active."
+                    : "Pause queued. The current in-flight take will finish, then the carousel will wait for you.";
+            } else if (action === "next_candidate") {
                 status.textContent = `Candidate ${submittedReview.candidates.length}/` +
                     `${submittedReview.candidate_count} reviewed — generating the next take ` +
                     `with seed ${body.seed}. ${body.kept_candidate_count} marked take` +
@@ -1373,6 +1439,12 @@ function mount(node) {
 
     node._h3ReviewHandler = (data) => {
         const sameToken = Boolean(current?.token) && current.token === data?.token;
+        const carriesCandidateBatch = !sameToken &&
+            String(current?.run_name ?? "") === String(data?.run_name ?? "") &&
+            Number(current?.clip_index) === Number(data?.clip_index) &&
+            Number(current?.candidate_count) > 1;
+        const carriedKeepRevisions = carriesCandidateBatch
+            ? [...keptCandidateRevisions] : [];
         const previousRevision = Number(current?.preview_revision ?? 0);
         const incomingRevision = Number(data?.preview_revision ?? 0);
         if (sameToken && incomingRevision <= previousRevision) return;
@@ -1391,8 +1463,12 @@ function mount(node) {
             setActionsEnabled(true);
             activeCandidateRevision = "";
             keptCandidateRevisions = new Set(
-                Array.isArray(data.kept_candidate_revisions)
-                    ? data.kept_candidate_revisions : [],
+                [
+                    ...(Array.isArray(data.kept_candidate_revisions)
+                        ? data.kept_candidate_revisions : []),
+                    ...carriedKeepRevisions,
+                ].filter((revision) => (data.candidates ?? []).some(
+                    (candidate) => candidate.revision === revision)),
             );
             // The scene is persisted before Review Gate receives its token.
             // Refresh here so the current (including final) checkpoint appears
@@ -1449,6 +1525,12 @@ function mount(node) {
         setActionsEnabled(false);
         status.className = "h3r-status";
         status.textContent = data.status || "Review resolved; continuing…";
+        if (data.action === "candidate_batch_approve") {
+            const saved = updatePlan(
+                node, Number(data.clip_index), data.scene_prompt,
+                data.seed, data.raw_frames);
+            if (saved) status.textContent += " The Plan seed was updated.";
+        }
         const completedVideo = data.final_video ?? data.partial_video;
         if (completedVideo) {
             video.src = videoUrl(completedVideo);
@@ -1457,7 +1539,8 @@ function mount(node) {
                 ? "final assembled video"
                 : "partial joined video";
         }
-        if (data.action === "approve" || data.action === "stop") {
+        if (data.action === "approve" || data.action === "stop" ||
+                data.action === "candidate_batch_approve") {
             setTimeout(refreshResumeOptions, 0);
         }
     };
