@@ -61,7 +61,8 @@ def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def write_revision(run, scene, token, seed, active=False, predecessor=None):
+def write_revision(run, scene, token, seed, active=False, predecessor=None,
+                   run_name="revision_test", compatibility=None):
     segments = run / "segments"
     checkpoints = run / "checkpoints"
     reviews = run / "reviews"
@@ -109,8 +110,8 @@ def write_revision(run, scene, token, seed, active=False, predecessor=None):
             "checkpoint_sha256"]
     metadata = {
         "format": "h3_chain_segment_v3",
-        "run_name": "revision_test",
-        "compatibility": {
+        "run_name": run_name,
+        "compatibility": compatibility or {
             "context_length": 22,
             "audio_context_length": 22,
             "audio_mode": "generated_audio",
