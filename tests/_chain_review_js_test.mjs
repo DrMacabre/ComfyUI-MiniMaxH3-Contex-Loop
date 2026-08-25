@@ -170,7 +170,12 @@ assert.match(reviewSource, /Checkpoint history/);
 assert.match(reviewSource, /const refreshToken = \+\+resumeRefreshToken/);
 assert.match(reviewSource, /if \(refreshToken !== resumeRefreshToken\) return/);
 assert.match(reviewSource, /candidate_revision/);
-assert.match(reviewSource, /Use selected take & continue/);
+assert.match(reviewSource, /Generate next candidate/);
+assert.match(reviewSource, /Accept now & continue/);
+assert.match(reviewSource, /candidate_revisions/);
+assert.match(reviewSource, /keptCandidateRevisions/);
+assert.match(reviewSource, /h3r-candidate-dots/);
+assert.match(reviewSource, /moveCandidate/);
 assert.match(reviewSource, /exact video and audio continuation tensors/);
 assert.match(reviewSource, /Candidate \$\{candidate\.number\}\/\$\{current\.candidate_count\}/);
 assert.match(

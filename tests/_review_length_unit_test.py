@@ -219,21 +219,59 @@ async def check_candidate_batch():
     original_server = chain.PromptServer
     original_review_video = chain._review_video
     original_load_revision = chain._load_checkpoint_revision
+    original_prune_candidates = chain._prune_review_candidates
+    cleanup_calls = []
     chain.PromptServer = type(
         "BatchServer", (), {"instance": BatchServerInstance()})
     chain._review_video = lambda _plan, segment, _audio, retain_previous=False: (
         {"filename": "%s.mp4" % segment["revision"],
          "subfolder": "candidates", "type": "output"}, True, "")
+    chain._prune_review_candidates = (
+        lambda candidate_plan, scene, candidates, kept: (
+            cleanup_calls.append((candidate_plan, scene, candidates, kept)) or {
+                "kept": list(kept),
+                "deleted": [],
+                "reclaimed_bytes": 0,
+                "warnings": [],
+            }))
     first = candidate_segment("a" * 32, 2)
     try:
-        first_result = await chain.MiniMaxH3ChainReview().review(
+        first_task = asyncio.create_task(chain.MiniMaxH3ChainReview().review(
             {"plan": plan, "index": 2, "segments": [{"revision": "parent"}]},
             first, True, False, 0.0, False, False, "none",
-            candidate_count=2, unique_id="review-node")
+            candidate_count=2, unique_id="review-node"))
+        for _ in range(100):
+            if chain._PENDING_REVIEWS:
+                break
+            await asyncio.sleep(0.01)
+        assert chain._PENDING_REVIEWS
+        first_public = next(iter(chain._PENDING_REVIEWS.values()))["public"]
+        assert first_public["candidate_index"] == 1
+        assert first_public["candidate_generation_complete"] is False
+        assert first_public["candidate_remaining"] == 1
+        assert [item["revision"] for item in first_public["candidates"]] == [
+            first["revision"]]
+
+        class GenerateNext:
+            async def json(self):
+                return {
+                    "token": first_public["token"],
+                    "action": "next_candidate",
+                    "candidate_revisions": [first["revision"]],
+                }
+
+        next_response = await chain._submit_review_decision(GenerateNext())
+        next_body = json.loads(next_response.text)
+        assert next_response.status == 200
+        assert next_body["action"] == "next_candidate"
+        assert next_body["kept_candidate_count"] == 1
+        first_result = await asyncio.wait_for(first_task, timeout=2.0)
         decision = first_result["result"][0]["_h3_review_decision"]
         assert decision["action"] == "retry"
         assert decision["candidate_batch"]["target"] == 2
         assert len(decision["candidate_batch"]["candidates"]) == 1
+        assert decision["candidate_batch"]["kept_revisions"] == [
+            first["revision"]]
         assert decision["seed"] != 2
 
         second_plan = chain._plan_with_review_revision(
@@ -258,6 +296,8 @@ async def check_candidate_batch():
         assert chain._PENDING_REVIEWS
         public = next(iter(chain._PENDING_REVIEWS.values()))["public"]
         assert public["candidate_count"] == 2
+        assert public["candidate_generation_complete"] is True
+        assert public["kept_candidate_revisions"] == [first["revision"]]
         assert [item["revision"] for item in public["candidates"]] == [
             first["revision"], second["revision"]]
         token = public["token"]
@@ -265,23 +305,98 @@ async def check_candidate_batch():
         class ChooseCurrent:
             async def json(self):
                 return {"token": token, "action": "approve",
-                        "candidate_revision": second["revision"]}
+                        "candidate_revision": second["revision"],
+                        "candidate_revisions": [first["revision"]]}
 
         response = await chain._submit_review_decision(ChooseCurrent())
         body = json.loads(response.text)
         assert response.status == 200
         assert body["candidate_number"] == 2
+        assert body["kept_candidate_count"] == 2
         result = await asyncio.wait_for(task, timeout=2.0)
         assert result["result"][0]["revision"] == second["revision"]
         assert "selected candidate 2/2" in result["result"][1]
+        assert cleanup_calls
+        assert cleanup_calls[-1][3] == [first["revision"], second["revision"]]
+
+        early = candidate_segment("c" * 32, 2)
+        early_task = asyncio.create_task(chain.MiniMaxH3ChainReview().review(
+            {"plan": plan, "index": 2, "segments": [{"revision": "parent"}]},
+            early, True, False, 0.0, False, False, "none",
+            candidate_count=3, unique_id="review-node"))
+        for _ in range(100):
+            if chain._PENDING_REVIEWS:
+                break
+            await asyncio.sleep(0.01)
+        early_public = next(iter(chain._PENDING_REVIEWS.values()))["public"]
+        assert early_public["candidate_generation_complete"] is False
+
+        class AcceptEarly:
+            async def json(self):
+                return {
+                    "token": early_public["token"],
+                    "action": "approve",
+                    "candidate_revision": early["revision"],
+                    "candidate_revisions": [],
+                }
+
+        early_response = await chain._submit_review_decision(AcceptEarly())
+        assert early_response.status == 200
+        early_body = json.loads(early_response.text)
+        assert early_body["candidate_number"] == 1
+        assert early_body["candidate_count"] == 3
+        assert early_body["candidate_generated_count"] == 1
+        assert early_body["kept_candidate_count"] == 1
+        early_result = await asyncio.wait_for(early_task, timeout=2.0)
+        assert early_result["result"][0]["revision"] == early["revision"]
+        assert cleanup_calls[-1][3] == [early["revision"]]
     finally:
         chain._PENDING_REVIEWS.clear()
         chain.PromptServer = original_server
         chain._review_video = original_review_video
         chain._load_checkpoint_revision = original_load_revision
+        chain._prune_review_candidates = original_prune_candidates
 
 
 asyncio.run(check_candidate_batch())
+
+
+def check_candidate_cleanup():
+    original_manager = chain.CheckpointGraphManager
+    deleted = []
+
+    class FakeManager:
+        def __init__(self, _root):
+            pass
+
+        def deletion_preview(self, run_name, scene, revision):
+            assert run_name == plan["run_name"]
+            assert scene == 2
+            return {"allowed": True, "snapshot": "snapshot-" + revision}
+
+        def delete(self, run_name, scene, revision, snapshot):
+            deleted.append((run_name, scene, revision, snapshot))
+            return {"reclaimed_bytes": 123}
+
+    chain.CheckpointGraphManager = FakeManager
+    try:
+        candidates = [
+            {"segment": candidate_segment("a" * 32, 1)},
+            {"segment": candidate_segment("b" * 32, 2)},
+            {"segment": candidate_segment("c" * 32, 3)},
+        ]
+        cleanup = chain._prune_review_candidates(
+            plan, 2, candidates, ["a" * 32, "c" * 32])
+        assert cleanup["kept"] == ["a" * 32, "c" * 32]
+        assert cleanup["deleted"] == ["b" * 32]
+        assert cleanup["reclaimed_bytes"] == 123
+        assert deleted == [(
+            plan["run_name"], 2, "b" * 32, "snapshot-" + "b" * 32)]
+    finally:
+        chain.CheckpointGraphManager = original_manager
+
+
+check_candidate_cleanup()
 
 
 def check_exact_candidate_selection():

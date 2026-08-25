@@ -6,18 +6,24 @@ Place **Review Gate** between Segment + Checkpoint and Loop End. Each scene is
 persisted before the gate waits, then the gate offers:
 
 - **Approve & continue**
+- **Generate next candidate** when a multi-take batch is not complete
 - **Retry scene / seed / length**
 - **Reroll seed**
 - **Approve & stop**, optionally assembling a partial video
 
 Set Review Gate's optional **candidate_count** above 1 to collect several
-different-seed takes before making a decision. Intermediate takes are saved and
-rerolled automatically. When the requested count is reached, use **Choose take**
-to preview the candidates, then continue or stop with the selected checkpoint.
-The chosen take's saved video frames and AV tensors—not the last generated
-take—become the context for the following scene. The default value of 1 keeps
-the normal one-take review behavior. The widget can be converted to an input
-and driven by a regular INT node; the safety limit is 20 candidates per scene.
+different-seed takes. The gate pauses after every saved candidate instead of
+blindly generating the full batch. Use **Generate next candidate** to continue,
+or accept the current scene early and interrupt the remaining batch. The
+carousel previews every completed take with synchronized sound; arrow keys and
+the visible dots move between them. Mark one or more takes to keep, then choose
+the take that becomes the active continuation. Its saved video frames and AV
+tensors—not the last generated take—become the context for the following scene.
+The active take and checked alternatives remain in checkpoint history; unkept
+alternatives are deleted only after the active checkpoint is promoted safely.
+The default value of 1 keeps the normal one-take review behavior. The widget can
+be converted to an input and driven by a regular INT node; the safety limit is
+20 candidates per scene.
 
 Notification sound, automatic timeout, and model unloading while waiting are
 optional. Drag the bar below the player to resize it; double-click to restore
@@ -147,6 +153,16 @@ parent, following scenes, and the exact video/audio frame context those
 following scenes consume. Older checkpoints derive this graph from predecessor
 revision and checkpoint hashes; newly saved checkpoints also carry a stable
 branch id and effective context fields.
+
+If deleting the active branch tip rolls the run back while alternate leaf
+revisions remain, select the surviving branch and click **Make branch active**.
+The manager validates and promotes that revision's complete lineage directly,
+including when no Plan is connected. It only changes the run's canonical active
+checkpoint pointers; immutable revisions, Plan values, workflow state,
+references, and assembled videos are left untouched. You can then keep the
+chosen candidate active and continue deleting the rejected inactive leaves.
+**Load selected branch** remains the separate resume operation: it also restores
+saved Plan inputs and arms Loop Start for the following scene.
 
 Deletion is deliberately one scene revision at a time:
 

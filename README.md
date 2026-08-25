@@ -52,8 +52,10 @@ Restart ComfyUI, then:
    and resume state before H3 loads.
 6. At Review Gate, approve, retry, reroll, or approve and stop. To compare
    several takes per scene, set its optional `candidate_count` above 1 (or
-   convert it to an input and connect an INT node); Review Gate generates the
-   candidates automatically and continues from the exact take you select.
+   convert it to an input and connect an INT node). Review Gate pauses after
+   every saved take: accept early, request the next candidate, browse completed
+   takes in the carousel, and mark any alternatives to keep. The selected take
+   supplies the exact continuation; unkept alternatives are deleted.
 7. Assemble the completed or partial manifest.
 
 Version 0.5 expects a current ComfyUI build containing native **Add Guide for
