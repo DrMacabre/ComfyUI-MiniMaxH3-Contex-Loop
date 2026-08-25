@@ -221,7 +221,10 @@ async def check_candidate_batch():
     original_load_revision = chain._load_checkpoint_revision
     original_prune_candidates = chain._prune_review_candidates
     original_select_candidate = chain._select_review_candidate
+    original_resume_revisions = chain._review_candidate_resume_revisions
+    original_write_archives = chain._write_run_archives
     cleanup_calls = []
+    archive_calls = []
     chain.PromptServer = type(
         "BatchServer", (), {"instance": BatchServerInstance()})
     chain._review_video = lambda _plan, segment, _audio, retain_previous=False: (
@@ -235,6 +238,13 @@ async def check_candidate_batch():
                 "reclaimed_bytes": 0,
                 "warnings": [],
             }))
+    chain._review_candidate_resume_revisions = (
+        lambda _run_name, scene, revision: [
+            {"scene": number,
+             "revision": revision if number == scene else "%032x" % number}
+            for number in range(1, scene + 1)])
+    chain._write_run_archives = lambda selected_plan: archive_calls.append(
+        selected_plan)
     automatic = candidate_segment("d" * 32, 2)
     automatic_result = await asyncio.wait_for(
         chain.MiniMaxH3ChainReview().review(
@@ -256,6 +266,7 @@ async def check_candidate_batch():
     assert progress["candidate_batch_active"] is True
     assert progress["pending_decision"] is False
     assert progress["candidate_index"] == 1
+    assert progress["end_clip"] == len(plan["shots"])
     assert [item["revision"] for item in progress["candidates"]] == [
         automatic["revision"]]
     assert "automatically generating candidate 2" in automatic_result[
@@ -315,6 +326,10 @@ async def check_candidate_batch():
     accept_response = await chain._submit_candidate_batch_command(
         AcceptAutomaticBatch())
     assert accept_response.status == 200
+    accept_body = json.loads(accept_response.text)
+    assert accept_body["resume_scene"] == 3
+    assert accept_body["resume_revisions"][-1] == {
+        "scene": 2, "revision": early_automatic["revision"]}
     next_plan = chain._plan_with_review_revision(
         plan, 2, "Scene 2.", early_decision["seed"], 56)
     next_candidate = candidate_segment("f" * 32, early_decision["seed"])
@@ -465,6 +480,37 @@ async def check_candidate_batch():
         early_result = await asyncio.wait_for(early_task, timeout=2.0)
         assert early_result["result"][0]["revision"] == early["revision"]
         assert cleanup_calls[-1][3] == [early["revision"]]
+
+        finalize_token = "1" * 32
+        finalize_candidate = candidate_segment("9" * 32, 29)
+        chain._ACTIVE_CANDIDATE_BATCHES[finalize_token] = {
+            "run_name": plan["run_name"],
+            "scene": 2,
+            "target": 3,
+            "plan": plan,
+            "candidates": [{"segment": finalize_candidate}],
+            "kept_revisions": [finalize_candidate["revision"]],
+            "command": {
+                "action": "accept",
+                "candidate_revision": finalize_candidate["revision"],
+                "kept_revisions": [finalize_candidate["revision"]],
+            },
+        }
+
+        class FinalizeAutomaticBatch:
+            async def json(self):
+                return {
+                    "token": finalize_token,
+                    "action": "finalize",
+                    "candidate_revision": finalize_candidate["revision"],
+                }
+
+        finalize_response = await chain._submit_candidate_batch_command(
+            FinalizeAutomaticBatch())
+        assert finalize_response.status == 200
+        assert finalize_token not in chain._ACTIVE_CANDIDATE_BATCHES
+        assert archive_calls[-1]["shots"][1]["seed"] == 29
+        assert cleanup_calls[-1][3] == [finalize_candidate["revision"]]
     finally:
         chain._PENDING_REVIEWS.clear()
         chain._ACTIVE_CANDIDATE_BATCHES.clear()
@@ -473,9 +519,54 @@ async def check_candidate_batch():
         chain._load_checkpoint_revision = original_load_revision
         chain._prune_review_candidates = original_prune_candidates
         chain._select_review_candidate = original_select_candidate
+        chain._review_candidate_resume_revisions = original_resume_revisions
+        chain._write_run_archives = original_write_archives
 
 
 asyncio.run(check_candidate_batch())
+
+
+def check_candidate_resume_lineage():
+    original_load = chain._load_checkpoint_revision
+    revisions = {
+        (1, "1" * 32): {
+            "segment": {
+                "index": 1,
+                "revision": "1" * 32,
+                "checkpoint_sha256": "hash-one",
+            },
+        },
+        (2, "2" * 32): {
+            "segment": {
+                "index": 2,
+                "revision": "2" * 32,
+                "checkpoint_sha256": "hash-two",
+                "predecessor_revision": "1" * 32,
+                "predecessor_checkpoint_sha256": "hash-one",
+            },
+        },
+    }
+    chain._load_checkpoint_revision = (
+        lambda _run_name, scene, revision: (
+            revisions[(scene, revision)], "metadata.json"))
+    try:
+        assert chain._review_candidate_resume_revisions(
+            "run", 2, "2" * 32) == [
+                {"scene": 1, "revision": "1" * 32},
+                {"scene": 2, "revision": "2" * 32},
+            ]
+        revisions[(2, "2" * 32)]["segment"][
+            "predecessor_checkpoint_sha256"] = "wrong"
+        try:
+            chain._review_candidate_resume_revisions("run", 2, "2" * 32)
+            raise AssertionError("candidate lineage hash mismatch was accepted")
+        except ValueError as exc:
+            assert "different scene 1 checkpoint" in str(exc)
+    finally:
+        chain._load_checkpoint_revision = original_load
+
+
+check_candidate_resume_lineage()
 
 
 def check_candidate_cleanup():

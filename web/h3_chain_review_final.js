@@ -36,6 +36,88 @@ const mountedReviewNodes = new Set();
 let notificationAudioContext = null;
 let pendingFetchPromise = null;
 let pendingPollTimer = null;
+const activeSceneExecutions = new Map();
+const reviewInterruptionWaiters = new Map();
+
+function sceneExecutionKey(runName, clipIndex) {
+    return `${String(runName ?? "").trim()}\u0000${Number(clipIndex)}`;
+}
+
+function activeSceneFromExecutedOutput(output) {
+    const values = output?.h3_chain_active_scene;
+    const value = Array.isArray(values) ? values.at(-1) : null;
+    const clipIndex = Number(value?.clip_index);
+    if (!value || !String(value.run_name ?? "").trim()
+            || !Number.isInteger(clipIndex) || clipIndex < 1) return null;
+    return {
+        runName: String(value.run_name).trim(),
+        clipIndex,
+    };
+}
+
+function trackActiveSceneExecution(data) {
+    const scene = activeSceneFromExecutedOutput(data?.output);
+    const promptId = String(data?.prompt_id ?? "");
+    if (!scene || !promptId) return;
+    activeSceneExecutions.set(
+        sceneExecutionKey(scene.runName, scene.clipIndex),
+        {promptId, displayNode: String(data?.display_node ?? "")},
+    );
+}
+
+function waitForReviewInterruption(promptId, timeoutMilliseconds = 30000) {
+    let timer;
+    const promise = new Promise((resolve, reject) => {
+        timer = window.setTimeout(() => {
+            reviewInterruptionWaiters.delete(promptId);
+            reject(new Error(
+                "ComfyUI did not confirm candidate interruption within 30 seconds."));
+        }, timeoutMilliseconds);
+        reviewInterruptionWaiters.set(promptId, {
+            resolve: () => {
+                window.clearTimeout(timer);
+                reviewInterruptionWaiters.delete(promptId);
+                resolve();
+            },
+            reject: (message) => {
+                window.clearTimeout(timer);
+                reviewInterruptionWaiters.delete(promptId);
+                reject(new Error(message));
+            },
+        });
+    });
+    // The websocket terminal event can beat the cancellation HTTP response.
+    void promise.catch(() => {});
+    return {
+        promise,
+        cancel() {
+            window.clearTimeout(timer);
+            reviewInterruptionWaiters.delete(promptId);
+        },
+    };
+}
+
+function finishTrackedReviewExecution(kind, data) {
+    const promptId = String(data?.prompt_id ?? "");
+    if (!promptId) return;
+    for (const [key, record] of activeSceneExecutions) {
+        if (record.promptId !== promptId) continue;
+        record.terminal = kind;
+        window.setTimeout(() => {
+            if (activeSceneExecutions.get(key) === record) {
+                activeSceneExecutions.delete(key);
+            }
+        }, 60000);
+    }
+    const waiter = reviewInterruptionWaiters.get(promptId);
+    if (!waiter) return;
+    if (kind === "interrupted") waiter.resolve();
+    else waiter.reject(
+        kind === "success"
+            ? "The candidate finished before targeted cancellation."
+            : "The H3 prompt ended before candidate cancellation was confirmed.",
+    );
+}
 
 function reviewPromptEditorEnabled() {
     return app.ui?.settings?.getSettingValue?.(PROMPT_EDITOR_SETTING) === true;
@@ -388,22 +470,157 @@ function checkpointRevisionLabel(revision) {
     return `${active}${date} · ${revision.revision.slice(0, 8)}${seed} · ${formatBytes(revision.sizeBytes)}`;
 }
 
-function prepareResume(reviewNode, nextIndex) {
+function prepareResume(reviewNode, nextIndex, endIndex = null, clipCount = null) {
     const startNode = findUpstreamNode(reviewNode, "MiniMaxH3ChainLoopStart") ??
         allNodes(app.graph).find((item) => nodeType(item) === "MiniMaxH3ChainLoopStart");
     const widget = startNode?.widgets?.find((item) => item.name === "start_clip");
     if (!widget) return false;
     widget.value = nextIndex;
     widget.callback?.(nextIndex);
-    // An explicit range overrides start_clip in the backend. Clear it so the
-    // checkpoint browser's selected resume scene is always authoritative.
+    // An explicit range overrides start_clip in the backend. Checkpoint loads
+    // clear it; immediate candidate acceptance preserves a shorter active
+    // range while advancing to its next scene.
     const rangeWidget = startNode.widgets?.find((item) => item.name === "scene_range");
     if (rangeWidget) {
-        rangeWidget.value = "";
-        rangeWidget.callback?.("");
+        const end = Number(endIndex);
+        const total = Number(clipCount);
+        const range = Number.isInteger(end) && Number.isInteger(total) &&
+                nextIndex <= end && end < total
+            ? nextIndex === end ? String(nextIndex) : `${nextIndex}:${end}`
+            : "";
+        rangeWidget.value = range;
+        rangeWidget.callback?.(range);
     }
     startNode.graph?.setDirtyCanvas?.(true, true);
     return true;
+}
+
+async function activateAcceptedCandidate(reviewNode, submittedReview, body) {
+    const endClip = Number(submittedReview.end_clip ?? submittedReview.clip_count);
+    const clipIndex = Number(submittedReview.clip_index);
+    if (!Number.isInteger(endClip) || clipIndex >= endClip) {
+        return {
+            immediate: false,
+            message: "This is the last scene in the active range, so the current " +
+                "take must reach Loop End before the selected checkpoint can finish it.",
+        };
+    }
+    const execution = activeSceneExecutions.get(sceneExecutionKey(
+        submittedReview.run_name, clipIndex));
+    if (!execution?.promptId) {
+        return {
+            immediate: false,
+            message: "The exact running prompt could not be identified; the " +
+                "selection is armed and will stop at the next safe boundary.",
+        };
+    }
+    const revisions = Array.isArray(body.resume_revisions)
+        ? body.resume_revisions : [];
+    if (revisions.length !== clipIndex) {
+        return {
+            immediate: false,
+            message: "The selected checkpoint lineage could not be activated " +
+                "immediately; the selection remains armed at the safe boundary.",
+        };
+    }
+    const saved = updatePlan(
+        reviewNode, clipIndex, body.scene_prompt, body.seed, body.length);
+    if (!saved) {
+        return {
+            immediate: false,
+            message: "The connected Plan could not be updated; the selection " +
+                "remains armed at the safe boundary.",
+        };
+    }
+    const activationResponse = await api.fetchApi(
+        "/minimax_h3_context_loop/checkpoint-revisions/restore", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({
+                run_name: submittedReview.run_name,
+                resume_scene: Number(body.resume_scene),
+                revisions,
+                activate_only: true,
+            }),
+        },
+    );
+    const activation = await activationResponse.json().catch(() => ({}));
+    if (!activationResponse.ok) {
+        return {
+            immediate: false,
+            message: `${activation.error || `HTTP ${activationResponse.status}`} ` +
+                "The selection remains armed at the safe boundary.",
+        };
+    }
+
+    if (execution.terminal === "success") {
+        return {
+            immediate: false,
+            message: "The speculative prompt already completed; its Review " +
+                "boundary is applying the armed selection now.",
+        };
+    }
+    if (execution.terminal !== "interrupted" && execution.terminal !== "error") {
+        const waiter = waitForReviewInterruption(execution.promptId);
+        const cancelResponse = await api.fetchApi(
+            `/api/jobs/${encodeURIComponent(execution.promptId)}/cancel`,
+            {method: "POST"},
+        );
+        const cancelled = await cancelResponse.json().catch(() => ({}));
+        if (!cancelResponse.ok) {
+            waiter.cancel();
+            return {
+                immediate: false,
+                message: `${cancelled.error ||
+                    `Targeted cancellation failed (HTTP ${cancelResponse.status}).`} ` +
+                    "The selection remains armed at the safe boundary.",
+            };
+        }
+        if (!cancelled.cancelled) {
+            waiter.cancel();
+            return {
+                immediate: false,
+                message: "The speculative take finished during cancellation; the " +
+                    "armed selection will be applied by Review Gate now.",
+            };
+        }
+        await waiter.promise;
+    }
+    const nextIndex = clipIndex + 1;
+    if (!prepareResume(
+        reviewNode, nextIndex, endClip, Number(submittedReview.clip_count))) {
+        throw new Error(
+            `Candidate accepted and sampling stopped, but Loop Start could not ` +
+            `be armed for scene ${nextIndex}. Queue it manually from that scene.`);
+    }
+
+    let cleanupWarning = "";
+    try {
+        const finalizeResponse = await api.fetchApi(
+            "/minimax_h3_context_loop/review-candidate-batch", {
+                method: "POST",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({
+                    token: submittedReview.token,
+                    action: "finalize",
+                    candidate_revision: body.candidate_revision,
+                }),
+            },
+        );
+        const finalize = await finalizeResponse.json().catch(() => ({}));
+        if (!finalizeResponse.ok) {
+            cleanupWarning = ` Candidate cleanup warning: ${finalize.error ||
+                `HTTP ${finalizeResponse.status}`}`;
+        } else if (Array.isArray(finalize.cleanup_warnings) &&
+                finalize.cleanup_warnings.length) {
+            cleanupWarning = ` Candidate cleanup warning: ${
+                finalize.cleanup_warnings.join(" ")}`;
+        }
+    } catch (error) {
+        cleanupWarning = ` Candidate cleanup warning: ${error.message}`;
+    }
+    await app.queuePrompt(0, 1);
+    return {immediate: true, nextIndex, saved, cleanupWarning};
 }
 
 function fetchPending() {
@@ -924,6 +1141,10 @@ function mount(node) {
             ? running ? "Use this take & stop batch"
                 : complete ? "Use this take & continue" : "Accept now & continue"
             : "Approve & continue";
+        approveButton.title = running
+            ? "Accept this saved take now, cancel only the speculative in-flight " +
+                "H3 prompt, activate its checkpoint, and continue at the next scene."
+            : "Accept this saved scene and continue the loop with the next scene.";
         if (!batch || !candidates.length) return null;
         if (!candidates.some(
             (candidate) => candidate.revision === activeCandidateRevision)) {
@@ -1278,7 +1499,7 @@ function mount(node) {
         const batchCommand = current.candidate_batch_command_pending;
         const message = batchCommand
             ? batchCommand === "accept"
-                ? "Selected take queued. The current in-flight candidate will finish, then the batch will stop."
+                ? "Selected take is being activated; Review Gate is stopping the speculative take."
                 : "Pause queued. The current in-flight candidate will finish, then Review Gate will wait here."
             : current.warning || (target > 1
             ? complete
@@ -1346,7 +1567,7 @@ function mount(node) {
             setActionsEnabled(false);
             status.className = "h3r-status";
             status.textContent = candidateBatchAction === "accept"
-                ? "Queuing this take and stopping after the in-flight candidate…"
+                ? "Activating this checkpoint and cancelling the speculative take…"
                 : candidateBatchAction === "pause"
                     ? "Queuing a pause after the in-flight candidate…"
                 : action === "approve" ? "Sending approval…" :
@@ -1376,10 +1597,25 @@ function mount(node) {
                 if (current?.token === submittedToken) {
                     current.candidate_batch_command_pending = candidateBatchAction;
                 }
-                status.textContent = candidateBatchAction === "accept"
-                    ? `Candidate ${body.candidate_number}/${body.candidate_count} selected. ` +
-                        "The current in-flight take will finish, then this candidate becomes active."
-                    : "Pause queued. The current in-flight take will finish, then the carousel will wait for you.";
+                if (candidateBatchAction === "accept") {
+                    const result = await activateAcceptedCandidate(
+                        node, submittedReview, body);
+                    if (result.immediate) {
+                        status.textContent =
+                            `Candidate ${body.candidate_number}/${body.candidate_count} ` +
+                            `is active. The unwanted take was cancelled; scene ` +
+                            `${result.nextIndex} was queued immediately.` +
+                            (result.saved ? " The Plan seed was updated." : "") +
+                            (result.cleanupWarning || "");
+                    } else {
+                        status.textContent =
+                            `Candidate ${body.candidate_number}/${body.candidate_count} ` +
+                            `selected. ${result.message}`;
+                    }
+                } else {
+                    status.textContent = "Pause queued. The current in-flight take " +
+                        "will finish, then the carousel will wait for you.";
+                }
             } else if (action === "next_candidate") {
                 status.textContent = `Candidate ${submittedReview.candidates.length}/` +
                     `${submittedReview.candidate_count} reviewed — generating the next take ` +
@@ -1573,6 +1809,14 @@ function mount(node) {
 api.addEventListener("minimax_h3_context_loop_review", (event) => routeReview(event.detail));
 api.addEventListener("minimax_h3_context_loop_review_resolved", (event) =>
     routeReviewResolved(event.detail));
+api.addEventListener("executed", (event) =>
+    trackActiveSceneExecution(event.detail));
+api.addEventListener("execution_interrupted", (event) =>
+    finishTrackedReviewExecution("interrupted", event.detail));
+api.addEventListener("execution_success", (event) =>
+    finishTrackedReviewExecution("success", event.detail));
+api.addEventListener("execution_error", (event) =>
+    finishTrackedReviewExecution("error", event.detail));
 // A status event is sent when ComfyUI's websocket connects or reconnects.
 api.addEventListener("status", fetchPending);
 window.addEventListener("focus", fetchPending);

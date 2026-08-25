@@ -53,12 +53,16 @@ Restart ComfyUI, then:
    several takes per scene, set its optional `candidate_count` above 1 (or
    convert it to an input and connect an INT node). The requested takes generate
    automatically in one batch. Each completed take appears immediately in the
-   live carousel while the next take renders; selecting one stops the batch at
-   the next safe candidate boundary, and **Pause candidate run** waits there
-   without accepting. After the requested count, Review Gate pauses normally so
-   you can mark alternatives to keep. Enable `review_each_candidate` only when
-   you want a blocking decision after every saved take. The selected take
-   supplies the exact continuation; unkept alternatives are deleted.
+   live carousel while the next take renders. **Use this take & stop batch**
+   activates that saved checkpoint, cancels only the speculative in-flight H3
+   prompt, and immediately requeues the next scene; a completion race falls
+   back to the normal safe candidate boundary. The final scene of an active
+   range still reaches Loop End so it can emit the completed manifest.
+   **Pause candidate run** waits at the next candidate boundary without
+   accepting. After the requested count, Review Gate pauses normally so you can
+   mark alternatives to keep. Enable `review_each_candidate` only when you want
+   a blocking decision after every saved take. The selected take supplies the
+   exact continuation; unkept alternatives are deleted.
 7. Assemble the completed or partial manifest.
 
 Version 0.5 expects a current ComfyUI build containing native **Add Guide for
