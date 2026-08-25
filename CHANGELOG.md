@@ -4,6 +4,17 @@ Newest first. This file keeps release history out of the onboarding README.
 
 ## Unreleased — Deferred checkpoint upscaling
 
+- The two-clip masked AV bridge now accepts silent source videos. Start and end
+  audio are independent optional inputs: an available endpoint is encoded and
+  protected, while a missing endpoint remains unmasked so H3 generates audio
+  there instead of failing or forcing artificial silence.
+
+- **Use this take & stop batch** now pins the accepted candidate preview across
+  targeted cancellation and the automatic next-scene queue. Late payloads from
+  an earlier scene can no longer replace it with the predecessor preview; a new
+  run of the same scene, the next scene, or an explicit checkpoint choice
+  releases the pin normally.
+
 - Review Gate candidate polling no longer reloads an unchanged preview or
   jumps back to the newest take when a live candidate batch reaches its final
   review token. The selected take, playback position, and playing/paused state

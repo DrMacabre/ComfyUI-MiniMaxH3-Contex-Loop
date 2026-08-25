@@ -11,7 +11,7 @@ import {
     sceneVisualContextLeadSource,
     sceneVisualContextSource,
     sharedPrompt,
-} from "./h3_chain_plan_core.mjs?v=0.6.21";
+} from "./h3_chain_plan_core.mjs?v=0.6.22";
 
 const FPS = 24;
 const MAX_H3_FRAMES = 3592;
@@ -115,6 +115,24 @@ export function reviewLocalDeadline(
     const serverNow = Number(serverNowSeconds);
     if (!Number.isFinite(deadline) || !Number.isFinite(serverNow)) return null;
     return Number(clientNowMilliseconds) / 1000 + Math.max(0, deadline - serverNow);
+}
+
+export function acceptedPreviewDisposition(pin, payload) {
+    if (!pin) return "none";
+    const pinnedRun = String(pin.runName ?? "");
+    const incomingRun = String(payload?.run_name ?? "");
+    if (pinnedRun && incomingRun && pinnedRun !== incomingRun) return "release";
+    const pinnedScene = Number(pin.clipIndex);
+    const incomingScene = Number(payload?.clip_index);
+    if (!Number.isInteger(pinnedScene) || !Number.isInteger(incomingScene)) {
+        return "hold";
+    }
+    if (incomingScene < pinnedScene) return "ignore";
+    if (incomingScene > pinnedScene) return "release";
+    const pinnedToken = String(pin.token ?? "");
+    const incomingToken = String(payload?.token ?? "");
+    return pinnedToken && incomingToken && pinnedToken !== incomingToken
+        ? "release" : "hold";
 }
 
 export function checkpointResumeOptions(checkpoints, clipCount) {

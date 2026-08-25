@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import {
+    acceptedPreviewDisposition,
     applyCheckpointRevisionSeeds,
     applyCheckpointRevisionSet,
     applyReviewEdit,
@@ -13,6 +14,22 @@ import {
     reviewPlanScenePrompt,
     reviewSeed,
 } from "../web/h3_chain_review_core.mjs";
+
+const acceptedPin = {
+    runName: "project", clipIndex: 5, token: "batch", revision: "a".repeat(32),
+};
+assert.equal(acceptedPreviewDisposition(acceptedPin, {
+    run_name: "project", clip_index: 4, token: "older",
+}), "ignore", "an earlier scene cannot replace an accepted preview");
+assert.equal(acceptedPreviewDisposition(acceptedPin, {
+    run_name: "project", clip_index: 5, token: "batch",
+}), "hold", "the accepted batch keeps its selected preview pinned");
+assert.equal(acceptedPreviewDisposition(acceptedPin, {
+    run_name: "project", clip_index: 5, token: "new-run",
+}), "release", "a new run of the same scene may replace the old preview");
+assert.equal(acceptedPreviewDisposition(acceptedPin, {
+    run_name: "project", clip_index: 6, token: "next",
+}), "release", "the next scene releases the accepted preview pin");
 
 assert.equal(reviewSeed("18446744073709551615"), "18446744073709551615");
 assert.throws(() => reviewSeed("18446744073709551616"), /uint64/);
@@ -281,6 +298,9 @@ assert.match(reviewSource, /function setReviewVideo/);
 assert.match(reviewSource, /video\.dataset\.source === source/);
 assert.match(reviewSource, /const carriedActiveCandidateRevision/);
 assert.match(reviewSource, /setReviewVideo\(candidate\.video, sameCandidate\)/);
+assert.match(reviewSource, /pinAcceptedPreview\(submittedReview, submittedCandidate\)/);
+assert.match(reviewSource, /acceptedDisposition === "ignore"/);
+assert.match(reviewSource, /if \(acceptedDisposition === "hold"\) showAcceptedPreview\(\)/);
 const showCandidateStart = reviewSource.indexOf("function showCandidate");
 const showCandidateSource = reviewSource.slice(
     showCandidateStart,

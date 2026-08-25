@@ -103,6 +103,10 @@ def main():
             (1, 2, round(100 / 24 * 32000)), 0.7),
         "sample_rate": 32000,
     }
+    input_types = bridge.MiniMaxH3ContexMaskedAVBridge.INPUT_TYPES()
+    assert "start_audio" not in input_types["required"]
+    assert "end_audio" not in input_types["required"]
+    assert {"start_audio", "end_audio"} <= set(input_types["optional"])
 
     output, middle, protected = (
         bridge.MiniMaxH3ContexMaskedAVBridge().prepare(
@@ -141,6 +145,20 @@ def main():
     assert not torch.count_nonzero(target_video)
     assert not torch.count_nonzero(target_audio)
 
+    generated_start, _, _ = (
+        bridge.MiniMaxH3ContexMaskedAVBridge().prepare(
+            target, VideoVAE(), AudioVAE(), start_frames, None,
+            end_frames, end_audio, 24.0, 24.0, 39, "disabled"))
+    _generated_video, generated_audio = generated_start["samples"].unbind()
+    _generated_video_mask, generated_audio_mask = (
+        generated_start["noise_mask"].unbind())
+    assert not torch.count_nonzero(generated_audio[..., :65])
+    assert torch.all(generated_audio_mask[..., :65] == 1)
+    assert torch.allclose(
+        generated_audio[..., -65:],
+        torch.full_like(generated_audio[..., -65:], 0.7))
+    assert not torch.count_nonzero(generated_audio_mask[..., -65:])
+
     try:
         bridge.MiniMaxH3ContexMaskedAVBridge().prepare(
             target, VideoVAE(), AudioVAE(), start_frames, start_audio,
@@ -152,7 +170,7 @@ def main():
 
     print(
         "masked bridge: 192 target frames, 39+39 protected, 114 generated; "
-        "12 video and 65 audio steps protected at each end")
+        "12 video and optional 65-step audio windows protected independently")
 
 
 if __name__ == "__main__":

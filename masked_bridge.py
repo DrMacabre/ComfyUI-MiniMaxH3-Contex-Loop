@@ -195,13 +195,9 @@ class MiniMaxH3ContexMaskedAVBridge:
                 "start_frames": ("IMAGE", {
                     "tooltip": "First source clip. Its final protected window "
                                "becomes the bridge prefix."}),
-                "start_audio": ("AUDIO", {
-                    "tooltip": "Audio synchronized with the first clip."}),
                 "end_frames": ("IMAGE", {
                     "tooltip": "Second source clip. Its initial protected "
                                "window becomes the bridge suffix."}),
-                "end_audio": ("AUDIO", {
-                    "tooltip": "Audio synchronized with the second clip."}),
                 "start_fps": ("FLOAT", {
                     "default": 24.0, "min": 0.001, "max": 1000.0,
                     "step": 0.001,
@@ -227,6 +223,16 @@ class MiniMaxH3ContexMaskedAVBridge:
                                "center preserves aspect ratio and center-crops.",
                 }),
             },
+            "optional": {
+                "start_audio": ("AUDIO", {
+                    "tooltip": "Optional audio synchronized with the first "
+                               "clip. When absent, H3 generates the bridge's "
+                               "opening audio instead of protecting silence."}),
+                "end_audio": ("AUDIO", {
+                    "tooltip": "Optional audio synchronized with the second "
+                               "clip. When absent, H3 generates the bridge's "
+                               "ending audio instead of protecting silence."}),
+            },
         }
 
     RETURN_TYPES = ("LATENT", "INT", "INT")
@@ -250,9 +256,9 @@ class MiniMaxH3ContexMaskedAVBridge:
         vae,
         audio_vae,
         start_frames,
-        start_audio,
-        end_frames,
-        end_audio,
+        start_audio=None,
+        end_frames=None,
+        end_audio=None,
         start_fps=24.0,
         end_fps=24.0,
         preserve_frames=39,
@@ -320,16 +326,33 @@ class MiniMaxH3ContexMaskedAVBridge:
                 "an out-of-phase protected endpoint." % (suffix_step % 5))
 
         vae_rate = int(getattr(audio_vae, "audio_sample_rate", 32000))
-        start_waveform = _stereo_audio(
-            start_audio, vae_rate, int(start_idx.numel()), "start_audio")
-        end_waveform = _stereo_audio(
-            end_audio, vae_rate, int(end_idx.numel()), "end_audio")
-        start_audio_latent = _encode_audio_window(
-            audio_vae, start_waveform, protected, "tail", "first clip tail")
-        end_audio_latent = _encode_audio_window(
-            audio_vae, end_waveform, protected, "head", "second clip head")
-        audio_steps = int(start_audio_latent.shape[-1])
-        if int(end_audio_latent.shape[-1]) != audio_steps:
+        start_audio_latent = None
+        if start_audio is not None:
+            start_waveform = _stereo_audio(
+                start_audio, vae_rate, int(start_idx.numel()), "start_audio")
+            start_audio_latent = _encode_audio_window(
+                audio_vae, start_waveform, protected, "tail",
+                "first clip tail")
+        else:
+            _LOG.info(
+                "h3_masked_bridge: start_audio is absent; opening audio stays "
+                "unmasked for H3 generation.")
+        end_audio_latent = None
+        if end_audio is not None:
+            end_waveform = _stereo_audio(
+                end_audio, vae_rate, int(end_idx.numel()), "end_audio")
+            end_audio_latent = _encode_audio_window(
+                audio_vae, end_waveform, protected, "head", "second clip head")
+        else:
+            _LOG.info(
+                "h3_masked_bridge: end_audio is absent; ending audio stays "
+                "unmasked for H3 generation.")
+        start_audio_steps = (int(start_audio_latent.shape[-1])
+                             if start_audio_latent is not None else 0)
+        end_audio_steps = (int(end_audio_latent.shape[-1])
+                           if end_audio_latent is not None else 0)
+        if (start_audio_latent is not None and end_audio_latent is not None
+                and end_audio_steps != start_audio_steps):
             raise RuntimeError(
                 "h3_masked_bridge: protected audio windows encoded to "
                 "different lengths.")
@@ -338,8 +361,6 @@ class MiniMaxH3ContexMaskedAVBridge:
         out_audio = target_audio.clone()
         start_video = start_video.to(out_video)
         end_video = end_video.to(out_video)
-        start_audio_latent = start_audio_latent.to(out_audio)
-        end_audio_latent = end_audio_latent.to(out_audio)
         if (tuple(start_video.shape[1:2] + start_video.shape[3:]) !=
                 tuple(out_video.shape[1:2] + out_video.shape[3:])):
             raise ValueError(
@@ -350,19 +371,23 @@ class MiniMaxH3ContexMaskedAVBridge:
             raise ValueError(
                 "h3_masked_bridge: second video latent shape does not match "
                 "the target canvas.")
-        if tuple(start_audio_latent.shape[1:3]) != tuple(out_audio.shape[1:3]):
-            raise ValueError(
-                "h3_masked_bridge: first audio latent shape does not match "
-                "the H3 target.")
-        if tuple(end_audio_latent.shape[1:3]) != tuple(out_audio.shape[1:3]):
-            raise ValueError(
-                "h3_masked_bridge: second audio latent shape does not match "
-                "the H3 target.")
+        if start_audio_latent is not None:
+            start_audio_latent = start_audio_latent.to(out_audio)
+            if tuple(start_audio_latent.shape[1:3]) != tuple(
+                    out_audio.shape[1:3]):
+                raise ValueError(
+                    "h3_masked_bridge: first audio latent shape does not match "
+                    "the H3 target.")
+        if end_audio_latent is not None:
+            end_audio_latent = end_audio_latent.to(out_audio)
+            if tuple(end_audio_latent.shape[1:3]) != tuple(
+                    out_audio.shape[1:3]):
+                raise ValueError(
+                    "h3_masked_bridge: second audio latent shape does not "
+                    "match the H3 target.")
 
         out_video[:, :, :video_steps] = start_video
         out_video[:, :, -video_steps:] = end_video
-        out_audio[..., :audio_steps] = start_audio_latent
-        out_audio[..., -audio_steps:] = end_audio_latent
         video_mask = torch.ones(
             (1, 1, int(out_video.shape[2]), int(out_video.shape[3]),
              int(out_video.shape[4])),
@@ -372,8 +397,12 @@ class MiniMaxH3ContexMaskedAVBridge:
             device=out_audio.device, dtype=torch.float32)
         video_mask[:, :, :video_steps] = 0.0
         video_mask[:, :, -video_steps:] = 0.0
-        audio_mask[..., :audio_steps] = 0.0
-        audio_mask[..., -audio_steps:] = 0.0
+        if start_audio_latent is not None:
+            out_audio[..., :start_audio_steps] = start_audio_latent
+            audio_mask[..., :start_audio_steps] = 0.0
+        if end_audio_latent is not None:
+            out_audio[..., -end_audio_steps:] = end_audio_latent
+            audio_mask[..., -end_audio_steps:] = 0.0
 
         import comfy.nested_tensor
         output = latent.copy()
@@ -384,9 +413,10 @@ class MiniMaxH3ContexMaskedAVBridge:
         middle_frames = target_frames - 2 * protected
         _LOG.info(
             "h3_masked_bridge: %d-frame target at %dx%d; preserve %d frames "
-            "(%d video / %d audio steps) at each end; generate %d frames.",
-            target_frames, width, height, protected, video_steps, audio_steps,
-            middle_frames)
+            "(%d video / %d+%d audio steps) at the two ends; generate %d "
+            "frames.",
+            target_frames, width, height, protected, video_steps,
+            start_audio_steps, end_audio_steps, middle_frames)
         return output, middle_frames, protected
 
 

@@ -4,13 +4,14 @@ import {
     parsePlanJson,
     planToJson,
     promptValueToText,
-} from "./h3_chain_plan_core.mjs?v=0.6.21";
-import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.6.21";
+} from "./h3_chain_plan_core.mjs?v=0.6.22";
+import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.6.22";
 import {
     refreshRestoredPlanEditors,
     restoreConnectedPolicyInputs,
-} from "./h3_plan_restore_core.mjs?v=0.6.21";
+} from "./h3_plan_restore_core.mjs?v=0.6.22";
 import {
+    acceptedPreviewDisposition,
     applyCheckpointRevisionSet,
     applyReviewEdit,
     checkpointRevisionChain,
@@ -21,7 +22,7 @@ import {
     reviewLocalDeadline,
     reviewPlanScenePrompt,
     reviewSeed,
-} from "./h3_chain_review_core.mjs?v=0.6.21";
+} from "./h3_chain_review_core.mjs?v=0.6.22";
 
 const NODE_NAME = "MiniMaxH3ChainReview";
 const PLAN_NAME = "MiniMaxH3ChainPlan";
@@ -1046,6 +1047,7 @@ function mount(node) {
     let activeCandidateRevision = "";
     let keptCandidateRevisions = new Set();
     let previewLoadRevision = 0;
+    let acceptedPreviewPin = null;
 
     function setReviewVideo(item, preservePosition = false) {
         if (!item?.filename) return false;
@@ -1070,6 +1072,26 @@ function mount(node) {
             }, {once:true});
         }
         return true;
+    }
+
+    function showAcceptedPreview() {
+        if (!acceptedPreviewPin?.video) return;
+        activeCandidateRevision = acceptedPreviewPin.revision;
+        setReviewVideo(acceptedPreviewPin.video, true);
+        badge.textContent = `accepted scene ${acceptedPreviewPin.clipIndex} · ` +
+            `revision ${acceptedPreviewPin.revision.slice(0, 8)}`;
+    }
+
+    function pinAcceptedPreview(review, candidate) {
+        if (!candidate?.video || !candidate?.revision) return;
+        acceptedPreviewPin = {
+            runName: String(review?.run_name ?? ""),
+            clipIndex: Number(review?.clip_index),
+            token: String(review?.token ?? ""),
+            revision: String(candidate.revision),
+            video: candidate.video,
+        };
+        showAcceptedPreview();
     }
 
     function setActionsEnabled(enabled) {
@@ -1248,6 +1270,7 @@ function mount(node) {
 
     function showRevisionPreview(revision) {
         if (!revision?.video) return;
+        acceptedPreviewPin = null;
         setReviewVideo(revision.video);
         badge.textContent = `saved scene ${revision.scene} · revision ${revision.revision.slice(0, 8)}`;
     }
@@ -1487,6 +1510,7 @@ function mount(node) {
             const preview = selectedPredecessor?.video
                 ?? choice?.partialVideo ?? choice?.video;
             if (preview) {
+                acceptedPreviewPin = null;
                 setReviewVideo(preview);
                 badge.textContent = selectedPredecessor
                     ? `saved scene ${selectedPredecessor.scene} · revision ${selectedPredecessor.revision.slice(0, 8)}`
@@ -1622,8 +1646,10 @@ function mount(node) {
                     current.candidate_batch_command_pending = candidateBatchAction;
                 }
                 if (candidateBatchAction === "accept") {
+                    pinAcceptedPreview(submittedReview, submittedCandidate);
                     const result = await activateAcceptedCandidate(
                         node, submittedReview, body);
+                    showAcceptedPreview();
                     if (result.immediate) {
                         status.textContent =
                             `Candidate ${body.candidate_number}/${body.candidate_count} ` +
@@ -1698,6 +1724,10 @@ function mount(node) {
     }
 
     node._h3ReviewHandler = (data) => {
+        const acceptedDisposition = acceptedPreviewDisposition(
+            acceptedPreviewPin, data);
+        if (acceptedDisposition === "ignore") return;
+        if (acceptedDisposition === "release") acceptedPreviewPin = null;
         const sameToken = Boolean(current?.token) && current.token === data?.token;
         const carriesCandidateBatch = !sameToken &&
             String(current?.run_name ?? "") === String(data?.run_name ?? "") &&
@@ -1765,6 +1795,7 @@ function mount(node) {
             badge.textContent = `clip ${data.clip_index}/${data.clip_count} · ${data.shot_id}`;
             setReviewVideo(data.video, sameToken);
         }
+        if (acceptedDisposition === "hold") showAcceptedPreview();
         const planNode = upstreamPlanNode(node);
         if (planNode) {
             publishPlanCompanionScene(node, planNode, Number(data.clip_index) - 1);
