@@ -4,8 +4,9 @@ import {
     promptTextToLines,
     sceneAudioContextLength,
     sceneContextLength,
+    sceneVisualContextSource,
     sharedPrompt,
-} from "./h3_chain_plan_core.mjs?v=0.6.13";
+} from "./h3_chain_plan_core.mjs?v=0.6.14";
 
 const FPS = 24;
 const MAX_H3_FRAMES = 3592;
@@ -217,6 +218,14 @@ export function applyCheckpointRevisionSet(plan, revisions) {
             );
         } else {
             delete shot.audio_context_length;
+        }
+        if (Object.hasOwn(revision, "visual_context_source")) {
+            shot.visual_context_source = String(
+                revision.visual_context_source,
+            );
+            sceneVisualContextSource(plan, scene);
+        } else {
+            delete shot.visual_context_source;
         }
         delete shot.frames;
         delete shot.duration_seconds;

@@ -527,6 +527,49 @@ export function sceneContextLength(shot, planDefault = 22) {
     return resolved;
 }
 
+export function sceneVisualContextSource(plan, index) {
+    const shots = plan?.shots;
+    const target = Number(index);
+    if (!Array.isArray(shots) || !Number.isInteger(target)
+            || target < 1 || target > shots.length) {
+        throw new Error("Visual context source has an invalid target scene.");
+    }
+    if (target === 1) return null;
+    const raw = shots[target - 1]?.visual_context_source;
+    if (raw === undefined || raw === null
+            || (typeof raw === "string" && [
+                "", "previous", "immediate",
+            ].includes(raw.trim().toLowerCase()))) return target - 1;
+    if (typeof raw === "boolean") {
+        throw new Error(
+            "Visual context source must name an earlier scene ID or index.",
+        );
+    }
+    let source = null;
+    const numeric = Number(raw);
+    if ((typeof raw === "number" || (typeof raw === "string"
+            && /^\d+$/.test(raw.trim()))) && Number.isInteger(numeric)) {
+        source = numeric;
+    } else if (typeof raw === "string") {
+        const wanted = raw.trim();
+        const matches = shots.map((shot, offset) => safeShotId(
+            shot?.id, `clip_${String(offset + 1).padStart(4, "0")}`,
+        ) === wanted ? offset + 1 : null).filter(Boolean);
+        if (matches.length === 1) source = matches[0];
+    }
+    if (source === null) {
+        throw new Error(
+            `Visual context source “${String(raw)}” does not match a scene ID or index.`,
+        );
+    }
+    if (source < 1 || source >= target) {
+        throw new Error(
+            `Visual context source for scene ${target} must point to an earlier scene.`,
+        );
+    }
+    return source;
+}
+
 export function sceneAudioContextLength(
     shot, planDefault = 22, videoContextLength = 22,
 ) {
@@ -684,6 +727,13 @@ export function calculatePlanTiming(plan, settings = {}) {
             rowErrors.push(error.message);
         }
 
+        let visualContextSource = index > 1 ? index - 1 : null;
+        try {
+            visualContextSource = sceneVisualContextSource(plan, index);
+        } catch (error) {
+            rowErrors.push(error.message);
+        }
+
         let sceneAudioContext = audioContextLength || sceneContext;
         try {
             sceneAudioContext = sceneAudioContextLength(
@@ -702,6 +752,12 @@ export function calculatePlanTiming(plan, settings = {}) {
             );
             if (sceneBlendFrames > 0 && anchorMode !== "head") {
                 rowErrors.push("Video blending requires head anchor mode.");
+            }
+            if (sceneBlendFrames > 0 && visualContextSource !== null
+                    && visualContextSource !== index - 1) {
+                rowErrors.push(
+                    "Non-linear visual context requires 0 assembly blend frames; the timeline still cuts from the immediately previous scene.",
+                );
             }
         } catch (error) {
             rowErrors.push(error.message);
@@ -835,6 +891,12 @@ export function calculatePlanTiming(plan, settings = {}) {
             deliveredSeconds: deliveredFrames / FPS,
             generationStartFrame,
             contextLength: sceneContext,
+            visualContextSource,
+            visualContextSourceId: visualContextSource === null ? null
+                : safeShotId(
+                    plan.shots[visualContextSource - 1]?.id,
+                    `clip_${String(visualContextSource).padStart(4, "0")}`,
+                ),
             videoBlendFrames: sceneBlendFrames,
             audioContextLength: [
                 "masked_av", "tapered_av", "feathered_av",
@@ -860,11 +922,13 @@ export function calculatePlanTiming(plan, settings = {}) {
         stitchedFrames += deliveredFrames;
     }
 
-    for (let offset = 0; offset < rows.length - 1; offset += 1) {
-        const required = rows[offset + 1].contextLength;
-        if (rows[offset].deliveredFrames < required) {
-            rows[offset].errors.push(
-                `Delivers fewer than ${required} frames needed by the next scene.`,
+    for (let offset = 1; offset < rows.length; offset += 1) {
+        const target = rows[offset];
+        const source = target.visualContextSource === null ? null
+            : rows[target.visualContextSource - 1];
+        if (source && source.deliveredFrames < target.contextLength) {
+            target.errors.push(
+                `Selected visual source scene ${source.index} delivers fewer than ${target.contextLength} required context frames.`,
             );
         }
     }

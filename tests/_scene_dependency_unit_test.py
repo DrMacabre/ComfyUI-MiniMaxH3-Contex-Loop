@@ -377,6 +377,84 @@ independent_start_plan["shots"][1]["context_length"] = 0
 independent_start_plan["shots"][1]["audio_context_length"] = 0
 assert chain._resume_context_predecessor(independent_start_plan, 2) is None
 
+# Visual and generated-audio continuity are independent edges. Scene 5 can
+# consume scene 3's saved picture state while retaining scene 4's audio latent.
+nonlinear_plan = chain._normalize_plan(
+    json.dumps({"shots": [
+        {"id": name, "prompt": name, "length": 39,
+         **({"visual_context_source": "three",
+             "video_blend_frames": 0} if name == "five" else {})}
+        for name in ("one", "two", "three", "four", "five")
+    ]}),
+    "nonlinear-context-test", 64, 64, 5, "video", "head", "disabled",
+    "generated_audio", 5, 1.0, 8, 11, 18, "body:auto:v1", 0,
+    "guide")
+assert nonlinear_plan["shots"][4]["visual_context_source"] == "three"
+assert chain._shot_visual_context_source(nonlinear_plan, 5) == 3
+linear_spelling = json.loads(json.dumps(nonlinear_plan))
+linear_spelling["shots"][4]["visual_context_source"] = "four"
+assert chain._shot_visual_context_source(linear_spelling, 5) == 4
+nonlinear_sources = chain._resume_context_predecessors(nonlinear_plan, 5)
+assert nonlinear_sources == {"visual": 3, "audio": 4, "scenes": [3, 4]}
+nonlinear_dependency = chain._scene_dependency_record(
+    nonlinear_plan, 5, None)
+assert nonlinear_dependency["scopes"]["incoming_boundary"][
+    "visual_context_source_scene"] == 3
+assert nonlinear_dependency["scopes"]["incoming_boundary"][
+    "visual_context_source_id"] == "three"
+
+source_frames = torch.full((5, 2, 2, 3), 3.0)
+source_video = torch.full((1, 24, 2, 2, 2), 30.0)
+immediate_video = torch.full((1, 24, 2, 2, 2), 40.0)
+immediate_audio = torch.full((1, 32, 2), 44.0)
+original_loader = chain._st_load
+original_streams = chain._streams_from_latent
+chain._st_load = lambda _path: {
+    "context_frames": source_frames, "video": source_video,
+}
+chain._streams_from_latent = lambda value: value["samples"]
+try:
+    nonlinear_state = {
+        "plan": nonlinear_plan, "index": 5,
+        "previous_frames": torch.full((5, 2, 2, 3), 4.0),
+        "previous_latent": {
+            "samples": [immediate_video, immediate_audio]},
+        "segments": [
+            {"index": scene, "id": nonlinear_plan["shots"][scene - 1]["id"],
+             "checkpoint": "scene_%d.safetensors" % scene,
+             "revision": "r%d" % scene,
+             "checkpoint_sha256": "h%d" % scene}
+            for scene in range(1, 5)
+        ],
+    }
+    selected_state = chain._visual_context_state(nonlinear_state)
+    assert selected_state is not nonlinear_state
+    assert selected_state["previous_frames"] is source_frames
+    assert selected_state["previous_latent"]["samples"][0] is source_video
+    assert selected_state["previous_latent"]["samples"][1] is immediate_audio
+    assert [item["index"] for item in selected_state["segments"]] == [1, 2, 3]
+    assert nonlinear_state["previous_latent"]["samples"][0] is immediate_video
+    assert chain._visual_context_state(nonlinear_state) is selected_state
+finally:
+    chain._st_load = original_loader
+    chain._streams_from_latent = original_streams
+
+try:
+    chain._normalize_plan(
+        json.dumps({"shots": [
+            {"id": name, "prompt": name, "length": 39,
+             **({"visual_context_source": "three",
+                 "video_blend_frames": 2} if name == "five" else {})}
+            for name in ("one", "two", "three", "four", "five")
+        ]}),
+        "invalid-nonlinear-blend", 64, 64, 5, "video", "head",
+        "disabled", "generated_audio", 5, 1.0, 8, 11, 18,
+        "body:auto:v1", 0, "guide")
+except ValueError as exc:
+    assert "video_blend_frames must be 0" in str(exc)
+else:
+    raise AssertionError("non-linear visual context accepted an assembly blend")
+
 formatted = chain._format_dependency_mismatches(boundary_diffs)
 assert "scene 2 incoming_boundary.context_length" in formatted
 assert chain._scene_dependency_diffs({"version": "legacy"}, scene1_a) == []
@@ -634,3 +712,64 @@ with tempfile.TemporaryDirectory() as temporary:
     assert independent_resume["predecessors"][0]["mismatches"] == []
 
 print("H3 structured resume preflight: field-level saved/current mismatch pass")
+
+
+with tempfile.TemporaryDirectory() as temporary:
+    root = pathlib.Path(temporary)
+    chain._output_root = lambda: str(root)
+    saved_plan = chain._plan_with_source_audio(nonlinear_plan, None)
+    for scene in range(1, 5):
+        paths = chain._artifact_paths(saved_plan, scene)
+        pathlib.Path(paths["segment"]).parent.mkdir(parents=True, exist_ok=True)
+        pathlib.Path(paths["checkpoint"]).parent.mkdir(
+            parents=True, exist_ok=True)
+        pathlib.Path(paths["segment"]).write_bytes(
+            ("video-%d" % scene).encode())
+        pathlib.Path(paths["checkpoint"]).write_bytes(
+            ("checkpoint-%d" % scene).encode())
+        history = chain._history_hash(saved_plan, scene)
+        segment = {
+            "index": scene,
+            "id": saved_plan["shots"][scene - 1]["id"],
+            "segment": chain._relative_output_path(paths["segment"]),
+            "checkpoint": chain._relative_output_path(paths["checkpoint"]),
+            "segment_sha256": chain._file_sha256(paths["segment"]),
+            "checkpoint_sha256": chain._file_sha256(paths["checkpoint"]),
+            "history_hash": history,
+            "revision": "r%d" % scene,
+        }
+        pathlib.Path(paths["metadata"]).write_text(json.dumps({
+            "history_hash": history,
+            "compatibility": saved_plan["compatibility"],
+            "scene_dependency": chain._scene_dependency_record(
+                saved_plan, scene, None),
+            "segment": segment,
+        }), encoding="utf-8")
+
+    changed_unconsumed = json.loads(json.dumps(saved_plan))
+    changed_unconsumed["shots"][1]["prompt"] = "changed scene two"
+    changed_unconsumed["shots"][1]["prompt_hash"] = (
+        chain.hashlib.sha256(b"changed scene two").hexdigest())
+    report = {"errors": [], "warnings": []}
+    preflight = chain._preflight_resume(
+        changed_unconsumed, 5, True, report)
+    assert preflight["eligible"] is True
+    assert preflight["context_sources"] == {
+        "visual": 3, "audio": 4, "scenes": [3, 4]}
+    assert preflight["predecessors"][1]["mismatches"] == []
+
+    for consumed_scene in (3, 4):
+        changed_consumed = json.loads(json.dumps(saved_plan))
+        changed_consumed["shots"][consumed_scene - 1]["prompt"] = (
+            "changed scene %d" % consumed_scene)
+        changed_consumed["shots"][consumed_scene - 1]["prompt_hash"] = (
+            chain.hashlib.sha256(
+                changed_consumed["shots"][consumed_scene - 1][
+                    "prompt"].encode()).hexdigest())
+        report = {"errors": [], "warnings": []}
+        blocked = chain._preflight_resume(
+            changed_consumed, 5, True, report)
+        assert blocked["eligible"] is False
+        assert blocked["predecessors"][consumed_scene - 1]["mismatches"]
+
+print("H3 non-linear resume preflight: visual scene 3 + audio scene 4 dependencies pass")
