@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import {
+    applyCheckpointRevisionSeeds,
     applyCheckpointRevisionSet,
     applyReviewEdit,
     checkpointRevisionChain,
@@ -125,6 +126,24 @@ assert.deepEqual(recoveredPlan.shots, [
         context_length: 0, audio_context_length: 33},
     {id: "old_two", prompt: ["old two"], length: 328, steps: 7, seed: "102"},
 ]);
+
+const seedOnlyPlan = applyCheckpointRevisionSeeds({
+    prompt_prefix: ["keep prefix"],
+    shots: [
+        {id: "one", prompt: ["keep one"], length: 362, steps: 8, seed: "1"},
+        {id: "two", prompt: ["keep two"], length: 345, steps: 6, seed: "2"},
+    ],
+}, [
+    {scene: 1, seed: "101", scene_prompt: "ignored", raw_frames: 5, steps: 1},
+    {scene: 2, seed: "102", scene_prompt: "ignored", raw_frames: 5, steps: 1},
+]);
+assert.deepEqual(seedOnlyPlan, {
+    prompt_prefix: ["keep prefix"],
+    shots: [
+        {id: "one", prompt: ["keep one"], length: 362, steps: 8, seed: "101"},
+        {id: "two", prompt: ["keep two"], length: 345, steps: 6, seed: "102"},
+    ],
+});
 
 const reviewSource = fs.readFileSync(
     new URL("../web/h3_chain_review_final.js", import.meta.url),
