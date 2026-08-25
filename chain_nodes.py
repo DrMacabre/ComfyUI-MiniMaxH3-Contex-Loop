@@ -19057,6 +19057,7 @@ async def _restore_checkpoint_revisions(request):
         run_name = _safe_name(body.get("run_name", ""), "")
         if not run_name:
             raise ValueError("A non-empty H3 chain run_name is required.")
+        activate_only = body.get("activate_only") is True
         resume_scene = int(body.get("resume_scene", 0))
         if resume_scene < 2 or resume_scene > MAX_SHOTS + 1:
             raise ValueError(
@@ -19087,18 +19088,27 @@ async def _restore_checkpoint_revisions(request):
             current_compatibility = metadata.get("compatibility")
             if compatibility is None:
                 compatibility = current_compatibility
-            elif _canonical_json(current_compatibility) != _canonical_json(
-                    compatibility):
+            elif (not activate_only and
+                  _canonical_json(current_compatibility) != _canonical_json(
+                      compatibility)):
                 raise ValueError(
                     "Selected checkpoint revisions use different Plan "
                     "compatibility settings.")
+            elif activate_only:
+                # Pointer promotion validates immutable lineage, not whether
+                # every scene was authored under an identical historical Plan
+                # policy snapshot.  Keep the tip snapshot only for the response;
+                # the activation caller does not rewrite an editable Plan.
+                compatibility = current_compatibility
             segment = metadata["segment"]
             current_prefix = str(segment.get("prompt_prefix") or "")
             if prompt_prefix is None:
                 prompt_prefix = current_prefix
-            elif current_prefix != prompt_prefix:
+            elif not activate_only and current_prefix != prompt_prefix:
                 raise ValueError(
                     "Selected checkpoint revisions use different shared prompts.")
+            elif activate_only:
+                prompt_prefix = current_prefix
             if loaded:
                 predecessor = loaded[-1][1]["segment"]
                 expected_revision = str(
@@ -19173,6 +19183,7 @@ async def _restore_checkpoint_revisions(request):
             "ok": True,
             "run_name": run_name,
             "resume_scene": resume_scene,
+            "activate_only": activate_only,
             "restored": restored,
             "retired_later_pointers": len(retired),
             # The revision chain is authoritative.  The latest plan.json can
@@ -19181,8 +19192,12 @@ async def _restore_checkpoint_revisions(request):
             "policy_inputs": archive_policy_inputs({
                 "compatibility": compatibility,
             }),
-            "message": "Restored scenes 1 through %d; resume scene %d is ready."
-                       % (resume_scene - 1, resume_scene),
+            "message": (
+                "Activated scenes 1 through %d."
+                if activate_only else
+                "Restored scenes 1 through %d; resume scene %d is ready."
+            ) % ((resume_scene - 1,) if activate_only else
+                 (resume_scene - 1, resume_scene)),
         })
     except FileNotFoundError as exc:
         return web.json_response({"error": str(exc)}, status=404)

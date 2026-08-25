@@ -9,18 +9,18 @@ import {
     checkpointSelectionJson,
     formatCheckpointBytes,
     selectedCheckpointRevision,
-} from "./h3_checkpoint_manager_core.mjs?v=0.6.14";
+} from "./h3_checkpoint_manager_core.mjs?v=0.6.15";
 import {
     parsePlanJson,
     planToJson,
     promptValueToText,
-} from "./h3_chain_plan_core.mjs?v=0.6.14";
-import {applyCheckpointRevisionSet} from "./h3_chain_review_core.mjs?v=0.6.14";
-import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.6.14";
+} from "./h3_chain_plan_core.mjs?v=0.6.15";
+import {applyCheckpointRevisionSet} from "./h3_chain_review_core.mjs?v=0.6.15";
+import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.6.15";
 import {
     refreshRestoredPlanEditors,
     restoreConnectedPolicyInputs,
-} from "./h3_plan_restore_core.mjs?v=0.6.14";
+} from "./h3_plan_restore_core.mjs?v=0.6.15";
 
 const NODE_NAME = "MiniMaxH3ChainCheckpointManager";
 const PLAN_NAME = "MiniMaxH3ChainPlan";
@@ -637,8 +637,14 @@ function mount(node) {
         }
         setBusy(true, "Scanning checkpoint metadata…");
         try {
-            const query = new URLSearchParams({run_name:state.runName});
-            state.payload = await jsonRequest(`/minimax_h3_context_loop/checkpoints?${query}`);
+            const query = new URLSearchParams({
+                run_name:state.runName,
+                cache_bust:String(Date.now()),
+            });
+            state.payload = await jsonRequest(
+                `/minimax_h3_context_loop/checkpoints?${query}`,
+                {cache:"no-store"},
+            );
             let selected = selectedCheckpointRevision(
                 state.payload, state.scene, state.revision);
             if (state.initialRefresh) {
@@ -868,6 +874,7 @@ function mount(node) {
                         run_name:state.runName,
                         resume_scene:Number(record.scene) + 1,
                         revisions:lineage,
+                        activate_only:true,
                     }),
                 });
             await refreshCheckpoints();
