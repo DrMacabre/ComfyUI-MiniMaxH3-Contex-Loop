@@ -837,7 +837,7 @@ def validate_deferred_h3_upscale(path):
         "SamplerCustomAdvanced",
         "MiniMaxH3ChainUpscaleSegmentSave",
         "MiniMaxH3ChainUpscaleLoopEnd",
-        "MiniMaxH3ChainUpscaleMerge",
+        "MiniMaxH3ChainAssemble",
     }
     assert required <= node_types
     assert "MiniMaxH3ChainPlan" not in node_types
@@ -856,7 +856,7 @@ def validate_deferred_h3_upscale(path):
     sampler = node(workflow, "SamplerCustomAdvanced")
     saver = node(workflow, "MiniMaxH3ChainUpscaleSegmentSave")
     loop_end = node(workflow, "MiniMaxH3ChainUpscaleLoopEnd")
-    merger = node(workflow, "MiniMaxH3ChainUpscaleMerge")
+    assembler = node(workflow, "MiniMaxH3ChainAssemble")
 
     assert manager["inputs"] == []
     assert [item["name"] for item in manager["outputs"]] == [
@@ -921,7 +921,11 @@ def validate_deferred_h3_upscale(path):
     assert socket(loop_end["inputs"], "images")["link"] is not None
     assert socket(loop_end["inputs"], "upscaled_latent")["link"] is not None
     assert socket(loop_end["outputs"], "manifest")["links"] == [
-        socket(merger["inputs"], "manifest")["link"]]
+        socket(assembler["inputs"], "manifest")["link"]]
+    assert socket(loop_end["outputs"], "manifest")["type"] == (
+        "H3_CHAIN_MANIFEST")
+    assert socket(assembler["inputs"], "manifest")["type"] == (
+        "H3_CHAIN_MANIFEST")
     notes = "\n".join(
         str(item.get("widgets_values", [""])[0])
         for item in workflow["nodes"] if item.get("type") == "Note")
@@ -965,7 +969,7 @@ def validate_deferred_h3_derope(path):
         "MinimaxH3LatentUpscaler3D",
         "MiniMaxH3ChainUpscaleSegmentSave",
         "MiniMaxH3ChainUpscaleLoopEnd",
-        "MiniMaxH3ChainUpscaleMerge",
+        "MiniMaxH3ChainAssemble",
     } <= node_types
     assert not node_types.intersection({
         "MiniMaxH3ChainPlan", "MiniMaxH3ChainPass2Prepare",
@@ -993,6 +997,7 @@ def validate_deferred_h3_derope(path):
     recovered_av = node(workflow, "MiniMaxH3ChainRecoveredAV")
     saver = node(workflow, "MiniMaxH3ChainUpscaleSegmentSave")
     loop_end = node(workflow, "MiniMaxH3ChainUpscaleLoopEnd")
+    assembler = node(workflow, "MiniMaxH3ChainAssemble")
 
     assert adapter["widgets_values"][0:2] == [
         "h3_lbh_3d_derope", "h3_latent"]
@@ -1049,6 +1054,8 @@ def validate_deferred_h3_derope(path):
     assert origin_for_input(
         workflow, socket(loop_end["inputs"], "upscaled_latent")) == (
             recovered_av)
+    assert socket(loop_end["outputs"], "manifest")["links"] == [
+        socket(assembler["inputs"], "manifest")["link"]]
     return workflow
 
 

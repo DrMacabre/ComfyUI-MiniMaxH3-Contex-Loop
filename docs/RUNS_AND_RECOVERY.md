@@ -259,7 +259,7 @@ Policy, or decoded source media is retained by the recursive upscale graph:
 Checkpoint Manager → Upscale Adapter → Upscale Current Scene
                                       → backend graph
                                       → Upscale Segment Save
-                                      → Upscale Loop End → Upscale Merger
+                                      → Upscale Loop End → H3 Chain Assemble
 ```
 
 **Upscale Current Scene** prefers the optional `denoised_output` saved by
@@ -409,10 +409,13 @@ For new parent renders, connect SamplerCustomAdvanced `denoised_output` to
 Segment + Checkpoint's optional `denoised_latent` input. Existing checkpoints
 remain valid and use their terminal sampler output. Keep the parent branch
 until every selected child scene has been persisted; a completed child profile
-contains its own HQ video segments and audio needed by Upscale Merger.
-Upscale Merger reconstructs a recoverable Source Timeline from the embedded
-parent manifest. Legacy source-track runs without that descriptor still need
-their original full AUDIO connected to the merger.
+contains its own HQ video segments and audio needed by H3 Chain Assemble.
+Assemble recognizes the upscale manifest, reconstructs a recoverable Source
+Timeline from the embedded parent manifest, and keeps the canonical HQ result
+under `upscaled/<profile>/final/`. Its normal `copy_to_output` and
+`output_subfolder` controls can additionally publish the MP4 in ComfyUI's
+regular output tree. Legacy source-track runs without the embedded descriptor
+still need their original full AUDIO connected to Assemble.
 
 ## Run Manager
 

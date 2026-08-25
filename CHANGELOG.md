@@ -4,6 +4,12 @@ Newest first. This file keeps release history out of the onboarding README.
 
 ## Unreleased
 
+- Unified source and deferred-upscale finishing in **H3 Chain Assemble**.
+  Upscale Loop End now emits the common manifest wire; Assemble dispatches by
+  document format, keeps HQ finals under the child profile, and exposes the
+  same optional regular-output copy, filename, audio, and assembly controls.
+  The former Upscale Merger remains as a deprecated compatibility wrapper.
+
 ## v0.5.20 — Candidate review and flexible branches
 
 - Reworked multi-candidate review into a live carousel. Completed candidates

@@ -17800,9 +17800,10 @@ class MiniMaxH3ChainAssemble:
         return {
             "required": {
                 "manifest": (MANIFEST_TYPE, {
-                    "tooltip": "Completed manifest from Loop End or Manifest "
-                               "Load. Every segment file is verified before "
-                               "joining."}),
+                    "tooltip": "Completed source or upscale manifest from "
+                               "Loop End or Manifest Load. Its format selects "
+                               "the correct verified segments and canonical "
+                               "final folder automatically."}),
                 "audio_source": (["plan", "source", "generated", "none"],
                                  {
                                      "default": "plan",
@@ -17898,11 +17899,10 @@ class MiniMaxH3ChainAssemble:
     FUNCTION = "assemble"
     OUTPUT_NODE = True
     CATEGORY = "conditioning/minimax/contex_loop"
-    DESCRIPTION = ("Stream-copy saved H3 segments into one MP4 and mux either "
-                   "the original source track or checkpointed generated audio. "
-                   "Optional assembly filters can blend joins, remove a small "
-                   "boundary tone step, or stabilize later scene color to "
-                   "scene one without rerunning diffusion.")
+    DESCRIPTION = ("Assemble either source or upscaled H3 manifests into one "
+                   "MP4 and mux the selected source or generated audio. "
+                   "Upscale manifests publish under their child profile and "
+                   "share the same optional output copy and assembly filters.")
 
     @classmethod
     def IS_CHANGED(cls, *args, **kwargs):
@@ -17914,6 +17914,20 @@ class MiniMaxH3ChainAssemble:
                  source_timeline=None, blend_schedule="plan",
                  blend_video_vae=None, boundary_tone_match="off",
                  color_stabilization="off"):
+        upscale_manifest = None
+        upscale_support = None
+        manifest_format = str((manifest or {}).get("format") or "")
+        if manifest_format.startswith("h3_chain_upscale_"):
+            # Import lazily: upscale_nodes imports this module to reuse the
+            # source-chain contracts, while assembly only needs its child-run
+            # verifier after both modules have finished loading.
+            from . import upscale_nodes as upscale_support
+
+            upscale_manifest = _json_document(manifest)
+            upscale_segments = upscale_support._validate_upscale_manifest(
+                upscale_manifest)
+            manifest = upscale_support._assembly_manifest(
+                upscale_manifest, upscale_segments)
         segments = _validate_manifest(manifest)
         prelude = _validate_prelude(manifest)
         tone_match_mode = str(
@@ -18007,7 +18021,12 @@ class MiniMaxH3ChainAssemble:
 
         run_name = _safe_name(manifest.get("run_name"), "h3_chain")
         run_dir = os.path.join(_output_root(), "h3_chains", run_name)
-        final_dir = os.path.join(run_dir, "final")
+        if upscale_manifest is not None:
+            final_dir = upscale_support._profile_paths(
+                upscale_manifest["run_name"],
+                upscale_manifest["profile"], 1)["final"]
+        else:
+            final_dir = os.path.join(run_dir, "final")
         os.makedirs(final_dir, exist_ok=True)
         final_name = _safe_name(_expand_filename_date(filename), "final")
         final_path = os.path.join(final_dir, final_name + ".mp4")
@@ -18151,6 +18170,10 @@ class MiniMaxH3ChainAssemble:
                 if os.path.exists(temporary):
                     os.unlink(temporary)
 
+        if upscale_manifest is not None:
+            upscale_support._write_upscale_final_record(
+                upscale_manifest, final_path)
+
         output_copy = (_copy_final_to_output(final_path, output_subfolder)
                        if copy_to_output else None)
         sidecar_status = (
@@ -18180,8 +18203,11 @@ class MiniMaxH3ChainAssemble:
         color_status = (
             "; scene-one temporal color anchor"
             if color_stabilization_mode == "scene_1_anchor" else "")
-        status = "assembled %d generated clips%s with %s%s%s%s -> %s%s%s" % (
-            len(segments), " + existing-video prelude" if prelude else "",
+        clip_kind = ("HQ clips" if upscale_manifest is not None
+                     else "generated clips")
+        status = "assembled %d %s%s with %s%s%s%s -> %s%s%s" % (
+            len(segments), clip_kind,
+            " + existing-video prelude" if prelude else "",
             backend, blend_status, tone_status, color_status, final_path,
             sidecar_status, copy_status)
         _LOG.info("H3 Chain %s", status)
