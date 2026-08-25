@@ -127,6 +127,47 @@ assert.deepEqual(recoveredPlan.shots, [
     {id: "old_two", prompt: ["old two"], length: 328, steps: 7, seed: "102"},
 ]);
 
+const activatedAlternate = applyCheckpointRevisionSet({
+    prompt_prefix: ["current prefix"],
+    shots: [
+        {id: "one", prompt: ["current one"], length: 362, steps: 8,
+            seed: "1", lora_route: "d", prompt_seed_mode: "randomize"},
+        {id: "two", prompt: ["current two"], length: 362, steps: 8,
+            seed: "2", context_spatial_proxy: "rgb_5_6"},
+    ],
+}, [
+    {scene: 1, scene_id: "old_one", scene_prompt: "{template|one}",
+        effective_scene_prompt: "executed one", seed: "101", raw_frames: 345,
+        steps: 6, prompt_prefix: "older prefix", context_length: 0,
+        audio_context_length: 0, continuation_mode: "guide",
+        video_blend_frames: 0, source_reference: "off",
+        generated_continuity: "off", source_audio_target: "off",
+        lora_route: "a", prompt_seed_mode: "fixed", prompt_seed: "9001"},
+    {scene: 2, scene_id: "old_two", scene_prompt: "{template|two}",
+        effective_scene_prompt: "executed two", seed: "102", raw_frames: 328,
+        steps: 7, prompt_prefix: "tip prefix", context_length: 39,
+        audio_context_length: 39, visual_context_source: "old_one",
+        continuation_mode: "masked_av", video_blend_frames: 2,
+        context_spatial_proxy: "latent_5_6", source_reference: "on",
+        generated_continuity: "on", source_audio_target: "locked",
+        prompt_seed_mode: "randomize"},
+], {useEffectivePrompts: true, useTipSharedPrompt: true});
+assert.deepEqual(activatedAlternate.prompt_prefix, ["tip prefix"]);
+assert.deepEqual(activatedAlternate.shots, [
+    {id: "old_one", prompt: ["executed one"], length: 345, steps: 6,
+        seed: "101", context_length: 0, audio_context_length: 0,
+        continuation_mode: "guide", video_blend_frames: 0,
+        source_reference: "off", generated_continuity: "off",
+        source_audio_target: "off", lora_route: "a",
+        prompt_seed_mode: "fixed", prompt_seed: "9001"},
+    {id: "old_two", prompt: ["executed two"], length: 328, steps: 7,
+        seed: "102", context_length: 39, audio_context_length: 39,
+        visual_context_source: "old_one", continuation_mode: "masked_av",
+        video_blend_frames: 2, context_spatial_proxy: "latent_5_6",
+        source_reference: "on", generated_continuity: "on",
+        source_audio_target: "locked", prompt_seed_mode: "randomize"},
+]);
+
 const seedOnlyPlan = applyCheckpointRevisionSeeds({
     prompt_prefix: ["keep prefix"],
     shots: [

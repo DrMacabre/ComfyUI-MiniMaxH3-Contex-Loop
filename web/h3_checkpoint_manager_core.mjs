@@ -41,12 +41,22 @@ export function selectedCheckpointRevision(payload, scene = null, revision = "")
 
 export function checkpointBranchRows(payload) {
     const revisions = checkpointRevisionMap(payload);
-    return (payload?.branches ?? []).map((branch) => ({
-        ...branch,
-        revisions: (branch.path ?? []).map((item) =>
+    return (payload?.branches ?? []).map((branch) => {
+        const slot = branch.attribution_slot;
+        return {
+            ...branch,
+            revisions: (branch.path ?? []).map((item) =>
             revisions.get(checkpointRevisionKey(item.scene, item.revision)))
             .filter(Boolean),
-    }));
+            attribution_slot: slot ? {
+                ...slot,
+                candidates: (slot.candidates ?? []).map((item) =>
+                    revisions.get(checkpointRevisionKey(
+                        item.scene, item.revision,
+                    ))).filter(Boolean),
+            } : null,
+        };
+    });
 }
 
 export function checkpointRevisionLineage(payload, selected) {

@@ -6508,6 +6508,10 @@ def _effective_editor_plan(plan: dict[str, Any]) -> dict[str, Any]:
                 if "generated_continuity" in shot else {}),
              **({"source_audio_target": shot["source_audio_target"]}
                 if "source_audio_target" in shot else {}),
+             **({"prompt_seed_mode": shot["prompt_seed_mode"]}
+                if "prompt_seed_mode" in shot else {}),
+             **({"prompt_seed": str(shot["prompt_seed"])}
+                if "prompt_seed" in shot else {}),
              **({"lora_route": shot["lora_route"]}
                 if "lora_route" in shot else {}))
             for shot in plan["shots"]],
@@ -7127,7 +7131,7 @@ def _public_segment(value: dict[str, Any]) -> dict[str, Any]:
         "seed", "steps", "continuation_mode", "context_length",
         "audio_context_length", "context_spatial_proxy",
         "source_reference", "generated_continuity", "source_audio_target",
-        "lora_route",
+        "prompt_seed_mode", "prompt_seed", "lora_route",
         "guide_tone_carry",
         "guide_tone_input_applied",
         "latent_color_stats",
@@ -13601,6 +13605,10 @@ class MiniMaxH3ChainSegmentSave:
                         "generated_continuity"]),
                 **({"lora_route": shot["lora_route"]}
                    if "lora_route" in shot else {}),
+                **({"prompt_seed_mode": str(shot["prompt_seed_mode"])}
+                   if "prompt_seed_mode" in shot else {}),
+                **({"prompt_seed": int(shot["prompt_seed"])}
+                   if "prompt_seed" in shot else {}),
                 "blend_frames": blend_frames,
                 "sample_rate": sample_rate,
                 "segment_sha256": _file_sha256(published_segment),
@@ -13620,7 +13628,13 @@ class MiniMaxH3ChainSegmentSave:
                         visual_source_segment.get(
                             "checkpoint_sha256") or ""),
                 })
-            if _audio_policy_locks_source_audio(plan, shot):
+            if "source_audio_target" in shot:
+                # Keep an explicit scene-local "off" as well as "locked".
+                # Without it, activating this revision under a globally
+                # locked policy would silently change the saved scene.
+                segment["source_audio_target"] = str(
+                    shot["source_audio_target"])
+            elif _audio_policy_locks_source_audio(plan, shot):
                 segment["source_audio_target"] = "locked"
             cache_metadata = _find_reference_cache(
                 str(plan["compatibility"].get(
@@ -18363,6 +18377,16 @@ def _checkpoint_plan_revision(segment: dict[str, Any]) -> dict[str, Any]:
             segment["visual_context_source_id"])
     if "lora_route" in segment:
         revision["lora_route"] = str(segment["lora_route"])
+    for key in (
+            "continuation_mode", "context_spatial_proxy",
+            "source_reference", "generated_continuity",
+            "source_audio_target", "prompt_seed_mode"):
+        if key in segment:
+            revision[key] = str(segment[key])
+    if "prompt_seed" in segment:
+        revision["prompt_seed"] = str(segment["prompt_seed"])
+    if "blend_frames" in segment:
+        revision["video_blend_frames"] = int(segment["blend_frames"])
     return revision
 
 
@@ -18535,6 +18559,30 @@ async def _preview_checkpoint_revision_deletion(request):
     try:
         payload = CheckpointGraphManager(_output_root()).deletion_preview(
             body.get("run_name"), body.get("scene"), body.get("revision"))
+    except FileNotFoundError as exc:
+        return web.json_response({"error": str(exc)}, status=404)
+    except (OSError, TypeError, ValueError, json.JSONDecodeError, KeyError) as exc:
+        return web.json_response({"error": str(exc)}, status=400)
+    return web.json_response(payload)
+
+
+async def _attribute_checkpoint_revision(request):
+    try:
+        body = await request.json()
+    except (json.JSONDecodeError, TypeError):
+        return web.json_response(
+            {"error": "Checkpoint candidate attribution requires JSON."},
+            status=400)
+    if not isinstance(body, dict):
+        return web.json_response(
+            {"error": "Checkpoint candidate attribution requires a JSON object."},
+            status=400)
+    try:
+        payload = await asyncio.to_thread(
+            CheckpointGraphManager(_output_root()).attribute,
+            body.get("run_name"), body.get("parent_scene"),
+            body.get("parent_revision"), body.get("candidate_scene"),
+            body.get("candidate_revision"))
     except FileNotFoundError as exc:
         return web.json_response({"error": str(exc)}, status=404)
     except (OSError, TypeError, ValueError, json.JSONDecodeError, KeyError) as exc:
@@ -19194,6 +19242,9 @@ if (PromptServer is not None and web is not None and
     PromptServer.instance.routes.post(
         "/minimax_h3_context_loop/checkpoint-revisions/restore")(
             _restore_checkpoint_revisions)
+    PromptServer.instance.routes.post(
+        "/minimax_h3_context_loop/checkpoint-revisions/attribute")(
+            _attribute_checkpoint_revision)
     PromptServer.instance.routes.post(
         "/minimax_h3_context_loop/checkpoint-revisions/delete-preview")(
             _preview_checkpoint_revision_deletion)

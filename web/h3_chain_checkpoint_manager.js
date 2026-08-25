@@ -185,6 +185,10 @@ function injectStyles() {
       .h3cm-arrow { align-self:center; color:var(--h3cm-muted); }
       .h3cm-revision { position:relative; min-width:112px; text-align:left; white-space:nowrap; }
       .h3cm-revision small { display:block; color:var(--h3cm-muted); font-size:10px; }
+      .h3cm-revision-empty { border-style:dashed !important; color:var(--h3cm-muted) !important;
+        background:color-mix(in srgb,var(--h3cm-panel) 72%,transparent) !important; }
+      .h3cm-revision-empty-selected { border-color:var(--h3cm-accent) !important;
+        color:var(--h3cm-accent) !important; }
       .h3cm-revision-shared { border-color:var(--h3cm-shared-color) !important;
         box-shadow:inset 3px 0 0 var(--h3cm-shared-color); }
       .h3cm-shared-label { display:block; width:max-content; margin:2px 0; padding:1px 5px;
@@ -202,6 +206,12 @@ function injectStyles() {
       .h3cm-inspector dd { margin:0; overflow-wrap:anywhere; }
       .h3cm-prompt { max-height:90px; overflow:auto; padding:6px; border-radius:5px;
         background:var(--h3cm-panel); white-space:pre-wrap; overflow-wrap:anywhere; }
+      .h3cm-attribution { padding:7px; border:1px dashed var(--h3cm-accent);
+        border-radius:6px; background:color-mix(in srgb,var(--h3cm-accent) 8%,transparent); }
+      .h3cm-attribution-title { margin-bottom:6px; font-weight:750; color:var(--h3cm-accent); }
+      .h3cm-attribution-candidates { display:flex; flex-wrap:wrap; gap:5px; margin-bottom:7px; }
+      .h3cm-attribution-candidate-selected { border-color:var(--h3cm-accent) !important;
+        color:var(--h3cm-accent) !important; }
       .h3cm-delete { flex:0 0 auto; max-height:210px; overflow:auto; padding:8px;
         border:1px solid var(--h3cm-border); border-radius:7px; }
       .h3cm-delete-blocked { border-color:var(--h3cm-danger); }
@@ -234,7 +244,7 @@ function mount(node) {
         scene:Number(node.properties[SCENE_PROPERTY]) || null,
         revision:String(node.properties[REVISION_PROPERTY] ?? ""),
         selected:null, deletion:null, busy:false, requestToken:0, sharedLinkFrame:0,
-        initialRefresh:true,
+        initialRefresh:true, attribution:null, attributionButton:null,
     };
     const root = element("div", "h3cm-root");
     const head = element("div", "h3cm-head");
@@ -262,8 +272,10 @@ function mount(node) {
     audio.preload = "metadata";
     audio.hidden = true;
     const inspector = element("dl", "h3cm-inspector");
+    const attributionPanel = element("div", "h3cm-attribution");
+    attributionPanel.hidden = true;
     const prompt = element("div", "h3cm-prompt");
-    detail.append(preview, audio, inspector, prompt);
+    detail.append(preview, audio, attributionPanel, inspector, prompt);
     main.append(branchesPanel, detail);
     const deletion = element("section", "h3cm-delete");
     const deletionTitle = element("div", "h3cm-delete-title", "Select a checkpoint revision.");
@@ -271,7 +283,7 @@ function mount(node) {
     const deletionActions = element("div", "h3cm-delete-actions");
     const status = element("div", "h3cm-status");
     const load = button("Load selected branch", "Restore this revision and its complete lineage into the connected Plan", () => void loadSelected());
-    const activate = button("Make branch active", "Promote this revision and its complete lineage to the run's active checkpoint pointers without changing the connected Plan", () => void activateSelected());
+    const activate = button("Make branch active", "Promote this revision and its complete lineage, then restore their saved scene settings into the connected Plan", () => void activateSelected());
     const remove = button("Delete selected revision", "Delete an inactive leaf or roll back the active branch tip after confirmation", () => void deleteSelected(), "h3cm-delete-button");
     load.disabled = true;
     activate.disabled = true;
@@ -312,9 +324,10 @@ function mount(node) {
         runSelect.disabled = state.busy;
         refresh.disabled = state.busy;
         open.disabled = state.busy || !state.runName;
-        load.disabled = state.busy || !canLoadSelected();
-        activate.disabled = state.busy || !canActivateSelected();
-        remove.disabled = state.busy || !state.deletion?.allowed;
+        load.disabled = state.busy || Boolean(state.attribution) || !canLoadSelected();
+        activate.disabled = state.busy || Boolean(state.attribution) || !canActivateSelected();
+        remove.disabled = state.busy || Boolean(state.attribution) || !state.deletion?.allowed;
+        if (state.attributionButton) state.attributionButton.disabled = state.busy;
         if (message) status.textContent = message;
     }
 
@@ -338,6 +351,7 @@ function mount(node) {
     }
 
     function selectRevision(record, requestDeletion = true) {
+        state.attribution = null;
         state.selected = record;
         state.scene = record ? Number(record.scene) : null;
         state.revision = record ? String(record.revision) : "";
@@ -345,6 +359,22 @@ function mount(node) {
         persistSelection();
         render();
         if (record && requestDeletion) void refreshDeletionPreview();
+    }
+
+    function selectAttribution(parent, slot) {
+        const candidates = slot?.candidates ?? [];
+        if (!parent || !candidates.length) return;
+        state.selected = parent;
+        state.scene = Number(parent.scene);
+        state.revision = String(parent.revision);
+        state.attribution = {
+            parent,
+            scene:Number(slot.scene),
+            candidates,
+            candidate:candidates[0],
+        };
+        persistSelection();
+        render();
     }
 
     function renderScenes() {
@@ -422,6 +452,25 @@ function mount(node) {
                 }
                 path.append(card);
             });
+            const slot = branch.attribution_slot;
+            if (slot?.candidates?.length && tip) {
+                path.append(element("span", "h3cm-arrow", "→"));
+                const count = slot.candidates.length;
+                const empty = button(
+                    `S${slot.scene} · empty`,
+                    `${count} independent saved candidate${count === 1 ? "" : "s"} can be attributed here`,
+                    () => selectAttribution(tip, slot),
+                    "h3cm-revision h3cm-revision-empty",
+                );
+                empty.append(element(
+                    "small", "", `${count} attributable candidate${count === 1 ? "" : "s"}`,
+                ));
+                if (state.attribution &&
+                        state.attribution.parent.revision === tip.revision) {
+                    empty.classList.add("h3cm-revision-empty-selected");
+                }
+                path.append(empty);
+            }
             row.append(header, path);
             branches.append(row);
             path.addEventListener("scroll", scheduleSharedLinks, {passive:true});
@@ -487,7 +536,10 @@ function mount(node) {
 
     function renderDetail() {
         inspector.replaceChildren();
-        const record = state.selected;
+        attributionPanel.replaceChildren();
+        attributionPanel.hidden = !state.attribution;
+        state.attributionButton = null;
+        const record = state.attribution?.candidate ?? state.selected;
         if (!record) {
             preview.removeAttribute("src");
             delete preview.dataset.source;
@@ -497,6 +549,41 @@ function mount(node) {
             delete audio.dataset.source;
             prompt.textContent = "Select a revision from the branch graph.";
             return;
+        }
+        if (state.attribution) {
+            const attribution = state.attribution;
+            attributionPanel.append(element(
+                "div", "h3cm-attribution-title",
+                `Attribute an existing scene ${attribution.scene} candidate to branch ${attribution.parent.revision.slice(0, 8)}`,
+            ));
+            const candidates = element("div", "h3cm-attribution-candidates");
+            for (const candidate of attribution.candidates) {
+                const choice = button(
+                    `${candidate.revision.slice(0, 8)} · seed ${candidate.seed || "?"}`,
+                    candidate.prompt_preview || candidate.scene_id,
+                    () => {
+                        attribution.candidate = candidate;
+                        renderDetail();
+                    },
+                );
+                if (candidate.revision === record.revision) {
+                    choice.classList.add("h3cm-attribution-candidate-selected");
+                }
+                candidates.append(choice);
+            }
+            const attach = button(
+                "Attach selected candidate",
+                "Create a metadata-only lineage link; saved media and checkpoint files remain shared",
+                () => void attributeCandidate(),
+            );
+            attach.disabled = state.busy;
+            state.attributionButton = attach;
+            attributionPanel.append(
+                candidates,
+                element("div", "h3cm-muted",
+                    "This candidate uses no predecessor video or generated-audio context. Attribution creates a new lineage link without regeneration or media duplication."),
+                attach,
+            );
         }
         const media = record.preview_video ?? record.video;
         const nextVideo = videoUrl(media);
@@ -519,17 +606,21 @@ function mount(node) {
             audio.removeAttribute("src");
             delete audio.dataset.source;
         }
-        addInspector("Identity", `Scene ${record.scene} · ${record.scene_id} · ${record.revision}`);
+        addInspector("Identity", `${state.attribution ? "Candidate " : ""}Scene ${record.scene} · ${record.scene_id} · ${record.revision}`);
         addInspector("State", `${record.active ? "Active" : "Inactive"} · ${record.ready ? "Ready" : "Broken"}`);
         addInspector("Branches", (record.branches ?? []).map((item) => item.label).join(", ") || "Unresolved lineage");
         addInspector("Created", localTime(record.created_at));
         addInspector("Frames", `${record.raw_frames} raw · ${record.delivered_frames} delivered`);
         addInspector("Sampling", `seed ${record.seed || "unknown"} · ${record.steps || "?"} steps`);
         addInspector("Incoming", `${record.continuation_mode} · Video ${record.context_length}f · Audio ${record.audio_context_length}f`);
-        addInspector("Parent", record.parent ? `Scene ${record.parent.scene} · ${record.parent.revision.slice(0, 8)}` : record.lineage_status);
+        addInspector("Parent", state.attribution
+            ? `Will become Scene ${state.attribution.parent.scene} · ${state.attribution.parent.revision.slice(0, 8)}`
+            : record.parent ? `Scene ${record.parent.scene} · ${record.parent.revision.slice(0, 8)}` : record.lineage_status);
         addInspector("Following", (record.children ?? []).length
             ? record.children.map(checkpointDependencyText).join(" · ") : "No dependent revision");
-        addInspector("Storage", `${formatCheckpointBytes(record.size_bytes)} · ${(record.missing_files ?? []).length ? `missing ${record.missing_files.join(", ")}` : "complete"}`);
+        addInspector("Storage", `${formatCheckpointBytes(record.size_bytes)}` +
+            `${record.shared_size_bytes ? ` · ${formatCheckpointBytes(record.shared_size_bytes)} shared` : ""}` +
+            ` · ${(record.missing_files ?? []).length ? `missing ${record.missing_files.join(", ")}` : "complete"}`);
         const compatibility = record.compatibility ?? {};
         addInspector("Canvas", compatibility.width && compatibility.height
             ? `${compatibility.width}×${compatibility.height} @ ${compatibility.fps ?? 24} fps` : "Unknown");
@@ -547,6 +638,11 @@ function mount(node) {
         load.disabled = state.busy || !canLoadSelected();
         activate.disabled = state.busy || !canActivateSelected();
         remove.disabled = state.busy || !state.deletion?.allowed;
+        if (state.attribution) {
+            load.disabled = true;
+            activate.disabled = true;
+            remove.disabled = true;
+        }
         if (!state.deletion) return;
         const files = (state.deletion.files ?? []).filter((item) => item.exists);
         if (files.length) {
@@ -773,17 +869,28 @@ function mount(node) {
         return plan;
     }
 
-    function applyActivatedRevisionSeeds(planNode, revisions) {
+    function applyActivatedRevisions(planNode, revisions) {
         const target = widget(planNode, "plan_json");
         if (!target) return false;
-        const plan = applyCheckpointRevisionSeeds(
-            parsePlanJson(String(target.value ?? "")), revisions,
+        const plan = applyCheckpointRevisionSet(
+            parsePlanJson(String(target.value ?? "")), revisions, {
+                useEffectivePrompts: true,
+                useTipSharedPrompt: true,
+            },
         );
         const value = planToJson(plan);
         target.value = value;
         target.callback?.(value);
         refreshRestoredPlanEditors(planNode);
         planNode.graph?.setDirtyCanvas?.(true, true);
+        for (const revision of revisions ?? []) {
+            const sceneIndex = Number(revision.scene) - 1;
+            if (sceneIndex < 0 || sceneIndex >= plan.shots.length) continue;
+            publishCompanionPrompt(
+                node, planNode, sceneIndex,
+                promptValueToText(plan.shots[sceneIndex]?.prompt),
+            );
+        }
         return true;
     }
 
@@ -800,6 +907,43 @@ function mount(node) {
         }
         start.graph?.setDirtyCanvas?.(true, true);
         return true;
+    }
+
+    async function attributeCandidate() {
+        const attribution = state.attribution;
+        const candidate = attribution?.candidate;
+        const parent = attribution?.parent;
+        if (!candidate || !parent || state.busy) return;
+        const confirmed = window.confirm(
+            `Attribute scene ${candidate.scene} candidate ${candidate.revision.slice(0, 8)} after scene ${parent.scene} revision ${parent.revision.slice(0, 8)}?\n\n` +
+            "The candidate has no predecessor video or generated-audio dependency. A new immutable lineage record will be created; its existing video, audio, prompt, and checkpoint files remain shared. Nothing is regenerated or copied.",
+        );
+        if (!confirmed) return;
+        setBusy(true, "Attributing saved candidate to branch…");
+        try {
+            const payload = await jsonRequest(
+                "/minimax_h3_context_loop/checkpoint-revisions/attribute", {
+                    method:"POST", headers:{"Content-Type":"application/json"},
+                    body:JSON.stringify({
+                        run_name:state.runName,
+                        parent_scene:parent.scene,
+                        parent_revision:parent.revision,
+                        candidate_scene:candidate.scene,
+                        candidate_revision:candidate.revision,
+                    }),
+                });
+            state.attribution = null;
+            state.scene = Number(payload.scene);
+            state.revision = String(payload.revision);
+            await refreshCheckpoints();
+            status.className = "h3cm-status";
+            status.textContent = payload.message;
+        } catch (error) {
+            status.className = "h3cm-status h3cm-error";
+            status.textContent = error.message;
+        } finally {
+            setBusy(false);
+        }
     }
 
     async function loadSelected() {
@@ -876,7 +1020,7 @@ function mount(node) {
         if (!record || !canActivateSelected() || state.busy) return;
         const confirmed = window.confirm(
             `Make ${state.runName} active through scene ${record.scene} revision ${record.revision.slice(0, 8)}?\n\n` +
-            "This complete lineage will become the run's active checkpoint branch and later active pointers will be cleared. No saved revision, Plan, workflow, reference, or assembled video is deleted or changed.",
+            "This complete lineage will become the run's active checkpoint branch and later active pointers will be cleared. If a Plan is connected, its saved per-scene prompts, seeds, lengths, steps, context, and other checkpointed settings will be restored. No saved revision, workflow, reference, or assembled video is deleted.",
         );
         if (!confirmed) return;
         setBusy(true, "Promoting selected checkpoint lineage…");
@@ -892,13 +1036,13 @@ function mount(node) {
                     }),
                 });
             const planNode = upstreamPlanNode(node);
-            const seedsUpdated = Boolean(planNode &&
-                applyActivatedRevisionSeeds(planNode, payload.restored ?? []));
+            const planUpdated = Boolean(planNode &&
+                applyActivatedRevisions(planNode, payload.restored ?? []));
             await refreshCheckpoints();
             status.className = "h3cm-status";
             status.textContent = `Scene ${record.scene} revision ${record.revision.slice(0, 8)} is now the active branch tip. ` +
                 `${payload.retired_later_pointers || 0} later active pointer${payload.retired_later_pointers === 1 ? " was" : "s were"} cleared; all immutable revisions were kept` +
-                `${seedsUpdated ? "; connected Plan seeds were synchronized." : "."}`;
+                `${planUpdated ? "; connected Plan scene settings were restored." : "."}`;
         } catch (error) {
             status.className = "h3cm-status h3cm-error";
             status.textContent = error.message;
