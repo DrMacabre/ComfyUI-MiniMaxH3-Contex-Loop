@@ -426,7 +426,8 @@ function mount(node) {
         sourcePlayer:null, sourceLayer:null,
         playerSlider:null, playerIndex:-1,
         playerPreloadVideo:null, playerPreloadAudio:null,
-        primePlayerNext:null, keyboardHover:false,
+        primePlayerNext:null, playPlayerTransport:null,
+        togglePlayerPlayback:null, keyboardHover:false,
         generatedVolume:monitorVolume(
             node.properties[GENERATED_VOLUME_PROPERTY]),
         sourceVolume:monitorVolume(node.properties[SOURCE_VOLUME_PROPERTY]),
@@ -452,17 +453,13 @@ function mount(node) {
     };
     const onPlayerKeydown = (event) => {
         if (event.code !== "Space" || event.repeat || state.view !== "player"
-                || !state.player || !state.player.dataset.source) return;
+                || !state.togglePlayerPlayback) return;
         const target = event.target;
         if (target instanceof Element && target.closest(
             "input,textarea,select,button,[contenteditable=true]")) return;
         if (!state.keyboardHover && !root.contains(document.activeElement)) return;
         event.preventDefault(); event.stopPropagation();
-        if (state.player.paused) void state.player.play().catch(() => {});
-        else {
-            state.player.pause();
-            pausePlayerMonitors();
-        }
+        state.togglePlayerPlayback();
     };
     document.addEventListener("keydown", onPlayerKeydown, true);
 
@@ -1963,6 +1960,8 @@ function mount(node) {
         state.playerPreloadVideo = null;
         state.playerPreloadAudio = null;
         state.primePlayerNext = null;
+        state.playPlayerTransport = null;
+        state.togglePlayerPlayback = null;
         for (const media of [
             current, generatedAudio, sourceAudioCurrent, sourceCurrent,
             preloadVideo, preloadAudio,
@@ -2095,7 +2094,7 @@ function mount(node) {
         const label = root.querySelector(".h3studio-player-label");
         if (label) label.textContent = generated
             ? `Scene ${index + 1} · ${timing().shots[index].id}${reference ? ` ↔ @${reference.tag}` : ""}`
-            : `Scene ${index + 1} has no saved segment${reference ? ` · @${reference.tag} is ready` : ""}.`;
+            : `Scene ${index + 1} has no saved segment${sourceAudio() ? " · Source track is ready" : ""}${reference ? ` · @${reference.tag} is ready` : ""}.`;
         const motionAudioToggle = root.querySelector(".h3studio-audio-motion");
         if (motionAudioToggle) {
             motionAudioToggle.disabled = !reference?.has_audio;
@@ -2135,6 +2134,7 @@ function mount(node) {
             new Event("change"),
         );
         state.primePlayerNext?.(index + 1);
+        if (autoplay && !generated) state.playPlayerTransport?.();
     }
 
     function renderPlayerPanel() {
@@ -2237,13 +2237,11 @@ function mount(node) {
         state.playerPreloadAudio = preloadAudio;
         state.primePlayerNext = primeNextSegment;
         const controls = element("div", "h3studio-player-controls");
-        const play = button("▶", "Play or pause the delivered timeline from the current position", () => {
-            if (video.paused) void video.play().catch(() => {});
-            else {
-                video.pause();
-                pausePlayerMonitors();
-            }
-        });
+        const play = button(
+            "▶",
+            "Play or pause the planned timeline from the current position",
+            () => state.togglePlayerPlayback?.(),
+        );
         const slider = element("input"); slider.type = "range"; slider.min = "0"; slider.max = String(timing().totalSeconds); slider.step = String(1 / 24); slider.value = "0";
         const clock = element("span", "", `0 / ${formatClock(timing().totalSeconds)}`);
         slider.addEventListener("input", () => seekTimeline(Number(slider.value), false));
@@ -2297,6 +2295,47 @@ function mount(node) {
                 void sourceTimelineAudio.play().catch(() => {});
             }
         };
+        const updateTransportPosition = (current) => {
+            const result = timing();
+            const bounded = Math.max(0, Math.min(
+                result.totalSeconds, Number(current) || 0,
+            ));
+            state.timelinePosition = bounded;
+            slider.value = String(bounded);
+            clock.textContent = `${formatClock(bounded)} / ${formatClock(result.totalSeconds)}`;
+            if (state.playhead) state.playhead.style.left = `${result.totalSeconds ? bounded / result.totalSeconds * 100 : 0}%`;
+        };
+        const playPlayerTransport = () => {
+            if (video.dataset.source) {
+                return video.play().catch(() => {});
+            }
+            if (!sourceTimelineAudio.dataset.source) return undefined;
+            synchronizeSourceTimelineAudio(
+                false, state.timelinePosition ?? 0,
+            );
+            play.textContent = "❚❚";
+            return sourceTimelineAudio.play().catch(() => {
+                play.textContent = "▶";
+            });
+        };
+        const togglePlayerPlayback = () => {
+            if (video.dataset.source) {
+                if (video.paused) void playPlayerTransport();
+                else {
+                    video.pause();
+                    pausePlayerMonitors();
+                }
+                return;
+            }
+            if (!sourceTimelineAudio.dataset.source) return;
+            if (sourceTimelineAudio.paused) void playPlayerTransport();
+            else {
+                sourceTimelineAudio.pause();
+                generatedAudio.pause(); sourceVideo.pause();
+            }
+        };
+        state.playPlayerTransport = playPlayerTransport;
+        state.togglePlayerPlayback = togglePlayerPlayback;
         video.addEventListener("play", () => {
             play.textContent = "❚❚";
             syncSource(); synchronizeGeneratedAudio(true);
@@ -2324,6 +2363,12 @@ function mount(node) {
         sourceTimelineAudio.addEventListener("canplay", () => {
             synchronizeSourceTimelineAudio(!video.paused);
         });
+        sourceTimelineAudio.addEventListener("play", () => {
+            if (!video.dataset.source) play.textContent = "❚❚";
+        });
+        sourceTimelineAudio.addEventListener("pause", () => {
+            if (!video.dataset.source) play.textContent = "▶";
+        });
         video.addEventListener("seeking", () => {
             generatedAudio.pause(); sourceTimelineAudio.pause(); sourceVideo.pause();
             synchronizeGeneratedAudio(false); synchronizeSourceTimelineAudio(false);
@@ -2345,11 +2390,31 @@ function mount(node) {
             let prior = 0;
             for (let index = 0; index < state.playerIndex; index += 1) prior += result.shots[index].deliveredSeconds;
             const current = Math.min(result.totalSeconds, prior + video.currentTime);
-            state.timelinePosition = current;
-            slider.value = String(current); clock.textContent = `${formatClock(current)} / ${formatClock(result.totalSeconds)}`;
-            if (state.playhead) state.playhead.style.left = `${result.totalSeconds ? current / result.totalSeconds * 100 : 0}%`;
+            updateTransportPosition(current);
             synchronizeGeneratedAudio(false);
             synchronizeSourceTimelineAudio(false, current); syncSource();
+        });
+        sourceTimelineAudio.addEventListener("timeupdate", () => {
+            if (video.dataset.source) return;
+            const descriptor = sourceAudio();
+            if (!descriptor) return;
+            const current = Math.max(
+                0,
+                (Number(sourceTimelineAudio.currentTime) || 0) -
+                    Math.max(0, Number(descriptor.seek_seconds) || 0),
+            );
+            const result = timing();
+            const location = locateStudioTimelineSecond(result.shots, current);
+            if (location.index >= 0 && location.index !== state.playerIndex) {
+                seekTimeline(current, !sourceTimelineAudio.paused);
+                return;
+            }
+            updateTransportPosition(current);
+        });
+        sourceTimelineAudio.addEventListener("ended", () => {
+            if (video.dataset.source) return;
+            updateTransportPosition(timing().totalSeconds);
+            play.textContent = "▶";
         });
         video.addEventListener("ended", () => {
             captureHandoffFrame();
@@ -2463,7 +2528,7 @@ function mount(node) {
             label, stage, generatedAudio, sourceTimelineAudio,
             preloadVideo, preloadAudio,
             compareControls, controls,
-            element("div", "h3studio-message", "Generated and Source Track can play together on the same delivered-video clock. Each monitor has independent volume; waveform speaker buttons mute only the Source Track for that scene. Click the player and press Space to play or pause. Motion-ref audio is optional when available."),
+            element("div", "h3studio-message", "Generated and Source Track can play together on the planned timeline. Before a scene is rendered, Source Track playback supplies the timeline clock; playback hands back to video automatically when a saved segment begins. Each monitor has independent volume; waveform speaker buttons mute only the Source Track for that scene. Click the player and press Space to play or pause. Motion-ref audio is optional when available."),
         );
         setTimeout(() => {
             if (state.player !== video || !video.isConnected) return;
