@@ -531,8 +531,8 @@
         "aux_id": "ethanfel/ComfyUI-MiniMaxH3-Contex-Loop"
       },
       "widgets_values": [
-        24.0,
-        24.0,
+        24,
+        24,
         39,
         "center"
       ],
@@ -685,7 +685,7 @@
       "widgets_values": [
         "simple",
         20,
-        1.0
+        1
       ]
     },
     {
@@ -1141,7 +1141,7 @@
         "Node name for S&R": "CreateVideo"
       },
       "widgets_values": [
-        24.0
+        24
       ]
     },
     {

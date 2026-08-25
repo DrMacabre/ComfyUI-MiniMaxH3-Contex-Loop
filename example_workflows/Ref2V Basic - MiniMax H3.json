@@ -1,8 +1,8 @@
 {
   "id": "c0b8422a-84d4-44f8-91ce-31c68a9a119e",
   "revision": 0,
-  "last_node_id": 1945,
-  "last_link_id": 86,
+  "last_node_id": 1950,
+  "last_link_id": 93,
   "nodes": [
     {
       "id": 1,
@@ -35,7 +35,7 @@
         "Node name for S&R": "UNETLoader"
       },
       "widgets_values": [
-        "MiniMax-H3/minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+        "MiniMax-H3/minimax_h3_ref2va_pruned_int8_convrot.safetensors",
         "default"
       ]
     },
@@ -106,7 +106,7 @@
         "Node name for S&R": "KSamplerSelect"
       },
       "widgets_values": [
-        "lcm"
+        "res_multistep"
       ]
     },
     {
@@ -163,7 +163,8 @@
           "name": "VAE",
           "type": "VAE",
           "links": [
-            65
+            65,
+            86
           ]
         }
       ],
@@ -193,14 +194,56 @@
       "mode": 0,
       "inputs": [],
       "outputs": [],
-      "title": "Note — PROMPT SOURCE / ATTRIBUTION",
+      "title": "Note — REF2V PROMPT / IMAGE SOURCE",
       "properties": {
         "Node name for S&R": "Note"
       },
       "widgets_values": [
-        "PROMPT SOURCE / ATTRIBUTION\n\nScene 1 is reproduced verbatim from a MiniMax H3 prompt shared by 🦙rishappi in Banodoco's #minimax_h3_chatter on August 11, 2026:\nhttps://discord.com/channels/1076117621407223829/1532625331960152124/1536689209761599608\n\nScene 2 is a new continuation written for this repository example using the same three-section H3 T2VA structure. The continuation is not attributed to the original author.\n\nThe generation graph uses ComfyUI's core MiniMaxH3ImageToVideo node with both image inputs intentionally disconnected, which is its T2VA route. The recursive disk-backed Plan, context, review, recovery, and assembly nodes come from this pack."
+        "PROMPT / IMAGE SOURCE — VISIBLE ATTRIBUTION\n\nThe Classic Doom 1993 Market Garden concept, opening prompt, and source image were shared by ᴊɪɢᴇɴ in Banodoco's #minimax_h3_gens on August 12, 2026:\nhttps://discord.com/channels/1076117621407223829/1533677158067736777/1537180042210054226\n\nThe second picture is the final frame extracted from the credited generated result:\nhttps://discord.com/channels/1076117621407223829/1533677158067736777/1537178443358142555\n\nThis repository adapts the concept into a new two-scene six-section Ref2VA demonstration. Copy both PNG files from example_workflows/assets/ into ComfyUI/input/ before loading."
       ],
       "color": "#432f66",
+      "bgcolor": "rgba(24,24,27,.9)"
+    },
+    {
+      "id": 1930,
+      "type": "MiniMaxH3ChainScenePromptEditor",
+      "pos": [
+        416,
+        1344
+      ],
+      "size": [
+        1120,
+        1056
+      ],
+      "flags": {},
+      "order": 15,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "plan",
+          "type": "H3_CHAIN_PLAN",
+          "link": 74
+        }
+      ],
+      "outputs": [
+        {
+          "name": "plan",
+          "type": "H3_CHAIN_PLAN",
+          "links": [
+            75,
+            76
+          ]
+        }
+      ],
+      "title": "MiniMax H3 Scene Prompt Editor — SCENE PROMPT EDITOR — STANDARD AUTHORING",
+      "properties": {
+        "cnr_id": "comfyui-minimaxh3-contex-loop",
+        "ver": "0.3.10",
+        "Node name for S&R": "MiniMaxH3ChainScenePromptEditor",
+        "aux_id": "ethanfel/ComfyUI-MiniMaxH3-Contex-Loop"
+      },
+      "widgets_values": [],
+      "color": "#1f1f48",
       "bgcolor": "rgba(24,24,27,.9)"
     },
     {
@@ -219,10 +262,10 @@
       "mode": 0,
       "inputs": [],
       "outputs": [],
-      "title": "Note — T2VA PROMPT FORMAT",
+      "title": "Note — REF2VA SIX-SECTION PROMPT FORMAT",
       "properties": {},
       "widgets_values": [
-        "T2VA PROMPT FORMAT\n\nT2VA begins directly with these three fields in this exact order—there is no Picture alignment instruction:\n\nintegrated_multimodal_description: [Shot 1] Describe visible style, composition, subjects, actions, camera movement, dialogue, and synchronized diegetic events.\n\noverall_soundscape: Summarize ambience, physical sounds, and non-verbal human sounds.\n\nnon_diegetic_music: Describe audience-only music, or use N/A.\n\nFor a chained continuation, explicitly continue the incoming pose, action phase, camera position and motion, lighting, environment, object states, ambience, and speaker identity. Do not re-establish or reset the shot unless a cut is intentional."
+        "REF2VA PROMPT FORMAT — SIX SECTIONS\n\n1. subject_definitions:\n2. summary:\n3. retention_analysis:\n4. detailed_description:\n5. overall_soundscape:\n6. non_diegetic_music:\n\nThis core Ref2VA workflow uses native <Picture 1> and <Picture 2> labels. Both connected pictures remain active in every scene."
       ],
       "color": "#432",
       "bgcolor": "#653"
@@ -239,7 +282,7 @@
         26
       ],
       "flags": {},
-      "order": 11,
+      "order": 13,
       "mode": 0,
       "inputs": [
         {
@@ -275,7 +318,7 @@
         26
       ],
       "flags": {},
-      "order": 12,
+      "order": 14,
       "mode": 0,
       "inputs": [
         {
@@ -310,13 +353,13 @@
         192
       ],
       "flags": {},
-      "order": 17,
+      "order": 19,
       "mode": 0,
       "inputs": [
         {
           "name": "plan",
           "type": "H3_CHAIN_PLAN",
-          "link": 75
+          "link": 91
         },
         {
           "name": "source_audio",
@@ -378,7 +421,7 @@
         26
       ],
       "flags": {},
-      "order": 15,
+      "order": 17,
       "mode": 0,
       "inputs": [
         {
@@ -414,7 +457,7 @@
         26
       ],
       "flags": {},
-      "order": 16,
+      "order": 18,
       "mode": 0,
       "inputs": [
         {
@@ -449,7 +492,7 @@
         512
       ],
       "flags": {},
-      "order": 22,
+      "order": 23,
       "mode": 0,
       "inputs": [
         {
@@ -472,8 +515,8 @@
             24,
             41,
             46,
-            77,
-            85
+            82,
+            92
           ]
         },
         {
@@ -559,7 +602,7 @@
           "links": null
         }
       ],
-      "title": "MiniMax H3 Contex Loop Current Shot — CURRENT T2V SCENE — PROMPT / SEED / TIMING",
+      "title": "MiniMax H3 Contex Loop Current Shot — CURRENT REF2V SCENE — PROMPT / SEED / TIMING",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -576,7 +619,7 @@
       "id": 1708,
       "type": "MiniMaxH3ChainAssemble",
       "pos": [
-        5632,
+        5568,
         416
       ],
       "size": [
@@ -584,7 +627,7 @@
         256
       ],
       "flags": {},
-      "order": 23,
+      "order": 24,
       "mode": 2,
       "inputs": [
         {
@@ -615,7 +658,7 @@
       },
       "widgets_values": [
         "plan",
-        "t2v_studio_recovered_%date:yyyy-MM-dd%",
+        "t2v_normal_recovered_%date:yyyy-MM-dd%",
         256
       ],
       "color": "#59451e",
@@ -633,7 +676,7 @@
         26
       ],
       "flags": {},
-      "order": 21,
+      "order": 22,
       "mode": 0,
       "inputs": [
         {
@@ -668,7 +711,7 @@
         96
       ],
       "flags": {},
-      "order": 25,
+      "order": 26,
       "mode": 0,
       "inputs": [
         {
@@ -702,17 +745,17 @@
     },
     {
       "id": 110,
-      "type": "MiniMaxH3ImageToVideo",
+      "type": "MiniMaxH3ReferenceToVideo",
       "pos": [
         640,
         -256
       ],
       "size": [
-        544,
-        384
+        608,
+        448
       ],
       "flags": {},
-      "order": 26,
+      "order": 27,
       "mode": 0,
       "inputs": [
         {
@@ -726,15 +769,50 @@
           "link": 59
         },
         {
-          "name": "first_frame",
+          "name": "audio_vae",
+          "type": "VAE",
+          "link": 86
+        },
+        {
+          "label": "ref_image_0",
+          "name": "ref_images.ref_image_0",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": 87
+        },
+        {
+          "label": "ref_image_1",
+          "name": "ref_images.ref_image_1",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": 88
+        },
+        {
+          "label": "ref_image_2",
+          "name": "ref_images.ref_image_2",
           "shape": 7,
           "type": "IMAGE",
           "link": null
         },
         {
-          "name": "last_frame",
+          "label": "ref_video_0",
+          "name": "ref_videos.ref_video_0",
           "shape": 7,
           "type": "IMAGE",
+          "link": null
+        },
+        {
+          "label": "ref_video_audio_0",
+          "name": "ref_video_audios.ref_video_audio_0",
+          "shape": 7,
+          "type": "AUDIO",
+          "link": null
+        },
+        {
+          "label": "ref_audio_0",
+          "name": "ref_audios.ref_audio_0",
+          "shape": 7,
+          "type": "AUDIO",
           "link": null
         },
         {
@@ -786,61 +864,21 @@
           ]
         }
       ],
-      "title": "MiniMax H3 Image to Video — CORE T2VA — NO IMAGE INPUTS",
+      "title": "MiniMax H3 Reference to Video — CORE REF2VA — TWO GLOBAL PICTURES",
       "properties": {
         "cnr_id": "comfy-core",
-        "ver": "0.30.0",
-        "Node name for S&R": "MiniMaxH3ImageToVideo"
+        "ver": "0.31.0",
+        "Node name for S&R": "MiniMaxH3ReferenceToVideo"
       },
       "widgets_values": [
-        "integrated_multimodal_description: The target video is in a hyper-realistic, cinematic single-take confessional style, shallow depth of field, soft moody key light on one side of the face, dark neutral background, portrait orientation.\n[Shot 1] A tight portrait shot frames a weary 40-year-old man seated close to camera, stubble catching the light, eyes glistening as he stares just past the lens. His breath catches once before he speaks. The raw, trembling-voiced man (S1) says, <d>[English] I have to be honest with you. I left Wan. It wasn't working anymore — the consistency, the way it just... let me down when I needed it most.</d> His hand comes up, rubbing his brow, a bitter half-smile breaking through. [Shot 2] At 00:04.500, he leans in slightly, voice steadying, a flicker of guilty excitement crossing his face. He continues, <d>[English] I'm with MiniMax now. And I know how that sounds. But for the first time in a long time... I feel understood.</d> His eyes well up, lip trembling, before he lets out a short, broken laugh and looks down, shaking his head at himself.\n\noverall_soundscape: A quiet room tone hums beneath, with a single sharp intake of breath before he speaks, a soft rustle as his hand moves to his face, and a faint, choked exhale on the laugh.\n\nnon_diegetic_music: A single sustained low piano note holds under the first line, joined by a soft, melancholic string swell, dropping away entirely on the final broken laugh.",
-        544,
-        960,
-        243
+        "subject_definitions:\n<Picture 1> is the primary visual reference for <Subject 1>, defining the exact Classic Doom 1993 first-person rendering language, the airborne Market Garden battlefield, the paratrooper viewpoint, muted olive-and-brown palette, chunky low-resolution geometry, pixel texture scale, and period military equipment.\n<Picture 2> is a secondary environment reference for <Subject 1>, defining the same game's dark timber-and-stone interior language, corridor proportions, weapon-view scale, high-contrast lighting, and readable retro silhouettes.\n<Subject 1> is the same playable first-person Allied paratrooper viewpoint and coherent 1993 DOS-era game world defined jointly by <Picture 1> and <Picture 2>. Keep the world, viewpoint, weapon scale, texture density, palette, and interface-free cinematic presentation consistent.\n\nsummary:\n[reference generation] A continuous first-person descent into a Market Garden village begins in the airborne exterior from <Picture 1> and advances toward the fortified interior language from <Picture 2>.\n\nretention_analysis:\n<Subject 1> (appears in [Shot 1]): fully_preserved - retain the first-person viewpoint, Classic Doom 1993 rendering language, WWII Market Garden identity, palette, texture scale, weapon-view proportions, and coherent level design defined by <Picture 1> and <Picture 2> while allowing new camera travel and action.\n<Picture 1>: fully_preserved - use its airborne battlefield, paratrooper silhouettes, landscape layout, olive-and-brown colors, and retro pixel-art treatment as the opening visual identity.\n<Picture 2>: reference - use its timber-and-stone interior, contrast, corridor scale, and gameplay readability to guide the destination revealed near the end.\n\ndetailed_description:\n[Shot 1] Begin in the same first-person paratrooper viewpoint and Classic Doom 1993 visual language as <Picture 1>. The camera descends beneath a canvas parachute over a war-torn Dutch village at dawn. Other Allied parachutes drift at different depths, anti-aircraft bursts expand into coarse pixel smoke, and fields, canals, tiled roofs, and a church tower grow steadily larger below. Keep all movement physically continuous and preserve the reference's low-resolution texture rhythm rather than smoothing it into modern realism.\n\nThe viewpoint swings gently toward a damaged stone farmhouse. Boots strike the muddy ground, the parachute canopy collapses behind the camera, and the same first-person momentum becomes a short sprint between hedgerows. A period weapon rises naturally into the lower frame at the same scale and screen position implied by <Picture 2>. The camera reaches a splintered doorway and pushes inside without a cut. End while exterior dawn light is still visible behind and the timber corridor ahead is beginning to take on the darker contrast and spatial language of <Picture 2>; preserve forward motion through the boundary.\n\noverall_soundscape:\nWind rush and canvas flutter during descent give way to a heavy landing, muddy footfalls, distant artillery, scattered rifle fire, wood creaks, and a close doorframe scrape. Keep the sound spatial and game-world diegetic.\n\nnon_diegetic_music:\nLow martial drums and a restrained ominous brass pulse build gradually beneath the descent, remaining secondary to the battlefield ambience.",
+        896,
+        672,
+        243,
+        "match"
       ],
       "color": "#346434",
       "bgcolor": "rgba(24,24,27,.9)"
-    },
-    {
-      "id": 1635,
-      "type": "LoraLoaderModelOnly",
-      "pos": [
-        -1344,
-        -928
-      ],
-      "size": [
-        288,
-        96
-      ],
-      "flags": {},
-      "order": 14,
-      "mode": 0,
-      "inputs": [
-        {
-          "name": "model",
-          "type": "MODEL",
-          "link": 4
-        }
-      ],
-      "outputs": [
-        {
-          "name": "MODEL",
-          "type": "MODEL",
-          "links": [
-            5
-          ]
-        }
-      ],
-      "title": "Load LoRA — LIGHTX2V TURBO — 8 STEP V1.0",
-      "properties": {
-        "cnr_id": "comfy-core",
-        "ver": "0.30.0",
-        "Node name for S&R": "LoraLoaderModelOnly"
-      },
-      "widgets_values": [
-        "MiniMax H3/minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors",
-        1
-      ]
     },
     {
       "id": 1703,
@@ -854,7 +892,7 @@
         288
       ],
       "flags": {},
-      "order": 28,
+      "order": 29,
       "mode": 0,
       "inputs": [
         {
@@ -935,7 +973,7 @@
         160
       ],
       "flags": {},
-      "order": 20,
+      "order": 21,
       "mode": 0,
       "inputs": [
         {
@@ -975,7 +1013,7 @@
         26
       ],
       "flags": {},
-      "order": 24,
+      "order": 25,
       "mode": 0,
       "inputs": [
         {
@@ -1010,7 +1048,7 @@
         26
       ],
       "flags": {},
-      "order": 27,
+      "order": 28,
       "mode": 0,
       "inputs": [
         {
@@ -1046,7 +1084,7 @@
         96
       ],
       "flags": {},
-      "order": 30,
+      "order": 31,
       "mode": 0,
       "inputs": [
         {
@@ -1089,7 +1127,7 @@
         128
       ],
       "flags": {},
-      "order": 29,
+      "order": 30,
       "mode": 0,
       "inputs": [
         {
@@ -1122,8 +1160,8 @@
         "Node name for S&R": "BasicScheduler"
       },
       "widgets_values": [
-        "beta",
-        8,
+        "simple",
+        20,
         1
       ]
     },
@@ -1136,10 +1174,10 @@
       ],
       "size": [
         320,
-        657.4117647058823
+        353
       ],
       "flags": {},
-      "order": 31,
+      "order": 32,
       "mode": 0,
       "inputs": [
         {
@@ -1205,7 +1243,7 @@
         96
       ],
       "flags": {},
-      "order": 32,
+      "order": 33,
       "mode": 0,
       "inputs": [
         {
@@ -1248,7 +1286,7 @@
         96
       ],
       "flags": {},
-      "order": 33,
+      "order": 34,
       "mode": 0,
       "inputs": [
         {
@@ -1291,7 +1329,7 @@
         224
       ],
       "flags": {},
-      "order": 34,
+      "order": 35,
       "mode": 0,
       "inputs": [
         {
@@ -1325,7 +1363,7 @@
         {
           "name": "state",
           "type": "H3_CHAIN_STATE",
-          "link": 85,
+          "link": 92,
           "shape": 7
         }
       ],
@@ -1343,7 +1381,7 @@
           "type": "AUDIO",
           "links": [
             44,
-            78
+            84
           ]
         },
         {
@@ -1370,7 +1408,7 @@
         0,
         24,
         true,
-        5
+        0
       ],
       "color": "#1f1f48",
       "bgcolor": "rgba(24,24,27,.9)"
@@ -1387,7 +1425,7 @@
         288
       ],
       "flags": {},
-      "order": 35,
+      "order": 36,
       "mode": 0,
       "inputs": [
         {
@@ -1423,7 +1461,7 @@
           "name": "segment",
           "type": "H3_CHAIN_SEGMENT",
           "links": [
-            49
+            83
           ]
         },
         {
@@ -1447,7 +1485,7 @@
       "id": 1706,
       "type": "MiniMaxH3ChainAssemble",
       "pos": [
-        5184,
+        5120,
         -256
       ],
       "size": [
@@ -1455,7 +1493,7 @@
         480
       ],
       "flags": {},
-      "order": 38,
+      "order": 39,
       "mode": 0,
       "inputs": [
         {
@@ -1486,7 +1524,7 @@
       },
       "widgets_values": [
         "plan",
-        "t2v_studio_%date:yyyy-MM-dd%",
+        "t2v_normal_%date:yyyy-MM-dd%",
         256
       ],
       "color": "#24533a",
@@ -1504,7 +1542,7 @@
         64
       ],
       "flags": {},
-      "order": 10,
+      "order": 12,
       "mode": 0,
       "inputs": [
         {
@@ -1518,7 +1556,7 @@
           "name": "MODEL",
           "type": "MODEL",
           "links": [
-            4
+            5
           ]
         }
       ],
@@ -1533,44 +1571,106 @@
       ]
     },
     {
-      "id": 1942,
-      "type": "MiniMaxH3ChainRichScenePromptEditor",
+      "id": 1705,
+      "type": "MiniMaxH3ChainLoopEnd",
       "pos": [
-        1984,
-        1344
+        4544,
+        -288
       ],
       "size": [
-        1088,
-        1312
+        352,
+        320
       ],
       "flags": {},
-      "order": 19,
+      "order": 38,
       "mode": 0,
       "inputs": [
         {
-          "name": "plan",
-          "type": "H3_CHAIN_PLAN",
-          "link": 82
+          "name": "flow",
+          "type": "H3_CHAIN_FLOW",
+          "link": 45
+        },
+        {
+          "name": "state",
+          "type": "H3_CHAIN_STATE",
+          "link": 46
+        },
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 47
+        },
+        {
+          "name": "sampled_latent",
+          "type": "LATENT",
+          "link": 48
+        },
+        {
+          "name": "segment",
+          "type": "H3_CHAIN_SEGMENT",
+          "link": 85
         }
       ],
       "outputs": [
         {
-          "name": "plan",
-          "type": "H3_CHAIN_PLAN",
+          "name": "manifest",
+          "type": "H3_CHAIN_MANIFEST",
+          "links": [
+            50
+          ]
+        },
+        {
+          "name": "manifest_json",
+          "type": "STRING",
+          "links": null
+        },
+        {
+          "name": "last_context_frames",
+          "type": "IMAGE",
+          "links": null
+        },
+        {
+          "name": "last_context_latent",
+          "type": "LATENT",
           "links": null
         }
       ],
+      "title": "MiniMax H3 Contex Loop End — LOOP END — ADVANCE REF2V SCENE",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
-        "ver": "d8ac6bc7b47a0c791f393d9300b7cc44773a66ff",
-        "Node name for S&R": "MiniMaxH3ChainRichScenePromptEditor",
-        "h3_rich_prompt_active_scene": 0,
-        "h3_rich_prompt_font_size": 17,
-        "h3_rich_prompt_guide": "auto"
+        "ver": "0.3.10",
+        "Node name for S&R": "MiniMaxH3ChainLoopEnd",
+        "aux_id": "ethanfel/ComfyUI-MiniMaxH3-Contex-Loop"
       },
       "widgets_values": [],
-      "color": "#223",
-      "bgcolor": "#335"
+      "color": "#1f1f48",
+      "bgcolor": "rgba(24,24,27,.9)"
+    },
+    {
+      "id": 1932,
+      "type": "Note",
+      "pos": [
+        1568,
+        1312
+      ],
+      "size": [
+        896,
+        1184
+      ],
+      "flags": {},
+      "order": 7,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "title": "Note — REF2V BASIC — HOW TO USE",
+      "properties": {
+        "Node name for S&R": "Note"
+      },
+      "widgets_values": [
+        "REF2V BASIC — QUICK START\n\nCopy both bundled PNG files into ComfyUI/input/. This basic workflow connects both pictures directly to ComfyUI's core MiniMax H3 Reference to Video node, so both remain active in every scene. Use native <Picture 1> and <Picture 2> labels in the Plan prompts.\n\nThe Plan uses generated audio, 22 motion-context frames, 20-step sampling with res_multistep and the simple scheduler. Edit prompts in the standard Scene Prompt Editor."
+      ],
+      "color": "#432f66",
+      "bgcolor": "rgba(24,24,27,.9)"
     },
     {
       "id": 1700,
@@ -1580,17 +1680,23 @@
         1344
       ],
       "size": [
-        992,
-        1184
+        1024,
+        1600
       ],
       "flags": {},
-      "order": 7,
+      "order": 8,
       "mode": 0,
       "inputs": [
         {
+          "name": "plan_json_input",
+          "shape": 7,
+          "type": "STRING",
+          "link": null
+        },
+        {
           "name": "chain_policy",
           "type": "H3_CHAIN_POLICY",
-          "link": 86,
+          "link": 93,
           "shape": 7
         }
       ],
@@ -1628,7 +1734,7 @@
           "links": null
         }
       ],
-      "title": "MiniMax H3 Contex Loop Plan — T2V PLAN — EDITED THROUGH STUDIO",
+      "title": "MiniMax H3 Contex Loop Plan — REF2V BASIC PLAN — STANDARD EDITOR",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -1638,17 +1744,17 @@
         "h3_chain_plan_layout": {
           "promptHeights": {
             "shared": 88,
-            "scene:confessional_opening": 112,
-            "scene:confessional_continuation": 112
+            "scene:market_garden_descent": 112,
+            "scene:farmhouse_interior": 112
           }
         }
       },
       "widgets_values": [
-        "{\"defaults\":{\"duration_seconds\":10,\"steps\":8},\"shots\":[{\"id\":\"confessional_opening\",\"prompt\":[\"integrated_multimodal_description: The target video is in a hyper-realistic, cinematic single-take confessional style, shallow depth of field, soft moody key light on one side of the face, dark neutral background, portrait orientation.\\n[Shot 1] A tight portrait shot frames a weary 40-year-old man seated close to camera, stubble catching the light, eyes glistening as he stares just past the lens. His breath catches once before he speaks. The raw, trembling-voiced man (S1) says, <d>[English] I have to be honest with you. I left Wan. It wasn't working anymore — the consistency, the way it just... let me down when I needed it most.</d> His hand comes up, rubbing his brow, a bitter half-smile breaking through. [Shot 2] At 00:04.500, he leans in slightly, voice steadying, a flicker of guilty excitement crossing his face. He continues, <d>[English] I'm with MiniMax now. And I know how that sounds. But for the first time in a long time... I feel understood.</d> His eyes well up, lip trembling, before he lets out a short, broken laugh and looks down, shaking his head at himself.\",\"\",\"overall_soundscape: A quiet room tone hums beneath, with a single sharp intake of breath before he speaks, a soft rustle as his hand moves to his face, and a faint, choked exhale on the laugh.\",\"\",\"non_diegetic_music: A single sustained low piano note holds under the first line, joined by a soft, melancholic string swell, dropping away entirely on the final broken laugh.\"],\"length\":243,\"seed\":\"1001\"},{\"id\":\"confessional_continuation\",\"prompt\":[\"integrated_multimodal_description: [Shot 1] Hyper-realistic, cinematic portrait footage continues directly from the incoming H3 Motion Context in the same dark confessional room. Preserve the weary 40-year-old man's identity, stubble, clothing, seated position, shallow depth of field, one-sided moody key light, dark neutral background, lens, portrait framing, and the downward head movement already in progress. His broken laugh trails off without resetting. The camera holds close and pushes in with small amplitude at slow speed as he draws one controlled breath, rubs his thumb against his brow, then lifts his wet eyes back toward the lens. The same raw, trembling-voiced man (S1) says quietly: <d>[English] I guess this is me moving on.</d> His lips move naturally with only those words. He lets the silence remain, lowers his hand into his lap, and holds eye contact while the camera gradually becomes still. No cut, no new person, no duplicated face, no change of room, wardrobe, lighting direction, or screen geography.\",\"\",\"overall_soundscape: Continue the same quiet room tone across the scene boundary without a restart. The last broken exhale fades into one controlled breath, accompanied by a soft sleeve rustle and the subtle movement of his hand returning to his lap.\",\"\",\"non_diegetic_music: The previous piano and strings have already stopped; use no non-diegetic music during this continuation.\"],\"length\":243,\"seed\":\"1002\"}]}",
-        "t2v_studio_demo",
-        "t2v-community-confessional-v1",
-        544,
-        960,
+        "{\"defaults\":{\"duration_seconds\":10,\"steps\":20},\"shots\":[{\"id\":\"market_garden_descent\",\"prompt\":[\"subject_definitions:\\n<Picture 1> is the primary visual reference for <Subject 1>, defining the exact Classic Doom 1993 first-person rendering language, the airborne Market Garden battlefield, the paratrooper viewpoint, muted olive-and-brown palette, chunky low-resolution geometry, pixel texture scale, and period military equipment.\\n<Picture 2> is a secondary environment reference for <Subject 1>, defining the same game's dark timber-and-stone interior language, corridor proportions, weapon-view scale, high-contrast lighting, and readable retro silhouettes.\\n<Subject 1> is the same playable first-person Allied paratrooper viewpoint and coherent 1993 DOS-era game world defined jointly by <Picture 1> and <Picture 2>. Keep the world, viewpoint, weapon scale, texture density, palette, and interface-free cinematic presentation consistent.\\n\\nsummary:\\n[reference generation] A continuous first-person descent into a Market Garden village begins in the airborne exterior from <Picture 1> and advances toward the fortified interior language from <Picture 2>.\\n\\nretention_analysis:\\n<Subject 1> (appears in [Shot 1]): fully_preserved - retain the first-person viewpoint, Classic Doom 1993 rendering language, WWII Market Garden identity, palette, texture scale, weapon-view proportions, and coherent level design defined by <Picture 1> and <Picture 2> while allowing new camera travel and action.\\n<Picture 1>: fully_preserved - use its airborne battlefield, paratrooper silhouettes, landscape layout, olive-and-brown colors, and retro pixel-art treatment as the opening visual identity.\\n<Picture 2>: reference - use its timber-and-stone interior, contrast, corridor scale, and gameplay readability to guide the destination revealed near the end.\\n\\ndetailed_description:\\n[Shot 1] Begin in the same first-person paratrooper viewpoint and Classic Doom 1993 visual language as <Picture 1>. The camera descends beneath a canvas parachute over a war-torn Dutch village at dawn. Other Allied parachutes drift at different depths, anti-aircraft bursts expand into coarse pixel smoke, and fields, canals, tiled roofs, and a church tower grow steadily larger below. Keep all movement physically continuous and preserve the reference's low-resolution texture rhythm rather than smoothing it into modern realism.\\n\\nThe viewpoint swings gently toward a damaged stone farmhouse. Boots strike the muddy ground, the parachute canopy collapses behind the camera, and the same first-person momentum becomes a short sprint between hedgerows. A period weapon rises naturally into the lower frame at the same scale and screen position implied by <Picture 2>. The camera reaches a splintered doorway and pushes inside without a cut. End while exterior dawn light is still visible behind and the timber corridor ahead is beginning to take on the darker contrast and spatial language of <Picture 2>; preserve forward motion through the boundary.\\n\\noverall_soundscape:\\nWind rush and canvas flutter during descent give way to a heavy landing, muddy footfalls, distant artillery, scattered rifle fire, wood creaks, and a close doorframe scrape. Keep the sound spatial and game-world diegetic.\\n\\nnon_diegetic_music:\\nLow martial drums and a restrained ominous brass pulse build gradually beneath the descent, remaining secondary to the battlefield ambience.\"],\"length\":243,\"seed\":\"4201\"},{\"id\":\"farmhouse_interior\",\"prompt\":[\"subject_definitions:\\n<Picture 1> is the exterior identity reference for <Subject 1>, preserving the Classic Doom 1993 first-person rendering language, WWII Market Garden palette, pixel texture scale, and Allied paratrooper world established before entry.\\n<Picture 2> is the primary interior reference for <Subject 1>, defining the dark timber-and-stone architecture, corridor proportions, weapon-view scale, hard-edged lighting, and readable retro silhouettes used in this continuation.\\n<Subject 1> is the same playable first-person Allied paratrooper viewpoint and uninterrupted 1993 DOS-era game world defined jointly by <Picture 1>, <Picture 2>, and the incoming H3 Motion Context.\\n\\nsummary:\\n[reference generation] The uninterrupted first-person movement continues from the farmhouse threshold into a fortified interior, using <Picture 2> for the room language while preserving the exterior world from <Picture 1> behind the player.\\n\\nretention_analysis:\\n<Subject 1> (appears in [Shot 1]): fully_preserved - preserve the exact first-person viewpoint, weapon scale, retro rendering language, WWII identity, palette, texture density, and forward screen geography inherited from the incoming context and both pictures.\\n<Picture 1>: reference - retain the dawn exterior colors and battlefield geography only where they remain visible through openings behind the player.\\n<Picture 2>: fully_preserved - retain its timber beams, stone walls, deep shadows, corridor scale, weapon-view proportions, and Classic Doom 1993 gameplay readability throughout the interior.\\n\\ndetailed_description:\\n[Shot 1] Continue directly from the incoming H3 Motion Context with the camera already crossing the splintered doorway. Do not reset the stride, weapon, lighting direction, or room geometry. Exterior dawn light from <Picture 1> remains briefly visible behind while the interior resolves into the timber beams, grey stone, hard shadows, and first-person weapon scale of <Picture 2>.\\n\\nThe player advances through a narrow corridor as dust shakes from overhead beams. A side door opens, revealing an enemy silhouette; the viewpoint pivots, fires one short burst, and continues forward without a cut. Muzzle light briefly illuminates coarse stone textures and smoke blocks the far end of the hall before clearing. The route bends down a short stair into a wider command room with a field radio, paper maps without readable text, and a bright exit slit beyond sandbags. Keep the forward motion continuous. End as the camera turns toward that exit and the exterior daylight widens, setting up the next movement without freezing.\\n\\noverall_soundscape:\\nContinue the prior battlefield bed through the doorway, adding enclosed boot echoes, timber strain, gear movement, one short weapon burst, stone debris, a field-radio hiss, and muffled artillery transmitted through the walls.\\n\\nnon_diegetic_music:\\nContinue the restrained martial pulse, adding a low sustained string tone inside the farmhouse and withholding any triumphant resolution.\"],\"length\":243,\"seed\":\"4202\"}]}",
+        "ref2v_basic_global_demo",
+        "ref2v-jigen-global-v1",
+        896,
+        672,
         22,
         "video",
         "head",
@@ -1656,83 +1762,10 @@
         "generated_audio",
         22,
         10,
-        8,
+        20,
         0,
         20,
-        5
-      ],
-      "color": "#1f1f48",
-      "bgcolor": "rgba(24,24,27,.9)"
-    },
-    {
-      "id": 1930,
-      "type": "MiniMaxH3ChainPlanStudio",
-      "pos": [
-        384,
-        1344
-      ],
-      "size": [
-        1536,
-        1056
-      ],
-      "flags": {},
-      "order": 13,
-      "mode": 0,
-      "inputs": [
-        {
-          "name": "plan",
-          "type": "H3_CHAIN_PLAN",
-          "link": 74
-        },
-        {
-          "name": "source_timeline",
-          "type": "H3_SOURCE_TIMELINE",
-          "link": null,
-          "shape": 7
-        },
-        {
-          "name": "source_audio",
-          "type": "AUDIO",
-          "link": null,
-          "shape": 7
-        },
-        {
-          "name": "tagged_references",
-          "type": "H3_TAGGED_REFERENCES",
-          "link": null,
-          "shape": 7
-        },
-        {
-          "name": "reference_schedule",
-          "type": "H3_REFERENCE_SCHEDULE",
-          "link": null,
-          "shape": 7
-        }
-      ],
-      "outputs": [
-        {
-          "name": "plan",
-          "type": "H3_CHAIN_PLAN",
-          "links": [
-            75,
-            76,
-            82
-          ]
-        }
-      ],
-      "title": "MiniMax H3 Plan Studio (Experimental) — PLAN STUDIO — TIMELINE / REVISIONS / PREVIEWS",
-      "properties": {
-        "cnr_id": "comfyui-minimaxh3-contex-loop",
-        "ver": "0.3.10",
-        "Node name for S&R": "MiniMaxH3ChainPlanStudio",
-        "aux_id": "ethanfel/ComfyUI-MiniMaxH3-Contex-Loop",
-        "h3_plan_studio_active_scene": 1,
-        "h3_plan_studio_view": "player"
-      },
-      "widgets_values": [
-        1,
-        "",
-        true
+        0
       ],
       "color": "#1f1f48",
       "bgcolor": "rgba(24,24,27,.9)"
@@ -1741,7 +1774,7 @@
       "id": 1707,
       "type": "MiniMaxH3ChainManifestLoad",
       "pos": [
-        5216,
+        5152,
         416
       ],
       "size": [
@@ -1749,7 +1782,7 @@
         224
       ],
       "flags": {},
-      "order": 18,
+      "order": 20,
       "mode": 2,
       "inputs": [
         {
@@ -1804,7 +1837,7 @@
       "id": 1901,
       "type": "Note",
       "pos": [
-        5184,
+        5152,
         736
       ],
       "size": [
@@ -1812,7 +1845,7 @@
         320
       ],
       "flags": {},
-      "order": 8,
+      "order": 9,
       "mode": 0,
       "inputs": [],
       "outputs": [],
@@ -1827,111 +1860,125 @@
       "bgcolor": "rgba(24,24,27,.9)"
     },
     {
-      "id": 1705,
-      "type": "MiniMaxH3ChainLoopEnd",
+      "id": 1945,
+      "type": "LoadImage",
       "pos": [
-        4704,
-        -256
+        -2048,
+        -224
       ],
       "size": [
-        352,
-        320
+        416,
+        448
       ],
       "flags": {},
-      "order": 37,
+      "order": 10,
       "mode": 0,
-      "inputs": [
-        {
-          "name": "flow",
-          "type": "H3_CHAIN_FLOW",
-          "link": 45
-        },
-        {
-          "name": "state",
-          "type": "H3_CHAIN_STATE",
-          "link": 46
-        },
-        {
-          "name": "images",
-          "type": "IMAGE",
-          "link": 47
-        },
-        {
-          "name": "sampled_latent",
-          "type": "LATENT",
-          "link": 48
-        },
-        {
-          "name": "segment",
-          "type": "H3_CHAIN_SEGMENT",
-          "link": 79
-        }
-      ],
+      "inputs": [],
       "outputs": [
         {
-          "name": "manifest",
-          "type": "H3_CHAIN_MANIFEST",
+          "name": "IMAGE",
+          "type": "IMAGE",
           "links": [
-            50
+            87
           ]
         },
         {
-          "name": "manifest_json",
-          "type": "STRING",
-          "links": null
-        },
-        {
-          "name": "last_context_frames",
-          "type": "IMAGE",
-          "links": null
-        },
-        {
-          "name": "last_context_latent",
-          "type": "LATENT",
+          "name": "MASK",
+          "type": "MASK",
           "links": null
         }
       ],
-      "title": "MiniMax H3 Contex Loop End — LOOP END — ADVANCE T2V SCENE",
+      "title": "Load Image — PICTURE 1 — MARKET GARDEN EXTERIOR",
       "properties": {
-        "cnr_id": "comfyui-minimaxh3-contex-loop",
-        "ver": "0.3.10",
-        "Node name for S&R": "MiniMaxH3ChainLoopEnd",
-        "aux_id": "ethanfel/ComfyUI-MiniMaxH3-Contex-Loop"
+        "cnr_id": "comfy-core",
+        "ver": "0.31.0",
+        "Node name for S&R": "LoadImage"
       },
-      "widgets_values": [],
-      "color": "#1f1f48",
+      "widgets_values": [
+        "jigen_market_garden_doom_opening.png",
+        "image",
+        null,
+        null,
+        null
+      ],
+      "color": "#744c8c",
       "bgcolor": "rgba(24,24,27,.9)"
     },
     {
-      "id": 1931,
+      "id": 1946,
+      "type": "LoadImage",
+      "pos": [
+        -1600,
+        -224
+      ],
+      "size": [
+        416,
+        448
+      ],
+      "flags": {},
+      "order": 11,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            88
+          ]
+        },
+        {
+          "name": "MASK",
+          "type": "MASK",
+          "links": null
+        }
+      ],
+      "title": "Load Image — PICTURE 2 — TIMBER / STONE INTERIOR",
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.31.0",
+        "Node name for S&R": "LoadImage"
+      },
+      "widgets_values": [
+        "jigen_market_garden_doom_last.png",
+        "image",
+        null,
+        null,
+        null
+      ],
+      "color": "#744c8c",
+      "bgcolor": "rgba(24,24,27,.9)"
+    },
+    {
+      "id": 1944,
       "type": "MiniMaxH3ChainReview",
       "pos": [
         3744,
         -256
       ],
       "size": [
-        864,
-        1120
+        736,
+        1376
       ],
       "flags": {},
-      "order": 36,
+      "order": 37,
       "mode": 0,
       "inputs": [
         {
           "name": "state",
           "type": "H3_CHAIN_STATE",
-          "link": 77
+          "link": 82
         },
         {
           "name": "segment",
           "type": "H3_CHAIN_SEGMENT",
-          "link": 49
+          "link": 83
         },
         {
           "name": "audio",
           "shape": 7,
           "type": "AUDIO",
-          "link": 78
+          "link": 84
         },
         {
           "name": "source_audio",
@@ -1945,7 +1992,7 @@
           "name": "segment",
           "type": "H3_CHAIN_SEGMENT",
           "links": [
-            79
+            85
           ]
         },
         {
@@ -1957,11 +2004,11 @@
       "title": "MiniMax H3 Contex Loop Review Gate — REVIEW GATE — APPROVE / EDIT+RETRY / REROLL / STOP",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
-        "ver": "0.4.0",
+        "ver": "0.3.10",
         "Node name for S&R": "MiniMaxH3ChainReview",
         "aux_id": "ethanfel/ComfyUI-MiniMaxH3-Contex-Loop",
-        "h3_chain_review_prompt_height": 120,
-        "h3_chain_review_video_height": 420
+        "h3_chain_review_prompt_height": 442,
+        "h3_chain_review_video_height": 373
       },
       "widgets_values": [
         true,
@@ -1975,33 +2022,91 @@
       "bgcolor": "rgba(24,24,27,.96)"
     },
     {
-      "id": 1932,
-      "type": "Note",
+      "id": 1949,
+      "type": "MiniMaxH3ChainPreflight",
       "pos": [
-        3136,
-        1312
+        -992,
+        256
       ],
       "size": [
-        576,
-        1344
+        384,
+        260
       ],
       "flags": {},
-      "order": 9,
+      "order": 42,
       "mode": 0,
-      "inputs": [],
-      "outputs": [],
-      "title": "Note — T2V STUDIO — HOW TO USE",
+      "inputs": [
+        {
+          "name": "plan",
+          "type": "H3_CHAIN_PLAN",
+          "link": 75
+        },
+        {
+          "name": "source_timeline",
+          "shape": 7,
+          "type": "H3_SOURCE_TIMELINE",
+          "link": null
+        },
+        {
+          "name": "source_audio",
+          "shape": 7,
+          "type": "AUDIO",
+          "link": null
+        },
+        {
+          "name": "tagged_references",
+          "shape": 7,
+          "type": "H3_TAGGED_REFERENCES",
+          "link": null
+        },
+        {
+          "name": "reference_schedule",
+          "shape": 7,
+          "type": "H3_REFERENCE_SCHEDULE",
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "name": "plan",
+          "type": "H3_CHAIN_PLAN",
+          "links": [
+            91
+          ]
+        },
+        {
+          "name": "preflight",
+          "type": "H3_PREFLIGHT",
+          "links": null
+        },
+        {
+          "name": "ready",
+          "type": "BOOLEAN",
+          "links": null
+        },
+        {
+          "name": "status",
+          "type": "STRING",
+          "links": null
+        },
+        {
+          "name": "report_json",
+          "type": "STRING",
+          "links": null
+        }
+      ],
+      "title": "MiniMax H3 Chain Preflight — 0.5 PREFLIGHT — BLOCKS BEFORE MODELS",
       "properties": {
-        "Node name for S&R": "Note"
+        "Node name for S&R": "MiniMaxH3ChainPreflight"
       },
       "widgets_values": [
-        "T2V STUDIO — QUICK START\n\nThis workflow keeps the same T2VA prompts, seeds, and sampling graph as the Normal version, but uses the advanced authoring pair: Plan Studio plus the separate Rich Scene Prompt Editor.\n\nUse Plan Studio for timeline navigation, scene prompt revisions, saved-segment status, and preview playback. Use Rich Scene Prompt Editor for decorated references and optional prompt optimization. Both write edits back into the connected Plan; neither replaces ComfyUI execution or changes sampling.\n\nTIMING\nEach requested 10-second scene is 243 raw H3 frames. Scene 2 repeats 22 context frames, so delivery is 243 + (243 - 22) = 464 frames = 19.333 seconds at 24 fps.\n\nBLENDING\nPlan carries 22 frames of motion context but blends only 5 frames at the visible boundary. This intentionally demonstrates that video_blend_frames is independent from context_length. The final video is re-encoded for the cumulative linear blend; generated audio remains frame-locked and is not crossfaded."
-      ],
-      "color": "#432f66",
-      "bgcolor": "rgba(24,24,27,.9)"
+        1,
+        "",
+        true
+      ]
     },
     {
-      "id": 1945,
+      "id": 1950,
       "type": "MiniMaxH3ChainPolicy",
       "pos": [
         -1092,
@@ -2012,7 +2117,7 @@
         190
       ],
       "flags": {},
-      "order": 41,
+      "order": 43,
       "mode": 0,
       "inputs": [],
       "outputs": [
@@ -2020,7 +2125,7 @@
           "name": "chain_policy",
           "type": "H3_CHAIN_POLICY",
           "links": [
-            86
+            93
           ]
         },
         {
@@ -2051,16 +2156,8 @@
       "MODEL"
     ],
     [
-      4,
-      1941,
-      0,
-      1635,
-      0,
-      "MODEL"
-    ],
-    [
       5,
-      1635,
+      1941,
       0,
       5,
       0,
@@ -2087,7 +2184,7 @@
       1702,
       4,
       110,
-      4,
+      9,
       "STRING"
     ],
     [
@@ -2095,7 +2192,7 @@
       1702,
       8,
       110,
-      5,
+      10,
       "INT"
     ],
     [
@@ -2103,7 +2200,7 @@
       1702,
       9,
       110,
-      6,
+      11,
       "INT"
     ],
     [
@@ -2111,7 +2208,7 @@
       1702,
       6,
       110,
-      7,
+      12,
       "INT"
     ],
     [
@@ -2307,14 +2404,6 @@
       "LATENT"
     ],
     [
-      49,
-      1704,
-      0,
-      1931,
-      1,
-      "H3_CHAIN_SEGMENT"
-    ],
-    [
       50,
       1705,
       0,
@@ -2446,7 +2535,7 @@
       75,
       1930,
       0,
-      1701,
+      1949,
       0,
       "H3_CHAIN_PLAN"
     ],
@@ -2459,30 +2548,6 @@
       "H3_CHAIN_PLAN"
     ],
     [
-      77,
-      1702,
-      0,
-      1931,
-      0,
-      "H3_CHAIN_STATE"
-    ],
-    [
-      78,
-      132,
-      1,
-      1931,
-      2,
-      "AUDIO"
-    ],
-    [
-      79,
-      1931,
-      0,
-      1705,
-      4,
-      "H3_CHAIN_SEGMENT"
-    ],
-    [
       81,
       132,
       2,
@@ -2492,14 +2557,70 @@
     ],
     [
       82,
-      1930,
+      1702,
       0,
-      1942,
+      1944,
+      0,
+      "H3_CHAIN_STATE"
+    ],
+    [
+      83,
+      1704,
+      0,
+      1944,
+      1,
+      "H3_CHAIN_SEGMENT"
+    ],
+    [
+      84,
+      132,
+      1,
+      1944,
+      2,
+      "AUDIO"
+    ],
+    [
+      85,
+      1944,
+      0,
+      1705,
+      4,
+      "H3_CHAIN_SEGMENT"
+    ],
+    [
+      86,
+      4,
+      0,
+      110,
+      2,
+      "VAE"
+    ],
+    [
+      87,
+      1945,
+      0,
+      110,
+      3,
+      "IMAGE"
+    ],
+    [
+      88,
+      1946,
+      0,
+      110,
+      4,
+      "IMAGE"
+    ],
+    [
+      91,
+      1949,
+      0,
+      1701,
       0,
       "H3_CHAIN_PLAN"
     ],
     [
-      85,
+      92,
       1702,
       0,
       132,
@@ -2507,11 +2628,11 @@
       "H3_CHAIN_STATE"
     ],
     [
-      86,
-      1945,
+      93,
+      1950,
       0,
       1700,
-      0,
+      1,
       "H3_CHAIN_POLICY"
     ]
   ],
@@ -2530,11 +2651,11 @@
     },
     {
       "id": 3,
-      "title": "CORE T2VA + CHECKPOINTED REVIEW",
+      "title": "CORE REF2VA + CHECKPOINTED REVIEW",
       "bounding": [
-        -704,
+        -1056,
         -352,
-        5792,
+        6080,
         1568
       ],
       "color": "#744c8c",
@@ -2544,7 +2665,7 @@
       "id": 4,
       "title": "FINAL ASSEMBLY",
       "bounding": [
-        5120,
+        5056,
         -352,
         800,
         640
@@ -2556,28 +2677,40 @@
       "id": 5,
       "title": "DISABLED RECOVERY PATH",
       "bounding": [
-        5120,
+        5056,
         320,
         1056,
-        768
+        736
       ],
       "color": "#8a5a2b",
       "flags": {}
     },
     {
       "id": 6,
-      "title": "T2V — PLAN STUDIO AUTHORING",
+      "title": "REF2V — PLAN + STANDARD PROMPT EDITOR",
       "bounding": [
         -1152,
         1280,
-        4244,
-        1472
+        3664,
+        1728
       ],
       "color": "#3f789e",
       "flags": {}
     },
     {
       "id": 7,
+      "title": "GLOBAL PICTURE REFERENCES — ALL SCENES",
+      "bounding": [
+        -2112,
+        -320,
+        1000,
+        640
+      ],
+      "color": "#744c8c",
+      "flags": {}
+    },
+    {
+      "id": 8,
       "title": "WORKFLOW GUIDE",
       "bounding": [
         -4000,
@@ -2592,10 +2725,10 @@
   "config": {},
   "extra": {
     "ds": {
-      "scale": 0.38554328942953164,
+      "scale": 0.8721646974438488,
       "offset": [
-        2034.6092391418879,
-        937.8713924487479
+        -2640.7783985794263,
+        318.23168424833165
       ]
     },
     "frontendVersion": "1.48.7",
@@ -2606,7 +2739,7 @@
     "ue_links": [],
     "links_added_by_ue": [],
     "comfyui_mcp": {
-      "workflow_uuid": "0caab59d-5b36-453a-8646-2180c636ac04"
+      "workflow_uuid": "fdd69127-0e2d-47d6-bcd1-54c4cd9527d5"
     }
   },
   "version": 0.4

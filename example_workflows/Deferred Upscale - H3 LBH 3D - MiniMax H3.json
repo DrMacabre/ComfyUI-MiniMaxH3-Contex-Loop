@@ -279,7 +279,7 @@
           "name": "MODEL",
           "type": "MODEL",
           "links": [
-            8
+            9
           ]
         }
       ],
@@ -290,46 +290,6 @@
       },
       "widgets_values": [
         "comfy kitchen attention"
-      ]
-    },
-    {
-      "id": 7,
-      "type": "LoraLoaderModelOnly",
-      "pos": [
-        -1056,
-        -384
-      ],
-      "size": [
-        288,
-        96
-      ],
-      "flags": {},
-      "order": 10,
-      "mode": 0,
-      "inputs": [
-        {
-          "name": "model",
-          "type": "MODEL",
-          "link": 8
-        }
-      ],
-      "outputs": [
-        {
-          "name": "MODEL",
-          "type": "MODEL",
-          "links": [
-            9
-          ]
-        }
-      ],
-      "properties": {
-        "cnr_id": "comfy-core",
-        "ver": "0.30.0",
-        "Node name for S&R": "LoraLoaderModelOnly"
-      },
-      "widgets_values": [
-        "MiniMax H3/minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors",
-        1
       ]
     },
     {
@@ -725,7 +685,7 @@
       },
       "widgets_values": [
         "simple",
-        2,
+        20,
         0.24
       ]
     },
@@ -1064,7 +1024,7 @@
         "Node name for S&R": "KSamplerSelect"
       },
       "widgets_values": [
-        "euler"
+        "res_multistep"
       ]
     },
     {
@@ -1449,16 +1409,8 @@
       "MODEL"
     ],
     [
-      8,
-      6,
-      0,
-      7,
-      0,
-      "MODEL"
-    ],
-    [
       9,
-      7,
+      6,
       0,
       8,
       0,

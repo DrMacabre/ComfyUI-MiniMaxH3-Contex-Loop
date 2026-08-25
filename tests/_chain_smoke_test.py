@@ -274,7 +274,7 @@ def main():
     assert (ROOT / "web" / "h3_reference_autoconnect.js").is_file()
     assert (ROOT / "web" / "h3_reference_autoconnect_core.mjs").is_file()
     workflow_path = (ROOT / "example_workflows" / "Archive" /
-                     "Looping MiniMax H3 Seamless Chain Global Refs Example.json")
+                     "Looping Seamless Chain Global Refs Example - MiniMax H3.json")
     workflow = json.loads(workflow_path.read_text(encoding="utf-8"))
     workflow_types = {node.get("type") for node in workflow["nodes"]}
     assert "MiniMaxH3LoopTrim" in workflow_types
@@ -315,7 +315,7 @@ def main():
                     assert int(link_id) in links
 
     fl2va_path = (ROOT / "example_workflows" / "Archive" /
-                  "Looping MiniMax H3 V2 - Core FL2VA.json")
+                  "Looping Core FL2VA V2 - MiniMax H3.json")
     fl2va = json.loads(fl2va_path.read_text(encoding="utf-8"))
     assert_workflow_links(fl2va)
     fl2va_types = {node.get("type") for node in fl2va["nodes"]}
@@ -356,7 +356,7 @@ def main():
     print("workflow v2: scheduler-free core FL2VA editing/review graph passes")
 
     i2va_path = (ROOT / "example_workflows" / "Archive" /
-                  "Looping MiniMax H3 V2 - Single Image I2VA 20s.json")
+                  "Looping Single Image I2VA 20s V2 - MiniMax H3.json")
     i2va = json.loads(i2va_path.read_text(encoding="utf-8"))
     assert_workflow_links(i2va)
     i2va_types = {node.get("type") for node in i2va["nodes"]}
@@ -383,7 +383,7 @@ def main():
     print("workflow v2: gated two-scene I2VA 20-second graph passes")
 
     scheduled_path = (ROOT / "example_workflows" / "Archive" /
-                      "Looping MiniMax H3 Seamless Chain V2 - Scheduled Refs.json")
+                      "Looping Seamless Chain V2 - Scheduled Refs - MiniMax H3.json")
     scheduled = json.loads(scheduled_path.read_text(encoding="utf-8"))
     assert_workflow_links(scheduled)
     scheduled_types = {node.get("type") for node in scheduled["nodes"]}
@@ -496,7 +496,7 @@ def main():
     print("workflow v2: scheduled picture/video/audio aliases and review graph pass")
 
     angle_workflow_path = (ROOT / "example_workflows" / "Archive" /
-                           "EXPERIMENTAL MiniMax H3 Three-Angle Guitar Ref2VA.json")
+                           "Three-Angle Guitar Ref2VA - EXPERIMENTAL - MiniMax H3.json")
     angle_workflow = json.loads(
         angle_workflow_path.read_text(encoding="utf-8"))
     angle_types = {node.get("type") for node in angle_workflow["nodes"]}

@@ -34,9 +34,9 @@ Context's MODEL output. Audio remains owned by Audio Policy. This mode is fixed
 to 39 context frames and initially validated at 20 sampling steps.
 
 Start with
-[`MiniMax H3 - Masked Video Inpaint.json`](<../example_workflows/MiniMax H3 - Masked Video Inpaint.json>).
+[`Masked Video Inpaint - MiniMax H3.json`](<../example_workflows/Masked Video Inpaint - MiniMax H3.json>).
 For picture-defined replacement appearance, use
-[`MiniMax H3 Ref2V - Masked Video Inpaint.json`](<../example_workflows/MiniMax H3 Ref2V - Masked Video Inpaint.json>).
+[`Ref2V Masked Video Inpaint - MiniMax H3.json`](<../example_workflows/Ref2V Masked Video Inpaint - MiniMax H3.json>).
 For temporal continuation and bridging, use the three
 [masked AV examples](../example_workflows/README.md#masked-av-extension-and-bridge).
 

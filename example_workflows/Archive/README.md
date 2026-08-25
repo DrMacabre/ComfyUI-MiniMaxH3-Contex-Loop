@@ -3,17 +3,17 @@
 These are the previous mixed and experimental examples retained unchanged for
 compatibility and reference. The recommended type-based workflow pairs now
 live one level above this folder, beginning with
-[`MiniMax H3 T2V - Normal.json`](<../MiniMax H3 T2V - Normal.json>) and
-[`MiniMax H3 T2V - Studio.json`](<../MiniMax H3 T2V - Studio.json>).
+[`T2V Normal - MiniMax H3.json`](<../T2V Normal - MiniMax H3.json>) and
+[`T2V Studio - MiniMax H3.json`](<../T2V Studio - MiniMax H3.json>).
 
-`MiniMax H3 Ref2V - Legacy Scheduled.json` and
-`MiniMax H3 Ref2V - Studio Legacy Scheduled.json` preserve the former active
+`Ref2V Legacy Scheduled - MiniMax H3.json` and
+`Ref2V Studio Legacy Scheduled - MiniMax H3.json` preserve the former active
 Ref2V examples with explicit numeric scene selectors. The recommended Ref2V
 examples now use prompt-driven Tagged nodes one level above this folder.
 
 ## V2 demos: choose single-image I2VA, core FL2VA, or Scheduled Ref2VA
 
-[`Looping MiniMax H3 V2 - Single Image I2VA 20s.json`](<Looping MiniMax H3 V2 - Single Image I2VA 20s.json>)
+[`Looping Single Image I2VA 20s V2 - MiniMax H3.json`](<Looping Single Image I2VA 20s V2 - MiniMax H3.json>)
 is the simple long-form image-to-video starting point. It uses one opening
 image, no last-frame input, and two requested 10-second scenes. The included
 **First-Scene Image Gate** passes `<Picture 1>` to ComfyUI's stock
@@ -28,7 +28,7 @@ chain; each additional requested 10-second continuation contributes 238 frames
 (about 9.92 seconds). Replace the opening image and both generic motion prompts
 before queueing.
 
-[`Looping MiniMax H3 V2 - Core FL2VA.json`](<Looping MiniMax H3 V2 - Core FL2VA.json>)
+[`Looping Core FL2VA V2 - MiniMax H3.json`](<Looping Core FL2VA V2 - MiniMax H3.json>)
 is the scheduler-free starting point. It uses ComfyUI's stock
 `MiniMaxH3ImageToVideo` with a deliberately one-scene, 124-frame plan so one
 first/last keyframe pair is applied exactly once. The prompt follows H3's
@@ -38,7 +38,7 @@ L2VA, or both for T2VA. For a multi-scene I2VA chain use the dedicated example
 above; a globally connected keyframe would otherwise constrain every recursive
 scene.
 
-[`Looping MiniMax H3 Seamless Chain V2 - Scheduled Refs.json`](<Looping MiniMax H3 Seamless Chain V2 - Scheduled Refs.json>)
+[`Looping Seamless Chain V2 - Scheduled Refs - MiniMax H3.json`](<Looping Seamless Chain V2 - Scheduled Refs - MiniMax H3.json>)
 is the full fourteen-scene Ref2VA demonstration. It includes the large Scene
 Prompt Editor, reference hover previews, Review Gate, muted recovery assembly,
 and date/version-safe final filenames. Its schedule exercises every media
@@ -84,7 +84,7 @@ hand, right-click its core **MiniMax H3 Reference to Video** node and choose
 sockets become all-scene schedule entries; narrow their `scenes` fields and
 replace fixed native labels in Plan prompts with the generated `@tags`.
 
-## Experimental: MiniMax H3 Three-Angle Guitar Ref2VA
+## Three-Angle Guitar Ref2VA - Experimental - MiniMax H3
 
 A one-pass performance re-filming experiment, rather than a recursive loop.
 Core **Load Video** opens `3ClbaJYWVO4_000030.mp4`; **Reference Video Prep**
@@ -98,7 +98,7 @@ guitar, hand choreography, and musical timing while deliberately removing the
 source product card, website watermark, text, and split-screen layout. Treat
 this as experimental and select model paths available in your installation.
 
-## Experimental: MiniMax H3 Extend Existing Video Model Workflow
+## Extend Existing Video Model Workflow - Experimental - MiniMax H3
 
 A compact two-scene model for extending an existing MP4. Core **Load Video**
 connects its native `VIDEO` directly to **MiniMax H3 Existing Video Context**.
@@ -114,7 +114,7 @@ new standalone example; none of the earlier workflow JSON files were changed.
 Treat it as experimental until the imported video/audio continuation path has
 received broader testing across source codecs, frame rates, and H3 setups.
 
-## Looping MiniMax H3 Seamless Chain Global Refs Example
+## Looping Seamless Chain Global Refs Example - MiniMax H3
 
 Disk-backed recursive Ref2VA chain using the visual H3 Chain Plan editor,
 global character references, a frame-exact source-song timeline, per-segment
@@ -129,7 +129,7 @@ Replace the supplied image/audio filenames and model selections with files
 available in your ComfyUI installation. Scene-count and duration labels are
 intentionally generic because both are controlled by the editable plan.
 
-## MiniMax H3 Seamless Chain Global Refs 6 Clips
+## Seamless Chain Global Refs 6 Clips - MiniMax H3
 
 This is also a historical manual workflow rather than the recursive loop demo.
 It is a six-clip Ref2VA chain with global character-reference images, 39-frame video

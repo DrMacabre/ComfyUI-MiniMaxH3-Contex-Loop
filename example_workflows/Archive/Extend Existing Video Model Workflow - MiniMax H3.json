@@ -73,7 +73,7 @@
           "name": "MODEL",
           "type": "MODEL",
           "links": [
-            4
+            5
           ]
         }
       ],
@@ -493,46 +493,6 @@
         "MiniMax-H3/qwen3vl_32b_minimax_h3_int8_convrot.safetensors",
         "minimax",
         "default"
-      ]
-    },
-    {
-      "id": 1635,
-      "type": "LoraLoaderModelOnly",
-      "pos": [
-        -576,
-        -864
-      ],
-      "size": [
-        256,
-        96
-      ],
-      "flags": {},
-      "order": 26,
-      "mode": 0,
-      "inputs": [
-        {
-          "name": "model",
-          "type": "MODEL",
-          "link": 4
-        }
-      ],
-      "outputs": [
-        {
-          "name": "MODEL",
-          "type": "MODEL",
-          "links": [
-            5
-          ]
-        }
-      ],
-      "properties": {
-        "cnr_id": "comfy-core",
-        "ver": "0.30.0",
-        "Node name for S&R": "LoraLoaderModelOnly"
-      },
-      "widgets_values": [
-        "MiniMax H3/minimax_h3_fl2v_lightx2v_turbo_4step_v0.1_comfy.safetensors",
-        0.95
       ]
     },
     {
@@ -1013,7 +973,7 @@
       },
       "widgets_values": [
         "simple",
-        5,
+        20,
         1
       ]
     },
@@ -1744,7 +1704,7 @@
         "h3_chain_scene_colors": {}
       },
       "widgets_values": [
-        "{\n  \"defaults\": {\n    \"duration_seconds\": 8,\n    \"steps\": 5\n  },\n  \"shots\": [\n    {\n      \"id\": \"existing_video_extension_01\",\n      \"prompt\": \"integrated_multimodal_description: [Shot 1] Live-action, cinematic, begin inside the incoming video context with no establishing reset. Continue the exact final camera direction and speed from the imported ending. Preserve the principal subject's screen position, identity, body proportions, wardrobe, hair, accessories, pose, expression, contact points, clothing folds, hair movement, and ongoing action across the join. Complete the unfinished movement naturally during the first seconds. The camera then follows the subject forward into the nearest plausible adjoining area already implied by the source ending. Introduce new space through continuous parallax and physically connected geometry, never through a cut, dissolve, teleport, or sudden reframing. Maintain the established lens behavior, frame geometry, lighting direction, color response, motion cadence, anatomy, and environmental scale. End while the subject is still moving and the camera is beginning a gentle arc, leaving both motions visibly unresolved for the next scene.\\n\\noverall_soundscape:\\nContinue the incoming room tone, environmental texture, movement sounds, and acoustic perspective without a sudden change at the join. Keep new footsteps, fabric movement, impacts, and spatial reflections synchronized to the visible action.\\n\\nnon_diegetic_music:\\nIf music is already audible, continue its instrumentation, tempo, key, and dynamic level without a restart; otherwise use no non-diegetic music.\",\n      \"seed\": \"1001\"\n    },\n    {\n      \"id\": \"existing_video_extension_02\",\n      \"prompt\": \"integrated_multimodal_description: [Shot 1] Live-action, cinematic, continue from the incoming frames with the same principal subject already moving and the camera already entering the gentle arc; do not restart either motion. Preserve the exact identity, body proportions, wardrobe, hair, accessories, physical condition, lighting direction, background continuity, surface detail, lens behavior, and spatial scale inherited from the preceding scene. Complete the arc smoothly to reveal the connected environment from a new three-quarter angle. The subject reacts naturally to a visible feature already present in the space, then slows with believable weight while the camera eases from tracking movement into a stable medium-wide composition. Let small secondary motion continue in hair, fabric, reflections, loose objects, and the environment. During the final seconds, resolve the action cleanly and hold a confident composition long enough to read, without freezing the subject or introducing a cut.\\n\\noverall_soundscape:\\nMaintain continuous environmental ambience and synchronized movement sounds, gradually reducing activity as the final composition settles.\\n\\nnon_diegetic_music:\\nIf music was established, let the generated continuation resolve the same instrumentation, tempo, and key with a restrained ending; otherwise use no non-diegetic music.\",\n      \"seed\": \"1002\"\n    }\n  ]\n}",
+        "{\n  \"defaults\": {\n    \"duration_seconds\": 8,\n    \"steps\": 20\n  },\n  \"shots\": [\n    {\n      \"id\": \"existing_video_extension_01\",\n      \"prompt\": \"integrated_multimodal_description: [Shot 1] Live-action, cinematic, begin inside the incoming video context with no establishing reset. Continue the exact final camera direction and speed from the imported ending. Preserve the principal subject's screen position, identity, body proportions, wardrobe, hair, accessories, pose, expression, contact points, clothing folds, hair movement, and ongoing action across the join. Complete the unfinished movement naturally during the first seconds. The camera then follows the subject forward into the nearest plausible adjoining area already implied by the source ending. Introduce new space through continuous parallax and physically connected geometry, never through a cut, dissolve, teleport, or sudden reframing. Maintain the established lens behavior, frame geometry, lighting direction, color response, motion cadence, anatomy, and environmental scale. End while the subject is still moving and the camera is beginning a gentle arc, leaving both motions visibly unresolved for the next scene.\\n\\noverall_soundscape:\\nContinue the incoming room tone, environmental texture, movement sounds, and acoustic perspective without a sudden change at the join. Keep new footsteps, fabric movement, impacts, and spatial reflections synchronized to the visible action.\\n\\nnon_diegetic_music:\\nIf music is already audible, continue its instrumentation, tempo, key, and dynamic level without a restart; otherwise use no non-diegetic music.\",\n      \"seed\": \"1001\"\n    },\n    {\n      \"id\": \"existing_video_extension_02\",\n      \"prompt\": \"integrated_multimodal_description: [Shot 1] Live-action, cinematic, continue from the incoming frames with the same principal subject already moving and the camera already entering the gentle arc; do not restart either motion. Preserve the exact identity, body proportions, wardrobe, hair, accessories, physical condition, lighting direction, background continuity, surface detail, lens behavior, and spatial scale inherited from the preceding scene. Complete the arc smoothly to reveal the connected environment from a new three-quarter angle. The subject reacts naturally to a visible feature already present in the space, then slows with believable weight while the camera eases from tracking movement into a stable medium-wide composition. Let small secondary motion continue in hair, fabric, reflections, loose objects, and the environment. During the final seconds, resolve the action cleanly and hold a confident composition long enough to read, without freezing the subject or introducing a cut.\\n\\noverall_soundscape:\\nMaintain continuous environmental ambience and synchronized movement sounds, gradually reducing activity as the final composition settles.\\n\\nnon_diegetic_music:\\nIf music was established, let the generated continuation resolve the same instrumentation, tempo, and key with a restrained ending; otherwise use no non-diegetic music.\",\n      \"seed\": \"1002\"\n    }\n  ]\n}",
         "extend_existing_video_demo",
         "extend-existing-video-demo-v1",
         960,
@@ -1756,7 +1716,7 @@
         "generated_audio",
         22,
         8,
-        5,
+        20,
         0,
         20
       ],
@@ -1960,7 +1920,7 @@
         "Node name for S&R": "MiniMaxH3ChainExternalVideo"
       },
       "widgets_values": [
-        24.0,
+        24,
         true
       ],
       "color": "#1f1f48",
@@ -2021,7 +1981,7 @@
       "widgets_values": [
         true,
         false,
-        0.0,
+        0,
         false,
         true,
         "checkpointed"
@@ -2056,16 +2016,8 @@
       "MODEL"
     ],
     [
-      4,
-      1634,
-      0,
-      1635,
-      0,
-      "MODEL"
-    ],
-    [
       5,
-      1635,
+      1634,
       0,
       5,
       0,
@@ -2603,8 +2555,8 @@
     "ds": {
       "scale": 0.43,
       "offset": [
-        3300.0,
-        1440.0
+        3300,
+        1440
       ]
     },
     "frontendVersion": "1.48.7",

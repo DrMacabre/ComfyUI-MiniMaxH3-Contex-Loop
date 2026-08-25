@@ -20,23 +20,23 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 EXAMPLES = ROOT / "example_workflows"
-SOURCE_AUDIO_DEMO = "MiniMax H3 Ref2V - Studio Tagged Source Audio.json"
+SOURCE_AUDIO_DEMO = "Ref2V Studio Tagged Source Audio - MiniMax H3.json"
 MAINTAINED_DEMOS = (
-    "EXPERIMENTAL MiniMax H3 Ref2V - Sequential Motion.json",
-    "MiniMax H3 - Masked AV Bridge - Two Clips.json",
-    "MiniMax H3 - Masked AV Extension - Chain + Reference Image.json",
-    "MiniMax H3 - Masked AV Extension - Single Clip.json",
-    "MiniMax H3 - Masked Video Inpaint.json",
-    "MiniMax H3 FL2V - Normal.json",
-    "MiniMax H3 I2V - Normal.json",
-    "MiniMax H3 I2V - Studio.json",
-    "MiniMax H3 Ref2V - Basic.json",
-    "MiniMax H3 Ref2V - Masked Video Inpaint.json",
+    "Ref2V Sequential Motion - EXPERIMENTAL - MiniMax H3.json",
+    "Masked AV Bridge - Two Clips - MiniMax H3.json",
+    "Masked AV Extension - Chain + Reference Image - MiniMax H3.json",
+    "Masked AV Extension - Single Clip - MiniMax H3.json",
+    "Masked Video Inpaint - MiniMax H3.json",
+    "FL2V Normal - MiniMax H3.json",
+    "I2V Normal - MiniMax H3.json",
+    "I2V Studio - MiniMax H3.json",
+    "Ref2V Basic - MiniMax H3.json",
+    "Ref2V Masked Video Inpaint - MiniMax H3.json",
     SOURCE_AUDIO_DEMO,
-    "MiniMax H3 Ref2V - Studio Tagged.json",
-    "MiniMax H3 Ref2V - Tagged.json",
-    "MiniMax H3 T2V - Normal.json",
-    "MiniMax H3 T2V - Studio.json",
+    "Ref2V Studio Tagged - MiniMax H3.json",
+    "Ref2V Tagged - MiniMax H3.json",
+    "T2V Normal - MiniMax H3.json",
+    "T2V Studio - MiniMax H3.json",
 )
 
 # Exact display names exposed by ComfyUI's /object_info for every node type

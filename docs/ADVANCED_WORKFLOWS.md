@@ -4,7 +4,7 @@
 
 Use **MiniMax H3 Existing Video Context** when scene 1 must continue a decoded
 video rather than start from an empty timeline. The complete experimental model
-is [MiniMax H3 Extend Existing Video Model Workflow](<../example_workflows/MiniMax H3 Extend Existing Video Model Workflow.json>).
+is [Extend Existing Video Model Workflow - MiniMax H3](<../example_workflows/Archive/Extend Existing Video Model Workflow - MiniMax H3.json>).
 
 ```text
 Plan ────────────────────────────────┐
@@ -101,7 +101,7 @@ scene-local image, video, or audio anchors.
 
 ## Re-film a synchronized performance
 
-The [three-angle guitar workflow](<../example_workflows/EXPERIMENTAL MiniMax H3 Three-Angle Guitar Ref2VA.json>)
+The [three-angle guitar workflow](<../example_workflows/Three-Angle Guitar Ref2VA - EXPERIMENTAL - MiniMax H3.json>)
 uses **Reference Video Prep** to convert native VIDEO or decoded IMAGE/AUDIO
 into exact 24 fps Ref2VA input. Its soundtrack is copied without padding or
 time-stretching, allowing one performance to be generated from multiple camera

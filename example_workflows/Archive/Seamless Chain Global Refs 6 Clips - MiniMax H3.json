@@ -169,7 +169,7 @@
         "Node name for S&R": "PrimitiveFloat"
       },
       "widgets_values": [
-        15.0
+        15
       ],
       "title": "GLOBAL CLIP DURATION — seconds",
       "color": "#346434",

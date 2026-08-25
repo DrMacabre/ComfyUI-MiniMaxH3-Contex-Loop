@@ -77,16 +77,16 @@ Some examples need bundled media copied into `ComfyUI/input/`. See the
 
 | I want to… | Start here |
 |---|---|
-| Generate from text | [T2V Normal](<example_workflows/MiniMax H3 T2V - Normal.json>) |
-| Animate an opening image | [I2V Normal](<example_workflows/MiniMax H3 I2V - Normal.json>) |
-| Move between first/last images | [FL2V Normal](<example_workflows/MiniMax H3 FL2V - Normal.json>) |
-| Use prompt-driven pictures | [Ref2V Tagged](<example_workflows/MiniMax H3 Ref2V - Tagged.json>) |
-| Guide scenes with a source soundtrack | [Ref2V Studio Tagged Source Audio](<example_workflows/MiniMax H3 Ref2V - Studio Tagged Source Audio.json>) |
-| Inpaint a fixed or tracked region | [Masked Video Inpaint](<example_workflows/MiniMax H3 - Masked Video Inpaint.json>) |
-| Inpaint with a picture-defined replacement | [Ref2V Masked Video Inpaint](<example_workflows/MiniMax H3 Ref2V - Masked Video Inpaint.json>) |
-| Continue one existing clip | [Masked AV Extension — Single Clip](<example_workflows/MiniMax H3 - Masked AV Extension - Single Clip.json>) |
-| Continue several reviewed scenes | [Masked AV Extension — Chain](<example_workflows/MiniMax H3 - Masked AV Extension - Chain + Reference Image.json>) |
-| Generate the gap between two clips | [Two-Clip Masked AV Bridge](<example_workflows/MiniMax H3 - Masked AV Bridge - Two Clips.json>) |
+| Generate from text | [T2V Normal](<example_workflows/T2V Normal - MiniMax H3.json>) |
+| Animate an opening image | [I2V Normal](<example_workflows/I2V Normal - MiniMax H3.json>) |
+| Move between first/last images | [FL2V Normal](<example_workflows/FL2V Normal - MiniMax H3.json>) |
+| Use prompt-driven pictures | [Ref2V Tagged](<example_workflows/Ref2V Tagged - MiniMax H3.json>) |
+| Guide scenes with a source soundtrack | [Ref2V Studio Tagged Source Audio](<example_workflows/Ref2V Studio Tagged Source Audio - MiniMax H3.json>) |
+| Inpaint a fixed or tracked region | [Masked Video Inpaint](<example_workflows/Masked Video Inpaint - MiniMax H3.json>) |
+| Inpaint with a picture-defined replacement | [Ref2V Masked Video Inpaint](<example_workflows/Ref2V Masked Video Inpaint - MiniMax H3.json>) |
+| Continue one existing clip | [Masked AV Extension — Single Clip](<example_workflows/Masked AV Extension - Single Clip - MiniMax H3.json>) |
+| Continue several reviewed scenes | [Masked AV Extension — Chain](<example_workflows/Masked AV Extension - Chain + Reference Image - MiniMax H3.json>) |
+| Generate the gap between two clips | [Two-Clip Masked AV Bridge](<example_workflows/Masked AV Bridge - Two Clips - MiniMax H3.json>) |
 
 Choose **Normal** for the standard Plan and Scene Prompt Editor. **Studio**
 workflows add an optional experimental timeline interface without changing the
