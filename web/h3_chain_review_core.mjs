@@ -7,9 +7,11 @@ import {
     sceneContextLength,
     sceneLoRARoute,
     sceneVideoBlendFrames,
+    sceneVisualContextLeadFrames,
+    sceneVisualContextLeadSource,
     sceneVisualContextSource,
     sharedPrompt,
-} from "./h3_chain_plan_core.mjs?v=0.6.18";
+} from "./h3_chain_plan_core.mjs?v=0.6.19";
 
 const FPS = 24;
 const MAX_H3_FRAMES = 3592;
@@ -235,6 +237,25 @@ export function applyCheckpointRevisionSet(plan, revisions, {
             sceneVisualContextSource(plan, scene);
         } else {
             delete shot.visual_context_source;
+        }
+        if (Object.hasOwn(revision, "visual_context_lead_source")) {
+            shot.visual_context_lead_source = String(
+                revision.visual_context_lead_source,
+            );
+            shot.visual_context_lead_frames = Number(
+                revision.visual_context_lead_frames,
+            );
+            const lead = sceneVisualContextLeadSource(plan, scene);
+            const second = sceneVisualContextSource(plan, scene);
+            sceneVisualContextLeadFrames(shot, sceneContextLength(shot));
+            if (lead === second) {
+                throw new Error(
+                    `Restored scene ${scene} uses the same scene for both composed visual context blocks.`,
+                );
+            }
+        } else {
+            delete shot.visual_context_lead_source;
+            delete shot.visual_context_lead_frames;
         }
         if (Object.hasOwn(revision, "continuation_mode")) {
             shot.continuation_mode = String(revision.continuation_mode);

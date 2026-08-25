@@ -89,6 +89,48 @@ verifies both consumed dependencies independently: the selected visual scene
 and, when enabled, the immediate generated-audio predecessor. Other earlier
 scenes remain assembly-only and do not become false resume blockers.
 
+## Composed visual context
+
+A continuation can use two saved picture histories back to back. In Plan or
+Plan Studio, **Composed context lead** selects the scene placed first;
+**Composed lead span** selects how much of that scene is kept. The ordinary
+**Visual context source** supplies the second block immediately before the new
+generation:
+
+```json
+{
+  "id": "scene_5",
+  "context_length": 39,
+  "visual_context_lead_source": "scene_4",
+  "visual_context_lead_frames": 5,
+  "visual_context_source": "scene_3",
+  "video_blend_frames": 0
+}
+```
+
+This example constructs scene 5's visual prefix as:
+
+```text
+scene 4 tail:  5 RGB frames /  2 video-latent steps
+scene 3 tail: 34 RGB frames / 10 video-latent steps
+result:       39 RGB frames / 12 video-latent steps
+```
+
+The blocks are concatenated in their authored order; they are not blended,
+interpolated, decoded, or re-encoded. Both sources may be any distinct earlier
+scenes on the active branch—the first source does not have to have a lower
+scene number than the second. Native H3 temporal phase limits the available
+splits. A 22-frame context supports 5+17; a 39-frame context supports 5+34 or
+22+17. Longer native contexts expose the same phase-safe lead choices.
+
+Composition changes only picture context. Generated audio remains one complete
+latent tail from the immediately previous timeline scene, so there is no audio
+splice at the internal visual seam and a scene's independent audio-context
+override still works. Final assembly still follows normal scene order and must
+use `video_blend_frames: 0` at this boundary. Checkpoint preflight verifies
+both selected visual revisions plus the immediate audio predecessor when that
+audio continuity is active.
+
 ## Last-frame destinations
 
 When stock H3 Image to Video supplies `last_frame`, Motion Context preserves

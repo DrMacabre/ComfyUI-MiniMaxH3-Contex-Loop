@@ -25,24 +25,26 @@ import {
     sceneLoRARoute,
     scenePromptSeedMode,
     sceneVisualContextSource,
+    sceneVisualContextLeadFrames,
+    sceneVisualContextLeadSource,
     sceneVideoBlendFrames,
     setScenePromptSeedMode,
     setSharedPrompt,
     setShotLengthMode,
     sharedPrompt,
     shotLengthMode,
-} from "./h3_chain_plan_core.mjs?v=0.6.18";
+} from "./h3_chain_plan_core.mjs?v=0.6.19";
 import {
     promptRevisionHelp,
     promptRevisionLabel,
     promptRevisionNavigation,
-} from "./h3_prompt_history_core.mjs?v=0.6.18";
+} from "./h3_prompt_history_core.mjs?v=0.6.19";
 import {
     availableReferenceRecords,
     convertTaggedPictureReference,
     taggedPictureReferenceMode,
     taggedPictureReferenceToken,
-} from "./h3_reference_preview_core.mjs?v=0.6.18";
+} from "./h3_reference_preview_core.mjs?v=0.6.19";
 import {
     applySceneAudioOverride,
     applySceneTransitionPreset,
@@ -51,12 +53,12 @@ import {
     sceneAudioPolicy,
     sceneTransitionPreset,
     transitionPresetLabel,
-} from "./h3_policy_core.mjs?v=0.6.18";
+} from "./h3_policy_core.mjs?v=0.6.19";
 import {
     resolveAudioContextLength,
     resolveAudioPolicy,
     resolveTransitionPolicy,
-} from "./h3_socket_presentation_core.mjs?v=0.6.18";
+} from "./h3_socket_presentation_core.mjs?v=0.6.19";
 import {
     locateStudioTimelineSecond,
     h3StudioGridMarkers,
@@ -68,8 +70,8 @@ import {
     studioSourceAudioSecond,
     studioSourceSecond,
     studioWaveformSceneSamples,
-} from "./h3_chain_plan_studio_core.mjs?v=0.6.18";
-import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.6.18";
+} from "./h3_chain_plan_studio_core.mjs?v=0.6.19";
+import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.6.19";
 
 const {connectedPromptEditors, publishCompanionScene} = promptCompanionSync;
 function publishCompanionPrompt(...args) {
@@ -1410,6 +1412,25 @@ function mount(node) {
             renderTimeline();
         });
         const planSettings = settings();
+        function normalizeVisualLeadSpan() {
+            if (!Object.hasOwn(shot, "visual_context_lead_source")) return;
+            const resolved = sceneContextLength(
+                shot, planSettings.contextLength,
+            );
+            const allowed = H3_CONTEXT_LENGTHS.filter(
+                (value) => value >= 5 && value < resolved,
+            );
+            if (!allowed.length) {
+                delete shot.visual_context_lead_source;
+                delete shot.visual_context_lead_frames;
+                return;
+            }
+            try {
+                sceneVisualContextLeadFrames(shot, resolved);
+            } catch (_error) {
+                shot.visual_context_lead_frames = allowed[0];
+            }
+        }
         const incomingTransition = element("select");
         const inheritOption = element(
             "option", "",
@@ -1458,6 +1479,7 @@ function mount(node) {
                     && Number(shot.video_blend_frames) > nextContext) {
                 shot.video_blend_frames = nextContext;
             }
+            normalizeVisualLeadSpan();
             writePlan();
             renderShell();
         });
@@ -1480,10 +1502,11 @@ function mount(node) {
             if (context.value === "") delete shot.context_length;
             else shot.context_length = Number(context.value);
             sceneContextLength(shot, settings().contextLength);
+            normalizeVisualLeadSpan();
             refreshBlendControl();
             refreshIncomingTransition();
             writePlan();
-            renderStatus();
+            renderShell();
         });
         const visualSource = element("select");
         if (state.active === 0) {
@@ -1551,6 +1574,103 @@ function mount(node) {
                 delete shot.visual_context_source;
             } else {
                 shot.visual_context_source = visualSource.value;
+                shot.video_blend_frames = 0;
+            }
+            const recentSource = sceneVisualContextSource(
+                state.plan, state.active + 1,
+            );
+            const leadSource = sceneVisualContextLeadSource(
+                state.plan, state.active + 1,
+            );
+            if (leadSource !== null && leadSource === recentSource) {
+                delete shot.visual_context_lead_source;
+                delete shot.visual_context_lead_frames;
+            }
+            refreshBlendControl();
+            writePlan();
+            renderShell();
+        });
+        const visualLeadSource = element("select");
+        const noLead = element("option", "", "Off · one visual source");
+        noLead.value = "";
+        visualLeadSource.append(noLead);
+        const recentSourceIndex = state.active === 0 ? null
+            : sceneVisualContextSource(state.plan, state.active + 1);
+        if (recentSourceIndex !== null) {
+            for (let sourceOffset = 0;
+                sourceOffset < state.active; sourceOffset += 1) {
+                if (sourceOffset + 1 === recentSourceIndex) continue;
+                const sourceId = safeShotId(
+                    state.plan.shots[sourceOffset]?.id,
+                    `clip_${String(sourceOffset + 1).padStart(4, "0")}`,
+                );
+                const option = element(
+                    "option", "", `Scene ${sourceOffset + 1} · ${sourceId}`,
+                );
+                option.value = sourceId;
+                visualLeadSource.append(option);
+            }
+        }
+        visualLeadSource.disabled = state.active === 0 || state.active < 2;
+        try {
+            const resolvedLead = sceneVisualContextLeadSource(
+                state.plan, state.active + 1,
+            );
+            visualLeadSource.value = resolvedLead === null ? ""
+                : safeShotId(
+                    state.plan.shots[resolvedLead - 1]?.id,
+                    `clip_${String(resolvedLead).padStart(4, "0")}`,
+                );
+        } catch (_error) {
+            visualLeadSource.value = "";
+        }
+        visualLeadSource.title = "Optional first scene in a composed visual context. The normal Visual context source supplies the second block nearest generation. Either source may be chronologically newer, but they must differ; generated audio remains continuous from the immediate timeline predecessor.";
+
+        const visualLeadFrames = element("select");
+        const resolvedVisualContext = sceneContextLength(
+            shot, settings().contextLength,
+        );
+        const leadChoices = H3_CONTEXT_LENGTHS.filter(
+            (value) => value >= 5 && value < resolvedVisualContext,
+        );
+        visualLeadSource.disabled = visualLeadSource.disabled
+            || !leadChoices.length;
+        for (const value of leadChoices) {
+            const option = element("option", "", `${value} frames first`);
+            option.value = String(value);
+            visualLeadFrames.append(option);
+        }
+        visualLeadFrames.disabled = !visualLeadSource.value
+            || !leadChoices.length;
+        if (visualLeadSource.value) {
+            try {
+                visualLeadFrames.value = String(
+                    sceneVisualContextLeadFrames(shot, resolvedVisualContext),
+                );
+            } catch (_error) {
+                visualLeadFrames.value = String(leadChoices[0] ?? "");
+            }
+        }
+        visualLeadFrames.title = "Phase-safe duration taken from the first selected scene. The remainder comes from Visual context source as the second block. At 39 frames, choose 5+34 or 22+17.";
+        visualLeadSource.addEventListener("change", () => {
+            if (!visualLeadSource.value) {
+                delete shot.visual_context_lead_source;
+                delete shot.visual_context_lead_frames;
+            } else {
+                shot.visual_context_lead_source = visualLeadSource.value;
+                shot.visual_context_lead_frames = Number(
+                    visualLeadFrames.value || leadChoices[0]);
+                shot.video_blend_frames = 0;
+            }
+            refreshBlendControl();
+            writePlan();
+            renderShell();
+        });
+        visualLeadFrames.addEventListener("change", () => {
+            if (visualLeadSource.value) {
+                shot.visual_context_lead_frames = Number(
+                    visualLeadFrames.value);
+                sceneVisualContextLeadFrames(shot, resolvedVisualContext);
                 shot.video_blend_frames = 0;
             }
             refreshBlendControl();
@@ -1728,6 +1848,8 @@ function mount(node) {
         advancedGrid.append(
             field("Visual / audio context", contextPair),
             field("Visual context source", visualSource),
+            field("Composed context lead", visualLeadSource),
+            field("Composed lead span", visualLeadFrames),
             field("Implementation", continuation),
             field("Boundary spatial proxy", spatialProxy),
         );
