@@ -591,9 +591,7 @@ export function sceneVisualContextLeadFrames(shot, contextLength) {
     if (raw === undefined || raw === null
             || (typeof raw === "string" && !raw.trim())) return 0;
     const resolved = Number(raw);
-    const allowed = H3_CONTEXT_LENGTHS.filter(
-        (value) => value >= 5 && value < Number(contextLength),
-    );
+    const allowed = visualContextLeadFrameOptions(contextLength);
     if (typeof raw === "boolean" || !Number.isInteger(resolved)
             || !allowed.includes(resolved)) {
         throw new Error(
@@ -603,11 +601,23 @@ export function sceneVisualContextLeadFrames(shot, contextLength) {
     return resolved;
 }
 
+export function visualContextLeadFrameOptions(contextLength) {
+    const total = Number(contextLength);
+    if (!Number.isInteger(total)) return Object.freeze([]);
+    const values = new Set();
+    for (const nativeRun of H3_CONTEXT_LENGTHS) {
+        if (nativeRun < 5 || nativeRun >= total) continue;
+        values.add(nativeRun);
+        const inverse = total - nativeRun;
+        if (inverse >= 5 && inverse < total) values.add(inverse);
+    }
+    return Object.freeze([...values].sort((left, right) => left - right));
+}
+
 export function visualContextCompositions() {
     const compositions = [];
     for (const total of H3_CONTEXT_LENGTHS) {
-        for (const lead of H3_CONTEXT_LENGTHS) {
-            if (lead < 5 || lead >= total) continue;
+        for (const lead of visualContextLeadFrameOptions(total)) {
             compositions.push(Object.freeze({
                 total,
                 lead,

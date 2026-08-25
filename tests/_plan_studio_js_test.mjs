@@ -251,6 +251,8 @@ assert.match(source, /field\("LoRA route", loraRoute\)/);
 assert.match(source, /MiniMax H3 Scene LoRA Scheduler/);
 assert.match(source, /row\.loraRoute/);
 assert.match(source, /Advanced boundary controls/);
+assert.match(source, /advanced\.open = state\.advancedBoundaryOpen/);
+assert.match(source, /ADVANCED_BOUNDARY_OPEN_PROPERTY/);
 assert.match(source, /field\("Implementation", continuation\)/);
 assert.match(source, /applySceneTransitionPreset/);
 assert.match(source, /field\("Boundary spatial proxy", spatialProxy\)/);

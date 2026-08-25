@@ -116,17 +116,21 @@ scene 3 tail: 34 RGB frames / 10 video-latent steps
 result:       39 RGB frames / 12 video-latent steps
 ```
 
-The selector groups every valid split under its resulting total: `39` offers
-`5+34` and `22+17`; `56` offers `5+51`, `22+34`, and `39+17`; longer native
-totals continue the same phase-safe pattern. Choosing one combination writes
-that total to the scene's `context_length` and the first span to
-`visual_context_lead_frames`.
+The selector groups every valid ordered split under its resulting total. `39`
+offers `5+34`, `17+22`, `22+17`, and `34+5`; `56` offers both orientations of
+`5+51`, `17+39`, and `22+34`; longer native totals continue the same pattern.
+Choosing one combination writes that total to the scene's `context_length`
+and the first span to `visual_context_lead_frames`.
 
-The blocks are concatenated in their authored order; they are not blended,
-interpolated, decoded, or re-encoded. Both sources may be any distinct earlier
-scenes on the active branch—the first source does not have to have a lower
-scene number than the second. The composed prefix remains one context, so its
-normal head trim or AV mask uses the selected total exactly once.
+The blocks are concatenated in their authored order; they are not blended or
+interpolated. Native-phase layouts such as `22+17` splice the saved latent
+blocks directly. Their inverse layouts such as `17+22` use the exact authored
+RGB tails and, for AV or Latent Guide consumers, normalize the combined prefix
+once through the connected video VAE instead of accepting a phase-shifted raw
+splice. Both sources may be any distinct earlier scenes on the active
+branch—the first source does not have to have a lower scene number than the
+second. The composed prefix remains one context, so its normal head trim or AV
+mask uses the selected total exactly once.
 
 Composition changes only picture context. Generated audio remains one complete
 latent tail from the immediately previous timeline scene, so there is no audio

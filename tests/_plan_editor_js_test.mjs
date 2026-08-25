@@ -721,17 +721,28 @@ const contextCompositions = visualContextCompositions();
 assert.deepEqual(
     contextCompositions.filter((choice) => choice.total === 39)
         .map((choice) => choice.label),
-    ["39 total · 5 + 34", "39 total · 22 + 17"],
+    [
+        "39 total · 5 + 34",
+        "39 total · 17 + 22",
+        "39 total · 22 + 17",
+        "39 total · 34 + 5",
+    ],
 );
 assert.deepEqual(
     contextCompositions.filter((choice) => choice.total === 56)
         .map((choice) => choice.label),
     [
         "56 total · 5 + 51",
+        "56 total · 17 + 39",
         "56 total · 22 + 34",
+        "56 total · 34 + 22",
         "56 total · 39 + 17",
+        "56 total · 51 + 5",
     ],
 );
+assert.equal(sceneVisualContextLeadFrames({
+    visual_context_lead_frames:17,
+}, 39), 17);
 assert.equal(contextCompositions.at(-1).total, 243);
 const composedTiming = calculatePlanTiming(composedPlan, {
     contextLength:39, videoBlendFrames:0, anchorMode:"head",
@@ -754,7 +765,7 @@ invalidCompositionSpan.shots[4].visual_context_lead_frames = 6;
 assert.match(calculatePlanTiming(invalidCompositionSpan, {
     contextLength:39, videoBlendFrames:0, anchorMode:"head",
     defaultDurationSeconds:5, defaultSteps:10,
-}).errors.join("\n"), /composed context lead frames must be one of 5, 22/i);
+}).errors.join("\n"), /composed context lead frames must be one of 5, 17, 22, 34/i);
 const blendedComposition = structuredClone(composedPlan);
 blendedComposition.shots[4].video_blend_frames = 2;
 assert.match(calculatePlanTiming(blendedComposition, {

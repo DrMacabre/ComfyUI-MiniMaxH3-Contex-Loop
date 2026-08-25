@@ -34,11 +34,14 @@ Newest first. This file keeps release history out of the onboarding README.
   non-linear, or composed visual-context source, and a recovered scene tail is
   protected only when a later scene really consumes it.
 
-- Added phase-safe **Composed visual context** in Plan and Plan Studio. A
+- Added ordered **Composed visual context** in Plan and Plan Studio. A
   continuation can assemble one native H3 context total from two saved scene
-  tails without decoding and re-encoding their latent blocks. The UI exposes
-  every phase-safe combination by total—for example `39 = 5+34` or `22+17`,
-  then all splits for `56`, `73`, and the longer native totals. The complete
+  tails. The UI exposes both orientations of every valid split—for example
+  `39 = 17+22` as well as `22+17`, then all splits for `56`, `73`, and the
+  longer native totals. Native-phase layouts splice latent blocks directly;
+  inverse layouts are normalized through the connected video VAE only when a
+  latent continuation consumes them. Plan Studio also remembers whether its
+  Advanced Boundary controls are open while settings re-render. The complete
   generated-audio latent stays
   continuous from the immediately previous timeline scene, the two visual
   sources are tracked independently by checkpoint preflight, and checkpoint
