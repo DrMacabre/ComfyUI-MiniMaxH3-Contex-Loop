@@ -44,6 +44,16 @@ function findNodeByDisplayId(qid) {
     return Number.isFinite(leaf) ? graph?.getNodeById?.(leaf) ?? null : null;
 }
 
+function activeWorkflowIdentity() {
+    const workflow = app.extensionManager?.workflow?.activeWorkflow;
+    const value = workflow?.path
+        ?? workflow?.activeState?.id
+        ?? workflow?.filename
+        ?? null;
+    if (value == null || String(value).trim() === "") return null;
+    return String(value);
+}
+
 function findUpstreamNode(start, wantedType) {
     const queue = [start];
     const seen = new Set();
@@ -222,18 +232,37 @@ async function verifyPredecessorCheckpoint(record) {
 }
 
 function requireVisibleWorkflow(record) {
-    const currentNode = findNodeByDisplayId(record.displayNode);
-    if (currentNode !== record.currentNode || nodeType(currentNode) !== CURRENT_TYPE) {
+    const workflowIdentity = activeWorkflowIdentity();
+    if (record.workflowIdentity && workflowIdentity
+        && workflowIdentity !== record.workflowIdentity) {
         throw new Error("Return to the running H3 workflow before requeueing the scene.");
     }
-    return currentNode;
+    const currentNode = findNodeByDisplayId(record.displayNode);
+    if (nodeType(currentNode) !== CURRENT_TYPE) {
+        throw new Error("Return to the running H3 workflow before requeueing the scene.");
+    }
+    const startNode = findUpstreamNode(currentNode, START_TYPE);
+    const planNode = findUpstreamNode(currentNode, PLAN_TYPE);
+    const runName = String(widgetByName(planNode, "run_name")?.value ?? "").trim();
+    if (!startNode || !planNode
+        || (record.scene.runName && runName !== record.scene.runName)) {
+        throw new Error("Return to the running H3 workflow before requeueing the scene.");
+    }
+    // ComfyUI may reconstruct graph and node objects when workflow tabs change.
+    // Refresh the cached references after validating stable workflow, node-path,
+    // and run identities instead of requiring stale JavaScript object equality.
+    record.workflowIdentity ??= workflowIdentity;
+    record.currentNode = currentNode;
+    record.startNode = startNode;
+    record.planNode = planNode;
+    return {currentNode, startNode, planNode};
 }
 
 function updateWorkflowForReroll(record, seed) {
-    requireVisibleWorkflow(record);
-    const planWidget = widgetByName(record.planNode, "plan_json");
-    const startWidget = widgetByName(record.startNode, "start_clip");
-    const rangeWidget = widgetByName(record.startNode, "scene_range");
+    const {planNode, startNode} = requireVisibleWorkflow(record);
+    const planWidget = widgetByName(planNode, "plan_json");
+    const startWidget = widgetByName(startNode, "start_clip");
+    const rangeWidget = widgetByName(startNode, "scene_range");
     if (!planWidget || !startWidget) {
         throw new Error("The active Current Shot is not connected to an editable Plan and Loop Start.");
     }
@@ -250,15 +279,15 @@ function updateWorkflowForReroll(record, seed) {
     const serialized = planToJson(plan);
     planWidget.value = serialized;
     planWidget.callback?.(serialized);
-    record.planNode._h3ChainEditorRefresh?.();
+    planNode._h3ChainEditorRefresh?.();
     startWidget.value = resume.startClip;
     startWidget.callback?.(resume.startClip);
     if (rangeWidget) {
         rangeWidget.value = resume.sceneRange;
         rangeWidget.callback?.(resume.sceneRange);
     }
-    record.planNode.graph?.setDirtyCanvas?.(true, true);
-    record.startNode.graph?.setDirtyCanvas?.(true, true);
+    planNode.graph?.setDirtyCanvas?.(true, true);
+    startNode.graph?.setDirtyCanvas?.(true, true);
 }
 
 async function cancelAndReroll() {
@@ -336,6 +365,7 @@ function onCurrentExecuted(data) {
     showActive({
         promptId: String(data.prompt_id),
         displayNode: String(data.display_node),
+        workflowIdentity: activeWorkflowIdentity(),
         currentNode,
         startNode,
         planNode,

@@ -1528,6 +1528,37 @@ def _combined_reference_registry(
     return _make_tagged_references(entries)
 
 
+def _plan_studio_generation_fingerprint(
+        generation_fingerprint: Any, tagged_references: Any) -> str:
+    """Compose Studio's external contract with its connected references."""
+    external = str(generation_fingerprint or "").strip()
+    if tagged_references is None:
+        return external
+
+    combined = _combined_reference_registry(tagged_references)
+    if not combined["entries"]:
+        # Merely connecting an empty reference line must not change an older
+        # standalone Plan's compatibility contract.
+        return external
+
+    reference_token = _reference_fingerprint_output(combined)
+    external_current, external_lineage = _generation_fingerprint_value(
+        external)
+    if external_lineage is not None and (
+            external_current == combined["fingerprint"]):
+        # Existing workflows may still wire the reference STRING output into
+        # the legacy field. Avoid wrapping the same lineage a second time.
+        return reference_token
+    if not external:
+        return reference_token
+    return _reference_fingerprint_output(
+        combined,
+        wrapper_key="tagged_reference_fingerprint",
+        wrapper_contract={
+            "external_generation_fingerprint": external,
+        })
+
+
 def _append_scheduled_reference(
         previous: Any, *, kind: str, tag: Any, scenes: Any,
         value: Any, content_hash: str, audio: Any = None,
@@ -12457,7 +12488,10 @@ def _plan_studio_preflight_input_types():
                        "Plan. Disable only for an intentional advanced "
                        "recovery from known artifacts."}),
         "tagged_references": (TAGGED_REFERENCE_TYPE, {
-            "tooltip": "Optional active prompt-driven reference registry."}),
+            "tooltip": "Optional active prompt-driven reference registry. "
+                       "In standalone Plan Studio it also supplies the "
+                       "automatic incremental generation fingerprint, "
+                       "including bundled semantic anchors."}),
         "reference_schedule": (REFERENCE_SCHEDULE_TYPE, {
             "tooltip": "Optional legacy scheduled reference registry."}),
     }
@@ -12480,6 +12514,17 @@ class MiniMaxH3ChainPlanStudio:
         }
         for name in _PLAN_STUDIO_AUTHORING_FIELDS:
             optional[name] = plan_inputs["required"][name]
+        fingerprint_type, fingerprint_options = optional[
+            "generation_fingerprint"]
+        fingerprint_options = dict(fingerprint_options)
+        fingerprint_options["tooltip"] = (
+            "Optional external generation contract for model, VAE, LoRA, "
+            "CFG, sampler, or scheduler changes. In standalone mode the "
+            "connected Tagged reference carrier is fingerprinted "
+            "automatically and combined with this value; no separate "
+            "reference-fingerprint STRING wire is needed.")
+        optional["generation_fingerprint"] = (
+            fingerprint_type, fingerprint_options)
         optional["chain_policy"] = plan_inputs["optional"]["chain_policy"]
         return {
             "required": {},
@@ -12533,6 +12578,8 @@ class MiniMaxH3ChainPlanStudio:
                     base_seed=0, segment_crf=18, video_blend_frames=0,
                     continuation_mode="guide", chain_policy=None):
         if plan is None:
+            generation_fingerprint = _plan_studio_generation_fingerprint(
+                generation_fingerprint, tagged_references)
             plan = MiniMaxH3ChainPlan().build(
                 plan_json, run_name, generation_fingerprint, width, height,
                 context_length, encode_mode, anchor_mode, crop, audio_mode,

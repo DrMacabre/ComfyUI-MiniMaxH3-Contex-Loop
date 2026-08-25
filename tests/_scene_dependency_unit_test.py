@@ -101,6 +101,16 @@ def reference_plan(token, first_prompt="@actor opens."):
         0, "guide")
 
 
+wrapped_token_v1 = chain._plan_studio_generation_fingerprint(
+    "model-stack:v2", registry_v1)
+wrapped_token_v2 = chain._plan_studio_generation_fingerprint(
+    "model-stack:v2", registry_v2)
+assert chain._scene_dependency_diffs(
+    chain._scene_dependency_record(reference_plan(wrapped_token_v1), 1, None),
+    chain._scene_dependency_record(reference_plan(wrapped_token_v2), 1, None),
+) == []
+
+
 old_reference_dependency = chain._scene_dependency_record(
     reference_plan(token_v1), 1, None)
 new_reference_dependency = chain._scene_dependency_record(
