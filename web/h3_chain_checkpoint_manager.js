@@ -209,6 +209,7 @@ function injectStyles() {
       .h3cm-files,.h3cm-dependents { margin:5px 0 0; padding-left:18px; }
       .h3cm-dependent { color:var(--h3cm-danger); cursor:pointer; }
       .h3cm-delete-actions { margin-top:7px; }
+      .h3cm-delete-actions .h3cm-status { flex:1 1 180px; min-width:120px; }
       .h3cm-delete-button { margin-left:auto; color:var(--h3cm-danger) !important; }
       .h3cm-error { color:var(--h3cm-danger); }
       @media (max-width:760px) { .h3cm-main { grid-template-columns:1fr; }
@@ -270,10 +271,12 @@ function mount(node) {
     const deletionActions = element("div", "h3cm-delete-actions");
     const status = element("div", "h3cm-status");
     const load = button("Load selected branch", "Restore this revision and its complete lineage into the connected Plan", () => void loadSelected());
+    const activate = button("Make branch active", "Promote this revision and its complete lineage to the run's active checkpoint pointers without changing the connected Plan", () => void activateSelected());
     const remove = button("Delete selected revision", "Delete an inactive leaf or roll back the active branch tip after confirmation", () => void deleteSelected(), "h3cm-delete-button");
     load.disabled = true;
+    activate.disabled = true;
     remove.disabled = true;
-    deletionActions.append(load, status, remove);
+    deletionActions.append(load, activate, status, remove);
     deletion.append(deletionTitle, deletionBody, deletionActions);
     root.append(head, runRow, scenes, main, deletion);
 
@@ -310,6 +313,7 @@ function mount(node) {
         refresh.disabled = state.busy;
         open.disabled = state.busy || !state.runName;
         load.disabled = state.busy || !canLoadSelected();
+        activate.disabled = state.busy || !canActivateSelected();
         remove.disabled = state.busy || !state.deletion?.allowed;
         if (message) status.textContent = message;
     }
@@ -322,6 +326,15 @@ function mount(node) {
         const lineage = selectedLineage();
         return Boolean(state.selected?.ready &&
             lineage.length === Number(state.selected.scene));
+    }
+
+    function canActivateSelected() {
+        if (!canLoadSelected()) return false;
+        return selectedLineage().some((selection) => {
+            const revision = selectedCheckpointRevision(
+                state.payload, selection.scene, selection.revision);
+            return !revision?.active;
+        });
     }
 
     function selectRevision(record, requestDeletion = true) {
@@ -532,6 +545,7 @@ function mount(node) {
         deletion.classList.toggle("h3cm-delete-blocked", Boolean(state.deletion && !state.deletion.allowed));
         deletionTitle.textContent = checkpointDeletionTitle(state.deletion);
         load.disabled = state.busy || !canLoadSelected();
+        activate.disabled = state.busy || !canActivateSelected();
         remove.disabled = state.busy || !state.deletion?.allowed;
         if (!state.deletion) return;
         const files = (state.deletion.files ?? []).filter((item) => item.exists);
@@ -828,6 +842,38 @@ function mount(node) {
             status.textContent = canResume
                 ? `Loaded scenes 1–${record.scene}; Loop Start is armed for scene ${resumeScene}.`
                 : `Loaded the completed branch through final scene ${record.scene}.`;
+        } catch (error) {
+            status.className = "h3cm-status h3cm-error";
+            status.textContent = error.message;
+        } finally {
+            setBusy(false);
+        }
+    }
+
+    async function activateSelected() {
+        const record = state.selected;
+        const lineage = selectedLineage();
+        if (!record || !canActivateSelected() || state.busy) return;
+        const confirmed = window.confirm(
+            `Make ${state.runName} active through scene ${record.scene} revision ${record.revision.slice(0, 8)}?\n\n` +
+            "This complete lineage will become the run's active checkpoint branch and later active pointers will be cleared. No saved revision, Plan, workflow, reference, or assembled video is deleted or changed.",
+        );
+        if (!confirmed) return;
+        setBusy(true, "Promoting selected checkpoint lineage…");
+        try {
+            const payload = await jsonRequest(
+                "/minimax_h3_context_loop/checkpoint-revisions/restore", {
+                    method:"POST", headers:{"Content-Type":"application/json"},
+                    body:JSON.stringify({
+                        run_name:state.runName,
+                        resume_scene:Number(record.scene) + 1,
+                        revisions:lineage,
+                    }),
+                });
+            await refreshCheckpoints();
+            status.className = "h3cm-status";
+            status.textContent = `Scene ${record.scene} revision ${record.revision.slice(0, 8)} is now the active branch tip. ` +
+                `${payload.retired_later_pointers || 0} later active pointer${payload.retired_later_pointers === 1 ? " was" : "s were"} cleared; all immutable revisions were kept.`;
         } catch (error) {
             status.className = "h3cm-status h3cm-error";
             status.textContent = error.message;

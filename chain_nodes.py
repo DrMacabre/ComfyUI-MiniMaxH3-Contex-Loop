@@ -13679,6 +13679,26 @@ def _review_public_candidates(
     return public
 
 
+def _review_batch_kept_revisions(
+        state: dict[str, Any], index: int, target: int,
+        candidates: list[dict[str, Any]]) -> list[str]:
+    """Restore the user's keep marks while an incremental batch continues."""
+    batch = state.get("candidate_batch")
+    if (not isinstance(batch, dict) or int(batch.get("scene", -1)) != index
+            or int(batch.get("target", -1)) != target):
+        return []
+    available = {
+        str(candidate.get("segment", {}).get("revision") or "")
+        for candidate in candidates if isinstance(candidate, dict)
+    }
+    raw = batch.get("kept_revisions")
+    if not isinstance(raw, list):
+        return []
+    return list(dict.fromkeys(
+        str(revision) for revision in raw
+        if str(revision) in available))
+
+
 def _review_next_candidate_seed(candidates: list[dict[str, Any]],
                                 current_seed: int) -> int:
     used = {int(current_seed)}
@@ -13691,6 +13711,77 @@ def _review_next_candidate_seed(candidates: list[dict[str, Any]],
     while seed in used:
         seed = secrets.randbits(64)
     return seed
+
+
+def _review_requested_kept_revisions(
+        body: dict[str, Any], candidates: list[dict[str, Any]],
+        selected_revision: str = "") -> list[str]:
+    """Validate the user's keep marks against this exact pending batch."""
+    raw = body.get("candidate_revisions", [])
+    if raw is None:
+        raw = []
+    if not isinstance(raw, list):
+        raise ValueError("Kept H3 candidate revisions must be a list.")
+    available = {
+        str(candidate.get("segment", {}).get("revision") or "")
+        for candidate in candidates if isinstance(candidate, dict)
+    }
+    kept = []
+    for value in raw:
+        revision = str(value or "")
+        if revision not in available:
+            raise ValueError(
+                "A kept H3 candidate is not part of this pending review.")
+        if revision not in kept:
+            kept.append(revision)
+    if selected_revision and selected_revision not in kept:
+        kept.append(selected_revision)
+    return kept
+
+
+def _prune_review_candidates(
+        plan: dict[str, Any], index: int,
+        candidates: list[dict[str, Any]],
+        kept_revisions: list[str]) -> dict[str, Any]:
+    """Delete unkept candidate revisions after the active take is promoted."""
+    available = []
+    for candidate in candidates:
+        segment = candidate.get("segment") if isinstance(candidate, dict) else None
+        revision = str(segment.get("revision") or "") if isinstance(
+            segment, dict) else ""
+        if re.fullmatch(r"[0-9a-f]{32}", revision) and revision not in available:
+            available.append(revision)
+    kept = [revision for revision in dict.fromkeys(
+        str(value) for value in kept_revisions) if revision in available]
+    manager = CheckpointGraphManager(_output_root())
+    deleted = []
+    warnings = []
+    reclaimed = 0
+    for revision in available:
+        if revision in kept:
+            continue
+        try:
+            preview = manager.deletion_preview(
+                str(plan["run_name"]), int(index), revision)
+            if not preview.get("allowed"):
+                warnings.append(
+                    "%s: %s" % (revision[:8], " ".join(
+                        str(item) for item in preview.get("blockers", ()))))
+                continue
+            result = manager.delete(
+                str(plan["run_name"]), int(index), revision,
+                preview.get("snapshot"))
+            deleted.append(revision)
+            reclaimed += int(result.get("reclaimed_bytes", 0))
+        except (CheckpointDeleteBlocked, FileNotFoundError, OSError,
+                TypeError, ValueError, json.JSONDecodeError, KeyError) as exc:
+            warnings.append("%s: %s" % (revision[:8], exc))
+    return {
+        "kept": kept,
+        "deleted": deleted,
+        "reclaimed_bytes": reclaimed,
+        "warnings": warnings,
+    }
 
 
 def _select_review_candidate(
@@ -13975,11 +14066,12 @@ class MiniMaxH3ChainReview:
                     "min": 1,
                     "max": MAX_REVIEW_CANDIDATES,
                     "step": 1,
-                    "tooltip": "Generate this many different-seed takes for "
-                               "each scene before pausing. 1 keeps the normal "
-                               "single-take review. Higher values automatically "
-                               "save and reroll candidates, then let you choose "
-                               "which exact checkpoint continues the chain. "
+                    "tooltip": "Offer up to this many different-seed takes "
+                               "for each scene. Review Gate pauses after every "
+                               "saved take, so you can accept early or request "
+                               "the next candidate. Mark one or more takes to "
+                               "keep and choose which exact checkpoint continues "
+                               "the chain; unkept alternatives are deleted. "
                                "Convert this widget to an input to drive it from "
                                "an INT node."}),
             },
@@ -14040,46 +14132,10 @@ class MiniMaxH3ChainReview:
         if candidate_index > candidate_target:
             previous_candidates = []
             candidate_index = 1
-        if candidate_index < candidate_target:
-            try:
-                candidate_video, candidate_has_audio, candidate_warning = (
-                    _review_video(
-                        plan, segment, audio, retain_previous=True))
-            except Exception as exc:
-                _LOG.exception(
-                    "H3 Chain candidate synchronized preview failed")
-                candidate_video, candidate_has_audio, candidate_warning = (
-                    video, False,
-                    "Candidate audio preview is unavailable (%s)." % exc)
-            candidates = previous_candidates + [_review_candidate_record(
-                segment, candidate_video, candidate_has_audio,
-                candidate_warning)]
-            next_seed = _review_next_candidate_seed(
-                candidates, int(shot["seed"]))
-            revised_segment = dict(segment)
-            revised_segment["_h3_review_decision"] = {
-                "action": "retry",
-                "scene_prompt": shot.get(
-                    "scene_prompt_template",
-                    shot.get("scene_prompt", shot["prompt"])),
-                "seed": next_seed,
-                "raw_frames": int(shot["raw_frames"]),
-                "candidate_batch": {
-                    "scene": index,
-                    "target": candidate_target,
-                    "candidates": candidates,
-                },
-            }
-            status = (
-                "saved candidate %d/%d for clip %d; generating candidate %d "
-                "with seed %d" %
-                (candidate_index, candidate_target, index,
-                 candidate_index + 1, next_seed))
-            return {"ui": {"text": [status]},
-                    "result": (revised_segment, status)}
-
         candidates = previous_candidates + [_review_candidate_record(
             segment, video, False, no_audio_warning)]
+        kept_revisions = _review_batch_kept_revisions(
+            state, index, candidate_target, previous_candidates)
         timeout_seconds = _review_timeout_seconds(
             auto_continue_timeout_minutes)
         server_now = time.time()
@@ -14108,7 +14164,12 @@ class MiniMaxH3ChainReview:
             "preview_revision": 0,
             "candidate_index": candidate_index,
             "candidate_count": candidate_target,
+            "candidate_generation_complete": (
+                candidate_index >= candidate_target),
+            "candidate_remaining": max(
+                0, candidate_target - candidate_index),
             "candidates": _review_public_candidates(candidates),
+            "kept_candidate_revisions": kept_revisions,
             "play_notification_sound": bool(play_notification_sound),
             "unload_models_while_waiting": bool(unload_models_while_waiting),
             "assemble_partial_on_stop": bool(assemble_partial_on_stop),
@@ -14197,17 +14258,53 @@ class MiniMaxH3ChainReview:
                 future.cancel()
 
         action = decision["action"]
+        if action == "next_candidate":
+            next_seed = int(decision["seed"])
+            revised_segment = dict(segment)
+            revised_segment["_h3_review_decision"] = {
+                "action": "retry",
+                "scene_prompt": decision["scene_prompt"],
+                "seed": next_seed,
+                "raw_frames": int(decision["raw_frames"]),
+                "candidate_batch": decision["candidate_batch"],
+            }
+            status = (
+                "kept %d candidate%s; generating candidate %d/%d for clip %d "
+                "with seed %d" %
+                (len(decision["candidate_batch"].get(
+                    "kept_revisions", ())),
+                 "" if len(decision["candidate_batch"].get(
+                     "kept_revisions", ())) == 1 else "s",
+                 candidate_index + 1, candidate_target, index, next_seed))
+            return {"ui": {"text": [status]},
+                    "result": (revised_segment, status)}
+
         accepted_segment = segment
         accepted_state = state
+        cleanup = None
         if action in ("approve", "stop"):
             accepted_segment, accepted_state = _select_review_candidate(
                 state, segment, decision)
+            selected_revision = str(
+                accepted_segment.get("revision") or "")
+            kept = list(decision.get("kept_candidate_revisions") or ())
+            if selected_revision and selected_revision not in kept:
+                kept.append(selected_revision)
+            cleanup = _prune_review_candidates(
+                accepted_state["plan"], index, candidates, kept)
         candidate_number = int(decision.get("candidate_number", 0))
         candidate_total = int(decision.get("candidate_count", 0))
         candidate_note = (
             "; selected candidate %d/%d" %
             (candidate_number, candidate_total)
             if candidate_total > 1 and candidate_number > 0 else "")
+        if cleanup is not None and candidate_target > 1:
+            candidate_note += "; kept %d, deleted %d candidate%s" % (
+                len(cleanup["kept"]), len(cleanup["deleted"]),
+                "" if len(cleanup["deleted"]) == 1 else "s")
+            if cleanup["warnings"]:
+                candidate_note += "; cleanup warning: %s" % " | ".join(
+                    cleanup["warnings"])
         if action == "approve":
             timed_out = bool(decision.get("timed_out"))
             status = (("review timed out; auto-approved clip %d/%d; continuing")
@@ -17609,12 +17706,53 @@ async def _submit_review_decision(request):
             {"error": "This H3 review already has a decision."}, status=409)
 
     action = str(body.get("action") or "")
-    if action not in ("approve", "retry", "reroll", "stop"):
+    if action not in (
+            "approve", "next_candidate", "retry", "reroll", "stop"):
         return web.json_response({"error": "Unknown review action."}, status=400)
 
     decision: dict[str, Any] = {"action": action}
     selected_segment = None
-    if action in ("retry", "reroll"):
+    if action == "next_candidate":
+        candidates = pending.get("candidates")
+        if not isinstance(candidates, list) or not candidates:
+            return web.json_response(
+                {"error": "This review has no saved candidate batch."},
+                status=400)
+        try:
+            target = _review_candidate_target(
+                pending.get("public", {}).get("candidate_count", 1))
+            if len(candidates) >= target:
+                raise ValueError(
+                    "All requested H3 candidates have already been generated.")
+            kept = _review_requested_kept_revisions(body, candidates)
+            next_seed = _review_next_candidate_seed(
+                candidates, int(pending["current_seed"]))
+            raw_frames = _validate_h3_length(
+                pending["current_length"], "H3 next candidate length")
+            scene_prompt = str(
+                pending.get("public", {}).get("scene_prompt") or "")
+            _plan_with_review_revision(
+                pending["plan"],
+                int(pending["public"]["clip_index"]),
+                scene_prompt, next_seed, raw_frames)
+        except (KeyError, TypeError, ValueError) as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+        decision = {
+            "action": "next_candidate",
+            "scene_prompt": scene_prompt,
+            "seed": next_seed,
+            "raw_frames": raw_frames,
+            "candidate_batch": {
+                "scene": int(pending["public"]["clip_index"]),
+                "target": target,
+                "candidates": candidates,
+                "kept_revisions": kept,
+            },
+            "kept_candidate_revisions": kept,
+            "candidate_count": target,
+            "candidate_generated_count": len(candidates),
+        }
+    elif action in ("retry", "reroll"):
         scene_prompt = str(body.get("scene_prompt") or "").strip()
         prompt_prefix = str(
             pending.get("public", {}).get("prompt_prefix") or "").strip()
@@ -17691,8 +17829,16 @@ async def _submit_review_decision(request):
             decision.update({
                 "candidate_revision": requested_revision,
                 "candidate_number": selected_number,
-                "candidate_count": len(candidates),
+                "candidate_count": _review_candidate_target(
+                    pending.get("public", {}).get("candidate_count", 1)),
+                "candidate_generated_count": len(candidates),
             })
+            try:
+                decision["kept_candidate_revisions"] = (
+                    _review_requested_kept_revisions(
+                        body, candidates, requested_revision))
+            except ValueError as exc:
+                return web.json_response({"error": str(exc)}, status=400)
 
     def resolve_on_execution_loop():
         if not future.done():
@@ -17726,6 +17872,10 @@ async def _submit_review_decision(request):
         "candidate_revision": str(decision.get("candidate_revision") or ""),
         "candidate_number": int(decision.get("candidate_number", 0)),
         "candidate_count": int(decision.get("candidate_count", 0)),
+        "candidate_generated_count": int(
+            decision.get("candidate_generated_count", 0)),
+        "kept_candidate_count": len(
+            decision.get("kept_candidate_revisions", ())),
     })
 
 

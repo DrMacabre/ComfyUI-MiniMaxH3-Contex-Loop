@@ -131,13 +131,25 @@ function injectStyles() {
         .h3r-duration { width:100%; min-width:0; padding:6px 7px;
             border:1px solid #56637e; border-radius:5px; background:#101218;
             color:#eef1f7; }
-        .h3r-candidates { display:flex; align-items:center; gap:7px; padding:7px;
+        .h3r-candidates { display:flex; flex-direction:column; gap:7px; padding:8px;
             border:1px solid #4c6388; border-radius:6px; background:#172033; }
-        .h3r-candidate-label { flex:0 0 auto; color:#a9c2ff; font-weight:700; }
-        .h3r-candidate-select { flex:1; min-width:0; padding:6px 7px;
-            border:1px solid #637aa2; border-radius:5px; background:#101827;
-            color:#eef1f7; }
-        .h3r-candidate-help { flex:0 0 auto; color:#9ca8bc; font-size:10px; }
+        .h3r-candidate-nav { display:grid; grid-template-columns:auto minmax(0,1fr) auto;
+            align-items:center; gap:7px; }
+        .h3r-candidate-title { min-width:0; text-align:center; color:#a9c2ff;
+            font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        .h3r-candidate-arrow { width:38px; padding:5px; font-size:16px; }
+        .h3r-candidate-meta { display:flex; align-items:center; justify-content:space-between;
+            gap:8px; min-width:0; }
+        .h3r-candidate-keep { display:flex; align-items:center; gap:6px; color:#d6e3ff;
+            cursor:pointer; user-select:none; }
+        .h3r-candidate-progress { color:#9ca8bc; font-size:10px; text-align:right; }
+        .h3r-candidate-dots { display:flex; flex-wrap:wrap; justify-content:center; gap:6px; }
+        .h3r-candidate-dot { width:11px; height:11px; padding:0; border:1px solid #71809c;
+            border-radius:50%; background:#343b4b; cursor:pointer; }
+        .h3r-candidate-dot:hover { background:#526078; }
+        .h3r-candidate-dot.h3r-selected { outline:2px solid #a9c2ff;
+            outline-offset:2px; background:#6f8fd0; }
+        .h3r-candidate-dot.h3r-kept { border-color:#70d39c; background:#347a54; }
         .h3r-actions { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:7px; }
         .h3r-button { padding:7px; border:1px solid #63708b; border-radius:5px;
             background:#292e3a; color:#eef1f7; cursor:pointer; }
@@ -169,6 +181,7 @@ function injectStyles() {
             border-radius:5px; background:#101218; color:#eef1f7; }
         .h3r-delete { border-color:#8a6171; background:#3b252d; }
         .h3r-root.h3r-busy .h3r-actions .h3r-button { opacity:.45; pointer-events:none; }
+        .h3r-root.h3r-busy .h3r-candidates { opacity:.55; pointer-events:none; }
     `;
     document.head.appendChild(style);
 }
@@ -500,6 +513,7 @@ function mount(node) {
 
     const root = document.createElement("div");
     root.className = "h3r-root";
+    root.tabIndex = 0;
     root.title = "Review each persisted H3 scene with synchronized sound, then approve, retry, reroll, stop, or arm a saved checkpoint for resume.";
     // LiteGraph listens to pointer events on the canvas. Shield the complete
     // pointer sequence, not only mousedown: Firefox can otherwise let the
@@ -685,16 +699,38 @@ function mount(node) {
     const candidateRow = document.createElement("div");
     candidateRow.className = "h3r-candidates";
     candidateRow.hidden = true;
-    const candidateLabel = document.createElement("span");
-    candidateLabel.className = "h3r-candidate-label";
-    candidateLabel.textContent = "Choose take";
-    const candidateSelect = document.createElement("select");
-    candidateSelect.className = "h3r-candidate-select";
-    candidateSelect.title = "Preview each generated take. The selected checkpoint, including its exact video and audio continuation tensors, becomes the active scene when you approve.";
-    const candidateHelp = document.createElement("span");
-    candidateHelp.className = "h3r-candidate-help";
-    candidateHelp.textContent = "exact checkpoint";
-    candidateRow.append(candidateLabel, candidateSelect, candidateHelp);
+    candidateRow.title = "Preview each saved take. The active candidate's exact video and audio continuation tensors become the next scene's checkpoint state; checked alternatives remain in history.";
+    const candidateNav = document.createElement("div");
+    candidateNav.className = "h3r-candidate-nav";
+    const candidatePrevious = document.createElement("button");
+    candidatePrevious.type = "button";
+    candidatePrevious.className = "h3r-button h3r-candidate-arrow";
+    candidatePrevious.textContent = "←";
+    candidatePrevious.title = "Preview the previous saved candidate.";
+    const candidateTitle = document.createElement("span");
+    candidateTitle.className = "h3r-candidate-title";
+    candidateTitle.textContent = "Candidate";
+    const candidateNext = document.createElement("button");
+    candidateNext.type = "button";
+    candidateNext.className = "h3r-button h3r-candidate-arrow";
+    candidateNext.textContent = "→";
+    candidateNext.title = "Preview the next saved candidate.";
+    candidateNav.append(candidatePrevious, candidateTitle, candidateNext);
+    const candidateMeta = document.createElement("div");
+    candidateMeta.className = "h3r-candidate-meta";
+    const candidateKeepLabel = document.createElement("label");
+    candidateKeepLabel.className = "h3r-candidate-keep";
+    const candidateKeep = document.createElement("input");
+    candidateKeep.type = "checkbox";
+    candidateKeep.title = "Retain this take in checkpoint history even if another take becomes active. The active continuation is always retained; other unchecked alternatives are deleted after acceptance.";
+    candidateKeepLabel.append(candidateKeep, "Keep as alternative");
+    const candidateProgress = document.createElement("span");
+    candidateProgress.className = "h3r-candidate-progress";
+    candidateMeta.append(candidateKeepLabel, candidateProgress);
+    const candidateDots = document.createElement("div");
+    candidateDots.className = "h3r-candidate-dots";
+    candidateDots.setAttribute("role", "tablist");
+    candidateRow.append(candidateNav, candidateMeta, candidateDots);
 
     const actions = document.createElement("div");
     actions.className = "h3r-actions";
@@ -706,6 +742,7 @@ function mount(node) {
         button.type = "button";
         button.title = {
             approve: "Accept this saved scene and continue the loop with the next scene.",
+            next_candidate: "Keep any marked takes, resume the workflow, and generate the next candidate for this scene.",
             retry: "Reject this attempt and regenerate the same scene using the active Plan prompt, seed, and duration.",
             reroll: "Reject this attempt, assign a new random seed, and regenerate the same scene using the active Plan prompt and duration.",
             stop: "Accept this scene but stop before the next one. Optionally assemble a partial joined MP4 and arm the next scene for resume.",
@@ -725,6 +762,9 @@ function mount(node) {
     }
     const approveButton = actionButton(
         "Approve & continue", "h3r-approve", "approve");
+    const nextCandidateButton = actionButton(
+        "Generate next candidate", "h3r-retry", "next_candidate");
+    nextCandidateButton.hidden = true;
     actionButton("Retry scene / seed / length", "h3r-retry", "retry");
     actionButton("Reroll seed", "h3r-retry", "reroll");
     actionButton("Approve & stop", "h3r-stop", "stop");
@@ -783,6 +823,8 @@ function mount(node) {
     let revisionChain = [];
     let planClipCount = 0;
     let resumeRefreshToken = 0;
+    let activeCandidateRevision = "";
+    let keptCandidateRevisions = new Set();
 
     function setActionsEnabled(enabled) {
         for (const button of actionButtons) button.disabled = !enabled;
@@ -792,19 +834,30 @@ function mount(node) {
         const candidates = Array.isArray(current?.candidates)
             ? current.candidates : [];
         return candidates.find(
-            (candidate) => candidate.revision === candidateSelect.value,
+            (candidate) => candidate.revision === activeCandidateRevision,
         ) ?? candidates.at(-1) ?? null;
     }
 
     function showCandidate(candidate, announce = false) {
         if (!candidate) return;
+        activeCandidateRevision = candidate.revision;
         if (candidate.video) {
             video.src = videoUrl(candidate.video);
             video.load();
         }
         seed.value = String(candidate.seed ?? seed.value);
+        candidateTitle.textContent = `Candidate ${candidate.number}/${current.candidate_count} · ` +
+            `seed ${candidate.seed} · ${candidate.revision.slice(0, 8)}`;
+        candidateKeep.checked = keptCandidateRevisions.has(candidate.revision);
+        const candidates = Array.isArray(current?.candidates)
+            ? current.candidates : [];
+        const selectedIndex = Math.max(0, candidates.indexOf(candidate));
+        candidatePrevious.disabled = selectedIndex <= 0;
+        candidateNext.disabled = selectedIndex >= candidates.length - 1;
         badge.textContent = `clip ${current.clip_index}/${current.clip_count} · ` +
             `candidate ${candidate.number}/${current.candidate_count} · ${current.shot_id}`;
+        renderCandidateDots();
+        renderCandidateProgress();
         if (announce) {
             status.className = `h3r-status${candidate.warning ? " h3r-warning" : ""}`;
             status.textContent = candidate.warning ||
@@ -812,31 +865,86 @@ function mount(node) {
         }
     }
 
-    function renderCandidateChoices() {
-        const previous = candidateSelect.value;
+    function renderCandidateDots() {
         const candidates = Array.isArray(current?.candidates)
             ? current.candidates : [];
-        const multiple = Number(current?.candidate_count) > 1 && candidates.length > 1;
-        candidateRow.hidden = !multiple;
-        approveButton.textContent = multiple
-            ? "Use selected take & continue" : "Approve & continue";
-        candidateSelect.replaceChildren();
-        if (!multiple) return null;
+        candidateDots.replaceChildren();
         for (const candidate of candidates) {
-            const option = document.createElement("option");
-            option.value = candidate.revision;
-            option.textContent = `Candidate ${candidate.number}/${current.candidate_count} · ` +
-                `seed ${candidate.seed} · ${candidate.revision.slice(0, 8)}`;
-            candidateSelect.append(option);
+            const dot = document.createElement("button");
+            dot.type = "button";
+            dot.className = "h3r-candidate-dot";
+            if (candidate.revision === activeCandidateRevision) {
+                dot.classList.add("h3r-selected");
+            }
+            if (keptCandidateRevisions.has(candidate.revision)) {
+                dot.classList.add("h3r-kept");
+            }
+            dot.title = `Preview candidate ${candidate.number}, seed ${candidate.seed}` +
+                (keptCandidateRevisions.has(candidate.revision) ? " (kept)" : "");
+            dot.setAttribute("aria-label", dot.title);
+            dot.addEventListener("click", () => showCandidate(candidate, true));
+            candidateDots.append(dot);
         }
-        candidateSelect.value = candidates.some(
-            (candidate) => candidate.revision === previous,
-        ) ? previous : candidates.at(-1).revision;
-        return selectedCandidate();
     }
 
-    candidateSelect.addEventListener("change", () => {
-        showCandidate(selectedCandidate(), true);
+    function renderCandidateProgress() {
+        const generated = Array.isArray(current?.candidates)
+            ? current.candidates.length : 0;
+        const target = Number(current?.candidate_count) || generated;
+        const remaining = Math.max(0, target - generated);
+        candidateProgress.textContent = `${generated}/${target} generated · ` +
+            `${keptCandidateRevisions.size} marked to keep` +
+            (remaining ? ` · ${remaining} remaining` : " · complete");
+    }
+
+    function renderCandidateCarousel() {
+        const candidates = Array.isArray(current?.candidates)
+            ? current.candidates : [];
+        const batch = Number(current?.candidate_count) > 1;
+        candidateRow.hidden = !batch;
+        const complete = Boolean(current?.candidate_generation_complete) ||
+            candidates.length >= Number(current?.candidate_count);
+        nextCandidateButton.hidden = !batch || complete;
+        approveButton.textContent = batch
+            ? complete ? "Use this take & continue" : "Accept now & continue"
+            : "Approve & continue";
+        if (!batch || !candidates.length) return null;
+        if (!candidates.some(
+            (candidate) => candidate.revision === activeCandidateRevision)) {
+            activeCandidateRevision = candidates.at(-1).revision;
+        }
+        const selected = selectedCandidate();
+        renderCandidateDots();
+        renderCandidateProgress();
+        return selected;
+    }
+
+    function moveCandidate(offset) {
+        const candidates = Array.isArray(current?.candidates)
+            ? current.candidates : [];
+        const index = candidates.findIndex(
+            (candidate) => candidate.revision === activeCandidateRevision);
+        const candidate = candidates[index + offset];
+        if (candidate) showCandidate(candidate, true);
+    }
+
+    candidatePrevious.addEventListener("click", () => moveCandidate(-1));
+    candidateNext.addEventListener("click", () => moveCandidate(1));
+    root.addEventListener("keydown", (event) => {
+        if (candidateRow.hidden || event.altKey || event.ctrlKey || event.metaKey) return;
+        if (["INPUT", "TEXTAREA", "SELECT", "BUTTON"].includes(
+            event.target?.tagName)) return;
+        if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+        event.preventDefault();
+        moveCandidate(event.key === "ArrowLeft" ? -1 : 1);
+    });
+    candidateKeep.addEventListener("change", () => {
+        const candidate = selectedCandidate();
+        if (!candidate) return;
+        if (candidateKeep.checked) keptCandidateRevisions.add(candidate.revision);
+        else keptCandidateRevisions.delete(candidate.revision);
+        renderCandidateDots();
+        renderCandidateProgress();
     });
 
     function selectedRevisionChain() {
@@ -1126,8 +1234,15 @@ function mount(node) {
 
     function renderWaitingStatus() {
         if (!current) return;
-        const message = current.warning || (Number(current.candidate_count) > 1
-            ? `All ${current.candidate_count} candidates are saved. Preview them and choose the checkpoint that should continue the chain.`
+        const generated = Array.isArray(current.candidates)
+            ? current.candidates.length : 0;
+        const target = Number(current.candidate_count) || generated;
+        const complete = Boolean(current.candidate_generation_complete) ||
+            generated >= target;
+        const message = current.warning || (target > 1
+            ? complete
+                ? `All ${target} candidates are saved. Choose the active continuation and mark every take you want to retain.`
+                : `Candidate ${generated}/${target} is ready. Keep it if wanted, accept a take now, or generate the next candidate.`
             : "Review the synchronized picture and sound, then choose an action.");
         const countdown = reviewCountdown(current.local_deadline);
         status.className = `h3r-status${current.warning ? " h3r-warning" : ""}`;
@@ -1180,6 +1295,7 @@ function mount(node) {
             setActionsEnabled(false);
             status.className = "h3r-status";
             status.textContent = action === "approve" ? "Sending approval…" :
+                action === "next_candidate" ? "Resuming to generate the next candidate…" :
                 action === "stop" ? "Sending stop decision…" : "Sending retry decision…";
             const response = await api.fetchApi("/minimax_h3_context_loop/review", {
                 method: "POST",
@@ -1193,11 +1309,17 @@ function mount(node) {
                     candidate_revision: (action === "approve" || action === "stop") &&
                             Number(submittedReview.candidate_count) > 1
                         ? submittedCandidate?.revision ?? "" : "",
+                    candidate_revisions: [...keptCandidateRevisions],
                 }),
             });
             const body = await response.json();
             if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
-            if (action === "approve") {
+            if (action === "next_candidate") {
+                status.textContent = `Candidate ${submittedReview.candidates.length}/` +
+                    `${submittedReview.candidate_count} reviewed — generating the next take ` +
+                    `with seed ${body.seed}. ${body.kept_candidate_count} marked take` +
+                    `${body.kept_candidate_count === 1 ? " is" : "s are"} retained.`;
+            } else if (action === "approve") {
                 const selected = Number(body.candidate_count) > 1;
                 const saved = selected && updatePlan(
                     node, submittedIndex, body.scene_prompt, body.seed, body.length);
@@ -1206,6 +1328,7 @@ function mount(node) {
                     : "Approval received — workflow resumed.";
                 if (selected) {
                     status.textContent += ` Candidate ${body.candidate_number}/${body.candidate_count} is now active.` +
+                        ` ${body.kept_candidate_count} take${body.kept_candidate_count === 1 ? "" : "s"} kept.` +
                         (saved ? " The Plan seed was updated." : "");
                 }
             } else if (action === "retry" || action === "reroll") {
@@ -1232,6 +1355,7 @@ function mount(node) {
                     ? "Stop accepted — assembling the partial video…"
                     : "Stopped at the accepted checkpoint.") +
                     (selected ? ` Candidate ${body.candidate_number}/${body.candidate_count} is now active.` : "") +
+                    (selected ? ` ${body.kept_candidate_count} take${body.kept_candidate_count === 1 ? "" : "s"} kept.` : "") +
                     (saved ? " The Plan seed was updated." : "") +
                     (prepared ? ` Loop Start is ready at clip ${submittedReview.clip_index + 1}.` : "");
                 setTimeout(refreshResumeOptions, 0);
@@ -1265,6 +1389,11 @@ function mount(node) {
         if (!sameToken) {
             root.classList.remove("h3r-busy");
             setActionsEnabled(true);
+            activeCandidateRevision = "";
+            keptCandidateRevisions = new Set(
+                Array.isArray(data.kept_candidate_revisions)
+                    ? data.kept_candidate_revisions : [],
+            );
             // The scene is persisted before Review Gate receives its token.
             // Refresh here so the current (including final) checkpoint appears
             // in history without requiring the user to press Refresh.
@@ -1288,7 +1417,7 @@ function mount(node) {
         } else if (!root.classList.contains("h3r-busy")) {
             renderWaitingStatus();
         }
-        const candidate = renderCandidateChoices();
+        const candidate = renderCandidateCarousel();
         if (candidate) {
             showCandidate(candidate);
         } else {
