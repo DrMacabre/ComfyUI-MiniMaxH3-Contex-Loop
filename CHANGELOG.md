@@ -35,13 +35,13 @@ Newest first. This file keeps release history out of the onboarding README.
   protected only when a later scene really consumes it.
 
 - Added phase-safe **Composed visual context** in Plan and Plan Studio. A
-  continuation can prepend a selected frame/latent tail from one saved scene
-  to the tail of a different saved scene, producing one ordered H3 prefix
-  without decoding and re-encoding its latent blocks. At 39 frames the
-  authored splits are 5+34 or 22+17. The complete generated-audio latent stays
+  continuation can prepend an independent `+5`, `+22`, `+39`, or longer native
+  H3 run from one saved scene while retaining the complete ordinary context
+  from another. The two VAE runs remain separate Guide blocks instead of being
+  forced into a 39-frame split. The complete generated-audio latent stays
   continuous from the immediately previous timeline scene, the two visual
   sources are tracked independently by checkpoint preflight, and checkpoint
-  activation restores the exact source IDs and split span.
+  activation restores the exact source IDs and addition span.
 
 - Unified source and deferred-upscale finishing in **H3 Chain Assemble**.
   Upscale Loop End now emits the common manifest wire; Assemble dispatches by

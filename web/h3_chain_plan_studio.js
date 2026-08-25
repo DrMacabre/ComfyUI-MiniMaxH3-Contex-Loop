@@ -33,18 +33,18 @@ import {
     setShotLengthMode,
     sharedPrompt,
     shotLengthMode,
-} from "./h3_chain_plan_core.mjs?v=0.6.22";
+} from "./h3_chain_plan_core.mjs?v=0.6.23";
 import {
     promptRevisionHelp,
     promptRevisionLabel,
     promptRevisionNavigation,
-} from "./h3_prompt_history_core.mjs?v=0.6.22";
+} from "./h3_prompt_history_core.mjs?v=0.6.23";
 import {
     availableReferenceRecords,
     convertTaggedPictureReference,
     taggedPictureReferenceMode,
     taggedPictureReferenceToken,
-} from "./h3_reference_preview_core.mjs?v=0.6.22";
+} from "./h3_reference_preview_core.mjs?v=0.6.23";
 import {
     applySceneAudioOverride,
     applySceneTransitionPreset,
@@ -53,12 +53,12 @@ import {
     sceneAudioPolicy,
     sceneTransitionPreset,
     transitionPresetLabel,
-} from "./h3_policy_core.mjs?v=0.6.22";
+} from "./h3_policy_core.mjs?v=0.6.23";
 import {
     resolveAudioContextLength,
     resolveAudioPolicy,
     resolveTransitionPolicy,
-} from "./h3_socket_presentation_core.mjs?v=0.6.22";
+} from "./h3_socket_presentation_core.mjs?v=0.6.23";
 import {
     locateStudioTimelineSecond,
     h3StudioGridMarkers,
@@ -71,8 +71,8 @@ import {
     studioSourceSecond,
     studioTimelineLayout,
     studioWaveformSceneSamples,
-} from "./h3_chain_plan_studio_core.mjs?v=0.6.22";
-import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.6.22";
+} from "./h3_chain_plan_studio_core.mjs?v=0.6.23";
+import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.6.23";
 
 const {connectedPromptEditors, publishCompanionScene} = promptCompanionSync;
 function publishCompanionPrompt(...args) {
@@ -1526,14 +1526,7 @@ function mount(node) {
             const resolved = sceneContextLength(
                 shot, planSettings.contextLength,
             );
-            const allowed = H3_CONTEXT_LENGTHS.filter(
-                (value) => value >= 5 && value < resolved,
-            );
-            if (!allowed.length) {
-                delete shot.visual_context_lead_source;
-                delete shot.visual_context_lead_frames;
-                return;
-            }
+            const allowed = H3_CONTEXT_LENGTHS.filter((value) => value >= 5);
             try {
                 sceneVisualContextLeadFrames(shot, resolved);
             } catch (_error) {
@@ -1733,19 +1726,17 @@ function mount(node) {
         } catch (_error) {
             visualLeadSource.value = "";
         }
-        visualLeadSource.title = "Optional first scene in a composed visual context. The normal Visual context source supplies the second block nearest generation. Either source may be chronologically newer, but they must differ; generated audio remains continuous from the immediate timeline predecessor.";
+        visualLeadSource.title = "Optional independent visual-context run placed immediately before the full normal Visual context source. Either source may be chronologically newer, but they must differ; generated audio remains continuous from the immediate timeline predecessor.";
 
         const visualLeadFrames = element("select");
         const resolvedVisualContext = sceneContextLength(
             shot, settings().contextLength,
         );
-        const leadChoices = H3_CONTEXT_LENGTHS.filter(
-            (value) => value >= 5 && value < resolvedVisualContext,
-        );
+        const leadChoices = H3_CONTEXT_LENGTHS.filter((value) => value >= 5);
         visualLeadSource.disabled = visualLeadSource.disabled
             || !leadChoices.length;
         for (const value of leadChoices) {
-            const option = element("option", "", `${value} frames first`);
+            const option = element("option", "", `+ ${value} frames`);
             option.value = String(value);
             visualLeadFrames.append(option);
         }
@@ -1760,7 +1751,7 @@ function mount(node) {
                 visualLeadFrames.value = String(leadChoices[0] ?? "");
             }
         }
-        visualLeadFrames.title = "Phase-safe duration taken from the first selected scene. The remainder comes from Visual context source as the second block. At 39 frames, choose 5+34 or 22+17.";
+        visualLeadFrames.title = `Independent H3 run added before the full ${resolvedVisualContext}-frame Visual context source. For example, +5 gives 5 + ${resolvedVisualContext}; +22 gives 22 + ${resolvedVisualContext}. It does not reduce the normal context or add output trim.`;
         visualLeadSource.addEventListener("change", () => {
             if (!visualLeadSource.value) {
                 delete shot.visual_context_lead_source;
@@ -1957,8 +1948,8 @@ function mount(node) {
         advancedGrid.append(
             field("Visual / audio context", contextPair),
             field("Visual context source", visualSource),
-            field("Composed context lead", visualLeadSource),
-            field("Composed lead span", visualLeadFrames),
+            field("Additional visual context", visualLeadSource),
+            field("Additional context span", visualLeadFrames),
             field("Implementation", continuation),
             field("Boundary spatial proxy", spatialProxy),
         );

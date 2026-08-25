@@ -716,6 +716,9 @@ Object.assign(composedPlan.shots[4], {
 });
 assert.equal(sceneVisualContextLeadSource(composedPlan, 5), 4);
 assert.equal(sceneVisualContextLeadFrames(composedPlan.shots[4], 39), 5);
+composedPlan.shots[4].visual_context_lead_frames = 22;
+assert.equal(sceneVisualContextLeadFrames(composedPlan.shots[4], 22), 22);
+composedPlan.shots[4].visual_context_lead_frames = 5;
 const composedTiming = calculatePlanTiming(composedPlan, {
     contextLength:39, videoBlendFrames:0, anchorMode:"head",
     defaultDurationSeconds:5, defaultSteps:10,
@@ -737,7 +740,7 @@ invalidCompositionSpan.shots[4].visual_context_lead_frames = 6;
 assert.match(calculatePlanTiming(invalidCompositionSpan, {
     contextLength:39, videoBlendFrames:0, anchorMode:"head",
     defaultDurationSeconds:5, defaultSteps:10,
-}).errors.join("\n"), /lead frames must be one of 5, 22/i);
+}).errors.join("\n"), /additional visual context frames must be one of 5, 22, 39/i);
 const blendedComposition = structuredClone(composedPlan);
 blendedComposition.shots[4].video_blend_frames = 2;
 assert.match(calculatePlanTiming(blendedComposition, {
@@ -796,8 +799,8 @@ assert.match(editorSource, /field\("Generated continuity", generatedContinuity\)
 assert.match(editorSource, /field\("Lock source audio", lockSourceAudio\)/);
 assert.match(editorSource, /applySceneAudioOverride/);
 assert.match(editorSource, /Advanced visual context/);
-assert.match(editorSource, /Composed context lead/);
-assert.match(editorSource, /Composed lead span/);
+assert.match(editorSource, /Additional visual context/);
+assert.match(editorSource, /Additional context span/);
 assert.match(editorSource, /Visual context source/);
 assert.match(editorSource, /Advanced audio context/);
 assert.match(editorSource, /Advanced implementation/);
