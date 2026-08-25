@@ -34,18 +34,18 @@ import {
     sharedPrompt,
     shotLengthMode,
     visualContextCompositions,
-} from "./h3_chain_plan_core.mjs?v=0.6.24";
+} from "./h3_chain_plan_core.mjs?v=0.6.25";
 import {
     promptRevisionHelp,
     promptRevisionLabel,
     promptRevisionNavigation,
-} from "./h3_prompt_history_core.mjs?v=0.6.24";
+} from "./h3_prompt_history_core.mjs?v=0.6.25";
 import {
     availableReferenceRecords,
     convertTaggedPictureReference,
     taggedPictureReferenceMode,
     taggedPictureReferenceToken,
-} from "./h3_reference_preview_core.mjs?v=0.6.24";
+} from "./h3_reference_preview_core.mjs?v=0.6.25";
 import {
     applySceneAudioOverride,
     applySceneTransitionPreset,
@@ -54,12 +54,12 @@ import {
     sceneAudioPolicy,
     sceneTransitionPreset,
     transitionPresetLabel,
-} from "./h3_policy_core.mjs?v=0.6.24";
+} from "./h3_policy_core.mjs?v=0.6.25";
 import {
     resolveAudioContextLength,
     resolveAudioPolicy,
     resolveTransitionPolicy,
-} from "./h3_socket_presentation_core.mjs?v=0.6.24";
+} from "./h3_socket_presentation_core.mjs?v=0.6.25";
 import {
     locateStudioTimelineSecond,
     h3StudioGridMarkers,
@@ -72,8 +72,8 @@ import {
     studioSourceSecond,
     studioTimelineLayout,
     studioWaveformSceneSamples,
-} from "./h3_chain_plan_studio_core.mjs?v=0.6.24";
-import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.6.24";
+} from "./h3_chain_plan_studio_core.mjs?v=0.6.25";
+import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.6.25";
 
 const {connectedPromptEditors, publishCompanionScene} = promptCompanionSync;
 function publishCompanionPrompt(...args) {
@@ -85,6 +85,7 @@ const PLAN_NAME = "MiniMaxH3ChainPlan";
 const ACTIVE_PROPERTY = "h3_plan_studio_active_scene";
 const VIEW_PROPERTY = "h3_plan_studio_view";
 const TIMELINE_ZOOM_PROPERTY = "h3_plan_studio_timeline_zoom";
+const ADVANCED_BOUNDARY_OPEN_PROPERTY = "h3_plan_studio_advanced_boundary_open";
 const SOURCE_AUDIO_MUTES_PROPERTY = "h3_plan_studio_source_audio_mutes";
 const GENERATED_VOLUME_PROPERTY = "h3_plan_studio_generated_volume";
 const SOURCE_VOLUME_PROPERTY = "h3_plan_studio_source_volume";
@@ -435,6 +436,8 @@ function mount(node) {
             ? node.properties[VIEW_PROPERTY] : "scene",
         timelineZoom:normalizedTimelineZoom(
             node.properties[TIMELINE_ZOOM_PROPERTY]),
+        advancedBoundaryOpen:Boolean(
+            node.properties[ADVANCED_BOUNDARY_OPEN_PROPERTY]),
         checkpoints:new Map(), checkpointSignature:"", checkpointError:"", checkpointToken:0,
         checkpointPromise:null, checkpointRefreshQueued:false, disposed:false,
         sourcePreview:null, sourceWaveform:null, sourceWaveformToken:"",
@@ -1526,9 +1529,9 @@ function mount(node) {
             const resolved = sceneContextLength(
                 shot, planSettings.contextLength,
             );
-            const allowed = H3_CONTEXT_LENGTHS.filter(
-                (value) => value >= 5 && value < resolved,
-            );
+            const allowed = visualContextCompositions()
+                .filter((choice) => choice.total === resolved)
+                .map((choice) => choice.lead);
             if (!allowed.length) {
                 delete shot.visual_context_lead_source;
                 delete shot.visual_context_lead_frames;
@@ -1773,7 +1776,7 @@ function mount(node) {
         } else {
             visualLeadFrames.value = defaultComposition?.value ?? "";
         }
-        visualLeadFrames.title = "Select the total H3 context and its phase-safe two-scene split. For example, 39 total offers 5+34 and 22+17; 56 total offers 5+51, 22+34, and 39+17.";
+        visualLeadFrames.title = "Select the total H3 context and its ordered two-scene split. Both orientations are available: for example, 39 total includes 17+22 and 22+17. Reverse-phase layouts are normalized once through the connected video VAE when required.";
         function applyVisualComposition() {
             const [totalRaw, leadRaw] = visualLeadFrames.value.split(":");
             const total = Number(totalRaw);
@@ -1968,6 +1971,12 @@ function mount(node) {
             field("Lock source audio", lockSourceAudio),
         );
         const advanced = element("details", "h3studio-advanced");
+        advanced.open = state.advancedBoundaryOpen;
+        advanced.addEventListener("toggle", () => {
+            state.advancedBoundaryOpen = advanced.open;
+            node.properties[ADVANCED_BOUNDARY_OPEN_PROPERTY] = advanced.open;
+            dirty();
+        });
         advanced.append(element(
             "summary", "", "Advanced boundary controls",
         ));

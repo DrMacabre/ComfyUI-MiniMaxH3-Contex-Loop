@@ -4423,24 +4423,39 @@ def _shot_visual_context_lead_source(
         plan, index, raw, "visual_context_lead_source", False)
 
 
+def _composed_context_lead_options(context_length: int) -> tuple[int, ...]:
+    """Return both ordered orientations of every native H3 split."""
+    total = int(context_length)
+    values: set[int] = set()
+    for native_run in H3_CONTEXT_LENGTHS:
+        if int(native_run) < 5 or int(native_run) >= total:
+            continue
+        values.add(int(native_run))
+        inverse = total - int(native_run)
+        if 5 <= inverse < total:
+            values.add(inverse)
+    return tuple(sorted(values))
+
+
 def _shot_visual_context_lead_frames(
         shot: dict[str, Any], context_length: int) -> int:
-    """Validate the phase-zero leading run in a composed visual prefix."""
+    """Validate the first ordered run in a composed visual prefix."""
     value = shot.get("visual_context_lead_frames")
     if value is None or (isinstance(value, str) and not value.strip()):
         return 0
     if isinstance(value, bool) or (
             isinstance(value, float) and not value.is_integer()):
         raise ValueError(
-            "visual_context_lead_frames must be a native H3 context length.")
+            "visual_context_lead_frames must be a supported composed-context "
+            "split.")
     try:
         resolved = int(value)
     except (TypeError, ValueError) as exc:
         raise ValueError(
-            "visual_context_lead_frames must be a native H3 context length."
+            "visual_context_lead_frames must be a supported composed-context "
+            "split."
         ) from exc
-    allowed = tuple(item for item in H3_CONTEXT_LENGTHS
-                    if 5 <= int(item) < int(context_length))
+    allowed = _composed_context_lead_options(context_length)
     if resolved not in allowed:
         raise ValueError(
             "visual_context_lead_frames must be one of %s and smaller than "
@@ -7355,7 +7370,8 @@ def _public_segment(value: dict[str, Any]) -> dict[str, Any]:
         "predecessor_checkpoint_sha256") if key in value}
 
 
-def _visual_context_state(state: dict[str, Any]) -> dict[str, Any]:
+def _visual_context_state(
+        state: dict[str, Any], vae: Any = None) -> dict[str, Any]:
     """Return a boundary view with selected/composed video and immediate audio.
 
     Timeline ancestry remains in ``state``. For a non-linear visual edge this
@@ -7363,10 +7379,12 @@ def _visual_context_state(state: dict[str, Any]) -> dict[str, Any]:
     pairs it with the immediate predecessor's audio latent. The cached view is
     reused by Chain Context and Segment Save during the same scene execution.
 
-    A composed edge prepends a phase-zero tail from one selected scene to a
-    second selected source tail. The second block remains nearest the
-    generation boundary. Only phase-safe native H3 runs are accepted, and
-    audio remains one continuous tail from the immediate timeline predecessor.
+    A composed edge prepends one selected scene tail to a second selected
+    source tail. The second block remains nearest the generation boundary.
+    Native-phase layouts splice saved latents directly; their inverse layouts
+    preserve the requested RGB order and are normalized through the video VAE
+    only when a latent consumer needs them. Audio remains one continuous tail
+    from the immediate timeline predecessor.
     """
     plan = state["plan"]
     index = int(state["index"])
@@ -7423,6 +7441,40 @@ def _visual_context_state(state: dict[str, Any]) -> dict[str, Any]:
             video = video.unsqueeze(0)
         return position, segment, tensors, frames, video
 
+    def delivered_rgb_tail(segment, retained_frames, video, wanted):
+        wanted = int(wanted)
+        if int(retained_frames.shape[0]) >= wanted:
+            return retained_frames[-wanted:].detach().contiguous().clone()
+        if vae is None:
+            raise ValueError(
+                "H3 scene %d composed context needs %d RGB frames from "
+                "scene %d, whose checkpoint retained only %d. Execute it "
+                "through Chain Context with the video VAE connected." %
+                (index, wanted, int(segment.get("index", 0)),
+                 int(retained_frames.shape[0])))
+        decoded = vae.decode(video)
+        if not torch.is_tensor(decoded):
+            raise ValueError(
+                "H3 composed-context VAE returned %r instead of image "
+                "frames." % type(decoded))
+        if decoded.ndim == 5:
+            decoded = decoded.reshape(
+                -1, decoded.shape[-3], decoded.shape[-2], decoded.shape[-1])
+        raw_frames = int(segment.get("raw_frames", 0))
+        delivered_frames = int(segment.get("delivered_frames", 0))
+        trim_frames = raw_frames - delivered_frames
+        if (decoded.ndim != 4 or raw_frames <= 0 or delivered_frames <= 0
+                or trim_frames < 0 or int(decoded.shape[0]) != raw_frames
+                or wanted > delivered_frames):
+            raise ValueError(
+                "H3 composed context cannot recover scene %d's %d-frame "
+                "tail: decoded shape %s, metadata %d raw / %d delivered." %
+                (int(segment.get("index", 0)), wanted,
+                 tuple(getattr(decoded, "shape", ())), raw_frames,
+                 delivered_frames))
+        delivered = decoded[trim_frames:trim_frames + delivered_frames]
+        return _tensor_cpu_clone(delivered[-wanted:])
+
     source_position, source_segment, tensors, source_frames, source_video = (
         load_visual_source(source_index))
     audio_source_index = _resume_context_predecessors(
@@ -7450,54 +7502,94 @@ def _visual_context_state(state: dict[str, Any]) -> dict[str, Any]:
         (_lead_position, lead_segment, _lead_tensors, lead_source_frames,
          lead_video) = load_visual_source(lead_source_index)
         recent_frames = int(context_length) - int(lead_frames)
-        retained_rgb_available = (
-            int(lead_source_frames.shape[0]) >= int(lead_frames)
-            and int(source_frames.shape[0]) >= recent_frames)
         total_steps = 2 + 5 * ((int(context_length) - 5) // 17)
-        lead_steps = 2 + 5 * ((int(lead_frames) - 5) // 17)
-        recent_steps = total_steps - lead_steps
-        if recent_steps < 1 or recent_steps % 5:
-            raise RuntimeError(
-                "H3 composed context resolved a non-phase-safe latent split "
-                "%d + %d steps." % (lead_steps, recent_steps))
-        if (int(lead_video.shape[2]) < lead_steps
-                or int(source_video.shape[2]) < recent_steps):
-            raise ValueError(
-                "H3 scene %d composed context source checkpoint has too few "
-                "video latent steps for %d + %d." %
-                (index, lead_steps, recent_steps))
         if tuple(lead_video.shape[:2] + lead_video.shape[3:]) != tuple(
                 source_video.shape[:2] + source_video.shape[3:]):
             raise ValueError(
                 "H3 composed context scenes %d and %d use different latent "
                 "geometry." % (lead_source_index, source_index))
-        lead_start_phase = (int(lead_video.shape[2]) - lead_steps) % 5
-        recent_start_phase = (int(source_video.shape[2]) - recent_steps) % 5
-        if lead_start_phase != 0 or recent_start_phase != lead_steps % 5:
-            raise ValueError(
-                "H3 composed context source latent phases do not align with "
-                "the target prefix (%d then %d)." %
-                (lead_start_phase, recent_start_phase))
-        selected_frames = (
-            torch.cat((
-                lead_source_frames[-lead_frames:].detach().contiguous().clone(),
-                source_frames[-recent_frames:].detach().contiguous().clone(),
+        direct_latent_split = int(lead_frames) in H3_CONTEXT_LENGTHS
+        if direct_latent_split:
+            retained_rgb_available = (
+                int(lead_source_frames.shape[0]) >= int(lead_frames)
+                and int(source_frames.shape[0]) >= recent_frames)
+            lead_steps = 2 + 5 * ((int(lead_frames) - 5) // 17)
+            recent_steps = total_steps - lead_steps
+            if recent_steps < 1 or recent_steps % 5:
+                raise RuntimeError(
+                    "H3 composed context resolved a non-phase-safe latent "
+                    "split %d + %d steps." % (lead_steps, recent_steps))
+            if (int(lead_video.shape[2]) < lead_steps
+                    or int(source_video.shape[2]) < recent_steps):
+                raise ValueError(
+                    "H3 scene %d composed context source checkpoint has too "
+                    "few video latent steps for %d + %d." %
+                    (index, lead_steps, recent_steps))
+            lead_start_phase = (int(lead_video.shape[2]) - lead_steps) % 5
+            recent_start_phase = (
+                int(source_video.shape[2]) - recent_steps) % 5
+            if lead_start_phase != 0 or recent_start_phase != lead_steps % 5:
+                raise ValueError(
+                    "H3 composed context source latent phases do not align "
+                    "with the target prefix (%d then %d)." %
+                    (lead_start_phase, recent_start_phase))
+            selected_frames = (
+                torch.cat((
+                    lead_source_frames[-lead_frames:].detach().contiguous().clone(),
+                    source_frames[-recent_frames:].detach().contiguous().clone(),
+                ), dim=0)
+                if retained_rgb_available
+                else source_frames[:0].detach().clone())
+            selected_video = torch.cat((
+                lead_video[:1, :, -lead_steps:].detach().contiguous().clone(),
+                source_video[:1, :, -recent_steps:].detach().contiguous().clone(),
+            ), dim=2)
+            if not retained_rgb_available:
+                _LOG.info(
+                    "H3 Chain scene %d composed context will decode its RGB "
+                    "mirror from the assembled latent because scene %d or "
+                    "%d retained fewer source frames than the new %d+%d "
+                    "split.", index, lead_source_index, source_index,
+                    lead_frames, recent_frames)
+        else:
+            selected_frames = torch.cat((
+                delivered_rgb_tail(
+                    lead_segment, lead_source_frames, lead_video, lead_frames),
+                delivered_rgb_tail(
+                    source_segment, source_frames, source_video, recent_frames),
             ), dim=0)
-            if retained_rgb_available else source_frames[:0].detach().clone())
-        selected_video = torch.cat((
-            lead_video[:1, :, -lead_steps:].detach().contiguous().clone(),
-            source_video[:1, :, -recent_steps:].detach().contiguous().clone(),
-        ), dim=2)
+            continuation_mode = migrate_continuation_mode(shot.get(
+                "continuation_mode", plan["compatibility"].get(
+                    "continuation_mode", "guide")))
+            requires_video_latent = (
+                continuation_mode in MASKED_CONTINUATION_MODES
+                or continuation_mode == "latent_guide")
+            if requires_video_latent:
+                if vae is None:
+                    raise ValueError(
+                        "H3 reversed composed context requires the video VAE "
+                        "connected to Chain Context for %s." %
+                        continuation_mode)
+                selected_video = vae.encode(selected_frames[..., :3])
+                if (not torch.is_tensor(selected_video)
+                        or selected_video.ndim != 5
+                        or int(selected_video.shape[2]) != total_steps
+                        or tuple(selected_video.shape[:2]
+                                 + selected_video.shape[3:]) != tuple(
+                                     source_video.shape[:2]
+                                     + source_video.shape[3:])):
+                    raise ValueError(
+                        "H3 reversed composed context encoded to latent shape "
+                        "%s; expected %d steps with source geometry %s." %
+                        (tuple(getattr(selected_video, "shape", ())),
+                         total_steps, tuple(source_video.shape)))
+                _LOG.info(
+                    "H3 Chain scene %d normalized reversed %d+%d composed "
+                    "context through the video VAE for %s.", index,
+                    lead_frames, recent_frames, continuation_mode)
         # Keep the complete immediate audio latent. The consumer selects its
         # own scene-local audio context, which may intentionally be longer,
         # shorter, or disabled independently from this composed video prefix.
-        if not retained_rgb_available:
-            _LOG.info(
-                "H3 Chain scene %d composed context will decode its RGB "
-                "mirror from the assembled latent because scene %d or %d "
-                "retained fewer source frames than the new %d+%d split.",
-                index, lead_source_index, source_index, lead_frames,
-                recent_frames)
 
     selected = dict(state)
     selected.update({
@@ -13330,7 +13422,7 @@ class MiniMaxH3ChainContext:
                 model,
             )
         visual_state = (
-            _visual_context_state(state)
+            _visual_context_state(state, vae=vae)
             if index > 1 and context_length > 0 else state)
         previous_frames = _previous_context_frames(
             visual_state, vae, context_length)

@@ -31,8 +31,8 @@ import {
     shotLengthMode,
     sharedPrompt,
     visualContextCompositions,
-} from "./h3_chain_plan_core.mjs?v=0.6.24";
-import {availableReferenceRecords} from "./h3_reference_preview_core.mjs?v=0.6.24";
+} from "./h3_chain_plan_core.mjs?v=0.6.25";
+import {availableReferenceRecords} from "./h3_reference_preview_core.mjs?v=0.6.25";
 import {
     applySceneAudioOverride,
     applySceneTransitionPreset,
@@ -41,12 +41,12 @@ import {
     sceneAudioPolicy,
     sceneTransitionPreset,
     transitionPresetLabel,
-} from "./h3_policy_core.mjs?v=0.6.24";
+} from "./h3_policy_core.mjs?v=0.6.25";
 import {
     resolveAudioContextLength,
     resolveAudioPolicy,
     resolveTransitionPolicy,
-} from "./h3_socket_presentation_core.mjs?v=0.6.24";
+} from "./h3_socket_presentation_core.mjs?v=0.6.25";
 
 // This scene editor is an original implementation. Its quick @ reference and
 // # dialogue interactions are inspired by nkxx188/ComfyUI-MiniMaxH3-Easy,
@@ -948,9 +948,9 @@ function mountEditor(node) {
         function normalizeVisualLeadSpan() {
             if (!Object.hasOwn(shot, "visual_context_lead_source")) return;
             const resolved = sceneContextLength(shot, planContextLength);
-            const allowed = H3_CONTEXT_LENGTHS.filter(
-                (value) => value >= 5 && value < resolved,
-            );
+            const allowed = visualContextCompositions()
+                .filter((choice) => choice.total === resolved)
+                .map((choice) => choice.lead);
             if (!allowed.length) {
                 delete shot.visual_context_lead_source;
                 delete shot.visual_context_lead_frames;
@@ -1193,7 +1193,7 @@ function mountEditor(node) {
         } else {
             visualLeadFrames.value = defaultComposition?.value ?? "";
         }
-        visualLeadFrames.title = "Select the total H3 context and its phase-safe two-scene split. For example, 39 total offers 5+34 and 22+17; 56 total offers 5+51, 22+34, and 39+17.";
+        visualLeadFrames.title = "Select the total H3 context and its ordered two-scene split. Both orientations are available: for example, 39 total includes 17+22 and 22+17. Reverse-phase layouts are normalized once through the connected video VAE when required.";
         function applyVisualComposition() {
             const [totalRaw, leadRaw] = visualLeadFrames.value.split(":");
             const total = Number(totalRaw);

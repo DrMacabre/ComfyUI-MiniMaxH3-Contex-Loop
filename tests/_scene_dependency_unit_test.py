@@ -530,6 +530,44 @@ try:
     assert audio_latent is full_immediate_audio
     assert composed_state["visual_context_source_segment"]["index"] == 3
     assert composed_state["visual_context_lead_segment"]["index"] == 4
+
+    # The inverse ordered split is equally authorable. Because its first run
+    # begins on the opposite H3 temporal phase, latent consumers receive one
+    # VAE-normalized prefix instead of a phase-shifted raw splice.
+    reverse_plan = json.loads(json.dumps(composed_plan))
+    reverse_plan["shots"][4]["visual_context_lead_frames"] = 17
+    assert chain._shot_visual_context_lead_frames(
+        reverse_plan["shots"][4], 39) == 17
+
+    class ReverseCompositionVAE:
+        def __init__(self):
+            self.encoded = None
+
+        def encode(self, frames):
+            self.encoded = frames
+            return torch.full((1, 24, 12, 2, 2), 70.0)
+
+    reverse_vae = ReverseCompositionVAE()
+    reverse_state = chain._visual_context_state({
+        "plan": reverse_plan, "index": 5,
+        "previous_frames": scene4_frames,
+        "previous_latent": {
+            "samples": [scene4_video, full_immediate_audio]},
+        "segments": [
+            {"index": scene, "id": reverse_plan["shots"][scene - 1]["id"],
+             "checkpoint": "scene_%d.safetensors" % scene,
+             "revision": "r%d" % scene,
+             "checkpoint_sha256": "h%d" % scene}
+            for scene in range(1, 5)
+        ],
+    }, vae=reverse_vae)
+    reverse_frames = reverse_state["previous_frames"]
+    reverse_video = reverse_state["previous_latent"]["samples"][0]
+    assert torch.all(reverse_frames[:17] == 4.0)
+    assert torch.all(reverse_frames[17:] == 3.0)
+    assert torch.equal(reverse_vae.encoded, reverse_frames)
+    assert torch.all(reverse_video == 70.0)
+    assert reverse_state["previous_latent"]["samples"][1] is full_immediate_audio
 finally:
     chain._st_load = original_loader
     chain._streams_from_latent = original_streams

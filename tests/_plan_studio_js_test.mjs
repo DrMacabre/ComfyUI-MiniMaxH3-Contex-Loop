@@ -246,6 +246,8 @@ assert.match(source, /row\.loraRoute/);
 assert.match(source, /Advanced boundary controls/);
 assert.match(source, /experimentalCutMarker\.hidden = !advanced\.open/);
 assert.match(source, /advanced\.addEventListener\("toggle", refreshExperimentalMarkers\)/);
+assert.match(source, /advanced\.open = state\.advancedBoundaryOpen/);
+assert.match(source, /ADVANCED_BOUNDARY_OPEN_PROPERTY/);
 assert.match(source, /field\("Implementation", continuation\)/);
 assert.match(source, /applySceneTransitionPreset/);
 assert.match(source, /field\("Boundary spatial proxy", spatialProxy\)/);
