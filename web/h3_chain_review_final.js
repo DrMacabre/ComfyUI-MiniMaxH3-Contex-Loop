@@ -4,12 +4,12 @@ import {
     parsePlanJson,
     planToJson,
     promptValueToText,
-} from "./h3_chain_plan_core.mjs?v=0.6.19";
-import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.6.19";
+} from "./h3_chain_plan_core.mjs?v=0.6.21";
+import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.6.21";
 import {
     refreshRestoredPlanEditors,
     restoreConnectedPolicyInputs,
-} from "./h3_plan_restore_core.mjs?v=0.6.19";
+} from "./h3_plan_restore_core.mjs?v=0.6.21";
 import {
     applyCheckpointRevisionSet,
     applyReviewEdit,
@@ -21,7 +21,7 @@ import {
     reviewLocalDeadline,
     reviewPlanScenePrompt,
     reviewSeed,
-} from "./h3_chain_review_core.mjs?v=0.6.19";
+} from "./h3_chain_review_core.mjs?v=0.6.21";
 
 const NODE_NAME = "MiniMaxH3ChainReview";
 const PLAN_NAME = "MiniMaxH3ChainPlan";
@@ -1045,6 +1045,32 @@ function mount(node) {
     let resumeRefreshToken = 0;
     let activeCandidateRevision = "";
     let keptCandidateRevisions = new Set();
+    let previewLoadRevision = 0;
+
+    function setReviewVideo(item, preservePosition = false) {
+        if (!item?.filename) return false;
+        const source = videoUrl(item);
+        if (video.dataset.source === source) return false;
+        const savedTime = preservePosition && Number.isFinite(video.currentTime)
+            ? Math.max(0, video.currentTime) : 0;
+        const resumePlayback = preservePosition && !video.paused;
+        const revision = ++previewLoadRevision;
+        video.dataset.source = source;
+        video.src = source;
+        video.load();
+        if (preservePosition) {
+            video.addEventListener("loadedmetadata", () => {
+                if (revision !== previewLoadRevision ||
+                        video.dataset.source !== source) return;
+                const limit = Number.isFinite(video.duration)
+                    ? Math.max(0, video.duration - .02) : savedTime;
+                try { video.currentTime = Math.min(savedTime, limit); }
+                catch (_error) {}
+                if (resumePlayback) void video.play().catch(() => {});
+            }, {once:true});
+        }
+        return true;
+    }
 
     function setActionsEnabled(enabled) {
         for (const button of actionButtons) button.disabled = !enabled;
@@ -1065,10 +1091,10 @@ function mount(node) {
 
     function showCandidate(candidate, announce = false) {
         if (!candidate) return;
+        const sameCandidate = activeCandidateRevision === candidate.revision;
         activeCandidateRevision = candidate.revision;
         if (candidate.video) {
-            video.src = videoUrl(candidate.video);
-            video.load();
+            setReviewVideo(candidate.video, sameCandidate);
         }
         seed.value = String(candidate.seed ?? seed.value);
         candidateTitle.textContent = `Candidate ${candidate.number}/${current.candidate_count} · ` +
@@ -1222,8 +1248,7 @@ function mount(node) {
 
     function showRevisionPreview(revision) {
         if (!revision?.video) return;
-        video.src = videoUrl(revision.video);
-        video.load();
+        setReviewVideo(revision.video);
         badge.textContent = `saved scene ${revision.scene} · revision ${revision.revision.slice(0, 8)}`;
     }
 
@@ -1462,8 +1487,7 @@ function mount(node) {
             const preview = selectedPredecessor?.video
                 ?? choice?.partialVideo ?? choice?.video;
             if (preview) {
-                video.src = videoUrl(preview);
-                video.load();
+                setReviewVideo(preview);
                 badge.textContent = selectedPredecessor
                     ? `saved scene ${selectedPredecessor.scene} · revision ${selectedPredecessor.revision.slice(0, 8)}`
                     : choice?.partialVideo
@@ -1679,6 +1703,8 @@ function mount(node) {
             String(current?.run_name ?? "") === String(data?.run_name ?? "") &&
             Number(current?.clip_index) === Number(data?.clip_index) &&
             Number(current?.candidate_count) > 1;
+        const carriedActiveCandidateRevision = carriesCandidateBatch
+            ? activeCandidateRevision : "";
         const carriedKeepRevisions = carriesCandidateBatch
             ? [...keptCandidateRevisions] : [];
         const previousRevision = Number(current?.preview_revision ?? 0);
@@ -1697,7 +1723,10 @@ function mount(node) {
         if (!sameToken) {
             root.classList.remove("h3r-busy");
             setActionsEnabled(true);
-            activeCandidateRevision = "";
+            activeCandidateRevision = (data.candidates ?? []).some(
+                (candidate) => candidate.revision ===
+                    carriedActiveCandidateRevision,
+            ) ? carriedActiveCandidateRevision : "";
             keptCandidateRevisions = new Set(
                 [
                     ...(Array.isArray(data.kept_candidate_revisions)
@@ -1734,8 +1763,7 @@ function mount(node) {
             showCandidate(candidate);
         } else {
             badge.textContent = `clip ${data.clip_index}/${data.clip_count} · ${data.shot_id}`;
-            video.src = videoUrl(data.video);
-            video.load();
+            setReviewVideo(data.video, sameToken);
         }
         const planNode = upstreamPlanNode(node);
         if (planNode) {
@@ -1769,8 +1797,7 @@ function mount(node) {
         }
         const completedVideo = data.final_video ?? data.partial_video;
         if (completedVideo) {
-            video.src = videoUrl(completedVideo);
-            video.load();
+            setReviewVideo(completedVideo);
             badge.textContent = data.final_video
                 ? "final assembled video"
                 : "partial joined video";

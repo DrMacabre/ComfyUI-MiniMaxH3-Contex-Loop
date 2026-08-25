@@ -44,6 +44,36 @@ export function studioSceneStartSeconds(rows, index) {
     return seconds;
 }
 
+export function studioTimelineLayout(
+    rows, viewportWidth, zoom = 1, gap = 3, minimumSceneWidth = 54,
+) {
+    const scenes = Array.isArray(rows) ? rows : [];
+    const width = Math.max(1, Number(viewportWidth) || 1);
+    const scale = Math.max(1, Math.min(6, Number(zoom) || 1));
+    const spacing = Math.max(0, Number(gap) || 0);
+    const contentWidth = width * scale;
+    if (!scenes.length) return {zoom:scale, contentWidth, widths:[]};
+    const available = Math.max(
+        scenes.length,
+        contentWidth - spacing * Math.max(0, scenes.length - 1),
+    );
+    const floor = Math.min(
+        Math.max(0, Number(minimumSceneWidth) || 0),
+        available / scenes.length,
+    );
+    const weights = scenes.map((row) => Math.max(
+        1,
+        Number(row?.deliveredFrames) ||
+            Number(row?.deliveredSeconds) * 24 || 1,
+    ));
+    const totalWeight = weights.reduce((total, value) => total + value, 0);
+    const weightedWidth = Math.max(0, available - floor * scenes.length);
+    const widths = weights.map(
+        (weight) => floor + weightedWidth * weight / totalWeight,
+    );
+    return {zoom:scale, contentWidth, widths};
+}
+
 export function locateStudioTimelineSecond(rows, seconds) {
     const scenes = Array.isArray(rows) ? rows : [];
     const totalSeconds = studioSceneStartSeconds(scenes, scenes.length);

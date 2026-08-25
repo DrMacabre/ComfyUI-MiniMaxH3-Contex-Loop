@@ -277,6 +277,20 @@ assert.match(reviewSource, /keptCandidateRevisions/);
 assert.match(reviewSource, /h3r-candidate-dots/);
 assert.match(reviewSource, /moveCandidate/);
 assert.match(reviewSource, /exact video and audio continuation tensors/);
+assert.match(reviewSource, /function setReviewVideo/);
+assert.match(reviewSource, /video\.dataset\.source === source/);
+assert.match(reviewSource, /const carriedActiveCandidateRevision/);
+assert.match(reviewSource, /setReviewVideo\(candidate\.video, sameCandidate\)/);
+const showCandidateStart = reviewSource.indexOf("function showCandidate");
+const showCandidateSource = reviewSource.slice(
+    showCandidateStart,
+    reviewSource.indexOf("function renderCandidateDots", showCandidateStart),
+);
+assert.doesNotMatch(
+    showCandidateSource,
+    /video\.load\(\)/,
+    "candidate progress refreshes must not reload the active preview",
+);
 assert.match(reviewSource, /Candidate \$\{candidate\.number\}\/\$\{current\.candidate_count\}/);
 assert.match(
     reviewSource,
