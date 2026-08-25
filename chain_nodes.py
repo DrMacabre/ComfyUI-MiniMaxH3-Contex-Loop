@@ -4425,7 +4425,7 @@ def _shot_visual_context_lead_source(
 
 def _shot_visual_context_lead_frames(
         shot: dict[str, Any], context_length: int) -> int:
-    """Validate one independent H3 run added before visual context."""
+    """Validate the phase-zero leading run in a composed visual prefix."""
     value = shot.get("visual_context_lead_frames")
     if value is None or (isinstance(value, str) and not value.strip()):
         return 0
@@ -4439,15 +4439,12 @@ def _shot_visual_context_lead_frames(
         raise ValueError(
             "visual_context_lead_frames must be a native H3 context length."
         ) from exc
-    # The added source is its own phase-zero Guide run.  It is deliberately
-    # not a split inside ``context_length``: a 22-frame ordinary context may
-    # therefore be preceded by +5, +22, +39, and so on.
-    _ = context_length
-    allowed = tuple(item for item in H3_CONTEXT_LENGTHS if int(item) >= 5)
+    allowed = tuple(item for item in H3_CONTEXT_LENGTHS
+                    if 5 <= int(item) < int(context_length))
     if resolved not in allowed:
         raise ValueError(
-            "visual_context_lead_frames must be one of the independent H3 "
-            "context additions %s." % (allowed,))
+            "visual_context_lead_frames must be one of %s and smaller than "
+            "this scene's %d-frame context." % (allowed, int(context_length)))
     return resolved
 
 
@@ -4627,6 +4624,15 @@ def _low_grid_guide_context(
         raise ValueError(
             "H3 low-grid Guide video VAE returned image shape %s; expected "
             "[frames,height,width,channels]." % (tuple(decoded.shape),))
+
+    if int(state.get("_visual_context_lead_source", 0)):
+        # Composed state already contains exactly the synthetic prefix rather
+        # than a complete predecessor clip. Decode and consume it as-is.
+        if int(decoded.shape[0]) != requested:
+            raise ValueError(
+                "H3 low-grid Guide composed context decoded to %d frames; "
+                "expected %d." % (int(decoded.shape[0]), requested))
+        return decoded, (proxy_width, proxy_height)
 
     segments = state.get("segments")
     segment = segments[-1] if isinstance(segments, list) and segments else None
@@ -5500,13 +5506,14 @@ def _plan_with_external_context(
         lead_frames = (
             _shot_visual_context_lead_frames(target, next_context)
             if lead_source_index is not None else 0)
-        if int(source["delivered_frames"]) < next_context:
+        recent_frames = next_context - lead_frames
+        if int(source["delivered_frames"]) < recent_frames:
             raise ValueError(
                 "Shot %d (%s) delivers only %d frames, but the next clip "
-                "requires its full %d-frame context from it as scene %d's selected "
+                "requires %d second-block context frames from it as scene %d's selected "
                 "visual source." %
                 (source["index"], source["id"],
-                 source["delivered_frames"], next_context, target_index))
+                 source["delivered_frames"], recent_frames, target_index))
         if lead_source_index is not None:
             lead_source = prepared["shots"][lead_source_index - 1]
             if int(lead_source["delivered_frames"]) < lead_frames:
@@ -5711,13 +5718,14 @@ def _retime_review_plan(plan: dict[str, Any]) -> None:
         lead_frames = (
             _shot_visual_context_lead_frames(target, next_context)
             if lead_source_index is not None else 0)
-        if int(source["delivered_frames"]) < next_context:
+        recent_frames = next_context - lead_frames
+        if int(source["delivered_frames"]) < recent_frames:
             raise ValueError(
                 "Shot %d (%s) delivers only %d frames, but the next clip "
-                "requires its full %d-frame context from it as scene %d's selected "
+                "requires %d second-block context frames from it as scene %d's selected "
                 "visual source." %
                 (source["index"], source["id"],
-                 source["delivered_frames"], next_context, target_index))
+                 source["delivered_frames"], recent_frames, target_index))
         if lead_source_index is not None:
             lead_source = plan["shots"][lead_source_index - 1]
             if int(lead_source["delivered_frames"]) < lead_frames:
@@ -6238,15 +6246,16 @@ def _normalize_plan(
                 lead_source_index - 1]["id"]
             target["visual_context_lead_frames"] = lead_frames
         source = shots[source_index - 1]
-        if source["delivered_frames"] < next_context_length:
+        recent_frames = next_context_length - lead_frames
+        if source["delivered_frames"] < recent_frames:
             raise ValueError(
                 "Shot %d (%s) delivers only %d frames, but the next clip "
-                "requires its full %d-frame context from it as scene %d's "
+                "requires %d second-block context frames from it as scene %d's "
                 "selected visual source. Increase its "
                 "length, select another visual source, or reduce "
                 "context_length." %
                 (source["index"], source["id"],
-                 source["delivered_frames"], next_context_length,
+                 source["delivered_frames"], recent_frames,
                  target_index))
         if lead_source_index is not None:
             lead_source = shots[lead_source_index - 1]
@@ -7231,6 +7240,38 @@ def _previous_context_frames(state: dict[str, Any], vae: Any,
     if requested <= 0 or int(frames.shape[0]) >= requested:
         return frames
 
+    if int(state.get("_visual_context_lead_source", 0)):
+        # Older checkpoints may have retained fewer RGB frames than a newly
+        # authored composition requests even though their complete video
+        # latents are available. Decode the already-composed prefix once for
+        # RGB Guide/mask consumers; never re-encode or alter its latent blocks.
+        previous_latent = state.get("previous_latent")
+        streams = (_streams_from_latent(previous_latent)
+                   if previous_latent is not None else [])
+        if not streams:
+            raise ValueError(
+                "H3 composed visual context has no video latent to recover "
+                "its RGB prefix.")
+        decoded = vae.decode(streams[0])
+        if not torch.is_tensor(decoded):
+            raise ValueError(
+                "H3 composed-context VAE returned %r instead of image "
+                "frames." % type(decoded))
+        if decoded.ndim == 5:
+            decoded = decoded.reshape(
+                -1, decoded.shape[-3], decoded.shape[-2], decoded.shape[-1])
+        if decoded.ndim != 4 or int(decoded.shape[0]) != requested:
+            raise ValueError(
+                "H3 composed-context latent decoded to shape %s; expected "
+                "%d RGB frames." % (tuple(decoded.shape), requested))
+        recovered = _tensor_cpu_clone(decoded)
+        state["previous_frames"] = recovered
+        _LOG.info(
+            "H3 Chain decoded the composed %d-frame visual prefix because "
+            "one source checkpoint retained a shorter RGB tail; its ordered "
+            "video-latent blocks remain unchanged.", requested)
+        return recovered
+
     segments = state.get("segments")
     segment = segments[-1] if isinstance(segments, list) and segments else None
     if not isinstance(segment, dict):
@@ -7322,11 +7363,10 @@ def _visual_context_state(state: dict[str, Any]) -> dict[str, Any]:
     pairs it with the immediate predecessor's audio latent. The cached view is
     reused by Chain Context and Segment Save during the same scene execution.
 
-    A composed edge keeps both source tails as independent phase-zero runs.
-    The optional addition is placed immediately before the ordinary visual
-    context by Chain Context; it is never spliced into the ordinary source's
-    VAE timeline. Audio remains one continuous tail from the immediate
-    timeline predecessor.
+    A composed edge prepends a phase-zero tail from one selected scene to a
+    second selected source tail. The second block remains nearest the
+    generation boundary. Only phase-safe native H3 runs are accepted, and
+    audio remains one continuous tail from the immediate timeline predecessor.
     """
     plan = state["plan"]
     index = int(state["index"])
@@ -7406,35 +7446,58 @@ def _visual_context_state(state: dict[str, Any]) -> dict[str, Any]:
     selected_frames = source_frames
     selected_video = source_video
     lead_segment = None
-    lead_run = None
     if lead_source_index is not None:
-        (lead_position, lead_segment, _lead_tensors, lead_source_frames,
+        (_lead_position, lead_segment, _lead_tensors, lead_source_frames,
          lead_video) = load_visual_source(lead_source_index)
+        recent_frames = int(context_length) - int(lead_frames)
+        retained_rgb_available = (
+            int(lead_source_frames.shape[0]) >= int(lead_frames)
+            and int(source_frames.shape[0]) >= recent_frames)
+        total_steps = 2 + 5 * ((int(context_length) - 5) // 17)
         lead_steps = 2 + 5 * ((int(lead_frames) - 5) // 17)
-        if int(lead_video.shape[2]) < lead_steps:
+        recent_steps = total_steps - lead_steps
+        if recent_steps < 1 or recent_steps % 5:
+            raise RuntimeError(
+                "H3 composed context resolved a non-phase-safe latent split "
+                "%d + %d steps." % (lead_steps, recent_steps))
+        if (int(lead_video.shape[2]) < lead_steps
+                or int(source_video.shape[2]) < recent_steps):
             raise ValueError(
-                "H3 scene %d additional context checkpoint has too few "
-                "video latent steps for its independent %d-frame / %d-step "
-                "run." % (index, lead_frames, lead_steps))
+                "H3 scene %d composed context source checkpoint has too few "
+                "video latent steps for %d + %d." %
+                (index, lead_steps, recent_steps))
         if tuple(lead_video.shape[:2] + lead_video.shape[3:]) != tuple(
                 source_video.shape[:2] + source_video.shape[3:]):
             raise ValueError(
                 "H3 composed context scenes %d and %d use different latent "
                 "geometry." % (lead_source_index, source_index))
         lead_start_phase = (int(lead_video.shape[2]) - lead_steps) % 5
-        if lead_start_phase != 0:
+        recent_start_phase = (int(source_video.shape[2]) - recent_steps) % 5
+        if lead_start_phase != 0 or recent_start_phase != lead_steps % 5:
             raise ValueError(
-                "H3 additional context source scene %d does not expose a "
-                "phase-zero %d-frame latent tail." %
-                (lead_source_index, lead_frames))
-        # Keep this run separate.  Chain Context places it before the normal
-        # context as its own Guide block, so both VAE runs retain phase zero.
-        lead_run = {
-            "previous_frames": lead_source_frames,
-            "previous_latent": {"samples": [lead_video]},
-            "segments": list(segments[:lead_position + 1]),
-            "_visual_context_source": int(lead_source_index),
-        }
+                "H3 composed context source latent phases do not align with "
+                "the target prefix (%d then %d)." %
+                (lead_start_phase, recent_start_phase))
+        selected_frames = (
+            torch.cat((
+                lead_source_frames[-lead_frames:].detach().contiguous().clone(),
+                source_frames[-recent_frames:].detach().contiguous().clone(),
+            ), dim=0)
+            if retained_rgb_available else source_frames[:0].detach().clone())
+        selected_video = torch.cat((
+            lead_video[:1, :, -lead_steps:].detach().contiguous().clone(),
+            source_video[:1, :, -recent_steps:].detach().contiguous().clone(),
+        ), dim=2)
+        # Keep the complete immediate audio latent. The consumer selects its
+        # own scene-local audio context, which may intentionally be longer,
+        # shorter, or disabled independently from this composed video prefix.
+        if not retained_rgb_available:
+            _LOG.info(
+                "H3 Chain scene %d composed context will decode its RGB "
+                "mirror from the assembled latent because scene %d or %d "
+                "retained fewer source frames than the new %d+%d split.",
+                index, lead_source_index, source_index, lead_frames,
+                recent_frames)
 
     selected = dict(state)
     selected.update({
@@ -7446,8 +7509,6 @@ def _visual_context_state(state: dict[str, Any]) -> dict[str, Any]:
         "_visual_context_source": source_index,
         "_visual_context_lead_source": int(lead_source_index or 0),
         "_visual_context_lead_frames": int(lead_frames),
-        **({"_visual_context_lead_run": lead_run}
-           if lead_run is not None else {}),
         "visual_context_source_segment": source_segment,
         **({"visual_context_lead_segment": lead_segment}
            if lead_segment is not None else {}),
@@ -7455,11 +7516,11 @@ def _visual_context_state(state: dict[str, Any]) -> dict[str, Any]:
     state["_visual_context_state"] = selected
     if lead_source_index is not None:
         _LOG.info(
-            "H3 Chain scene %d additive visual context: +%d frames from scene "
-            "%d (%s), then the full %d-frame context from scene %d (%s); generated-audio "
+            "H3 Chain scene %d composed visual context: %d frames from scene "
+            "%d (%s), then %d frames from scene %d (%s); generated-audio "
             "continuity remains one tail from immediate scene %d.",
             index, lead_frames, lead_source_index,
-            lead_segment.get("id", "scene"), context_length,
+            lead_segment.get("id", "scene"), context_length - lead_frames,
             source_index, source_segment.get("id", "scene"), index - 1)
     else:
         _LOG.info(
@@ -13273,33 +13334,14 @@ class MiniMaxH3ChainContext:
             if index > 1 and context_length > 0 else state)
         previous_frames = _previous_context_frames(
             visual_state, vae, context_length)
-        additional_context = visual_state.get("_visual_context_lead_run")
-        additional_frames = 0
-        additional_context_frames = None
-        additional_context_latent = None
-        if isinstance(additional_context, dict):
-            additional_frames = int(
-                visual_state.get("_visual_context_lead_frames", 0))
-            additional_context_frames = _previous_context_frames(
-                additional_context, vae, additional_frames)
-            additional_context_latent = additional_context.get(
-                "previous_latent")
         if continuation_mode in MASKED_CONTINUATION_MODES:
             if (abs(float(visual_cond_noise_aug)
                     - VISUAL_COND_NOISE_AUG_DEFAULT) > 5e-7):
-                if additional_frames:
-                    _LOG.warning(
-                        "H3 Chain visual_cond_noise_aug %.3f affects only "
-                        "the additive +%d-frame Guide; the %s prefix remains "
-                        "controlled by its denoise mask.",
-                        float(visual_cond_noise_aug), additional_frames,
-                        continuation_mode)
-                else:
-                    _LOG.warning(
-                        "H3 Chain visual_cond_noise_aug %.3f is a Guide-only "
-                        "diagnostic and is ignored by %s; AV prefix strength "
-                        "is controlled by its denoise mask.",
-                        float(visual_cond_noise_aug), continuation_mode)
+                _LOG.warning(
+                    "H3 Chain visual_cond_noise_aug %.3f is a Guide-only "
+                    "diagnostic and is ignored by %s; AV prefix strength is "
+                    "controlled by its denoise mask.",
+                    float(visual_cond_noise_aug), continuation_mode)
             from .masked_context import apply_masked_prefix
 
             previous_latent = visual_state.get("previous_latent")
@@ -13334,31 +13376,6 @@ class MiniMaxH3ChainContext:
                 context_spatial_proxy=context_spatial_proxy,
                 latent_color_carry=latent_color_carry,
             )
-            if additional_frames:
-                # AV continuity keeps its ordinary protected prefix intact.
-                # The independent additional run occupies the immediately
-                # preceding (negative) Guide coordinates, so it contributes
-                # history without changing the mask, trim, or audio boundary.
-                out_conditioning, _addition_trim = (
-                    MiniMaxH3MotionContext().apply(
-                        conditioning=out_conditioning,
-                        vae=vae,
-                        latent=out_latent,
-                        context_frames=additional_context_frames,
-                        context_length=additional_frames,
-                        encode_mode="video",
-                        anchor_mode="before",
-                        crop=cfg["crop"],
-                        audio_context_length=0,
-                        audio_mode="timeline",
-                        video_context_latent=additional_context_latent,
-                        visual_cond_noise_aug=visual_cond_noise_aug,
-                        preserve_existing_guides=True,
-                    ))
-                _LOG.info(
-                    "H3 Chain %s kept its %d-frame protected prefix and "
-                    "prepended an independent +%d-frame visual Guide.",
-                    continuation_mode, context_length, additional_frames)
             if explicit_future_anchor is not None:
                 from .nodes import _append_explicit_future_end_anchor
 
@@ -13432,18 +13449,14 @@ class MiniMaxH3ChainContext:
             previous_frames, proxy_size = _low_grid_guide_context(
                 visual_state, vae, context_length,
                 int(cfg["width"]), int(cfg["height"]))
-            if additional_frames:
-                additional_context_frames, _addition_proxy_size = (
-                    _low_grid_guide_context(
-                        additional_context, vae, additional_frames,
-                        int(cfg["width"]), int(cfg["height"])))
             _LOG.info(
-                "H3 Chain low-grid Guide proxy: scene %d decoded each saved "
-                "visual-context latent at %dx%d, selected its requested "
-                "delivered tail, then Motion Context restores it to "
+                "H3 Chain low-grid Guide proxy: scene %d decoded the full "
+                "saved predecessor latent at %dx%d, selected its final %d "
+                "delivered frames, then Motion Context restores them to "
                 "%dx%d before Guide VAE encoding. Saved artifacts remain "
                 "untouched.",
                 index, int(proxy_size[0]), int(proxy_size[1]),
+                int(previous_frames.shape[0]),
                 int(cfg["width"]), int(cfg["height"]))
         if continuation_mode == "tone_carry_guide" and context_length > 0:
             tone_carry = _recover_state_guide_tone_carry(visual_state)
@@ -13461,20 +13474,10 @@ class MiniMaxH3ChainContext:
                     "H3 Chain Tone Carry Guide: clip %d has no detected carry "
                     "curve; using regular RGB Guide for this boundary.",
                     int(_shot_visual_context_source(plan, index) or 0))
-            if additional_frames:
-                addition_tone_carry = _recover_state_guide_tone_carry(
-                    additional_context)
-                if addition_tone_carry is not None:
-                    additional_context_frames = _apply_guide_tone_carry(
-                        additional_context_frames, addition_tone_carry)
         if continuation_mode == "tapered_guide" and context_length > 0:
             noise_seed = int(shot["seed"]) ^ 0x5A17
             previous_frames = _tapered_guide_context(
                 previous_frames, context_length, noise_seed)
-            if additional_frames:
-                additional_context_frames = _tapered_guide_context(
-                    additional_context_frames, additional_frames,
-                    noise_seed ^ 0x2C39)
             _LOG.info(
                 "H3 Chain Tapered Guide: %d context frames; block chroma "
                 "alpha %.2f, final %d frames taper to %.2f; noise seed %d",
@@ -13499,35 +13502,6 @@ class MiniMaxH3ChainContext:
             context_audio=previous_audio,
             video_context_latent=video_context_latent,
         )
-        if additional_frames:
-            # The ordinary context remains nearest generation.  Its head
-            # overlap/trim is unchanged; the extra run is placed directly
-            # before it and therefore costs no additional output frames.
-            addition_offset = (
-                -context_length if cfg["anchor_mode"] == "before" else 0)
-            out, _addition_trim = MiniMaxH3MotionContext().apply(
-                conditioning=out,
-                vae=vae,
-                latent=target_latent,
-                context_frames=additional_context_frames,
-                context_length=additional_frames,
-                encode_mode=cfg["encode_mode"],
-                anchor_mode="before",
-                crop=cfg["crop"],
-                audio_context_length=0,
-                audio_mode="timeline",
-                video_context_latent=(
-                    additional_context_latent
-                    if continuation_mode == "latent_guide" else None),
-                visual_cond_noise_aug=visual_cond_noise_aug,
-                future_end_anchor=False,
-                context_frame_offset=addition_offset,
-                preserve_existing_guides=True,
-            )
-            _LOG.info(
-                "H3 Chain Guide kept its full %d-frame ordinary context and "
-                "prepended an independent +%d-frame visual run.",
-                context_length, additional_frames)
         if explicit_future_anchor is not None:
             from .nodes import _append_explicit_future_end_anchor
 

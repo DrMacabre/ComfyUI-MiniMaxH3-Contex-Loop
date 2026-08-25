@@ -35,6 +35,7 @@ import {
     shotLengthMode,
     sharedPrompt,
     validateH3Length,
+    visualContextCompositions,
 } from "../web/h3_chain_plan_core.mjs";
 import {
     PRIMARY_TRANSITION_PRESETS,
@@ -687,9 +688,22 @@ Object.assign(composedPlan.shots[4], {
 });
 assert.equal(sceneVisualContextLeadSource(composedPlan, 5), 4);
 assert.equal(sceneVisualContextLeadFrames(composedPlan.shots[4], 39), 5);
-composedPlan.shots[4].visual_context_lead_frames = 22;
-assert.equal(sceneVisualContextLeadFrames(composedPlan.shots[4], 22), 22);
-composedPlan.shots[4].visual_context_lead_frames = 5;
+const contextCompositions = visualContextCompositions();
+assert.deepEqual(
+    contextCompositions.filter((choice) => choice.total === 39)
+        .map((choice) => choice.label),
+    ["39 total · 5 + 34", "39 total · 22 + 17"],
+);
+assert.deepEqual(
+    contextCompositions.filter((choice) => choice.total === 56)
+        .map((choice) => choice.label),
+    [
+        "56 total · 5 + 51",
+        "56 total · 22 + 34",
+        "56 total · 39 + 17",
+    ],
+);
+assert.equal(contextCompositions.at(-1).total, 243);
 const composedTiming = calculatePlanTiming(composedPlan, {
     contextLength:39, videoBlendFrames:0, anchorMode:"head",
     defaultDurationSeconds:5, defaultSteps:10,
@@ -711,7 +725,7 @@ invalidCompositionSpan.shots[4].visual_context_lead_frames = 6;
 assert.match(calculatePlanTiming(invalidCompositionSpan, {
     contextLength:39, videoBlendFrames:0, anchorMode:"head",
     defaultDurationSeconds:5, defaultSteps:10,
-}).errors.join("\n"), /additional visual context frames must be one of 5, 22, 39/i);
+}).errors.join("\n"), /composed context lead frames must be one of 5, 22/i);
 const blendedComposition = structuredClone(composedPlan);
 blendedComposition.shots[4].video_blend_frames = 2;
 assert.match(calculatePlanTiming(blendedComposition, {
@@ -770,8 +784,9 @@ assert.match(editorSource, /field\("Generated continuity", generatedContinuity\)
 assert.match(editorSource, /field\("Lock source audio", lockSourceAudio\)/);
 assert.match(editorSource, /applySceneAudioOverride/);
 assert.match(editorSource, /Advanced visual context/);
-assert.match(editorSource, /Additional visual context/);
-assert.match(editorSource, /Additional context span/);
+assert.match(editorSource, /Composed context first source/);
+assert.match(editorSource, /Composed total \/ split/);
+assert.match(editorSource, /visualContextCompositions/);
 assert.match(editorSource, /Visual context source/);
 assert.match(editorSource, /Advanced audio context/);
 assert.match(editorSource, /Advanced implementation/);
