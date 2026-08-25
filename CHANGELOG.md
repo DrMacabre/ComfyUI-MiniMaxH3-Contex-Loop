@@ -14,11 +14,17 @@ Newest first. This file keeps release history out of the onboarding README.
   an earlier scene can no longer replace it with the predecessor preview; a new
   run of the same scene, the next scene, or an explicit checkpoint choice
   releases the pin normally.
-
 - Review Gate candidate polling no longer reloads an unchanged preview or
   jumps back to the newest take when a live candidate batch reaches its final
   review token. The selected take, playback position, and playing/paused state
   survive progress refreshes and synchronized-audio preview upgrades.
+
+- Plan Studio's scene lanes now behave as one horizontally zoomable timeline.
+  **Fit** compresses the complete Plan into the available width; zooming in
+  expands duration-proportional scene spans beneath a shared ruler and single
+  scrollbar. Generated clips, motion references, Source Timeline audio, and
+  the playhead remain aligned while resizing, zooming around the pointer, and
+  navigating long Plans.
 
 - Live generation can now route **Current Shot** directly through the four
   H3 de-rope adapter nodes, recover the exact AV clock, and save that recovered

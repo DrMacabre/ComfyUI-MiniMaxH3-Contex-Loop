@@ -12,6 +12,7 @@ import {
     studioSceneStartSeconds,
     studioSourceAudioSecond,
     studioSourceSecond,
+    studioTimelineLayout,
     studioWaveformSceneSamples,
 } from "../web/h3_chain_plan_studio_core.mjs";
 import {
@@ -39,6 +40,20 @@ assert.equal(locateStudioTimelineSecond(rows, 999).index, 2);
 assert.ok(Math.abs(
     locateStudioTimelineSecond(rows, 362 / 24 + 1).localSeconds - 1,
 ) < 1e-9);
+
+const fittedTimeline = studioTimelineLayout(rows, 600, 1);
+assert.equal(fittedTimeline.zoom, 1);
+assert.ok(Math.abs(
+    fittedTimeline.widths.reduce((total, value) => total + value, 0) + 6 - 600,
+) < 1e-9);
+assert.ok(fittedTimeline.widths[0] > fittedTimeline.widths[1]);
+const expandedTimeline = studioTimelineLayout(rows, 600, 2);
+assert.equal(expandedTimeline.contentWidth, 1200);
+assert.ok(expandedTimeline.widths.every(
+    (value, index) => value > fittedTimeline.widths[index],
+));
+assert.equal(studioTimelineLayout(rows, 600, .25).zoom, 1);
+assert.equal(studioTimelineLayout(rows, 600, 20).zoom, 6);
 
 const checkpoints = new Map([[1, {
     scene:1, scene_id:"one", ready:true, delivered_frames:362,
@@ -131,6 +146,10 @@ assert.match(source, /MiniMaxH3ChainPlan/);
 assert.match(source, /item\.name === name/);
 assert.match(source, /state\.planWidget\.value = value/);
 assert.match(source, /h3studio-timeline/);
+assert.match(source, /TIMELINE_ZOOM_PROPERTY/);
+assert.match(source, /studioTimelineLayout/);
+assert.match(source, /Fit timeline/);
+assert.match(source, /Ctrl\/Cmd \+ wheel/);
 assert.match(source, /Scene prompt/);
 assert.match(source, /Shared prompt/);
 assert.match(source, /Plan settings/);
