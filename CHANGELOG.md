@@ -4,6 +4,13 @@ Newest first. This file keeps release history out of the onboarding README.
 
 ## Unreleased
 
+- Live generation can now route **Current Shot** directly through the four
+  H3 de-rope adapter nodes, recover the exact AV clock, and save that recovered
+  latent back into the normal chain. The same nodes still accept deferred
+  Upscale Loop state. Inline continuity resolves the Plan's actual linear,
+  or non-linear visual-context source, and a recovered scene tail is protected
+  only when a later scene really consumes it.
+
 - Unified source and deferred-upscale finishing in **H3 Chain Assemble**.
   Upscale Loop End now emits the common manifest wire; Assemble dispatches by
   document format, keeps HQ finals under the child profile, and exposes the

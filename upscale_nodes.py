@@ -33,6 +33,24 @@ UPSCALE_SEGMENT_TYPE = "H3_CHAIN_UPSCALE_SEGMENT"
 # document's ``format`` selects the assembly behavior at runtime, which lets
 # the normal H3 Chain Assemble node finish either kind of run.
 UPSCALE_MANIFEST_TYPE = chain.MANIFEST_TYPE
+
+
+class _AnyStateType(str):
+    """Expose a comma union while accepting either state server-side."""
+
+    def __ne__(self, other):  # pragma: no cover - Python protocol shim
+        return False
+
+    def __eq__(self, other):  # pragma: no cover - Python protocol shim
+        return True
+
+    def __hash__(self):  # pragma: no cover - retain string hashability
+        return str.__hash__(self)
+
+
+DEROPE_STATE_TYPE = _AnyStateType(
+    "H3_CHAIN_UPSCALE_STATE,H3_CHAIN_STATE")
+
 UPSCALE_BACKENDS = ("h3_latent", "ltx_2_5", "custom")
 CONDITIONING_SYNC_METHODS = (
     "nearest", "nearest-exact", "bilinear", "bicubic")
@@ -134,6 +152,141 @@ def _source_segment(state: dict[str, Any], index: int | None = None
     if int(source.get("index", -1)) != slot:
         raise ValueError("Source manifest scene indexes are not contiguous.")
     return source
+
+
+def _derope_state_view(state: Any
+                       ) -> tuple[dict[str, Any], int, int, dict[str, Any], str]:
+    """Normalize live-chain and deferred-upscale scene state."""
+    if not isinstance(state, dict):
+        raise ValueError(
+            "H3 De-Rope nodes require Current Shot state or Checkpoint "
+            "Upscale Loop state; got %s." % type(state).__name__)
+    source_manifest = state.get("source_manifest")
+    if isinstance(source_manifest, dict):
+        segments = source_manifest.get("segments") or []
+        scene_count = len(segments)
+        index = int(state.get("index", 0))
+        if index < 1 or index > scene_count:
+            raise ValueError(
+                "H3 de-rope upscale scene must be between 1 and %d." %
+                scene_count)
+        segment = segments[index - 1]
+        if (not isinstance(segment, dict)
+                or int(segment.get("index", -1)) != index):
+            raise ValueError(
+                "Source manifest scene indexes are not contiguous.")
+        compatibility = source_manifest.get("compatibility") or {}
+        return segment, index, scene_count, compatibility, "upscale"
+    plan = state.get("plan")
+    if isinstance(plan, dict):
+        shots = plan.get("shots") or []
+        scene_count = len(shots)
+        index = int(state.get("index", 0))
+        if index < 1 or index > scene_count:
+            raise ValueError(
+                "H3 de-rope chain scene must be between 1 and %d." %
+                scene_count)
+        shot = shots[index - 1]
+        if not isinstance(shot, dict):
+            raise ValueError("H3 de-rope chain scene is not a Plan shot.")
+        compatibility = plan.get("compatibility") or {}
+        return shot, index, scene_count, compatibility, "chain"
+    raise ValueError(
+        "H3 De-Rope nodes did not recognize the connected state. Wire "
+        "Current Shot or Checkpoint Upscale Loop.")
+
+
+def _derope_continuation_mode(segment: dict[str, Any],
+                              compatibility: dict[str, Any]) -> str:
+    return str(chain.migrate_continuation_mode(
+        segment.get("continuation_mode") or
+        compatibility.get("continuation_mode") or "guide"))
+
+
+def _derope_prefix_steps_from_view(segment: dict[str, Any],
+                                   compatibility: dict[str, Any],
+                                   scene_number: int) -> int:
+    """Return the exact H3 latent prefix span for a Drift-Control scene."""
+    mode = _derope_continuation_mode(segment, compatibility)
+    if mode not in chain.DRIFT_CONTROL_CONTINUATION_MODES:
+        return 0
+    trim = int(segment.get("raw_frames", 0)) - int(
+        segment.get("delivered_frames", 0))
+    if trim <= 0:
+        return 0
+    expected_frames = int(chain.DRIFT_CONTROL_AV_RECIPE["context_frames"])
+    if trim != expected_frames:
+        raise ValueError(
+            "H3 de-rope Drift-Control scene %d has a %d-frame prefix; "
+            "recipe %s requires %d." % (
+                scene_number, trim,
+                chain.DRIFT_CONTROL_AV_RECIPE["version"], expected_frames))
+    return int(chain.DRIFT_CONTROL_AV_RECIPE["video_steps"])
+
+
+def _derope_future_visual_consumers(state: dict[str, Any],
+                                    scene: int) -> list[int]:
+    """Return later scenes whose saved visual prefix depends on ``scene``."""
+    segment, _index, scene_count, compatibility, kind = _derope_state_view(
+        state)
+    del segment
+    consumers = []
+    if kind == "chain":
+        plan = state["plan"]
+        default_context = int(compatibility.get("context_length", 0))
+        for target in range(int(scene) + 1, scene_count + 1):
+            shot = plan["shots"][target - 1]
+            if chain._shot_context_length(shot, default_context) <= 0:
+                continue
+            sources = {
+                chain._shot_visual_context_source(plan, target),
+            }
+            lead_source = getattr(
+                chain, "_shot_visual_context_lead_source", None)
+            if callable(lead_source):
+                sources.add(lead_source(plan, target))
+            if int(scene) in sources:
+                consumers.append(target)
+        return consumers
+    segments = state["source_manifest"].get("segments") or []
+    for target in range(int(scene) + 1, scene_count + 1):
+        candidate = segments[target - 1]
+        if not isinstance(candidate, dict):
+            continue
+        trim = int(candidate.get("raw_frames", 0)) - int(
+            candidate.get("delivered_frames", 0))
+        if trim <= 0:
+            continue
+        explicit = {
+            candidate.get("visual_context_source_scene"),
+            candidate.get("visual_context_lead_source_scene"),
+        }
+        sources = set()
+        for value in explicit:
+            try:
+                if value is not None:
+                    sources.add(int(value))
+            except (TypeError, ValueError):
+                continue
+        if not sources:
+            sources.add(target - 1)
+        if int(scene) in sources:
+            consumers.append(target)
+    return consumers
+
+
+def _derope_visual_state(state: dict[str, Any], kind: str,
+                         scene: int, compatibility: dict[str, Any]
+                         ) -> dict[str, Any]:
+    """Resolve the same visual source that Chain Context conditioned on."""
+    if kind != "chain" or int(scene) <= 1:
+        return state
+    shot = state["plan"]["shots"][int(scene) - 1]
+    context_length = chain._shot_context_length(
+        shot, int(compatibility.get("context_length", 0)))
+    if context_length <= 0:
+        return state
+    return chain._visual_context_state(state)
 
 
 def _derope_hold_map(value: Any, expected_frames: int,
@@ -244,6 +397,44 @@ def _drift_continuation_video(video: Any, state: Any
     output[:, :, :prefix_steps] = prior[:, :, -prefix_steps:].to(
         device=video.device, dtype=video.dtype)
     return output, prefix_steps, "previous HQ latent tail spliced and protected"
+
+
+def _derope_drift_continuation_video(video: Any, state: Any
+                                     ) -> tuple[Any, int, str]:
+    """Splice the resolved prior visual tail for either loop state."""
+    segment, index, _count, compatibility, kind = _derope_state_view(state)
+    prefix_steps = _derope_prefix_steps_from_view(
+        segment, compatibility, index)
+    if prefix_steps <= 0:
+        return video, 0, "open video"
+    if int(video.shape[2]) <= prefix_steps:
+        raise ValueError(
+            "H3 de-rope Drift-Control prefix uses %d/%d latent steps; no "
+            "future remains to refine." % (
+                prefix_steps, int(video.shape[2])))
+    visual_state = _derope_visual_state(
+        state, kind, index, compatibility)
+    previous = visual_state.get("previous_latent")
+    if previous is None:
+        return video, prefix_steps, (
+            "source prefix protected (prior HQ context unavailable)")
+    prior = _video_stream_from_latent(previous, "Resolved prior HQ latent")
+    if int(prior.shape[2]) < prefix_steps:
+        raise ValueError(
+            "Resolved prior HQ latent has %d video steps; Drift-Control "
+            "needs %d." % (int(prior.shape[2]), prefix_steps))
+    if (int(prior.shape[0]) != int(video.shape[0]) or
+            tuple(prior.shape[-2:]) != tuple(video.shape[-2:])):
+        raise ValueError(
+            "Prior/current HQ video geometry differs: %s vs %s." % (
+                tuple(prior.shape), tuple(video.shape)))
+    output = video.clone()
+    output[:, :, :prefix_steps] = prior[:, :, -prefix_steps:].to(
+        device=video.device, dtype=video.dtype)
+    route = ("resolved chain visual context spliced and protected"
+             if kind == "chain" else
+             "previous HQ latent tail spliced and protected")
+    return output, prefix_steps, route
 
 
 def _load_source_tensors(source: dict[str, Any]) -> dict[str, Any]:
@@ -919,10 +1110,11 @@ class MiniMaxH3ChainDeropeGuard:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "state": (UPSCALE_STATE_TYPE, {
-                    "tooltip": "Current Upscale state. Its RAW/delivered "
-                               "contract identifies the disposable prefix "
-                               "and whether another selected scene follows."}),
+                "state": (DEROPE_STATE_TYPE, {
+                    "tooltip": "Current Shot or Checkpoint Upscale Loop "
+                               "state. Its RAW/delivered contract identifies "
+                               "the disposable prefix and saved visual "
+                               "context consumers."}),
                 "hold_map": ("STRING", {
                     "forceInput": True,
                     "tooltip": "Adaptive world-frame hold map from MAINodes "
@@ -946,16 +1138,16 @@ class MiniMaxH3ChainDeropeGuard:
     FUNCTION = "guard"
     CATEGORY = "conditioning/minimax/contex_loop/upscale"
     DESCRIPTION = (
-        "Adapt a MAINodes de-rope hold map to one deferred H3 chain scene. "
-        "The repeated continuation prefix is never retimed; a non-final "
-        "scene also protects its last 17 frames so recovery cannot accelerate "
-        "motion into the next scene. H3 Time Smear's end expansion is enabled "
-        "only at the selected branch tip.")
+        "Adapt a MAINodes de-rope hold map to a live or deferred H3 chain "
+        "scene. The repeated continuation prefix is never retimed; the last "
+        "17 frames are protected only when a later scene consumes this "
+        "scene as visual context. H3 Time Smear's end expansion is enabled "
+        "when no later visual-context consumer exists.")
 
     def guard(self, state, hold_map):
-        source = _source_segment(state)
-        raw = int(source.get("raw_frames", 0))
-        delivered = int(source.get("delivered_frames", 0))
+        segment, scene, scene_count, _compat, kind = _derope_state_view(state)
+        raw = int(segment.get("raw_frames", 0))
+        delivered = int(segment.get("delivered_frames", 0))
         if raw < 1 or delivered < 1 or delivered > raw:
             raise ValueError(
                 "H3 de-rope scene has invalid RAW/delivered frames %d/%d." %
@@ -963,9 +1155,8 @@ class MiniMaxH3ChainDeropeGuard:
         parsed, holds = _derope_hold_map(
             hold_map, raw, "H3 de-rope oracle hold map")
         prefix = raw - delivered
-        scene = int(state["index"])
-        scene_count = len(state["source_manifest"].get("segments") or ())
-        suffix = min(17, raw) if scene < scene_count else 0
+        consumers = _derope_future_visual_consumers(state, scene)
+        suffix = min(17, raw) if consumers else 0
         removed_prefix = sum(holds[:prefix]) - min(prefix, len(holds))
         removed_suffix = (
             sum(holds[len(holds) - suffix:]) - suffix if suffix else 0)
@@ -979,15 +1170,19 @@ class MiniMaxH3ChainDeropeGuard:
             "h3_chain_scene": scene,
             "h3_chain_protected_prefix": prefix,
             "h3_chain_protected_suffix": suffix,
+            "h3_chain_visual_consumers": consumers,
         })
-        expand_to_end = scene == scene_count
+        expand_to_end = not consumers
         status = (
-            "de-rope scene %d/%d: %d RAW frames; prefix %d held at 1 "
+            "de-rope %s scene %d/%d: %d RAW frames; prefix %d held at 1 "
             "(%d dilated frames removed); suffix %d held at 1 "
-            "(%d removed); expand_to_end=%s; protected map currently %d "
+            "(%d removed); visual consumers=%s; expand_to_end=%s; "
+            "protected map currently %d "
             "frames before H3 legal-grid padding" % (
-                scene, scene_count, raw, prefix, removed_prefix, suffix,
-                removed_suffix, "on" if expand_to_end else "off",
+                kind, scene, scene_count, raw, prefix, removed_prefix, suffix,
+                removed_suffix,
+                ",".join(str(value) for value in consumers) or "none",
+                "on" if expand_to_end else "off",
                 sum(holds)))
         return (json.dumps(parsed, separators=(",", ":")), expand_to_end,
                 prefix, suffix, status)
@@ -1000,9 +1195,10 @@ class MiniMaxH3ChainDeropeFreezeMask:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "state": (UPSCALE_STATE_TYPE, {
-                    "tooltip": "Current Upscale state carrying the exact "
-                               "RAW/delivered prefix contract."}),
+                "state": (DEROPE_STATE_TYPE, {
+                    "tooltip": "Current Shot or Checkpoint Upscale Loop "
+                               "state carrying the exact RAW/delivered "
+                               "prefix contract."}),
                 "hold_map_used": ("STRING", {
                     "forceInput": True,
                     "tooltip": "Final hold_map_used emitted by H3 Time Smear. "
@@ -1029,9 +1225,9 @@ class MiniMaxH3ChainDeropeFreezeMask:
     def mask(self, state, hold_map_used):
         if chain.torch is None:
             raise RuntimeError("PyTorch is required for an H3 de-rope mask.")
-        source = _source_segment(state)
-        raw = int(source.get("raw_frames", 0))
-        delivered = int(source.get("delivered_frames", 0))
+        segment, _scene, _count, _compat, _kind = _derope_state_view(state)
+        raw = int(segment.get("raw_frames", 0))
+        delivered = int(segment.get("delivered_frames", 0))
         prefix = raw - delivered
         _parsed, holds = _derope_hold_map(
             hold_map_used, raw, "H3 Time Smear hold_map_used")
@@ -1058,9 +1254,11 @@ class MiniMaxH3ChainDeropeContinuity:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "state": (UPSCALE_STATE_TYPE, {
-                    "tooltip": "Current Upscale state, including the prior "
-                               "HQ context restored for a resumed child run."}),
+                "state": (DEROPE_STATE_TYPE, {
+                    "tooltip": "Current Shot or Checkpoint Upscale Loop "
+                               "state. Live-chain state resolves the same "
+                               "linear, non-linear, or composed visual "
+                               "context used by Chain Context."}),
                 "video_latent": ("LATENT", {
                     "tooltip": "Target-resolution 24-channel clean video "
                                "latent after Time Smear, VAE encode, and the "
@@ -1079,14 +1277,14 @@ class MiniMaxH3ChainDeropeContinuity:
     FUNCTION = "splice"
     CATEGORY = "conditioning/minimax/contex_loop/upscale"
     DESCRIPTION = (
-        "Restore deferred-upscale continuity before MAINodes H3 V2V Init. "
+        "Restore live or deferred continuity before MAINodes H3 V2V Init. "
         "For Drift-Control scenes it replaces the protected target-resolution "
-        "prefix with the previous scene's saved HQ latent tail; other scenes "
+        "prefix with the resolved saved visual-context latent; other scenes "
         "pass through unchanged.")
 
     def splice(self, state, video_latent):
         video, _width, _height = _target_video_geometry(video_latent)
-        output, steps, route = _drift_continuation_video(video, state)
+        output, steps, route = _derope_drift_continuation_video(video, state)
         result = dict(video_latent)
         result["samples"] = output
         status = "de-rope continuity: %s" % route
@@ -1102,18 +1300,20 @@ class MiniMaxH3ChainRecoveredAV:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "state": (UPSCALE_STATE_TYPE, {
-                    "tooltip": "Current Upscale state whose RAW clock the "
-                               "recovered latent must match."}),
+                "state": (DEROPE_STATE_TYPE, {
+                    "tooltip": "Current Shot or Checkpoint Upscale Loop "
+                               "state whose RAW clock the recovered latent "
+                               "must match."}),
                 "video_latent": ("LATENT", {
                     "tooltip": "H3 video VAE encode of frames after H3 Exact "
                                "Recover, back on the original RAW clock."}),
             },
             "optional": {
                 "audio_latent": ("LATENT", {
-                    "tooltip": "Optional H3 audio VAE encode of H3 Audio "
-                               "Recover. Connect it when save_latent should "
-                               "retain a complete recovered AV checkpoint."}),
+                    "tooltip": "H3 audio VAE encode of H3 Audio Recover. It "
+                               "is optional for a deferred video-only result "
+                               "and required when saving into the live H3 "
+                               "chain, whose checkpoints are always joint AV."}),
             },
         }
 
@@ -1134,9 +1334,9 @@ class MiniMaxH3ChainRecoveredAV:
 
     def pack(self, state, video_latent, audio_latent=None):
         video, width, height = _target_video_geometry(video_latent)
-        source = _source_segment(state)
+        segment, _scene, _count, _compat, kind = _derope_state_view(state)
         raw = chain._validate_h3_length(
-            source.get("raw_frames", 0), "Recovered H3 scene length")
+            segment.get("raw_frames", 0), "Recovered H3 scene length")
         expected_steps = (raw - 5) // 17 * 5 + 2
         if int(video.shape[2]) != expected_steps:
             raise ValueError(
@@ -1146,6 +1346,11 @@ class MiniMaxH3ChainRecoveredAV:
                 (int(video.shape[2]), raw, expected_steps))
         streams = [video]
         layout = "video"
+        if kind == "chain" and audio_latent is None:
+            raise ValueError(
+                "Live-chain de-rope requires recovered audio_latent so "
+                "Segment Save and Loop End can persist a complete H3 AV "
+                "checkpoint.")
         if audio_latent is not None:
             audio = _single_latent_tensor(
                 audio_latent, "Recovered de-rope audio latent")
