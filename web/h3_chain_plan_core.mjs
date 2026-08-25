@@ -588,13 +588,12 @@ export function sceneVisualContextLeadFrames(shot, contextLength) {
     if (raw === undefined || raw === null
             || (typeof raw === "string" && !raw.trim())) return 0;
     const resolved = Number(raw);
-    const allowed = H3_CONTEXT_LENGTHS.filter(
-        (value) => value >= 5 && value < Number(contextLength),
-    );
+    void contextLength;
+    const allowed = H3_CONTEXT_LENGTHS.filter((value) => value >= 5);
     if (typeof raw === "boolean" || !Number.isInteger(resolved)
             || !allowed.includes(resolved)) {
         throw new Error(
-            `Composed context lead frames must be one of ${allowed.join(", ")} and smaller than this scene's ${contextLength}-frame context.`,
+            `Additional visual context frames must be one of ${allowed.join(", ")}.`,
         );
     }
     return resolved;
@@ -770,7 +769,7 @@ export function calculatePlanTiming(plan, settings = {}) {
                 );
                 if (!visualContextLeadFrames) {
                     rowErrors.push(
-                        "Composed context lead source requires a phase-safe lead frame span.",
+                        "Additional visual context source requires an independent H3 frame span.",
                     );
                 }
                 if (visualContextSource !== null
@@ -968,11 +967,9 @@ export function calculatePlanTiming(plan, settings = {}) {
         const target = rows[offset];
         const source = target.visualContextSource === null ? null
             : rows[target.visualContextSource - 1];
-        const recentFrames = target.contextLength
-            - target.visualContextLeadFrames;
-        if (source && source.deliveredFrames < recentFrames) {
+        if (source && source.deliveredFrames < target.contextLength) {
             target.errors.push(
-                `Selected second visual source scene ${source.index} delivers fewer than ${recentFrames} required context frames.`,
+                `Selected visual source scene ${source.index} delivers fewer than the full ${target.contextLength} required context frames.`,
             );
         }
         const lead = target.visualContextLeadSource === null ? null

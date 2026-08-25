@@ -70,6 +70,15 @@ def main():
     assert upscale.MiniMaxH3ChainUpscaleLoopEnd.RETURN_TYPES[0] == (
         chain.MANIFEST_TYPE)
     assert upscale.MiniMaxH3ChainUpscaleMerge.DEPRECATED is True
+    legacy_chain_nodes = (
+        chain.MiniMaxH3ScheduledPictureReference,
+        chain.MiniMaxH3ScheduledVideoReference,
+        chain.MiniMaxH3ScheduledAudioReference,
+        chain.MiniMaxH3ScheduledReferenceToVideo,
+        chain.MiniMaxH3Legacy04PolicyAdapter,
+        chain.MiniMaxH3LazyMotionAVLoader,
+    )
+    assert all(node.DEPRECATED is True for node in legacy_chain_nodes)
     expected_derope_union = "H3_CHAIN_UPSCALE_STATE,H3_CHAIN_STATE"
     for node_name in (
             "MiniMaxH3ChainDeropeGuard",

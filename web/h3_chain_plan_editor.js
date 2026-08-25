@@ -30,8 +30,8 @@ import {
     setSharedPrompt,
     shotLengthMode,
     sharedPrompt,
-} from "./h3_chain_plan_core.mjs?v=0.6.21";
-import {availableReferenceRecords} from "./h3_reference_preview_core.mjs?v=0.6.21";
+} from "./h3_chain_plan_core.mjs?v=0.6.23";
+import {availableReferenceRecords} from "./h3_reference_preview_core.mjs?v=0.6.23";
 import {
     applySceneAudioOverride,
     applySceneTransitionPreset,
@@ -40,12 +40,12 @@ import {
     sceneAudioPolicy,
     sceneTransitionPreset,
     transitionPresetLabel,
-} from "./h3_policy_core.mjs?v=0.6.21";
+} from "./h3_policy_core.mjs?v=0.6.23";
 import {
     resolveAudioContextLength,
     resolveAudioPolicy,
     resolveTransitionPolicy,
-} from "./h3_socket_presentation_core.mjs?v=0.6.21";
+} from "./h3_socket_presentation_core.mjs?v=0.6.23";
 
 // This scene editor is an original implementation. Its quick @ reference and
 // # dialogue interactions are inspired by nkxx188/ComfyUI-MiniMaxH3-Easy,
@@ -947,14 +947,7 @@ function mountEditor(node) {
         function normalizeVisualLeadSpan() {
             if (!Object.hasOwn(shot, "visual_context_lead_source")) return;
             const resolved = sceneContextLength(shot, planContextLength);
-            const allowed = H3_CONTEXT_LENGTHS.filter(
-                (value) => value >= 5 && value < resolved,
-            );
-            if (!allowed.length) {
-                delete shot.visual_context_lead_source;
-                delete shot.visual_context_lead_frames;
-                return;
-            }
+            const allowed = H3_CONTEXT_LENGTHS.filter((value) => value >= 5);
             try {
                 sceneVisualContextLeadFrames(shot, resolved);
             } catch (_error) {
@@ -1152,19 +1145,17 @@ function mountEditor(node) {
         } catch (_error) {
             visualLeadSource.value = "";
         }
-        visualLeadSource.title = "Optional first scene in a composed visual context. The normal Visual context source supplies the second block nearest generation. Either source may be chronologically newer, but they must differ; audio remains one continuous tail from the immediate timeline scene.";
+        visualLeadSource.title = "Optional independent visual-context run placed immediately before the full normal Visual context source. Either source may be chronologically newer, but they must differ; audio remains one continuous tail from the immediate timeline scene.";
 
         const visualLeadFrames = element("select", "h3c-visual-lead-frames");
         const resolvedVisualContext = sceneContextLength(
             shot, planContextLength,
         );
-        const leadChoices = H3_CONTEXT_LENGTHS.filter(
-            (value) => value >= 5 && value < resolvedVisualContext,
-        );
+        const leadChoices = H3_CONTEXT_LENGTHS.filter((value) => value >= 5);
         visualLeadSource.disabled = visualLeadSource.disabled
             || !leadChoices.length;
         for (const value of leadChoices) {
-            const option = element("option", "", `${value} frames first`);
+            const option = element("option", "", `+ ${value} frames`);
             option.value = String(value);
             visualLeadFrames.append(option);
         }
@@ -1179,7 +1170,7 @@ function mountEditor(node) {
                 visualLeadFrames.value = String(leadChoices[0] ?? "");
             }
         }
-        visualLeadFrames.title = "Phase-safe duration taken from the first selected scene. The remaining context comes from Visual context source as the second block. For 39 frames, the choices are 5+34 or 22+17.";
+        visualLeadFrames.title = `Independent H3 run added before the full ${resolvedVisualContext}-frame Visual context source. For example, +5 gives 5 + ${resolvedVisualContext}; +22 gives 22 + ${resolvedVisualContext}. It does not reduce the normal context or add output trim.`;
         visualLeadSource.addEventListener("change", () => {
             if (!visualLeadSource.value) {
                 delete shot.visual_context_lead_source;
@@ -1366,8 +1357,8 @@ function mountEditor(node) {
             field("Steps (blank = default)", steps),
             field("Advanced visual context", context),
             field("Visual context source", visualSource),
-            field("Composed context lead", visualLeadSource),
-            field("Composed lead span", visualLeadFrames),
+            field("Additional visual context", visualLeadSource),
+            field("Additional context span", visualLeadFrames),
             field("Advanced audio context", audioContext),
             field("Advanced implementation", continuation),
             field("Boundary spatial proxy", spatialProxy),

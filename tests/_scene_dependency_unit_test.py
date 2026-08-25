@@ -449,10 +449,11 @@ finally:
     chain._st_load = original_loader
     chain._streams_from_latent = original_streams
 
-# Two independent saved picture tails can form one H3-phase-safe prefix. The
-# first block may come from a chronologically newer scene than the second;
-# their explicit order in the Plan is what matters. Audio stays the complete
-# immediate-predecessor latent and is never spliced at the visual seam.
+# Two independent saved picture tails form additive H3 Guide runs. The first
+# block may come from a chronologically newer scene than the second; their
+# explicit order in the Plan is what matters. The ordinary 39-frame context is
+# retained in full, while the other source contributes an independent +5.
+# Audio stays the complete immediate-predecessor latent.
 composed_plan = chain._normalize_plan(
     json.dumps({"shots": [
         {"id": name, "prompt": name, "length": 90,
@@ -522,12 +523,13 @@ try:
     frames = composed_state["previous_frames"]
     video, audio_latent = composed_state["previous_latent"]["samples"]
     assert frames.shape[0] == 39
-    assert torch.all(frames[:5] == 4.0)
-    assert torch.all(frames[5:] == 3.0)
+    assert torch.all(frames == 3.0)
     assert video.shape[2] == 12
-    assert torch.all(video[:, :, :2] == 40.0)
-    assert torch.all(video[:, :, 2:] == 30.0)
+    assert torch.all(video == 30.0)
     assert audio_latent is full_immediate_audio
+    lead_run = composed_state["_visual_context_lead_run"]
+    assert torch.all(lead_run["previous_frames"] == 4.0)
+    assert torch.all(lead_run["previous_latent"]["samples"][0] == 40.0)
     assert composed_state["visual_context_source_segment"]["index"] == 3
     assert composed_state["visual_context_lead_segment"]["index"] == 4
 finally:
@@ -563,17 +565,18 @@ try:
             "samples": [scene4_video, full_immediate_audio]},
         "segments": [
             {"index": scene, "id": composed_plan["shots"][scene - 1]["id"],
-             "checkpoint": "scene_%d.safetensors" % scene}
+             "checkpoint": "scene_%d.safetensors" % scene,
+             "raw_frames": 39, "delivered_frames": 39}
             for scene in range(1, 5)
         ],
     })
-    assert short_state["previous_frames"].shape[0] == 0
+    assert short_state["previous_frames"].shape[0] == 5
+    assert short_state["_visual_context_lead_run"]["previous_frames"].shape[0] == 5
     decoder = ComposedDecodeVAE()
     recovered = chain._previous_context_frames(short_state, decoder, 39)
     assert recovered.shape[0] == 39
     assert torch.all(recovered == 9.0)
     assert decoder.input is short_state["previous_latent"]["samples"][0]
-    assert short_state["previous_frames"] is recovered
 finally:
     chain._st_load = original_loader
     chain._streams_from_latent = original_streams
