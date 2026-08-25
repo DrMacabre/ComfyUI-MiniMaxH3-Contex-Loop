@@ -6,7 +6,7 @@ import {
     sceneContextLength,
     sceneVisualContextSource,
     sharedPrompt,
-} from "./h3_chain_plan_core.mjs?v=0.6.15";
+} from "./h3_chain_plan_core.mjs?v=0.6.16";
 
 const FPS = 24;
 const MAX_H3_FRAMES = 3592;
@@ -233,6 +233,21 @@ export function applyCheckpointRevisionSet(plan, revisions) {
     if (shared !== null) {
         const current = sharedPrompt(plan);
         plan[current.key] = promptTextToLines(shared);
+    }
+    return plan;
+}
+
+export function applyCheckpointRevisionSeeds(plan, revisions) {
+    if (!plan || !Array.isArray(plan.shots)) {
+        throw new Error("The active Plan has no scenes.");
+    }
+    for (const revision of revisions ?? []) {
+        const scene = Number(revision?.scene);
+        const index = scene - 1;
+        if (!Number.isInteger(scene) || index < 0 || index >= plan.shots.length) {
+            throw new Error("An activated checkpoint scene is outside the active Plan.");
+        }
+        plan.shots[index].seed = reviewSeed(revision.seed);
     }
     return plan;
 }

@@ -9,18 +9,21 @@ import {
     checkpointSelectionJson,
     formatCheckpointBytes,
     selectedCheckpointRevision,
-} from "./h3_checkpoint_manager_core.mjs?v=0.6.15";
+} from "./h3_checkpoint_manager_core.mjs?v=0.6.16";
 import {
     parsePlanJson,
     planToJson,
     promptValueToText,
-} from "./h3_chain_plan_core.mjs?v=0.6.15";
-import {applyCheckpointRevisionSet} from "./h3_chain_review_core.mjs?v=0.6.15";
-import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.6.15";
+} from "./h3_chain_plan_core.mjs?v=0.6.16";
+import {
+    applyCheckpointRevisionSeeds,
+    applyCheckpointRevisionSet,
+} from "./h3_chain_review_core.mjs?v=0.6.16";
+import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.6.16";
 import {
     refreshRestoredPlanEditors,
     restoreConnectedPolicyInputs,
-} from "./h3_plan_restore_core.mjs?v=0.6.15";
+} from "./h3_plan_restore_core.mjs?v=0.6.16";
 
 const NODE_NAME = "MiniMaxH3ChainCheckpointManager";
 const PLAN_NAME = "MiniMaxH3ChainPlan";
@@ -773,6 +776,20 @@ function mount(node) {
         return plan;
     }
 
+    function applyActivatedRevisionSeeds(planNode, revisions) {
+        const target = widget(planNode, "plan_json");
+        if (!target) return false;
+        const plan = applyCheckpointRevisionSeeds(
+            parsePlanJson(String(target.value ?? "")), revisions,
+        );
+        const value = planToJson(plan);
+        target.value = value;
+        target.callback?.(value);
+        refreshRestoredPlanEditors(planNode);
+        planNode.graph?.setDirtyCanvas?.(true, true);
+        return true;
+    }
+
     function prepareResume(scene) {
         const start = connectedNode(node, START_NAME);
         const startClip = widget(start, "start_clip");
@@ -877,10 +894,14 @@ function mount(node) {
                         activate_only:true,
                     }),
                 });
+            const planNode = upstreamPlanNode(node);
+            const seedsUpdated = Boolean(planNode &&
+                applyActivatedRevisionSeeds(planNode, payload.restored ?? []));
             await refreshCheckpoints();
             status.className = "h3cm-status";
             status.textContent = `Scene ${record.scene} revision ${record.revision.slice(0, 8)} is now the active branch tip. ` +
-                `${payload.retired_later_pointers || 0} later active pointer${payload.retired_later_pointers === 1 ? " was" : "s were"} cleared; all immutable revisions were kept.`;
+                `${payload.retired_later_pointers || 0} later active pointer${payload.retired_later_pointers === 1 ? " was" : "s were"} cleared; all immutable revisions were kept` +
+                `${seedsUpdated ? "; connected Plan seeds were synchronized." : "."}`;
         } catch (error) {
             status.className = "h3cm-status h3cm-error";
             status.textContent = error.message;
