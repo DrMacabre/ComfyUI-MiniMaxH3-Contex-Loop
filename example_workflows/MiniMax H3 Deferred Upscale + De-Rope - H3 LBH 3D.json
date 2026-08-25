@@ -965,7 +965,7 @@
       "outputs": [
         {
           "name": "manifest",
-          "type": "H3_CHAIN_UPSCALE_MANIFEST",
+          "type": "H3_CHAIN_MANIFEST",
           "links": [
             76
           ]
@@ -994,7 +994,7 @@
     },
     {
       "id": 22,
-      "type": "MiniMaxH3ChainUpscaleMerge",
+      "type": "MiniMaxH3ChainAssemble",
       "pos": [
         7392,
         0
@@ -1009,7 +1009,7 @@
       "inputs": [
         {
           "name": "manifest",
-          "type": "H3_CHAIN_UPSCALE_MANIFEST",
+          "type": "H3_CHAIN_MANIFEST",
           "link": 76
         },
         {
@@ -1034,7 +1034,7 @@
       ],
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
-        "Node name for S&R": "MiniMaxH3ChainUpscaleMerge"
+        "Node name for S&R": "MiniMaxH3ChainAssemble"
       },
       "widgets_values": [
         "plan",
@@ -2845,7 +2845,7 @@
       0,
       22,
       0,
-      "H3_CHAIN_UPSCALE_MANIFEST"
+      "H3_CHAIN_MANIFEST"
     ]
   ],
   "groups": [],

@@ -4,8 +4,8 @@ The source generation remains immutable.  A completed active checkpoint branch
 is adapted into a second recursive graph whose body may contain any upscaler
 (native H3 latent refinement, LTX video-to-video, or a custom image pipeline).
 Each delivered HQ scene is persisted below the source run's ``upscaled``
-folder before the loop advances, and the final merger reuses the original
-audio contract without requiring the source video segments. A chain-aware
+folder before the loop advances, and the shared chain assembler reuses the
+original audio contract without requiring the source video segments. A chain-aware
 MAINodes de-rope route may instead supply exact-recovered RAW-clock audio to
 the same scene save contract.
 """
@@ -29,7 +29,10 @@ except ImportError:
 UPSCALE_FLOW_TYPE = "H3_CHAIN_UPSCALE_FLOW"
 UPSCALE_STATE_TYPE = "H3_CHAIN_UPSCALE_STATE"
 UPSCALE_SEGMENT_TYPE = "H3_CHAIN_UPSCALE_SEGMENT"
-UPSCALE_MANIFEST_TYPE = "H3_CHAIN_UPSCALE_MANIFEST"
+# Upscale and source runs deliberately share one public manifest wire.  The
+# document's ``format`` selects the assembly behavior at runtime, which lets
+# the normal H3 Chain Assemble node finish either kind of run.
+UPSCALE_MANIFEST_TYPE = chain.MANIFEST_TYPE
 UPSCALE_BACKENDS = ("h3_latent", "ltx_2_5", "custom")
 CONDITIONING_SYNC_METHODS = (
     "nearest", "nearest-exact", "bilinear", "bicubic")
@@ -1980,7 +1983,7 @@ class MiniMaxH3ChainUpscaleLoopEnd:
     RETURN_NAMES = ("manifest", "manifest_json", "last_context_frames",
                     "last_context_latent")
     OUTPUT_TOOLTIPS = (
-        "Complete verified child manifest for Upscale Merger, or a partial manifest.",
+        "Complete verified child manifest for H3 Chain Assemble, or a partial manifest.",
         "Readable JSON form of the emitted child manifest.",
         "Delivered HQ tail retained from the last processed scene.",
         "Transient HQ latent retained from the last processed scene, if connected.",
@@ -2122,7 +2125,7 @@ class MiniMaxH3ChainUpscaleLoopEnd:
 
 def _validate_upscale_manifest(manifest: dict[str, Any]) -> list[dict[str, Any]]:
     if manifest.get("format") != "h3_chain_upscale_manifest_v1":
-        raise ValueError("Upscale Merger requires a complete upscale manifest.")
+        raise ValueError("H3 Chain Assemble requires a complete upscale manifest.")
     segments = manifest.get("segments") or []
     count = int(manifest.get("clip_count", 0))
     if count < 1 or len(segments) != count:
@@ -2175,14 +2178,43 @@ def _assembly_manifest(manifest: dict[str, Any],
     return assembly
 
 
+def _write_upscale_final_record(manifest: dict[str, Any],
+                                final_path: str) -> None:
+    """Publish the child-profile provenance beside a unified assembly."""
+    generated_sidecar = os.path.splitext(final_path)[0] + ".generated.wav"
+    record = {
+        "format": "h3_chain_upscale_final_v1",
+        "run_name": manifest["run_name"],
+        "profile": manifest["profile"],
+        "profile_config": manifest["profile_config"],
+        "source_manifest_hash": manifest["source_manifest_hash"],
+        "video": chain._relative_output_path(final_path),
+        "video_sha256": chain._file_sha256(final_path),
+        "frame_count": int(manifest["total_delivered_frames"]),
+        "created_at": datetime.now(timezone.utc).isoformat(
+            timespec="seconds").replace("+00:00", "Z"),
+    }
+    if os.path.isfile(generated_sidecar):
+        record.update({
+            "generated_audio": chain._relative_output_path(
+                generated_sidecar),
+            "generated_audio_sha256": chain._file_sha256(
+                generated_sidecar),
+        })
+    chain._atomic_json(os.path.splitext(final_path)[0] + ".json", record)
+
+
 class MiniMaxH3ChainUpscaleMerge:
+    DEPRECATED = True
+
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "manifest": (UPSCALE_MANIFEST_TYPE, {
-                    "tooltip": "Complete manifest emitted after the child loop "
-                               "reaches the final source scene."}),
+                "manifest": (chain.MANIFEST_TYPE, {
+                    "tooltip": "Legacy compatibility input. New workflows "
+                               "connect this manifest directly to H3 Chain "
+                               "Assemble."}),
                 "audio_source": (["plan", "source", "generated", "none"],
                                  {"default": "plan",
                                   "tooltip": "Final audio policy. plan follows the "
@@ -2212,8 +2244,8 @@ class MiniMaxH3ChainUpscaleMerge:
     FUNCTION = "merge"
     OUTPUT_NODE = True
     CATEGORY = "conditioning/minimax/contex_loop/upscale"
-    DESCRIPTION = ("Verify HQ child segments, reuse the source audio contract, "
-                   "and publish under upscaled/<profile>/final.")
+    DESCRIPTION = ("Deprecated compatibility wrapper. New workflows connect "
+                   "Upscale Loop End directly to H3 Chain Assemble.")
 
     @classmethod
     def IS_CHANGED(cls, *args, **kwargs):
@@ -2221,54 +2253,9 @@ class MiniMaxH3ChainUpscaleMerge:
 
     def merge(self, manifest, audio_source, filename, audio_bitrate,
               source_audio=None, source_timeline=None):
-        segments = _validate_upscale_manifest(manifest)
-        assembly = _assembly_manifest(manifest, segments)
-        temporary_name = "upscale_merge_%s" % uuid.uuid4().hex
-        result = chain.MiniMaxH3ChainAssemble().assemble(
-            assembly, audio_source, temporary_name, audio_bitrate,
+        return chain.MiniMaxH3ChainAssemble().assemble(
+            manifest, audio_source, filename, audio_bitrate,
             source_audio=source_audio, source_timeline=source_timeline)
-        temporary = result["result"][0]
-        paths = _profile_paths(manifest["run_name"], manifest["profile"], 1)
-        os.makedirs(paths["final"], exist_ok=True)
-        final_name = chain._safe_name(
-            chain._expand_filename_date(filename), "final") + ".mp4"
-        final_path = chain._available_versioned_path(
-            os.path.join(paths["final"], final_name))
-        temporary_sidecar = os.path.splitext(temporary)[0] + ".generated.wav"
-        final_sidecar = os.path.splitext(final_path)[0] + ".generated.wav"
-        try:
-            os.replace(temporary, final_path)
-            if os.path.isfile(temporary_sidecar):
-                os.replace(temporary_sidecar, final_sidecar)
-        except Exception:
-            if os.path.isfile(final_path) and not os.path.isfile(temporary):
-                os.replace(final_path, temporary)
-            raise
-        record = {
-            "format": "h3_chain_upscale_final_v1",
-            "run_name": manifest["run_name"],
-            "profile": manifest["profile"],
-            "profile_config": manifest["profile_config"],
-            "source_manifest_hash": manifest["source_manifest_hash"],
-            "video": chain._relative_output_path(final_path),
-            "video_sha256": chain._file_sha256(final_path),
-            "frame_count": int(manifest["total_delivered_frames"]),
-            "created_at": datetime.now(timezone.utc).isoformat(
-                timespec="seconds").replace("+00:00", "Z"),
-        }
-        if os.path.isfile(final_sidecar):
-            record.update({
-                "generated_audio": chain._relative_output_path(final_sidecar),
-                "generated_audio_sha256": chain._file_sha256(final_sidecar),
-            })
-        chain._atomic_json(os.path.splitext(final_path)[0] + ".json", record)
-        status = "merged %d HQ scenes -> %s" % (len(segments), final_path)
-        return {
-            "ui": {"text": [status],
-                   "images": [chain._video_output_item(final_path)],
-                   "animated": (True,)},
-            "result": (final_path,),
-        }
 
 
 UPSCALE_NODE_CLASS_MAPPINGS = {
@@ -2306,5 +2293,5 @@ UPSCALE_NODE_DISPLAY_NAME_MAPPINGS = {
     "MiniMaxH3ChainPass2Prepare": "MiniMax H3 Pass-2 AV Prepare",
     "MiniMaxH3ChainUpscaleSegmentSave": "MiniMax H3 Upscale Segment Save",
     "MiniMaxH3ChainUpscaleLoopEnd": "MiniMax H3 Upscale Loop End",
-    "MiniMaxH3ChainUpscaleMerge": "MiniMax H3 Upscale Merger",
+    "MiniMaxH3ChainUpscaleMerge": "MiniMax H3 Upscale Merger (Legacy)",
 }

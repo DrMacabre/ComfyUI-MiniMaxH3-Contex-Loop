@@ -4,6 +4,12 @@ Newest first. This file keeps release history out of the onboarding README.
 
 ## Unreleased — Deferred checkpoint upscaling
 
+- Unified source and deferred-upscale finishing in **H3 Chain Assemble**.
+  Upscale Loop End now emits the common manifest wire; Assemble dispatches by
+  document format, keeps HQ finals under the child profile, and exposes the
+  same optional regular-output copy, filename, audio, and assembly controls.
+  The former Upscale Merger remains as a deprecated compatibility wrapper.
+
 - Ported the strict authoring layer from the standalone H3 Prompt IDE into
   both scene prompt editors. They now share Auto/T2VA/I2VA/FL2VA/L2VA/Ref2VA
   schema selection, ordered-section diagnostics and repair, exact keyframe

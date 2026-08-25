@@ -66,6 +66,10 @@ def main():
         "MiniMaxH3ChainUpscaleMerge",
     }
     assert required <= set(package.NODE_CLASS_MAPPINGS)
+    assert upscale.UPSCALE_MANIFEST_TYPE == chain.MANIFEST_TYPE
+    assert upscale.MiniMaxH3ChainUpscaleLoopEnd.RETURN_TYPES[0] == (
+        chain.MANIFEST_TYPE)
+    assert upscale.MiniMaxH3ChainUpscaleMerge.DEPRECATED is True
     for name in required:
         node = package.NODE_CLASS_MAPPINGS[name]
         schema = node.INPUT_TYPES()
@@ -723,13 +727,24 @@ def main():
         assert manifest["profile"] == "quality"
         assert len(manifest["segments"]) == 2
         assert not manifest["latent_saving"]
-        merged = upscale.MiniMaxH3ChainUpscaleMerge().merge(
-            manifest, "generated", "final", 96)["result"][0]
+        merged_result = chain.MiniMaxH3ChainAssemble().assemble(
+            manifest, "generated", "final", 96,
+            copy_to_output=True, output_subfolder="published_upscale")
+        merged = merged_result["result"][0]
         merged_path = pathlib.Path(merged)
         assert merged_path.is_file() and merged_path.stat().st_size > 0
         assert merged_path.parent == (
             pathlib.Path(temporary) / "h3_chains" / "upscale_test" /
             "upscaled" / "quality" / "final")
+        output_copy = (pathlib.Path(temporary) / "published_upscale" /
+                       merged_path.name)
+        assert output_copy.is_file() and output_copy.stat().st_size > 0
+        final_record = merged_path.with_suffix(".json")
+        assert json.loads(final_record.read_text(encoding="utf-8"))[
+            "format"] == "h3_chain_upscale_final_v1"
+        legacy_merged = upscale.MiniMaxH3ChainUpscaleMerge().merge(
+            manifest, "none", "legacy_wrapper", 96)["result"][0]
+        assert pathlib.Path(legacy_merged).parent == merged_path.parent
 
         _flow, latent_state, _manifest, _ = adapter.adapt(
             selected_manifest, "archive_latent", "h3_latent", "{}",
@@ -749,7 +764,7 @@ def main():
             assert {"upscaled_video", "upscaled_audio"} <= set(saved.keys())
 
     print("H3 upscale child run: denoised source preference, optional HQ latent, "
-          "self-contained audio, manifest, and merger pass")
+          "self-contained audio, unified manifest, assembler, and output copy pass")
 
 
 if __name__ == "__main__":
