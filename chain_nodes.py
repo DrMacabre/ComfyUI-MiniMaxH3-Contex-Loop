@@ -14596,6 +14596,64 @@ def _review_candidate_batch_cleanup(max_age_seconds: float = 21600.0) -> None:
             _ACTIVE_CANDIDATE_BATCHES.pop(token, None)
 
 
+def _review_candidate_resume_revisions(
+        run_name: str, scene: int, revision: str) -> list[dict[str, Any]]:
+    """Return the exact immutable lineage ending at a saved candidate.
+
+    Live approval uses this list with the existing activate-only checkpoint
+    endpoint before cancelling the speculative take. Reusing that endpoint
+    keeps pointer promotion and rollback atomic instead of inventing a second
+    checkpoint activation path for Review Gate.
+    """
+    scene = int(scene)
+    if scene < 1:
+        raise ValueError("H3 candidate scene must be positive.")
+    current_revision = str(revision or "")
+    if re.fullmatch(r"[0-9a-f]{32}", current_revision) is None:
+        raise ValueError("H3 candidate revision is invalid.")
+    lineage = []
+    successor = None
+    for current_scene in range(scene, 0, -1):
+        metadata, _metadata_path = _load_checkpoint_revision(
+            str(run_name), current_scene, current_revision)
+        segment = metadata.get("segment")
+        if not isinstance(segment, dict):
+            raise ValueError(
+                "Scene %d checkpoint has no segment metadata." % current_scene)
+        if int(segment.get("index", -1)) != current_scene:
+            raise ValueError(
+                "Scene %d checkpoint identifies a different scene." %
+                current_scene)
+        if successor is not None:
+            expected_hash = str(
+                successor.get("predecessor_checkpoint_sha256") or "")
+            actual_hash = str(segment.get("checkpoint_sha256") or "")
+            if expected_hash and expected_hash != actual_hash:
+                raise ValueError(
+                    "Scene %d candidate was generated from a different "
+                    "scene %d checkpoint." %
+                    (current_scene + 1, current_scene))
+        actual_revision = str(segment.get("revision") or "")
+        if actual_revision != current_revision:
+            raise ValueError(
+                "Scene %d checkpoint revision metadata is inconsistent." %
+                current_scene)
+        lineage.append({
+            "scene": current_scene,
+            "revision": actual_revision,
+        })
+        successor = segment
+        if current_scene > 1:
+            current_revision = str(
+                segment.get("predecessor_revision") or "")
+            if re.fullmatch(r"[0-9a-f]{32}", current_revision) is None:
+                raise ValueError(
+                    "Scene %d candidate has no valid scene %d predecessor." %
+                    (current_scene, current_scene - 1))
+    lineage.reverse()
+    return lineage
+
+
 def _review_candidate_record(segment: dict[str, Any], video: dict[str, str],
                              has_audio: bool, warning: str) -> dict[str, Any]:
     return {
@@ -15183,6 +15241,7 @@ class MiniMaxH3ChainReview:
                 "run_name": str(plan["run_name"]),
                 "clip_index": index,
                 "clip_count": len(plan["shots"]),
+                "end_clip": int(state.get("range_end", len(plan["shots"]))),
                 "shot_id": shot["id"],
                 "scene_prompt": shot.get("scene_prompt", shot["prompt"]),
                 "prompt_prefix": str(plan.get("prompt_prefix") or ""),
@@ -15215,6 +15274,7 @@ class MiniMaxH3ChainReview:
                 "run_name": str(plan["run_name"]),
                 "scene": index,
                 "target": candidate_target,
+                "plan": plan,
                 "candidates": candidates,
                 "kept_revisions": kept_revisions,
                 "public": progress_payload,
@@ -15268,6 +15328,7 @@ class MiniMaxH3ChainReview:
             "run_name": str(plan["run_name"]),
             "clip_index": index,
             "clip_count": len(plan["shots"]),
+            "end_clip": int(state.get("range_end", len(plan["shots"]))),
             "shot_id": shot["id"],
             "scene_prompt": shot.get("scene_prompt", shot["prompt"]),
             "prompt_prefix": str(plan.get("prompt_prefix") or ""),
@@ -18844,11 +18905,64 @@ async def _submit_candidate_batch_command(request):
         return web.json_response(
             {"error": "This H3 candidate batch is no longer running."},
             status=404)
+    action = str(body.get("action") or "")
+    if action == "finalize":
+        command = entry.get("command")
+        if (not isinstance(command, dict)
+                or str(command.get("action") or "") != "accept"):
+            return web.json_response(
+                {"error": "Only an accepted H3 candidate batch can be "
+                          "finalized."}, status=409)
+        requested_revision = str(
+            body.get("candidate_revision") or
+            command.get("candidate_revision") or "")
+        if requested_revision != str(command.get("candidate_revision") or ""):
+            return web.json_response(
+                {"error": "The finalized H3 candidate does not match the "
+                          "accepted take."}, status=400)
+        candidates = entry.get("candidates")
+        plan = entry.get("plan")
+        if not isinstance(candidates, list) or not isinstance(plan, dict):
+            return web.json_response(
+                {"error": "This H3 candidate batch has no recoverable "
+                          "selection state."}, status=409)
+        selected = next((
+            candidate.get("segment")
+            for candidate in candidates if isinstance(candidate, dict)
+            and isinstance(candidate.get("segment"), dict)
+            and str(candidate["segment"].get("revision") or "") ==
+            requested_revision
+        ), None)
+        if not isinstance(selected, dict):
+            return web.json_response(
+                {"error": "The accepted H3 candidate is no longer present."},
+                status=409)
+        scene = int(entry.get("scene", 0))
+        selected_plan = _plan_with_review_revision(
+            plan, scene, str(selected.get(
+                "scene_prompt_template", selected.get("scene_prompt")) or ""),
+            int(selected.get("seed", 0)),
+            int(selected.get("raw_frames", 0)))
+        # The activate-only checkpoint endpoint has already committed the
+        # selected immutable lineage. Align run recovery metadata now that
+        # targeted cancellation is confirmed, then prune only unkept takes.
+        _write_run_archives(selected_plan)
+        cleanup = _prune_review_candidates(
+            selected_plan, scene, candidates,
+            list(command.get("kept_revisions") or ()))
+        _ACTIVE_CANDIDATE_BATCHES.pop(token, None)
+        return web.json_response({
+            "ok": True,
+            "action": "finalize",
+            "candidate_revision": requested_revision,
+            "kept_candidate_count": len(cleanup["kept"]),
+            "deleted_candidate_count": len(cleanup["deleted"]),
+            "cleanup_warnings": cleanup["warnings"],
+        })
     if entry.get("command") is not None:
         return web.json_response(
             {"error": "This H3 candidate batch already has a stop command."},
             status=409)
-    action = str(body.get("action") or "")
     if action not in ("accept", "pause", "update"):
         return web.json_response(
             {"error": "Unknown H3 candidate batch action."}, status=400)
@@ -18903,12 +19017,26 @@ async def _submit_candidate_batch_command(request):
         "kept_candidate_count": len(kept),
     }
     if isinstance(selected_segment, dict):
+        resume_revisions = []
+        activation_error = ""
+        try:
+            resume_revisions = _review_candidate_resume_revisions(
+                str(entry.get("run_name") or ""),
+                int(entry.get("scene", 0)), requested_revision)
+        except (FileNotFoundError, OSError, TypeError, ValueError,
+                json.JSONDecodeError, KeyError) as exc:
+            # Keep the established boundary command armed when an immutable
+            # lineage cannot be resolved for the faster cancellation path.
+            activation_error = str(exc)
         response.update({
             "scene_prompt": str(selected_segment.get(
                 "scene_prompt_template",
                 selected_segment.get("scene_prompt")) or ""),
             "seed": str(selected_segment.get("seed") or "0"),
             "length": int(selected_segment.get("raw_frames", 0)),
+            "resume_scene": int(entry.get("scene", 0)) + 1,
+            "resume_revisions": resume_revisions,
+            "immediate_activation_error": activation_error,
         })
     return web.json_response(response)
 
