@@ -664,7 +664,7 @@ model, so additional references may still cost VRAM and introduce competing
 motion instructions.
 
 See
-[`EXPERIMENTAL MiniMax H3 Ref2V - Sequential Motion.json`](<example_workflows/EXPERIMENTAL MiniMax H3 Ref2V - Sequential Motion.json>)
+[`Ref2V Sequential Motion - EXPERIMENTAL - MiniMax H3.json`](<example_workflows/Ref2V Sequential Motion - EXPERIMENTAL - MiniMax H3.json>)
 for the minimal two-scene wiring. Its Reference Video Prep selects 464 frames,
 so the user-supplied native video and embedded audio must cover at least
 19.333 seconds after conversion to 24 fps.
@@ -751,7 +751,7 @@ Use **MiniMax H3 Existing Video Context** when scene 1 must continue a decoded
 video rather than begin from an empty timeline.
 
 Open
-[`MiniMax H3 Extend Existing Video Model Workflow.json`](<example_workflows/MiniMax H3 Extend Existing Video Model Workflow.json>)
+[`Extend Existing Video Model Workflow - MiniMax H3.json`](<example_workflows/Extend Existing Video Model Workflow - MiniMax H3.json>)
 for a complete two-scene model with generated-audio continuity, original-video
 prepend, review/retry controls, and a muted recovery branch. This workflow is
 **experimental** while the imported AV continuation path receives broader

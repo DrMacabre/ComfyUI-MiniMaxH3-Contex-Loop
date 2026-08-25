@@ -1,8 +1,8 @@
 {
-  "id": "c0b8422a-84d4-44f8-91ce-31c68a9a119e",
+  "id": "46a25be1-4bfd-4bb5-aa7b-4d4ca322f3c2",
   "revision": 0,
-  "last_node_id": 1960,
-  "last_link_id": 107,
+  "last_node_id": 1952,
+  "last_link_id": 98,
   "nodes": [
     {
       "id": 1,
@@ -106,7 +106,7 @@
         "Node name for S&R": "KSamplerSelect"
       },
       "widgets_values": [
-        "lcm"
+        "res_multistep"
       ]
     },
     {
@@ -163,8 +163,7 @@
           "name": "VAE",
           "type": "VAE",
           "links": [
-            65,
-            87
+            65
           ]
         }
       ],
@@ -179,32 +178,6 @@
       ]
     },
     {
-      "id": 1902,
-      "type": "Note",
-      "pos": [
-        -2112,
-        -1344
-      ],
-      "size": [
-        1248,
-        320
-      ],
-      "flags": {},
-      "order": 5,
-      "mode": 0,
-      "inputs": [],
-      "outputs": [],
-      "title": "Note — PROMPT SOURCE / ATTRIBUTION",
-      "properties": {
-        "Node name for S&R": "Note"
-      },
-      "widgets_values": [
-        "SOURCE ASSET — CC0\n\nLight-blue soldier crabs on Bribie Island, filmed in 2015 by Watermark Resort Caloundra. Wikimedia Commons records the video as CC0 1.0.\n\nhttps://commons.wikimedia.org/wiki/File:Light-blue_soldier_crabs_on_Bribie_Island.webm\n\nCopy soldier_crabs_bribie_island_cc0.webm and soldier_crabs_inpaint_mask.png from example_workflows/assets/ to ComfyUI/input/."
-      ],
-      "color": "#432f66",
-      "bgcolor": "rgba(24,24,27,.9)"
-    },
-    {
       "id": 1906,
       "type": "Note",
       "pos": [
@@ -216,14 +189,14 @@
         1152
       ],
       "flags": {},
-      "order": 6,
+      "order": 5,
       "mode": 0,
       "inputs": [],
       "outputs": [],
-      "title": "Note — T2VA PROMPT FORMAT",
+      "title": "Note — FL2VA / L2VA PROMPT FORMAT",
       "properties": {},
       "widgets_values": [
-        "T2VA PROMPT FORMAT\n\nT2VA begins directly with these three fields in this exact order—there is no Picture alignment instruction:\n\nintegrated_multimodal_description: [Shot 1] Describe visible style, composition, subjects, actions, camera movement, dialogue, and synchronized diegetic events.\n\noverall_soundscape: Summarize ambience, physical sounds, and non-verbal human sounds.\n\nnon_diegetic_music: Describe audience-only music, or use N/A.\n\nFor a chained continuation, explicitly continue the incoming pose, action phase, camera position and motion, lighting, environment, object states, ambience, and speaker identity. Do not re-establish or reset the shot unless a cut is intentional."
+        "FL2VA / L2VA PROMPT FORMAT\n\nSCENE 1 — A TO B\nFrame Gate supplies opening Frame A and the index switch supplies target Frame B. Start with the two-picture FL2VA alignment sentence: Picture 1 at 0.00 seconds and Picture 2 at 15.08 seconds. Describe the observable continuous path between them.\n\nSCENE 2 — CONTEXT TO A\nFrame Gate omits the opening image, H3 Motion Context supplies the incoming state at B, and the index switch supplies Frame A as the only explicit image. The core node therefore labels that final target <Picture 1>; use the one-picture L2VA alignment sentence at 15.08 seconds.\n\nThe switch wraps automatically: scene 1 selects frame_1 (B), scene 2 selects frame_2 (A), scene 3 would select B again."
       ],
       "color": "#432",
       "bgcolor": "#653"
@@ -240,7 +213,7 @@
         26
       ],
       "flags": {},
-      "order": 11,
+      "order": 13,
       "mode": 0,
       "inputs": [
         {
@@ -276,7 +249,7 @@
         26
       ],
       "flags": {},
-      "order": 12,
+      "order": 14,
       "mode": 0,
       "inputs": [
         {
@@ -300,74 +273,6 @@
       }
     },
     {
-      "id": 1701,
-      "type": "MiniMaxH3ChainLoopStart",
-      "pos": [
-        -544,
-        -256
-      ],
-      "size": [
-        352,
-        192
-      ],
-      "flags": {},
-      "order": 17,
-      "mode": 0,
-      "inputs": [
-        {
-          "name": "plan",
-          "type": "H3_CHAIN_PLAN",
-          "link": 75
-        },
-        {
-          "name": "source_audio",
-          "shape": 7,
-          "type": "AUDIO",
-          "link": null
-        },
-        {
-          "name": "external_context",
-          "shape": 7,
-          "type": "H3_CHAIN_EXTERNAL_CONTEXT",
-          "link": null
-        }
-      ],
-      "outputs": [
-        {
-          "name": "flow",
-          "type": "H3_CHAIN_FLOW",
-          "links": [
-            45
-          ]
-        },
-        {
-          "name": "state",
-          "type": "H3_CHAIN_STATE",
-          "links": [
-            15
-          ]
-        },
-        {
-          "name": "status",
-          "type": "STRING",
-          "links": null
-        }
-      ],
-      "title": "MiniMax H3 Contex Loop Start — LOOP START — NO EXTERNAL CONTINUATION",
-      "properties": {
-        "cnr_id": "comfyui-minimaxh3-contex-loop",
-        "ver": "0.3.10",
-        "Node name for S&R": "MiniMaxH3ChainLoopStart",
-        "aux_id": "ethanfel/ComfyUI-MiniMaxH3-Contex-Loop"
-      },
-      "widgets_values": [
-        1,
-        ""
-      ],
-      "color": "#1f1f48",
-      "bgcolor": "rgba(24,24,27,.9)"
-    },
-    {
       "id": 1916,
       "type": "Reroute",
       "pos": [
@@ -379,7 +284,7 @@
         26
       ],
       "flags": {},
-      "order": 15,
+      "order": 17,
       "mode": 0,
       "inputs": [
         {
@@ -394,8 +299,7 @@
           "type": "VAE",
           "links": [
             63,
-            64,
-            90
+            64
           ]
         }
       ],
@@ -416,7 +320,7 @@
         26
       ],
       "flags": {},
-      "order": 16,
+      "order": 18,
       "mode": 0,
       "inputs": [
         {
@@ -430,8 +334,7 @@
           "name": "",
           "type": "VAE",
           "links": [
-            68,
-            91
+            68
           ]
         }
       ],
@@ -452,7 +355,7 @@
         512
       ],
       "flags": {},
-      "order": 22,
+      "order": 23,
       "mode": 0,
       "inputs": [
         {
@@ -475,16 +378,17 @@
             24,
             41,
             46,
-            77,
-            88,
-            96,
-            106
+            82,
+            86,
+            97
           ]
         },
         {
           "name": "clip_index",
           "type": "INT",
-          "links": null
+          "links": [
+            89
+          ]
         },
         {
           "name": "clip_count",
@@ -564,7 +468,7 @@
           "links": null
         }
       ],
-      "title": "MiniMax H3 Contex Loop Current Shot — CURRENT T2V SCENE — PROMPT / SEED / TIMING",
+      "title": "MiniMax H3 Contex Loop Current Shot — CURRENT FL2V SCENE — PROMPT / SEED / TIMING",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -581,7 +485,7 @@
       "id": 1708,
       "type": "MiniMaxH3ChainAssemble",
       "pos": [
-        5632,
+        5568,
         416
       ],
       "size": [
@@ -589,7 +493,7 @@
         256
       ],
       "flags": {},
-      "order": 23,
+      "order": 24,
       "mode": 2,
       "inputs": [
         {
@@ -620,7 +524,7 @@
       },
       "widgets_values": [
         "plan",
-        "cc0_soldier_crabs_loop_inpaint_recovered_%date:yyyy-MM-dd%",
+        "t2v_normal_recovered_%date:yyyy-MM-dd%",
         256
       ],
       "color": "#59451e",
@@ -638,7 +542,7 @@
         26
       ],
       "flags": {},
-      "order": 21,
+      "order": 22,
       "mode": 0,
       "inputs": [
         {
@@ -673,7 +577,7 @@
         96
       ],
       "flags": {},
-      "order": 25,
+      "order": 27,
       "mode": 0,
       "inputs": [
         {
@@ -717,7 +621,7 @@
         384
       ],
       "flags": {},
-      "order": 26,
+      "order": 31,
       "mode": 0,
       "inputs": [
         {
@@ -734,13 +638,13 @@
           "name": "first_frame",
           "shape": 7,
           "type": "IMAGE",
-          "link": null
+          "link": 88
         },
         {
           "name": "last_frame",
           "shape": 7,
           "type": "IMAGE",
-          "link": null
+          "link": 93
         },
         {
           "name": "prompt",
@@ -787,65 +691,24 @@
           "name": "LATENT",
           "type": "LATENT",
           "links": [
-            89
+            27
           ]
         }
       ],
-      "title": "MiniMax H3 Image to Video — CORE H3 T2VA — EMPTY GRID DEFINES AV SHAPES",
+      "title": "MiniMax H3 Image to Video — CORE FL2VA — FIRST A ONCE + INDEXED LAST TARGET",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
         "Node name for S&R": "MiniMaxH3ImageToVideo"
       },
       "widgets_values": [
-        "integrated_multimodal_description:\n[Shot 1] Edit the supplied wildlife source video in place. Preserve the original camera trajectory, cloudy coastal lighting, sand, water, distant shoreline, depth of field, motion timing, and every pixel outside the white mask. Inside the masked lower-central beach region only, replace the moving soldier crabs with small polished red metal crab sculptures that occupy the corresponding positions and follow the original animals' grounded lateral motion. Maintain correct perspective, contact shadows, sand interaction, occlusion, scale, and motion blur at the mask boundary. Do not alter the duration, frame rate, camera, background, or unmasked crabs.\n\noverall_soundscape:\nPreserve the source audio exactly, including coastal wind, distant surf, water movement, and all location ambience. Generate no replacement sound.\n\nnon_diegetic_music:\nN/A",
-        960,
-        544,
-        175
+        "How the reference pictures align with the target video — Picture 1 (from Shot 1) aligns with the 0.00-second mark of the target video; Picture 2 (from Shot 1) aligns with the 15.08-second mark of the target video.\n\nintegrated_multimodal_description: [Shot 1] Classic Doom 1993 first-person-shooter pixel art in a World War II Market Garden scenario. Begin from the exact first-person parachute view, hands, suspension lines, canopy, airborne soldiers, bridge, river, town, sky, HUD, palette, pixel scale, and composition established by <Picture 1>. Use one uninterrupted forward-moving gameplay shot with no camera cut.\n\nTimeline:\n[0s-8s] The viewpoint descends rapidly while advancing toward the outskirts of the city. The older paratroopers descend at different depths with coherent pixel-art parallax; one soldier lands near the viewer as the bridge and river rise through frame.\n[8s-10s] The player lands, the parachute collapses behind the viewpoint, and both hands pull an M1 Garand into the center of the screen. Preserve the HUD layout and first-person anatomy while the player turns toward the same dark building.\n[10s-13.5s] The viewpoint runs to cover beside a friendly soldier and fires into the building. Muzzle flashes, recoil, blocky wall debris, and enemy reactions remain synchronized with the forward movement.\n[13.5s-15.08s] The player pushes into the dark entrance and raises the rifle sight toward the enemy line inside. Progressively narrow every remaining difference in viewpoint, weapon position, doorway geometry, enemy spacing, HUD values, lighting, and pixel composition, landing exactly on <Picture 2> at the final frame.\n\noverall_soundscape: Flak bursts, distant gunfire, low World War II aircraft hum, rushing air, parachute fabric, landing impacts, running footsteps, M1 Garand handling, and sharp rifle reports follow the visible action continuously. Interior reverberation becomes audible only as the viewpoint enters the building.\n\nnon_diegetic_music: A low-volume World War II-era brass-and-snare fanfare continues beneath the gameplay sounds without a new downbeat at the end.",
+        896,
+        672,
+        362
       ],
       "color": "#346434",
       "bgcolor": "rgba(24,24,27,.9)"
-    },
-    {
-      "id": 1635,
-      "type": "LoraLoaderModelOnly",
-      "pos": [
-        -1344,
-        -928
-      ],
-      "size": [
-        288,
-        96
-      ],
-      "flags": {},
-      "order": 14,
-      "mode": 0,
-      "inputs": [
-        {
-          "name": "model",
-          "type": "MODEL",
-          "link": 4
-        }
-      ],
-      "outputs": [
-        {
-          "name": "MODEL",
-          "type": "MODEL",
-          "links": [
-            5
-          ]
-        }
-      ],
-      "title": "Load LoRA — LIGHTX2V TURBO — 8 STEP V1.0",
-      "properties": {
-        "cnr_id": "comfy-core",
-        "ver": "0.30.0",
-        "Node name for S&R": "LoraLoaderModelOnly"
-      },
-      "widgets_values": [
-        "MiniMax H3/minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors",
-        1
-      ]
     },
     {
       "id": 1703,
@@ -859,7 +722,7 @@
         288
       ],
       "flags": {},
-      "order": 28,
+      "order": 32,
       "mode": 0,
       "inputs": [
         {
@@ -880,13 +743,13 @@
         {
           "name": "latent",
           "type": "LATENT",
-          "link": 94
+          "link": 27
         },
         {
           "name": "audio_vae",
           "shape": 7,
           "type": "VAE",
-          "link": 87
+          "link": null
         }
       ],
       "outputs": [
@@ -913,7 +776,7 @@
           "name": "latent",
           "type": "LATENT",
           "links": [
-            95
+            33
           ]
         }
       ],
@@ -940,7 +803,7 @@
         160
       ],
       "flags": {},
-      "order": 20,
+      "order": 21,
       "mode": 0,
       "inputs": [
         {
@@ -980,7 +843,7 @@
         26
       ],
       "flags": {},
-      "order": 24,
+      "order": 25,
       "mode": 0,
       "inputs": [
         {
@@ -1015,7 +878,7 @@
         26
       ],
       "flags": {},
-      "order": 27,
+      "order": 28,
       "mode": 0,
       "inputs": [
         {
@@ -1051,7 +914,7 @@
         96
       ],
       "flags": {},
-      "order": 30,
+      "order": 33,
       "mode": 0,
       "inputs": [
         {
@@ -1094,7 +957,7 @@
         128
       ],
       "flags": {},
-      "order": 29,
+      "order": 30,
       "mode": 0,
       "inputs": [
         {
@@ -1127,8 +990,8 @@
         "Node name for S&R": "BasicScheduler"
       },
       "widgets_values": [
-        "beta",
-        8,
+        "simple",
+        20,
         1
       ]
     },
@@ -1141,10 +1004,10 @@
       ],
       "size": [
         320,
-        657.4117647058823
+        384
       ],
       "flags": {},
-      "order": 31,
+      "order": 34,
       "mode": 0,
       "inputs": [
         {
@@ -1170,7 +1033,7 @@
         {
           "name": "latent_image",
           "type": "LATENT",
-          "link": 101
+          "link": 33
         }
       ],
       "outputs": [
@@ -1210,7 +1073,7 @@
         96
       ],
       "flags": {},
-      "order": 32,
+      "order": 35,
       "mode": 0,
       "inputs": [
         {
@@ -1253,7 +1116,7 @@
         96
       ],
       "flags": {},
-      "order": 33,
+      "order": 36,
       "mode": 0,
       "inputs": [
         {
@@ -1296,7 +1159,7 @@
         224
       ],
       "flags": {},
-      "order": 34,
+      "order": 37,
       "mode": 0,
       "inputs": [
         {
@@ -1330,7 +1193,7 @@
         {
           "name": "state",
           "type": "H3_CHAIN_STATE",
-          "link": 106,
+          "link": 97,
           "shape": 7
         }
       ],
@@ -1348,7 +1211,7 @@
           "type": "AUDIO",
           "links": [
             44,
-            78
+            84
           ]
         },
         {
@@ -1375,7 +1238,7 @@
         0,
         24,
         true,
-        5
+        0
       ],
       "color": "#1f1f48",
       "bgcolor": "rgba(24,24,27,.9)"
@@ -1392,7 +1255,7 @@
         288
       ],
       "flags": {},
-      "order": 35,
+      "order": 38,
       "mode": 0,
       "inputs": [
         {
@@ -1428,7 +1291,7 @@
           "name": "segment",
           "type": "H3_CHAIN_SEGMENT",
           "links": [
-            49
+            83
           ]
         },
         {
@@ -1452,7 +1315,7 @@
       "id": 1706,
       "type": "MiniMaxH3ChainAssemble",
       "pos": [
-        5184,
+        5120,
         -256
       ],
       "size": [
@@ -1460,7 +1323,7 @@
         480
       ],
       "flags": {},
-      "order": 38,
+      "order": 41,
       "mode": 0,
       "inputs": [
         {
@@ -1491,7 +1354,7 @@
       },
       "widgets_values": [
         "plan",
-        "cc0_soldier_crabs_loop_inpaint_%date:yyyy-MM-dd%",
+        "t2v_normal_%date:yyyy-MM-dd%",
         256
       ],
       "color": "#24533a",
@@ -1509,7 +1372,7 @@
         64
       ],
       "flags": {},
-      "order": 10,
+      "order": 12,
       "mode": 0,
       "inputs": [
         {
@@ -1523,7 +1386,7 @@
           "name": "MODEL",
           "type": "MODEL",
           "links": [
-            4
+            5
           ]
         }
       ],
@@ -1538,44 +1401,106 @@
       ]
     },
     {
-      "id": 1942,
-      "type": "MiniMaxH3ChainRichScenePromptEditor",
+      "id": 1705,
+      "type": "MiniMaxH3ChainLoopEnd",
       "pos": [
-        1984,
-        544
+        4544,
+        -288
       ],
       "size": [
-        1088,
-        1312
+        352,
+        320
       ],
       "flags": {},
-      "order": 19,
+      "order": 40,
       "mode": 0,
       "inputs": [
         {
-          "name": "plan",
-          "type": "H3_CHAIN_PLAN",
-          "link": 82
+          "name": "flow",
+          "type": "H3_CHAIN_FLOW",
+          "link": 45
+        },
+        {
+          "name": "state",
+          "type": "H3_CHAIN_STATE",
+          "link": 46
+        },
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 47
+        },
+        {
+          "name": "sampled_latent",
+          "type": "LATENT",
+          "link": 48
+        },
+        {
+          "name": "segment",
+          "type": "H3_CHAIN_SEGMENT",
+          "link": 85
         }
       ],
       "outputs": [
         {
-          "name": "plan",
-          "type": "H3_CHAIN_PLAN",
+          "name": "manifest",
+          "type": "H3_CHAIN_MANIFEST",
+          "links": [
+            50
+          ]
+        },
+        {
+          "name": "manifest_json",
+          "type": "STRING",
+          "links": null
+        },
+        {
+          "name": "last_context_frames",
+          "type": "IMAGE",
+          "links": null
+        },
+        {
+          "name": "last_context_latent",
+          "type": "LATENT",
           "links": null
         }
       ],
+      "title": "MiniMax H3 Contex Loop End — LOOP END — ADVANCE T2V SCENE",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
-        "ver": "d8ac6bc7b47a0c791f393d9300b7cc44773a66ff",
-        "Node name for S&R": "MiniMaxH3ChainRichScenePromptEditor",
-        "h3_rich_prompt_active_scene": 0,
-        "h3_rich_prompt_font_size": 17,
-        "h3_rich_prompt_guide": "auto"
+        "ver": "0.3.10",
+        "Node name for S&R": "MiniMaxH3ChainLoopEnd",
+        "aux_id": "ethanfel/ComfyUI-MiniMaxH3-Contex-Loop"
       },
       "widgets_values": [],
-      "color": "#223",
-      "bgcolor": "#335"
+      "color": "#1f1f48",
+      "bgcolor": "rgba(24,24,27,.9)"
+    },
+    {
+      "id": 1932,
+      "type": "Note",
+      "pos": [
+        1568,
+        544
+      ],
+      "size": [
+        896,
+        1184
+      ],
+      "flags": {},
+      "order": 6,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "title": "Note — FL2V NORMAL — HOW TO USE",
+      "properties": {
+        "Node name for S&R": "Note"
+      },
+      "widgets_values": [
+        "FL2V NORMAL — A→B→A LOOP\n\n1. Copy both bundled PNG files from example_workflows/assets into ComfyUI/input and select them in FRAME A and FRAME B.\n2. Keep Current Shot.clip_index connected to the Frame Index Switch. Its frame_1 is B and frame_2 is A.\n3. Keep the switch connected through Frame Gate to core last_frame. Frame Gate sends A to first_frame only for scene 1.\n4. Scene 1 generates A→B with FL2VA. Scene 2 begins from H3 Motion Context at B and generates B→A with L2VA.\n5. Queue and approve both scenes. Final Assemble preserves generated audio.\n\nTIMING\nEach request is 362 raw H3 frames (15.08 seconds at 24 fps). Scene 2 repeats 22 context frames, so delivery is 362 + (362 - 22) = 702 frames = 29.25 seconds.\n\nBOUNDARIES\nvideo_blend_frames = 0 hard-trims repeated context. The exact final A target also creates a visual endpoint suitable for looping the assembled result back to its first frame."
+      ],
+      "color": "#432f66",
+      "bgcolor": "rgba(24,24,27,.9)"
     },
     {
       "id": 1700,
@@ -1585,17 +1510,23 @@
         544
       ],
       "size": [
-        992,
-        1184
+        1024,
+        1600
       ],
       "flags": {},
       "order": 7,
       "mode": 0,
       "inputs": [
         {
+          "name": "plan_json_input",
+          "shape": 7,
+          "type": "STRING",
+          "link": null
+        },
+        {
           "name": "chain_policy",
           "type": "H3_CHAIN_POLICY",
-          "link": 107,
+          "link": 98,
           "shape": 7
         }
       ],
@@ -1633,105 +1564,40 @@
           "links": null
         }
       ],
-      "title": "MiniMax H3 Contex Loop Plan — TWO-SCENE SOURCE-INPAINT LOOP — 311 DELIVERED FRAMES",
+      "title": "MiniMax H3 Contex Loop Plan — FL2V LOOP PLAN — NORMAL EDITOR",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
         "Node name for S&R": "MiniMaxH3ChainPlan",
         "aux_id": "ethanfel/ComfyUI-MiniMaxH3-Contex-Loop",
-        "h3_chain_scene_colors": {}
+        "h3_chain_scene_colors": {},
+        "h3_chain_plan_layout": {
+          "promptHeights": {
+            "shared": 88,
+            "scene:market_garden_parachute": 144,
+            "scene:market_garden_building": 144,
+            "scene:parachute_to_building": 112,
+            "scene:respawn_to_parachute": 112
+          }
+        }
       },
       "widgets_values": [
-        "{\n  \"defaults\": {\n    \"length\": 175,\n    \"steps\": 8\n  },\n  \"shots\": [\n    {\n      \"id\": \"source_inpaint_a\",\n      \"prompt\": \"integrated_multimodal_description:\\n[Shot 1] Edit the supplied wildlife source video in place. Preserve the original camera trajectory, cloudy coastal lighting, sand, water, distant shoreline, depth of field, motion timing, and every pixel outside the white mask. Inside the masked lower-central beach region only, replace the moving soldier crabs with small polished red metal crab sculptures that occupy the corresponding positions and follow the original animals' grounded lateral motion. Maintain correct perspective, contact shadows, sand interaction, occlusion, scale, and motion blur at the mask boundary. Do not alter the duration, frame rate, camera, background, or unmasked crabs.\\n\\noverall_soundscape:\\nPreserve the source audio exactly, including coastal wind, distant surf, water movement, and all location ambience. Generate no replacement sound.\\n\\nnon_diegetic_music:\\nN/A\",\n      \"length\": 175,\n      \"steps\": 8,\n      \"seed\": \"24051521\"\n    },\n    {\n      \"id\": \"source_inpaint_b\",\n      \"prompt\": \"integrated_multimodal_description:\\n[Shot 1] Edit the supplied wildlife source video in place. Preserve the original camera trajectory, cloudy coastal lighting, sand, water, distant shoreline, depth of field, motion timing, and every pixel outside the white mask. Inside the masked lower-central beach region only, replace the moving soldier crabs with small polished red metal crab sculptures that occupy the corresponding positions and follow the original animals' grounded lateral motion. Maintain correct perspective, contact shadows, sand interaction, occlusion, scale, and motion blur at the mask boundary. Do not alter the duration, frame rate, camera, background, or unmasked crabs.\\n\\noverall_soundscape:\\nPreserve the source audio exactly, including coastal wind, distant surf, water movement, and all location ambience. Generate no replacement sound.\\n\\nnon_diegetic_music:\\nN/A\",\n      \"length\": 175,\n      \"steps\": 8,\n      \"seed\": \"24051522\"\n    }\n  ]\n}",
-        "cc0_soldier_crabs_loop_inpaint",
-        "cc0-crab-source-av-v1+static-mask-h3-exact-v2",
-        960,
-        544,
-        39,
+        "{\n  \"defaults\": {\n    \"duration_seconds\": 15,\n    \"steps\": 20\n  },\n  \"shots\": [\n    {\n      \"id\": \"parachute_to_building\",\n      \"prompt\": [\n        \"How the reference pictures align with the target video — Picture 1 (from Shot 1) aligns with the 0.00-second mark of the target video; Picture 2 (from Shot 1) aligns with the 15.08-second mark of the target video.\",\n        \"\",\n        \"integrated_multimodal_description: [Shot 1] Classic Doom 1993 first-person-shooter pixel art in a World War II Market Garden scenario. Begin from the exact first-person parachute view, hands, suspension lines, canopy, airborne soldiers, bridge, river, town, sky, HUD, palette, pixel scale, and composition established by <Picture 1>. Use one uninterrupted forward-moving gameplay shot with no camera cut.\",\n        \"\",\n        \"Timeline:\",\n        \"[0s-8s] The viewpoint descends rapidly while advancing toward the outskirts of the city. The older paratroopers descend at different depths with coherent pixel-art parallax; one soldier lands near the viewer as the bridge and river rise through frame.\",\n        \"[8s-10s] The player lands, the parachute collapses behind the viewpoint, and both hands pull an M1 Garand into the center of the screen. Preserve the HUD layout and first-person anatomy while the player turns toward the same dark building.\",\n        \"[10s-13.5s] The viewpoint runs to cover beside a friendly soldier and fires into the building. Muzzle flashes, recoil, blocky wall debris, and enemy reactions remain synchronized with the forward movement.\",\n        \"[13.5s-15.08s] The player pushes into the dark entrance and raises the rifle sight toward the enemy line inside. Progressively narrow every remaining difference in viewpoint, weapon position, doorway geometry, enemy spacing, HUD values, lighting, and pixel composition, landing exactly on <Picture 2> at the final frame.\",\n        \"\",\n        \"overall_soundscape: Flak bursts, distant gunfire, low World War II aircraft hum, rushing air, parachute fabric, landing impacts, running footsteps, M1 Garand handling, and sharp rifle reports follow the visible action continuously. Interior reverberation becomes audible only as the viewpoint enters the building.\",\n        \"\",\n        \"non_diegetic_music: A low-volume World War II-era brass-and-snare fanfare continues beneath the gameplay sounds without a new downbeat at the end.\"\n      ],\n      \"length\": 362,\n      \"seed\": \"2101\"\n    },\n    {\n      \"id\": \"respawn_to_parachute\",\n      \"prompt\": [\n        \"How the reference pictures align with the target video — <Picture 1> (from [Shot 1]) aligns with the 15.08-second mark of the target video.\",\n        \"\",\n        \"integrated_multimodal_description: [Shot 1] Continue the same uninterrupted Classic Doom 1993 first-person Market Garden gameplay directly from the incoming H3 Motion Context inside the dark building. Preserve the incoming rifle sight, enemy positions, doorway geometry, HUD, pixel scale, palette, lighting, movement direction, and active audio phase without resetting at the scene boundary. The complete shot forms a plausible retro-game death-and-respawn cycle that converges on the supplied final frame.\",\n        \"\",\n        \"Timeline:\",\n        \"[0s-5s] The rifle fires into the enemy line while the viewpoint strafes behind the doorway. Enemies return fire, the weapon recoils, and the HUD health falls as impacts throw small blocky fragments from the timber walls.\",\n        \"[5s-8s] A nearby explosion overwhelms the player. The first-person view jolts downward, the weapon drops partly out of frame, and the image darkens through a brief period-authentic game-over transition while the battlefield audio becomes muffled.\",\n        \"[8s-11.5s] The game immediately respawns into the same mission: darkness lifts into a bright pixel sky, rushing wind returns, parachute lines extend into view, and the HUD resets cleanly without duplicating hands, weapons, or interface elements.\",\n        \"[11.5s-15.08s] The airborne viewpoint steadies over the river, bridge, town, and descending soldiers. Progressively align the hands, suspension lines, canopy edge, soldier positions, horizon, bridge geometry, river, HUD, colors, and exact first-person composition with <Picture 1>, reaching it precisely at the final frame so the assembled video can loop back to its opening.\",\n        \"\",\n        \"overall_soundscape: Indoor rifle fire, enemy shots, ricochets, wall impacts, and a close explosion transition into a short muffled game-over tail. Wind, parachute fabric, distant flak, aircraft hum, and battlefield gunfire return gradually during the respawn and remain continuous into the loop point.\",\n        \"\",\n        \"non_diegetic_music: The same low-volume World War II-era fanfare briefly filters down during the death transition, then resumes its brass-and-snare texture without a hard restart at the final boundary.\"\n      ],\n      \"length\": 362,\n      \"seed\": \"2102\"\n    }\n  ]\n}",
+        "fl2v_normal_market_garden_ab_loop",
+        "fl2v-market-garden-a-b-a-v1",
+        896,
+        672,
+        22,
         "video",
         "head",
-        "center",
+        "disabled",
         "generated_audio",
-        39,
-        8,
-        8,
+        22,
+        15,
+        20,
         0,
         20,
-        5,
-        "masked_av"
-      ],
-      "color": "#1f1f48",
-      "bgcolor": "rgba(24,24,27,.9)"
-    },
-    {
-      "id": 1930,
-      "type": "MiniMaxH3ChainPlanStudio",
-      "pos": [
-        384,
-        544
-      ],
-      "size": [
-        1536,
-        1056
-      ],
-      "flags": {},
-      "order": 13,
-      "mode": 0,
-      "inputs": [
-        {
-          "name": "plan",
-          "type": "H3_CHAIN_PLAN",
-          "link": 74
-        },
-        {
-          "name": "source_timeline",
-          "type": "H3_SOURCE_TIMELINE",
-          "link": null,
-          "shape": 7
-        },
-        {
-          "name": "source_audio",
-          "type": "AUDIO",
-          "link": null,
-          "shape": 7
-        },
-        {
-          "name": "tagged_references",
-          "type": "H3_TAGGED_REFERENCES",
-          "link": null,
-          "shape": 7
-        },
-        {
-          "name": "reference_schedule",
-          "type": "H3_REFERENCE_SCHEDULE",
-          "link": null,
-          "shape": 7
-        }
-      ],
-      "outputs": [
-        {
-          "name": "plan",
-          "type": "H3_CHAIN_PLAN",
-          "links": [
-            75,
-            76,
-            82
-          ]
-        }
-      ],
-      "title": "MiniMax H3 Plan Studio (Experimental) — PLAN STUDIO — TIMELINE / REVISIONS / PREVIEWS",
-      "properties": {
-        "cnr_id": "comfyui-minimaxh3-contex-loop",
-        "ver": "0.3.10",
-        "Node name for S&R": "MiniMaxH3ChainPlanStudio",
-        "aux_id": "ethanfel/ComfyUI-MiniMaxH3-Contex-Loop",
-        "h3_plan_studio_active_scene": 0,
-        "h3_plan_studio_view": "player"
-      },
-      "widgets_values": [
-        1,
-        "",
-        true
+        0
       ],
       "color": "#1f1f48",
       "bgcolor": "rgba(24,24,27,.9)"
@@ -1740,7 +1606,7 @@
       "id": 1707,
       "type": "MiniMaxH3ChainManifestLoad",
       "pos": [
-        5216,
+        5152,
         416
       ],
       "size": [
@@ -1748,7 +1614,7 @@
         224
       ],
       "flags": {},
-      "order": 18,
+      "order": 20,
       "mode": 2,
       "inputs": [
         {
@@ -1803,7 +1669,7 @@
       "id": 1901,
       "type": "Note",
       "pos": [
-        5184,
+        5152,
         736
       ],
       "size": [
@@ -1826,111 +1692,314 @@
       "bgcolor": "rgba(24,24,27,.9)"
     },
     {
-      "id": 1705,
-      "type": "MiniMaxH3ChainLoopEnd",
+      "id": 1947,
+      "type": "LoadImage",
       "pos": [
-        4704,
+        -1120,
         -256
       ],
       "size": [
-        352,
-        320
+        384,
+        448
       ],
       "flags": {},
-      "order": 37,
+      "order": 9,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            90
+          ]
+        },
+        {
+          "name": "MASK",
+          "type": "MASK",
+          "links": null
+        }
+      ],
+      "title": "Load Image — FRAME B — SCENE 1 TARGET",
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.31.0",
+        "Node name for S&R": "LoadImage"
+      },
+      "widgets_values": [
+        "jigen_market_garden_doom_last.png",
+        "image",
+        null,
+        null,
+        null
+      ]
+    },
+    {
+      "id": 1701,
+      "type": "MiniMaxH3ChainLoopStart",
+      "pos": [
+        -576,
+        -224
+      ],
+      "size": [
+        352,
+        192
+      ],
+      "flags": {},
+      "order": 19,
       "mode": 0,
       "inputs": [
         {
-          "name": "flow",
-          "type": "H3_CHAIN_FLOW",
-          "link": 45
+          "name": "plan",
+          "type": "H3_CHAIN_PLAN",
+          "link": 96
         },
         {
-          "name": "state",
-          "type": "H3_CHAIN_STATE",
-          "link": 46
+          "name": "source_audio",
+          "shape": 7,
+          "type": "AUDIO",
+          "link": null
         },
         {
-          "name": "images",
-          "type": "IMAGE",
-          "link": 47
-        },
-        {
-          "name": "sampled_latent",
-          "type": "LATENT",
-          "link": 48
-        },
-        {
-          "name": "segment",
-          "type": "H3_CHAIN_SEGMENT",
-          "link": 79
+          "name": "external_context",
+          "shape": 7,
+          "type": "H3_CHAIN_EXTERNAL_CONTEXT",
+          "link": null
         }
       ],
       "outputs": [
         {
-          "name": "manifest",
-          "type": "H3_CHAIN_MANIFEST",
+          "name": "flow",
+          "type": "H3_CHAIN_FLOW",
           "links": [
-            50
+            45
           ]
         },
         {
-          "name": "manifest_json",
+          "name": "state",
+          "type": "H3_CHAIN_STATE",
+          "links": [
+            15
+          ]
+        },
+        {
+          "name": "status",
           "type": "STRING",
-          "links": null
-        },
-        {
-          "name": "last_context_frames",
-          "type": "IMAGE",
-          "links": null
-        },
-        {
-          "name": "last_context_latent",
-          "type": "LATENT",
           "links": null
         }
       ],
-      "title": "MiniMax H3 Contex Loop End — LOOP END — ADVANCE T2V SCENE",
+      "title": "MiniMax H3 Contex Loop Start — LOOP START / RESUME",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
-        "Node name for S&R": "MiniMaxH3ChainLoopEnd",
+        "Node name for S&R": "MiniMaxH3ChainLoopStart",
         "aux_id": "ethanfel/ComfyUI-MiniMaxH3-Contex-Loop"
       },
-      "widgets_values": [],
+      "widgets_values": [
+        1,
+        ""
+      ],
       "color": "#1f1f48",
       "bgcolor": "rgba(24,24,27,.9)"
     },
     {
-      "id": 1931,
+      "id": 1948,
+      "type": "MiniMaxH3ChainFrameIndexSwitch",
+      "pos": [
+        -576,
+        32
+      ],
+      "size": [
+        384,
+        224
+      ],
+      "flags": {},
+      "order": 26,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "frame_1",
+          "type": "IMAGE",
+          "link": 90
+        },
+        {
+          "name": "frame_2",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": 91
+        },
+        {
+          "name": "frame_3",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "frame_4",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "frame_5",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "frame_6",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "frame_7",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "frame_8",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "clip_index",
+          "type": "INT",
+          "widget": {
+            "name": "clip_index"
+          },
+          "link": 89
+        }
+      ],
+      "outputs": [
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "links": [
+            92
+          ]
+        },
+        {
+          "name": "selected_index",
+          "type": "INT",
+          "links": null
+        },
+        {
+          "name": "status",
+          "type": "STRING",
+          "links": null
+        }
+      ],
+      "title": "MiniMax H3 Frame Index Switch — LAST-FRAME INDEX — SCENE 1→B / SCENE 2→A",
+      "properties": {
+        "cnr_id": "comfyui-minimaxh3-contex-loop",
+        "ver": "0.4.0",
+        "Node name for S&R": "MiniMaxH3ChainFrameIndexSwitch",
+        "aux_id": "ethanfel/ComfyUI-MiniMaxH3-Contex-Loop"
+      },
+      "widgets_values": [
+        1
+      ]
+    },
+    {
+      "id": 1946,
+      "type": "MiniMaxH3ChainFirstSceneImage",
+      "pos": [
+        608,
+        224
+      ],
+      "size": [
+        480,
+        192
+      ],
+      "flags": {},
+      "order": 29,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "state",
+          "type": "H3_CHAIN_STATE",
+          "link": 86
+        },
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "link": 87
+        },
+        {
+          "name": "last_frame",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": 92
+        }
+      ],
+      "outputs": [
+        {
+          "name": "first_frame",
+          "type": "IMAGE",
+          "links": [
+            88
+          ]
+        },
+        {
+          "name": "is_first_scene",
+          "type": "BOOLEAN",
+          "links": null
+        },
+        {
+          "name": "status",
+          "type": "STRING",
+          "links": null
+        },
+        {
+          "name": "last_frame",
+          "type": "IMAGE",
+          "links": [
+            93
+          ]
+        }
+      ],
+      "title": "MiniMax H3 Frame Gate — FRAME GATE — FRAME A ONCE / SELECTED END TARGET",
+      "properties": {
+        "cnr_id": "comfyui-minimaxh3-contex-loop",
+        "ver": "0.3.12",
+        "Node name for S&R": "MiniMaxH3ChainFirstSceneImage",
+        "aux_id": "ethanfel/ComfyUI-MiniMaxH3-Contex-Loop"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 1944,
       "type": "MiniMaxH3ChainReview",
       "pos": [
         3744,
         -256
       ],
       "size": [
-        864,
-        1120
+        736,
+        1376
       ],
       "flags": {},
-      "order": 36,
+      "order": 39,
       "mode": 0,
       "inputs": [
         {
           "name": "state",
           "type": "H3_CHAIN_STATE",
-          "link": 77
+          "link": 82
         },
         {
           "name": "segment",
           "type": "H3_CHAIN_SEGMENT",
-          "link": 49
+          "link": 83
         },
         {
           "name": "audio",
           "shape": 7,
           "type": "AUDIO",
-          "link": 78
+          "link": 84
         },
         {
           "name": "source_audio",
@@ -1944,7 +2013,7 @@
           "name": "segment",
           "type": "H3_CHAIN_SEGMENT",
           "links": [
-            79
+            85
           ]
         },
         {
@@ -1956,11 +2025,11 @@
       "title": "MiniMax H3 Contex Loop Review Gate — REVIEW GATE — APPROVE / EDIT+RETRY / REROLL / STOP",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
-        "ver": "0.4.0",
+        "ver": "0.3.10",
         "Node name for S&R": "MiniMaxH3ChainReview",
         "aux_id": "ethanfel/ComfyUI-MiniMaxH3-Contex-Loop",
-        "h3_chain_review_prompt_height": 120,
-        "h3_chain_review_video_height": 420
+        "h3_chain_review_prompt_height": 442,
+        "h3_chain_review_video_height": 373
       },
       "widgets_values": [
         true,
@@ -1974,481 +2043,206 @@
       "bgcolor": "rgba(24,24,27,.96)"
     },
     {
-      "id": 1932,
-      "type": "Note",
+      "id": 1945,
+      "type": "LoadImage",
       "pos": [
-        3136,
-        512
+        -1568,
+        -256
       ],
       "size": [
-        576,
-        1344
-      ],
-      "flags": {},
-      "order": 9,
-      "mode": 0,
-      "inputs": [],
-      "outputs": [],
-      "title": "Note — T2V STUDIO — HOW TO USE",
-      "properties": {
-        "Node name for S&R": "Note"
-      },
-      "widgets_values": [
-        "MASKED VIDEO INPAINT — CHAIN LOOP\n\nThis is a real Chain Loop workflow, including Current Shot, checkpoint/review, Loop End, resume, and disk assembly. Two 175-frame generations share a 39-frame protected overlap, delivering the largest valid span contained by the bundled 313-frame source: 311 frames. Scene 1 selects source frames 0..174; scene 2 selects 136..310 and retains the preceding edited result in its protected prefix.\n\nThe pack-native Loop Source AV Target selects the current source interval from Chain state, then fits picture and sound to the exact stock H3 joint target. It does not use LTXVConcatAVLatent or LTXVSeparateAVLatent. The source picture and audio therefore share the same frame-derived 24-fps start and duration. Apply Target Mask preserves source audio and every black video cell; only white cells are regenerated. Loop Mask Slice broadcasts the bundled one-frame mask explicitly. Replace its mask input with a tracked MASK batch covering the complete source timeline to follow a moving object; scene 2 automatically receives mask frames 136..310, including the same 39-frame overlap as source AV."
-      ],
-      "color": "#432f66",
-      "bgcolor": "rgba(24,24,27,.9)"
-    },
-    {
-      "id": 1950,
-      "type": "VHS_LoadVideo",
-      "pos": [
-        -3008,
-        -416
-      ],
-      "size": [
-        416,
+        384,
         448
       ],
       "flags": {},
-      "order": 8,
+      "order": 10,
       "mode": 0,
-      "inputs": [
-        {
-          "name": "meta_batch",
-          "shape": 7,
-          "type": "VHS_BatchManager",
-          "link": null
-        },
-        {
-          "name": "vae",
-          "shape": 7,
-          "type": "VAE",
-          "link": null
-        }
-      ],
+      "inputs": [],
       "outputs": [
         {
           "name": "IMAGE",
           "type": "IMAGE",
           "links": [
-            92
+            87,
+            91
           ]
         },
         {
-          "name": "frame_count",
-          "type": "INT",
-          "links": null
-        },
-        {
-          "name": "audio",
-          "type": "AUDIO",
-          "links": [
-            93
-          ]
-        },
-        {
-          "name": "video_info",
-          "type": "VHS_VIDEOINFO",
+          "name": "MASK",
+          "type": "MASK",
           "links": null
         }
       ],
-      "title": "Load Video (Upload) 🎥🅥🅗🅢 — CC0 2015 SOLDIER CRABS — SOURCE AV",
+      "title": "Load Image — FRAME A — LOOP OPENING / SCENE 2 TARGET",
       "properties": {
-        "cnr_id": "comfyui-videohelpersuite",
-        "Node name for S&R": "VHS_LoadVideo",
-        "h3_asset_binding_ids": {
-          "0": "crab-source-video-cc0-v1"
-        }
-      },
-      "widgets_values": {
-        "video": "soldier_crabs_bribie_island_cc0.webm",
-        "force_rate": 24,
-        "custom_width": 960,
-        "custom_height": 544,
-        "frame_load_cap": 0,
-        "skip_first_frames": 0,
-        "select_every_nth": 1,
-        "format": "AnimateDiff",
-        "videopreview": {
-          "hidden": false,
-          "paused": false,
-          "params": {
-            "force_rate": 24,
-            "frame_load_cap": 0,
-            "skip_first_frames": 0,
-            "select_every_nth": 1,
-            "filename": "soldier_crabs_bribie_island_cc0.webm",
-            "type": "input",
-            "format": "video/webm"
-          },
-          "muted": false
-        }
-      },
-      "color": "#345a73",
-      "bgcolor": "rgba(24,24,27,.9)"
-    },
-    {
-      "id": 1951,
-      "type": "MiniMaxH3ContexLoopSourceAVTarget",
-      "pos": [
-        1568,
-        96
-      ],
-      "size": [
-        480,
-        430
-      ],
-      "flags": {},
-      "order": 31,
-      "mode": 0,
-      "inputs": [
-        {
-          "name": "state",
-          "type": "H3_CHAIN_STATE",
-          "link": 88
-        },
-        {
-          "name": "latent",
-          "type": "LATENT",
-          "link": 89
-        },
-        {
-          "name": "vae",
-          "type": "VAE",
-          "link": 90
-        },
-        {
-          "name": "audio_vae",
-          "type": "VAE",
-          "link": 91
-        },
-        {
-          "name": "source_frames",
-          "type": "IMAGE",
-          "link": 92
-        },
-        {
-          "name": "source_audio",
-          "type": "AUDIO",
-          "link": 93
-        }
-      ],
-      "outputs": [
-        {
-          "name": "source_target",
-          "type": "LATENT",
-          "links": [
-            94
-          ]
-        },
-        {
-          "name": "scene_frames",
-          "type": "IMAGE",
-          "links": [
-            99
-          ]
-        },
-        {
-          "name": "scene_audio",
-          "type": "AUDIO",
-          "links": null
-        },
-        {
-          "name": "status",
-          "type": "STRING",
-          "links": [
-            103
-          ]
-        }
-      ],
-      "title": "MiniMax H3 Masking · Loop Source AV Target — FRAME-LOCK CURRENT LOOP SCENE TO SOURCE AV",
-      "properties": {
-        "cnr_id": "comfyui-minimaxh3-contex-loop",
-        "Node name for S&R": "MiniMaxH3ContexLoopSourceAVTarget",
-        "aux_id": "ethanfel/ComfyUI-MiniMaxH3-Contex-Loop"
+        "cnr_id": "comfy-core",
+        "ver": "0.31.0",
+        "Node name for S&R": "LoadImage"
       },
       "widgets_values": [
-        24,
-        "center"
+        "jigen_market_garden_doom_opening.png",
+        "image",
+        null,
+        null,
+        null
+      ]
+    },
+    {
+      "id": 1902,
+      "type": "Note",
+      "pos": [
+        -2112,
+        -1472
       ],
-      "color": "#1f1f48",
+      "size": [
+        1248,
+        416
+      ],
+      "flags": {},
+      "order": 11,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "title": "Note — PROMPT + IMAGE SOURCE / ATTRIBUTION",
+      "properties": {
+        "Node name for S&R": "Note"
+      },
+      "widgets_values": [
+        "PROMPT + IMAGE SOURCE / ATTRIBUTION\n\nFrame A and the original I2VA concept were shared by ᴊɪɢᴇɴ in Banodoco's #minimax_h3_gens on August 12, 2026:\nhttps://discord.com/channels/1076117621407223829/1533677158067736777/1537180042210054226\n\nThe credited generated result is here:\nhttps://discord.com/channels/1076117621407223829/1533677158067736777/1537178443358142555\n\nFrame B is the final video frame extracted from that credited result. The two FL2VA/L2VA prompts and A→B→A loop design are repository-authored adaptations.\n\nBundled assets:\nexample_workflows/assets/jigen_market_garden_doom_opening.png\nexample_workflows/assets/jigen_market_garden_doom_last.png\n\nCopy both files into ComfyUI/input, or select them manually in the two Load Image nodes."
+      ],
+      "color": "#432f66",
       "bgcolor": "rgba(24,24,27,.9)"
     },
     {
-      "id": 1952,
-      "type": "MiniMaxH3ContexMaskedTarget",
+      "id": 1930,
+      "type": "MiniMaxH3ChainScenePromptEditor",
       "pos": [
-        2112,
-        96
+        416,
+        544
       ],
       "size": [
-        400,
-        280
+        1120,
+        1056
       ],
       "flags": {},
       "order": 15,
       "mode": 0,
       "inputs": [
         {
-          "name": "target_latent",
-          "type": "LATENT",
-          "link": 95
-        },
-        {
-          "name": "mask",
-          "type": "MASK",
-          "link": 100
+          "name": "plan",
+          "type": "H3_CHAIN_PLAN",
+          "link": 74
         }
       ],
       "outputs": [
         {
-          "name": "masked_target",
-          "type": "LATENT",
+          "name": "plan",
+          "type": "H3_CHAIN_PLAN",
           "links": [
-            101
-          ]
-        },
-        {
-          "name": "mask_info",
-          "type": "STRING",
-          "links": null
-        }
-      ],
-      "properties": {
-        "Node name for S&R": "MiniMaxH3ContexMaskedTarget"
-      },
-      "widgets_values": [
-        "white = generate",
-        "preserve source audio",
-        "H3 exact (causal/token max)"
-      ],
-      "title": "MiniMax H3 Masking · Apply Target Mask — APPLY SPATIAL MASK — SOURCE AUDIO PRESERVED"
-    },
-    {
-      "id": 1953,
-      "type": "LoadImageMask",
-      "pos": [
-        -3008,
-        128
-      ],
-      "size": [
-        310,
-        310
-      ],
-      "flags": {},
-      "order": 2,
-      "mode": 0,
-      "inputs": [],
-      "outputs": [
-        {
-          "name": "MASK",
-          "type": "MASK",
-          "links": [
-            97
+            75,
+            76
           ]
         }
       ],
+      "title": "MiniMax H3 Scene Prompt Editor — SCENE PROMPT EDITOR — STANDARD AUTHORING",
       "properties": {
-        "Node name for S&R": "LoadImageMask",
-        "h3_asset_binding_ids": {
-          "0": "crab-inpaint-mask-v1"
-        }
-      },
-      "widgets_values": [
-        "soldier_crabs_inpaint_mask.png",
-        "red"
-      ],
-      "title": "Load Image (as Mask) — STATIC MASK — REPLACE WITH TRACKED MASK BATCH"
-    },
-    {
-      "id": 1954,
-      "type": "MiniMaxH3ContexMaskGridPreview",
-      "pos": [
-        1568,
-        576
-      ],
-      "size": [
-        370,
-        330
-      ],
-      "flags": {},
-      "order": 10,
-      "mode": 0,
-      "inputs": [
-        {
-          "name": "image",
-          "type": "IMAGE",
-          "link": 99
-        },
-        {
-          "name": "mask",
-          "type": "MASK",
-          "link": 98
-        }
-      ],
-      "outputs": [
-        {
-          "name": "snapped_mask",
-          "type": "MASK",
-          "links": [
-            100
-          ]
-        },
-        {
-          "name": "grid_preview",
-          "type": "IMAGE",
-          "links": [
-            102
-          ]
-        },
-        {
-          "name": "grid_info",
-          "type": "STRING",
-          "links": null
-        }
-      ],
-      "properties": {
-        "Node name for S&R": "MiniMaxH3ContexMaskGridPreview"
-      },
-      "widgets_values": [
-        "runtime exact (latent max)",
-        0,
-        0,
-        0.38,
-        true,
-        true,
-        "white = generate"
-      ],
-      "title": "MiniMax H3 Masking · Grid Preview — PREVIEW EXACT H3 32PX MASK CELLS"
-    },
-    {
-      "id": 1955,
-      "type": "PreviewImage",
-      "pos": [
-        2112,
-        576
-      ],
-      "size": [
-        380,
-        330
-      ],
-      "flags": {},
-      "order": 14,
-      "mode": 0,
-      "inputs": [
-        {
-          "name": "images",
-          "type": "IMAGE",
-          "link": 102
-        }
-      ],
-      "outputs": [
-        {
-          "name": "images",
-          "type": "IMAGE",
-          "links": null
-        }
-      ],
-      "properties": {
-        "Node name for S&R": "PreviewImage"
+        "cnr_id": "comfyui-minimaxh3-contex-loop",
+        "ver": "0.3.10",
+        "Node name for S&R": "MiniMaxH3ChainScenePromptEditor",
+        "aux_id": "ethanfel/ComfyUI-MiniMaxH3-Contex-Loop",
+        "h3_scene_prompt_editor_active_scene": 0,
+        "h3_scene_prompt_editor_font_size": 18,
+        "h3_scene_prompt_editor_rich_text": true
       },
       "widgets_values": [],
-      "title": "Preview Image — Verify generated 32×32 cells"
+      "color": "#1f1f48",
+      "bgcolor": "rgba(24,24,27,.9)"
     },
     {
-      "id": 1956,
-      "type": "PreviewAny",
+      "id": 1951,
+      "type": "MiniMaxH3ChainPreflight",
       "pos": [
-        2112,
-        816
+        -1024,
+        32
       ],
       "size": [
-        380,
-        90
+        384,
+        260
       ],
       "flags": {},
-      "order": 30,
+      "order": 44,
       "mode": 0,
       "inputs": [
         {
-          "name": "source",
-          "type": "*",
-          "link": 103
-        }
-      ],
-      "outputs": [
-        {
-          "name": "STRING",
-          "type": "STRING",
-          "links": null
-        }
-      ],
-      "properties": {
-        "Node name for S&R": "PreviewAny"
-      },
-      "widgets_values": [],
-      "title": "Preview as Text — SOURCE AV ALIGNMENT STATUS"
-    },
-    {
-      "id": 1957,
-      "type": "MiniMaxH3ContexLoopMaskSlice",
-      "pos": [
-        1056,
-        576
-      ],
-      "size": [
-        416,
-        250
-      ],
-      "flags": {},
-      "order": 32,
-      "mode": 0,
-      "inputs": [
-        {
-          "name": "state",
-          "type": "H3_CHAIN_STATE",
-          "link": 96
+          "name": "plan",
+          "type": "H3_CHAIN_PLAN",
+          "link": 75
         },
         {
-          "name": "mask",
-          "type": "MASK",
-          "link": 97
+          "name": "source_timeline",
+          "shape": 7,
+          "type": "H3_SOURCE_TIMELINE",
+          "link": null
+        },
+        {
+          "name": "source_audio",
+          "shape": 7,
+          "type": "AUDIO",
+          "link": null
+        },
+        {
+          "name": "tagged_references",
+          "shape": 7,
+          "type": "H3_TAGGED_REFERENCES",
+          "link": null
+        },
+        {
+          "name": "reference_schedule",
+          "shape": 7,
+          "type": "H3_REFERENCE_SCHEDULE",
+          "link": null
         }
       ],
       "outputs": [
         {
-          "name": "scene_mask",
-          "type": "MASK",
+          "name": "plan",
+          "type": "H3_CHAIN_PLAN",
           "links": [
-            98
+            96
           ]
         },
         {
-          "name": "scene_mask_frames",
-          "type": "INT",
+          "name": "preflight",
+          "type": "H3_PREFLIGHT",
+          "links": null
+        },
+        {
+          "name": "ready",
+          "type": "BOOLEAN",
           "links": null
         },
         {
           "name": "status",
           "type": "STRING",
           "links": null
+        },
+        {
+          "name": "report_json",
+          "type": "STRING",
+          "links": null
         }
       ],
-      "title": "MiniMax H3 Masking · Loop Mask Slice — SLICE TRACKED MASK TO CURRENT LOOP SCENE",
+      "title": "MiniMax H3 Chain Preflight — 0.5 PREFLIGHT — BLOCKS BEFORE MODELS",
       "properties": {
-        "cnr_id": "comfyui-minimaxh3-contex-loop",
-        "Node name for S&R": "MiniMaxH3ContexLoopMaskSlice",
-        "aux_id": "ethanfel/ComfyUI-MiniMaxH3-Contex-Loop"
+        "Node name for S&R": "MiniMaxH3ChainPreflight"
       },
       "widgets_values": [
-        24
-      ],
-      "color": "#1f1f48",
-      "bgcolor": "rgba(24,24,27,.9)"
+        1,
+        "",
+        true
+      ]
     },
     {
-      "id": 1960,
+      "id": 1952,
       "type": "MiniMaxH3ChainPolicy",
       "pos": [
         -1092,
@@ -2459,7 +2253,7 @@
         190
       ],
       "flags": {},
-      "order": 41,
+      "order": 45,
       "mode": 0,
       "inputs": [],
       "outputs": [
@@ -2467,7 +2261,7 @@
           "name": "chain_policy",
           "type": "H3_CHAIN_POLICY",
           "links": [
-            107
+            98
           ]
         },
         {
@@ -2481,7 +2275,7 @@
         "Node name for S&R": "MiniMaxH3ChainPolicy"
       },
       "widgets_values": [
-        "hard_av",
+        "guide",
         "generated",
         "off",
         "on"
@@ -2498,16 +2292,8 @@
       "MODEL"
     ],
     [
-      4,
-      1941,
-      0,
-      1635,
-      0,
-      "MODEL"
-    ],
-    [
       5,
-      1635,
+      1941,
       0,
       5,
       0,
@@ -2594,6 +2380,14 @@
       "CONDITIONING"
     ],
     [
+      27,
+      110,
+      1,
+      1703,
+      3,
+      "LATENT"
+    ],
+    [
       28,
       1703,
       0,
@@ -2632,6 +2426,14 @@
       124,
       3,
       "SIGMAS"
+    ],
+    [
+      33,
+      1703,
+      3,
+      124,
+      4,
+      "LATENT"
     ],
     [
       34,
@@ -2736,14 +2538,6 @@
       1705,
       3,
       "LATENT"
-    ],
-    [
-      49,
-      1704,
-      0,
-      1931,
-      1,
-      "H3_CHAIN_SEGMENT"
     ],
     [
       50,
@@ -2877,7 +2671,7 @@
       75,
       1930,
       0,
-      1701,
+      1951,
       0,
       "H3_CHAIN_PLAN"
     ],
@@ -2890,30 +2684,6 @@
       "H3_CHAIN_PLAN"
     ],
     [
-      77,
-      1702,
-      0,
-      1931,
-      0,
-      "H3_CHAIN_STATE"
-    ],
-    [
-      78,
-      132,
-      1,
-      1931,
-      2,
-      "AUDIO"
-    ],
-    [
-      79,
-      1931,
-      0,
-      1705,
-      4,
-      "H3_CHAIN_SEGMENT"
-    ],
-    [
       81,
       132,
       2,
@@ -2923,150 +2693,110 @@
     ],
     [
       82,
-      1930,
-      0,
-      1942,
-      0,
-      "H3_CHAIN_PLAN"
-    ],
-    [
-      87,
-      4,
-      0,
-      1703,
-      4,
-      "VAE"
-    ],
-    [
-      88,
       1702,
       0,
-      1951,
+      1944,
       0,
       "H3_CHAIN_STATE"
     ],
     [
-      89,
+      83,
+      1704,
+      0,
+      1944,
+      1,
+      "H3_CHAIN_SEGMENT"
+    ],
+    [
+      84,
+      132,
+      1,
+      1944,
+      2,
+      "AUDIO"
+    ],
+    [
+      85,
+      1944,
+      0,
+      1705,
+      4,
+      "H3_CHAIN_SEGMENT"
+    ],
+    [
+      86,
+      1702,
+      0,
+      1946,
+      0,
+      "H3_CHAIN_STATE"
+    ],
+    [
+      87,
+      1945,
+      0,
+      1946,
+      1,
+      "IMAGE"
+    ],
+    [
+      88,
+      1946,
+      0,
       110,
+      2,
+      "IMAGE"
+    ],
+    [
+      89,
+      1702,
       1,
-      1951,
-      1,
-      "LATENT"
+      1948,
+      8,
+      "INT"
     ],
     [
       90,
-      1916,
+      1947,
       0,
-      1951,
-      2,
-      "VAE"
+      1948,
+      0,
+      "IMAGE"
     ],
     [
       91,
-      1918,
+      1945,
       0,
-      1951,
-      3,
-      "VAE"
+      1948,
+      1,
+      "IMAGE"
     ],
     [
       92,
-      1950,
+      1948,
       0,
-      1951,
-      4,
+      1946,
+      2,
       "IMAGE"
     ],
     [
       93,
-      1950,
-      2,
-      1951,
-      5,
-      "AUDIO"
-    ],
-    [
-      94,
-      1951,
-      0,
-      1703,
+      1946,
       3,
-      "LATENT"
-    ],
-    [
-      95,
-      1703,
+      110,
       3,
-      1952,
-      0,
-      "LATENT"
+      "IMAGE"
     ],
     [
       96,
-      1702,
+      1951,
       0,
-      1957,
+      1701,
       0,
-      "H3_CHAIN_STATE"
+      "H3_CHAIN_PLAN"
     ],
     [
       97,
-      1953,
-      0,
-      1957,
-      1,
-      "MASK"
-    ],
-    [
-      98,
-      1957,
-      0,
-      1954,
-      1,
-      "MASK"
-    ],
-    [
-      99,
-      1951,
-      1,
-      1954,
-      0,
-      "IMAGE"
-    ],
-    [
-      100,
-      1954,
-      0,
-      1952,
-      1,
-      "MASK"
-    ],
-    [
-      101,
-      1952,
-      0,
-      124,
-      4,
-      "LATENT"
-    ],
-    [
-      102,
-      1954,
-      1,
-      1955,
-      0,
-      "IMAGE"
-    ],
-    [
-      103,
-      1951,
-      3,
-      1956,
-      0,
-      "STRING"
-    ],
-    [
-      106,
       1702,
       0,
       132,
@@ -3074,11 +2804,11 @@
       "H3_CHAIN_STATE"
     ],
     [
-      107,
-      1960,
+      98,
+      1952,
       0,
       1700,
-      0,
+      1,
       "H3_CHAIN_POLICY"
     ]
   ],
@@ -3097,11 +2827,11 @@
     },
     {
       "id": 3,
-      "title": "CORE T2VA + CHECKPOINTED REVIEW",
+      "title": "CORE FL2VA + INDEXED LAST FRAMES + CHECKPOINTED REVIEW",
       "bounding": [
-        -704,
+        -1600,
         -352,
-        5792,
+        6624,
         800
       ],
       "color": "#744c8c",
@@ -3111,7 +2841,7 @@
       "id": 4,
       "title": "FINAL ASSEMBLY",
       "bounding": [
-        5120,
+        5056,
         -352,
         800,
         640
@@ -3123,22 +2853,22 @@
       "id": 5,
       "title": "DISABLED RECOVERY PATH",
       "bounding": [
-        5120,
+        5056,
         320,
         1056,
-        768
+        736
       ],
       "color": "#8a5a2b",
       "flags": {}
     },
     {
       "id": 6,
-      "title": "T2V — PLAN STUDIO AUTHORING",
+      "title": "FL2V — PLAN + STANDARD PROMPT EDITOR",
       "bounding": [
-        -672,
+        -704,
         480,
-        3764,
-        1392
+        3216,
+        1280
       ],
       "color": "#3f789e",
       "flags": {}
@@ -3147,10 +2877,10 @@
   "config": {},
   "extra": {
     "ds": {
-      "scale": 0.38554328942953164,
+      "scale": 0.5453779137339684,
       "offset": [
-        2034.6092391418879,
-        937.8713924487479
+        2844.696551101137,
+        857.4532977923288
       ]
     },
     "frontendVersion": "1.48.7",
@@ -3161,7 +2891,7 @@
     "ue_links": [],
     "links_added_by_ue": [],
     "comfyui_mcp": {
-      "workflow_uuid": "d1d2cbe2-8aa3-4dc2-b189-7c8e63b84e04"
+      "workflow_uuid": "d6b9c5ea-2637-4b55-aff8-fc1a61904891"
     }
   },
   "version": 0.4

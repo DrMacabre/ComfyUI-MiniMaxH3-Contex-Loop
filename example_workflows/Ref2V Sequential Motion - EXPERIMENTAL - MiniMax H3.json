@@ -106,7 +106,7 @@
         "Node name for S&R": "KSamplerSelect"
       },
       "widgets_values": [
-        "lcm"
+        "res_multistep"
       ]
     },
     {
@@ -1167,8 +1167,8 @@
         "Node name for S&R": "BasicScheduler"
       },
       "widgets_values": [
-        "beta",
-        8,
+        "simple",
+        20,
         1
       ]
     },
@@ -1563,7 +1563,7 @@
           "name": "MODEL",
           "type": "MODEL",
           "links": [
-            4
+            5
           ]
         }
       ],
@@ -1575,47 +1575,6 @@
       },
       "widgets_values": [
         "comfy kitchen attention"
-      ]
-    },
-    {
-      "id": 1635,
-      "type": "LoraLoaderModelOnly",
-      "pos": [
-        -1344,
-        -928
-      ],
-      "size": [
-        288,
-        96
-      ],
-      "flags": {},
-      "order": 14,
-      "mode": 0,
-      "inputs": [
-        {
-          "name": "model",
-          "type": "MODEL",
-          "link": 4
-        }
-      ],
-      "outputs": [
-        {
-          "name": "MODEL",
-          "type": "MODEL",
-          "links": [
-            5
-          ]
-        }
-      ],
-      "title": "Load LoRA — LIGHTX2V TURBO — 8 STEP V1.0",
-      "properties": {
-        "cnr_id": "comfy-core",
-        "ver": "0.30.0",
-        "Node name for S&R": "LoraLoaderModelOnly"
-      },
-      "widgets_values": [
-        "MiniMax H3/minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors",
-        1
       ]
     },
     {
@@ -1798,7 +1757,7 @@
         }
       },
       "widgets_values": [
-        "{\"defaults\":{\"duration_seconds\":10,\"steps\":8},\"shots\":[{\"id\":\"market_garden_descent\",\"prompt\":[\"subject_definitions:\\n@style_base is the primary visual reference for <Subject 1>, defining the exact Classic Doom 1993 first-person rendering language, the airborne Market Garden battlefield, the paratrooper viewpoint, muted olive-and-brown palette, chunky low-resolution geometry, pixel texture scale, and period military equipment.\\n@motion is the current sequential slice of one continuous user-supplied motion video. Use it only for first-person camera cadence, directional movement, turn timing, and action progression; do not copy its subject, setting, text, or edit structure.\\n@motion_audio is the synchronized audio slice paired with @motion. Use it only as weak timing and energy guidance; generated audio remains the final soundtrack.\\n<Subject 1> is the same playable first-person Allied paratrooper viewpoint and coherent 1993 DOS-era game world defined by @style_base. Keep the viewpoint, weapon scale, texture density, palette, and interface-free cinematic presentation consistent.\\n\\nsummary:\\n[reference generation + audio reference] A continuous first-person descent into a Market Garden village begins in the airborne exterior defined by @style_base and advances toward a damaged stone farmhouse.\\n\\nretention_analysis:\\n<Subject 1> (appears in [Shot 1]): fully_preserved - retain the first-person viewpoint, Classic Doom 1993 rendering language, WWII Market Garden identity, palette, texture scale, weapon-view proportions, and coherent level design defined by @style_base while allowing new camera travel and action.\\n@style_base: fully_preserved - use its airborne battlefield, paratrooper silhouettes, landscape layout, olive-and-brown colors, and retro pixel-art treatment as the scene's visual identity.\\n\\n@motion: weak_reference - retain only the current source slice's camera cadence, directional movement, turn timing, and action progression.\\n@motion_audio: weak_reference - retain only broad synchronized timing and energy; do not copy its signal or verbal content.\\n\\ndetailed_description:\\n[Shot 1] Begin @motion at source frame 0 and follow its opening movement phrase without copying its visible content. Begin in the same first-person paratrooper viewpoint and Classic Doom 1993 visual language as @style_base. The camera descends beneath a canvas parachute over a war-torn Dutch village at dawn. Other Allied parachutes drift at different depths, anti-aircraft bursts expand into coarse pixel smoke, and fields, canals, tiled roofs, and a church tower grow steadily larger below. Keep all movement physically continuous and preserve the reference's low-resolution texture rhythm rather than smoothing it into modern realism.\\n\\nThe viewpoint swings gently toward a damaged stone farmhouse. Boots strike the muddy ground, the parachute canopy collapses behind the camera, and the same first-person momentum becomes a short sprint between hedgerows. A period weapon rises naturally into the lower frame. The camera reaches a splintered doorway and pushes inside without a cut. End while exterior dawn light remains visible behind and a dark timber corridor is emerging ahead; preserve the forward motion through the boundary.\\n\\noverall_soundscape:\\nWind rush and canvas flutter during descent give way to a heavy landing, muddy footfalls, distant artillery, scattered rifle fire, wood creaks, and a close doorframe scrape. Keep the sound spatial and game-world diegetic.\\n\\nnon_diegetic_music:\\n@motion_audio supplies only weak rhythmic timing for the newly generated score; do not directly reuse its waveform. Low martial drums and a restrained ominous brass pulse build gradually beneath the descent, remaining secondary to the battlefield ambience.\"],\"length\":243,\"seed\":\"4201\"},{\"id\":\"farmhouse_interior\",\"prompt\":[\"subject_definitions:\\n@style_base is the continuity reference for <Subject 1>, preserving the Classic Doom 1993 first-person rendering language, WWII Market Garden palette, pixel texture scale, and Allied paratrooper world established before entry.\\n@interior is the primary environment reference for <Subject 1> in this scene, defining the dark timber-and-stone architecture, corridor proportions, weapon-view scale, hard-edged lighting, and readable retro silhouettes.\\n@motion is the current sequential slice of one continuous user-supplied motion video. Use it only for first-person camera cadence, directional movement, turn timing, and action progression; do not copy its subject, setting, text, or edit structure.\\n@motion_audio is the synchronized audio slice paired with @motion. Use it only as weak timing and energy guidance; generated audio remains the final soundtrack.\\n<Subject 1> is the same playable first-person Allied paratrooper viewpoint and uninterrupted 1993 DOS-era game world defined jointly by @style_base, @interior, and the incoming H3 Motion Context.\\n\\nsummary:\\n[reference generation + audio reference] The uninterrupted first-person movement continues from the farmhouse threshold into a fortified interior, using @interior for the room language while @style_base preserves the same game world.\\n\\nretention_analysis:\\n<Subject 1> (appears in [Shot 1]): fully_preserved - preserve the exact first-person viewpoint, weapon scale, retro rendering language, WWII identity, palette, texture density, and forward screen geography inherited from the incoming context and both active references.\\n@style_base: reference - retain its dawn exterior colors, pixel-art treatment, and battlefield identity wherever the outside remains visible.\\n@interior: fully_preserved - retain its timber beams, stone walls, deep shadows, corridor scale, weapon-view proportions, and Classic Doom 1993 gameplay readability throughout the interior.\\n\\n@motion: weak_reference - retain only the current source slice's camera cadence, directional movement, turn timing, and action progression.\\n@motion_audio: weak_reference - retain only broad synchronized timing and energy; do not copy its signal or verbal content.\\n\\ndetailed_description:\\n[Shot 1] The @motion slice begins at source frame 221, repeating the same 22-frame interval already carried by H3 Motion Context, then advances into new movement instead of replaying source frame 0. Continue directly from the incoming H3 Motion Context with the camera already crossing the splintered doorway. Do not reset the stride, weapon, lighting direction, or room geometry. Exterior dawn light associated with @style_base remains briefly visible behind while the interior resolves into the timber beams, grey stone, hard shadows, and first-person weapon scale defined by @interior.\\n\\nThe player advances through a narrow corridor as dust shakes from overhead beams. A side door opens, revealing an enemy silhouette; the viewpoint pivots, fires one short burst, and continues forward without a cut. Muzzle light briefly illuminates coarse stone textures and smoke blocks the far end of the hall before clearing. The route bends down a short stair into a wider command room with a field radio, paper maps without readable text, and a bright exit slit beyond sandbags. Keep the forward motion continuous. End as the camera turns toward that exit and the exterior daylight widens, setting up the next movement without freezing.\\n\\noverall_soundscape:\\nContinue the prior battlefield bed through the doorway, adding enclosed boot echoes, timber strain, gear movement, one short weapon burst, stone debris, a field-radio hiss, and muffled artillery transmitted through the walls.\\n\\nnon_diegetic_music:\\n@motion_audio supplies only weak rhythmic timing for the newly generated score; do not directly reuse its waveform. Continue the restrained martial pulse, adding a low sustained string tone inside the farmhouse and withholding any triumphant resolution.\"],\"length\":243,\"seed\":\"4202\"}]}",
+        "{\"defaults\":{\"duration_seconds\":10,\"steps\":20},\"shots\":[{\"id\":\"market_garden_descent\",\"prompt\":[\"subject_definitions:\\n@style_base is the primary visual reference for <Subject 1>, defining the exact Classic Doom 1993 first-person rendering language, the airborne Market Garden battlefield, the paratrooper viewpoint, muted olive-and-brown palette, chunky low-resolution geometry, pixel texture scale, and period military equipment.\\n@motion is the current sequential slice of one continuous user-supplied motion video. Use it only for first-person camera cadence, directional movement, turn timing, and action progression; do not copy its subject, setting, text, or edit structure.\\n@motion_audio is the synchronized audio slice paired with @motion. Use it only as weak timing and energy guidance; generated audio remains the final soundtrack.\\n<Subject 1> is the same playable first-person Allied paratrooper viewpoint and coherent 1993 DOS-era game world defined by @style_base. Keep the viewpoint, weapon scale, texture density, palette, and interface-free cinematic presentation consistent.\\n\\nsummary:\\n[reference generation + audio reference] A continuous first-person descent into a Market Garden village begins in the airborne exterior defined by @style_base and advances toward a damaged stone farmhouse.\\n\\nretention_analysis:\\n<Subject 1> (appears in [Shot 1]): fully_preserved - retain the first-person viewpoint, Classic Doom 1993 rendering language, WWII Market Garden identity, palette, texture scale, weapon-view proportions, and coherent level design defined by @style_base while allowing new camera travel and action.\\n@style_base: fully_preserved - use its airborne battlefield, paratrooper silhouettes, landscape layout, olive-and-brown colors, and retro pixel-art treatment as the scene's visual identity.\\n\\n@motion: weak_reference - retain only the current source slice's camera cadence, directional movement, turn timing, and action progression.\\n@motion_audio: weak_reference - retain only broad synchronized timing and energy; do not copy its signal or verbal content.\\n\\ndetailed_description:\\n[Shot 1] Begin @motion at source frame 0 and follow its opening movement phrase without copying its visible content. Begin in the same first-person paratrooper viewpoint and Classic Doom 1993 visual language as @style_base. The camera descends beneath a canvas parachute over a war-torn Dutch village at dawn. Other Allied parachutes drift at different depths, anti-aircraft bursts expand into coarse pixel smoke, and fields, canals, tiled roofs, and a church tower grow steadily larger below. Keep all movement physically continuous and preserve the reference's low-resolution texture rhythm rather than smoothing it into modern realism.\\n\\nThe viewpoint swings gently toward a damaged stone farmhouse. Boots strike the muddy ground, the parachute canopy collapses behind the camera, and the same first-person momentum becomes a short sprint between hedgerows. A period weapon rises naturally into the lower frame. The camera reaches a splintered doorway and pushes inside without a cut. End while exterior dawn light remains visible behind and a dark timber corridor is emerging ahead; preserve the forward motion through the boundary.\\n\\noverall_soundscape:\\nWind rush and canvas flutter during descent give way to a heavy landing, muddy footfalls, distant artillery, scattered rifle fire, wood creaks, and a close doorframe scrape. Keep the sound spatial and game-world diegetic.\\n\\nnon_diegetic_music:\\n@motion_audio supplies only weak rhythmic timing for the newly generated score; do not directly reuse its waveform. Low martial drums and a restrained ominous brass pulse build gradually beneath the descent, remaining secondary to the battlefield ambience.\"],\"length\":243,\"seed\":\"4201\"},{\"id\":\"farmhouse_interior\",\"prompt\":[\"subject_definitions:\\n@style_base is the continuity reference for <Subject 1>, preserving the Classic Doom 1993 first-person rendering language, WWII Market Garden palette, pixel texture scale, and Allied paratrooper world established before entry.\\n@interior is the primary environment reference for <Subject 1> in this scene, defining the dark timber-and-stone architecture, corridor proportions, weapon-view scale, hard-edged lighting, and readable retro silhouettes.\\n@motion is the current sequential slice of one continuous user-supplied motion video. Use it only for first-person camera cadence, directional movement, turn timing, and action progression; do not copy its subject, setting, text, or edit structure.\\n@motion_audio is the synchronized audio slice paired with @motion. Use it only as weak timing and energy guidance; generated audio remains the final soundtrack.\\n<Subject 1> is the same playable first-person Allied paratrooper viewpoint and uninterrupted 1993 DOS-era game world defined jointly by @style_base, @interior, and the incoming H3 Motion Context.\\n\\nsummary:\\n[reference generation + audio reference] The uninterrupted first-person movement continues from the farmhouse threshold into a fortified interior, using @interior for the room language while @style_base preserves the same game world.\\n\\nretention_analysis:\\n<Subject 1> (appears in [Shot 1]): fully_preserved - preserve the exact first-person viewpoint, weapon scale, retro rendering language, WWII identity, palette, texture density, and forward screen geography inherited from the incoming context and both active references.\\n@style_base: reference - retain its dawn exterior colors, pixel-art treatment, and battlefield identity wherever the outside remains visible.\\n@interior: fully_preserved - retain its timber beams, stone walls, deep shadows, corridor scale, weapon-view proportions, and Classic Doom 1993 gameplay readability throughout the interior.\\n\\n@motion: weak_reference - retain only the current source slice's camera cadence, directional movement, turn timing, and action progression.\\n@motion_audio: weak_reference - retain only broad synchronized timing and energy; do not copy its signal or verbal content.\\n\\ndetailed_description:\\n[Shot 1] The @motion slice begins at source frame 221, repeating the same 22-frame interval already carried by H3 Motion Context, then advances into new movement instead of replaying source frame 0. Continue directly from the incoming H3 Motion Context with the camera already crossing the splintered doorway. Do not reset the stride, weapon, lighting direction, or room geometry. Exterior dawn light associated with @style_base remains briefly visible behind while the interior resolves into the timber beams, grey stone, hard shadows, and first-person weapon scale defined by @interior.\\n\\nThe player advances through a narrow corridor as dust shakes from overhead beams. A side door opens, revealing an enemy silhouette; the viewpoint pivots, fires one short burst, and continues forward without a cut. Muzzle light briefly illuminates coarse stone textures and smoke blocks the far end of the hall before clearing. The route bends down a short stair into a wider command room with a field radio, paper maps without readable text, and a bright exit slit beyond sandbags. Keep the forward motion continuous. End as the camera turns toward that exit and the exterior daylight widens, setting up the next movement without freezing.\\n\\noverall_soundscape:\\nContinue the prior battlefield bed through the doorway, adding enclosed boot echoes, timber strain, gear movement, one short weapon burst, stone debris, a field-radio hiss, and muffled artillery transmitted through the walls.\\n\\nnon_diegetic_music:\\n@motion_audio supplies only weak rhythmic timing for the newly generated score; do not directly reuse its waveform. Continue the restrained martial pulse, adding a low sustained string tone inside the farmhouse and withholding any triumphant resolution.\"],\"length\":243,\"seed\":\"4202\"}]}",
         "experimental_sequential_motion_demo",
         "",
         896,
@@ -1810,7 +1769,7 @@
         "generated_audio",
         22,
         10,
-        8,
+        20,
         0,
         20,
         0
@@ -2538,16 +2497,8 @@
       "MODEL"
     ],
     [
-      4,
-      1941,
-      0,
-      1635,
-      0,
-      "MODEL"
-    ],
-    [
       5,
-      1635,
+      1941,
       0,
       5,
       0,

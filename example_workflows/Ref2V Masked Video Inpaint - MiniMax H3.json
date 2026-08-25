@@ -1,8 +1,8 @@
 {
-  "id": "c0b8422a-84d4-44f8-91ce-31c68a9a119e",
+  "id": "9af339d6-8d1e-487b-9c12-9779b34e8ff2",
   "revision": 0,
-  "last_node_id": 1949,
-  "last_link_id": 93,
+  "last_node_id": 1961,
+  "last_link_id": 109,
   "nodes": [
     {
       "id": 1,
@@ -28,14 +28,14 @@
           ]
         }
       ],
-      "title": "H3 MODEL — REQUIRED",
+      "title": "Load Diffusion Model — H3 MODEL — REQUIRED",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
         "Node name for S&R": "UNETLoader"
       },
       "widgets_values": [
-        "MiniMax-H3/minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+        "MiniMax-H3/minimax_h3_ref2va_pruned_int8_convrot.safetensors",
         "default"
       ]
     },
@@ -63,7 +63,7 @@
           ]
         }
       ],
-      "title": "H3 TEXT ENCODER",
+      "title": "Load CLIP — H3 TEXT ENCODER",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -99,14 +99,14 @@
           ]
         }
       ],
-      "title": "Sampler algorithm",
+      "title": "KSamplerSelect — Sampler algorithm",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
         "Node name for S&R": "KSamplerSelect"
       },
       "widgets_values": [
-        "lcm"
+        "res_multistep"
       ]
     },
     {
@@ -133,7 +133,7 @@
           ]
         }
       ],
-      "title": "H3 Video VAE",
+      "title": "Load VAE — H3 Video VAE",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -164,11 +164,12 @@
           "type": "VAE",
           "links": [
             65,
-            83
+            87,
+            106
           ]
         }
       ],
-      "title": "H3 Audio VAE",
+      "title": "Load VAE — H3 Audio VAE",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -186,20 +187,20 @@
         -1344
       ],
       "size": [
-        1248,
-        320
+        800,
+        416
       ],
       "flags": {},
       "order": 5,
       "mode": 0,
       "inputs": [],
       "outputs": [],
-      "title": "REF2V PROMPT / IMAGE SOURCE",
+      "title": "Note — CC0 ASSETS + ABLEJONES V3.1 COMPATIBILITY",
       "properties": {
         "Node name for S&R": "Note"
       },
       "widgets_values": [
-        "PROMPT / IMAGE SOURCE — VISIBLE ATTRIBUTION\n\nThe Classic Doom 1993 Market Garden concept, opening prompt, and source image were shared by ᴊɪɢᴇɴ in Banodoco's #minimax_h3_gens on August 12, 2026:\nhttps://discord.com/channels/1076117621407223829/1533677158067736777/1537180042210054226\n\nThe second picture is the final frame extracted from the credited generated result:\nhttps://discord.com/channels/1076117621407223829/1533677158067736777/1537178443358142555\n\nThis repository adapts the concept into a new two-scene six-section Ref2VA demonstration. Copy both PNG files from example_workflows/assets/ into ComfyUI/input/ before loading."
+        "SOURCE ASSETS — CC0\n\nLight-blue soldier crabs on Bribie Island, filmed in 2015 by Watermark Resort Caloundra. Wikimedia Commons records the video as CC0 1.0.\n\nhttps://commons.wikimedia.org/wiki/File:Light-blue_soldier_crabs_on_Bribie_Island.webm\n\nCopy soldier_crabs_bribie_island_cc0.webm, soldier_crabs_inpaint_mask.png, and soldier_crabs_reference_cc0.png from example_workflows/assets/ to ComfyUI/input/.\n\nABLEJONES / DROZ V3.1 MAPPING\n\nApply Target Mask in H3 exact mode implements the same H3 auto + max / max causal-token mask contract as MVEx Mask To Latent Space. The pack-native Loop Source AV Target replaces separate VAEEncode, SetLatentNoiseMask, and LTXVConcatAVLatent wiring. Subject Crop / Uncrop remains an optional external efficiency and compositing stage, not a requirement for correct masked H3 sampling."
       ],
       "color": "#432f66",
       "bgcolor": "rgba(24,24,27,.9)"
@@ -212,18 +213,18 @@
         -1088
       ],
       "size": [
-        736,
-        1152
+        768,
+        400
       ],
       "flags": {},
       "order": 6,
       "mode": 0,
       "inputs": [],
       "outputs": [],
-      "title": "REF2VA SIX-SECTION PROMPT FORMAT",
+      "title": "Note — REF2VA MASKED-EDIT PROMPT FORMAT",
       "properties": {},
       "widgets_values": [
-        "REF2VA PROMPT FORMAT — SIX SECTIONS\n\n1. subject_definitions:\n2. summary:\n3. retention_analysis:\n4. detailed_description:\n5. overall_soundscape:\n6. non_diegetic_music:\n\nWrite stable @tags in the Plan. The scheduler resolves only active tags to native <Picture N> labels per scene; it does not insert definitions for you."
+        "REF2VA MASKED-EDIT PROMPT FORMAT\n\nUse these six fields in order: subject_definitions, summary, retention_analysis, detailed_description, overall_soundscape, and non_diegetic_music.\n\nPicture 1 defines only the replacement appearance. The movie remains the real masked target latent and is intentionally not connected a second time as a Ref2VA video. The source target supplies motion, camera, protected pixels, and synchronized audio; the picture supplies subject appearance."
       ],
       "color": "#432",
       "bgcolor": "#653"
@@ -317,7 +318,7 @@
         {
           "name": "plan",
           "type": "H3_CHAIN_PLAN",
-          "link": 91
+          "link": 75
         },
         {
           "name": "source_audio",
@@ -353,7 +354,7 @@
           "links": null
         }
       ],
-      "title": "LOOP START / RESUME",
+      "title": "MiniMax H3 Contex Loop Start — LOOP START — NO EXTERNAL CONTINUATION",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -394,7 +395,8 @@
           "type": "VAE",
           "links": [
             63,
-            64
+            64,
+            90
           ]
         }
       ],
@@ -429,7 +431,8 @@
           "name": "",
           "type": "VAE",
           "links": [
-            68
+            68,
+            91
           ]
         }
       ],
@@ -473,22 +476,21 @@
             24,
             41,
             46,
-            77
+            77,
+            88,
+            96,
+            108
           ]
         },
         {
           "name": "clip_index",
           "type": "INT",
-          "links": [
-            88
-          ]
+          "links": null
         },
         {
           "name": "clip_count",
           "type": "INT",
-          "links": [
-            89
-          ]
+          "links": null
         },
         {
           "name": "shot_id",
@@ -556,9 +558,14 @@
           "name": "status",
           "type": "STRING",
           "links": null
+        },
+        {
+          "name": "video_blend_frames",
+          "type": "INT",
+          "links": null
         }
       ],
-      "title": "CURRENT REF2V SCENE — PROMPT / SEED / TIMING",
+      "title": "MiniMax H3 Contex Loop Current Shot — CURRENT REF2V EDIT SCENE — PROMPT / SEED / TIMING",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -605,7 +612,7 @@
           "links": null
         }
       ],
-      "title": "RECOVERY: ASSEMBLE WITHOUT RENDERING",
+      "title": "MiniMax H3 Contex Loop Assemble — RECOVERY: ASSEMBLE WITHOUT RENDERING",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -614,7 +621,7 @@
       },
       "widgets_values": [
         "plan",
-        "t2v_studio_recovered_%date:yyyy-MM-dd%",
+        "cc0_soldier_crabs_ref2v_inpaint_recovered_%date:yyyy-MM-dd%",
         256
       ],
       "color": "#59451e",
@@ -688,7 +695,7 @@
           ]
         }
       ],
-      "title": "Per-shot noise seed",
+      "title": "RandomNoise — Per-shot noise seed",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -701,14 +708,14 @@
     },
     {
       "id": 110,
-      "type": "MiniMaxH3ScheduledReferenceToVideo",
+      "type": "MiniMaxH3ReferenceToVideo",
       "pos": [
         640,
         -256
       ],
       "size": [
-        640,
-        544
+        608,
+        448
       ],
       "flags": {},
       "order": 26,
@@ -727,28 +734,49 @@
         {
           "name": "audio_vae",
           "type": "VAE",
-          "link": 83
+          "link": 106
         },
         {
-          "name": "reference_schedule",
-          "type": "H3_REFERENCE_SCHEDULE",
-          "link": 87
+          "label": "ref_image_0",
+          "name": "ref_images.ref_image_0",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": 107
         },
         {
-          "name": "clip_index",
-          "type": "INT",
-          "widget": {
-            "name": "clip_index"
-          },
-          "link": 88
+          "label": "ref_image_1",
+          "name": "ref_images.ref_image_1",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
         },
         {
-          "name": "clip_count",
-          "type": "INT",
-          "widget": {
-            "name": "clip_count"
-          },
-          "link": 89
+          "label": "ref_image_2",
+          "name": "ref_images.ref_image_2",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "label": "ref_video_0",
+          "name": "ref_videos.ref_video_0",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "label": "ref_video_audio_0",
+          "name": "ref_video_audios.ref_video_audio_0",
+          "shape": 7,
+          "type": "AUDIO",
+          "link": null
+        },
+        {
+          "label": "ref_audio_0",
+          "name": "ref_audios.ref_audio_0",
+          "shape": 7,
+          "type": "AUDIO",
+          "link": null
         },
         {
           "name": "prompt",
@@ -792,87 +820,28 @@
           ]
         },
         {
-          "name": "latent",
+          "name": "LATENT",
           "type": "LATENT",
           "links": [
-            27,
-            33
+            89
           ]
-        },
-        {
-          "name": "compiled_prompt",
-          "type": "STRING",
-          "links": null
-        },
-        {
-          "name": "active_references",
-          "type": "STRING",
-          "links": null
-        },
-        {
-          "name": "schedule_fingerprint",
-          "type": "STRING",
-          "links": null
         }
       ],
-      "title": "SCHEDULED REF2VA — COMPILES @TAGS PER SCENE",
+      "title": "MiniMax H3 Reference to Video — CORE H3 REF2VA — PICTURE + MASKED SOURCE TARGET",
       "properties": {
-        "cnr_id": "comfyui-minimaxh3-contex-loop",
-        "ver": "0.4.0",
-        "Node name for S&R": "MiniMaxH3ScheduledReferenceToVideo",
-        "aux_id": "ethanfel/ComfyUI-MiniMaxH3-Contex-Loop"
+        "cnr_id": "comfy-core",
+        "ver": "0.31.0",
+        "Node name for S&R": "MiniMaxH3ReferenceToVideo"
       },
       "widgets_values": [
-        "subject_definitions:\n@style_base is the primary visual reference for <Subject 1>, defining the exact Classic Doom 1993 first-person rendering language, the airborne Market Garden battlefield, the paratrooper viewpoint, muted olive-and-brown palette, chunky low-resolution geometry, pixel texture scale, and period military equipment.\n<Subject 1> is the same playable first-person Allied paratrooper viewpoint and coherent 1993 DOS-era game world defined by @style_base. Keep the viewpoint, weapon scale, texture density, palette, and interface-free cinematic presentation consistent.\n\nsummary:\n[reference generation] A continuous first-person descent into a Market Garden village begins in the airborne exterior defined by @style_base and advances toward a damaged stone farmhouse.\n\nretention_analysis:\n<Subject 1> (appears in [Shot 1]): fully_preserved - retain the first-person viewpoint, Classic Doom 1993 rendering language, WWII Market Garden identity, palette, texture scale, weapon-view proportions, and coherent level design defined by @style_base while allowing new camera travel and action.\n@style_base: fully_preserved - use its airborne battlefield, paratrooper silhouettes, landscape layout, olive-and-brown colors, and retro pixel-art treatment as the scene's visual identity.\n\ndetailed_description:\n[Shot 1] Begin in the same first-person paratrooper viewpoint and Classic Doom 1993 visual language as @style_base. The camera descends beneath a canvas parachute over a war-torn Dutch village at dawn. Other Allied parachutes drift at different depths, anti-aircraft bursts expand into coarse pixel smoke, and fields, canals, tiled roofs, and a church tower grow steadily larger below. Keep all movement physically continuous and preserve the reference's low-resolution texture rhythm rather than smoothing it into modern realism.\n\nThe viewpoint swings gently toward a damaged stone farmhouse. Boots strike the muddy ground, the parachute canopy collapses behind the camera, and the same first-person momentum becomes a short sprint between hedgerows. A period weapon rises naturally into the lower frame. The camera reaches a splintered doorway and pushes inside without a cut. End while exterior dawn light remains visible behind and a dark timber corridor is emerging ahead; preserve the forward motion through the boundary.\n\noverall_soundscape:\nWind rush and canvas flutter during descent give way to a heavy landing, muddy footfalls, distant artillery, scattered rifle fire, wood creaks, and a close doorframe scrape. Keep the sound spatial and game-world diegetic.\n\nnon_diegetic_music:\nLow martial drums and a restrained ominous brass pulse build gradually beneath the descent, remaining secondary to the battlefield ambience.",
-        896,
-        672,
-        243,
-        "match",
-        "strict"
+        "subject_definitions:\n<Subject 1> is the adult light-blue soldier crab appearance defined by <Picture 1>: a glossy deep cobalt-blue oval carapace, pale sand-tan jointed legs, paired raised claws, small black eye stalks, realistic wet-shell highlights, and natural animal proportions.\n\nsummary:\n[reference generation + video editing + audio reuse] The target video is a spatially masked edit of the supplied source target. Only the crabs inside the editable lower-central beach region are rebuilt as clear, photorealistic instances of <Subject 1>; the protected source picture, performance, environment, and camera remain unchanged, and the synchronized source soundtrack is reused in full.\n\nretention_analysis:\n<Subject 1> (appears in [Shot 1]): fully_preserved - retain the referenced cobalt-blue carapace, sand-tan legs, raised claws, black eye stalks, wet-shell texture, realistic scale, and natural soldier-crab anatomy wherever the masked replacement is visible.\n\ndetailed_description:\nThe target remains live-action natural-history footage with the same cloudy coastal daylight, documentary optics, and realistic color response as the protected source.\n[Shot 1] Treat the supplied source target as the authoritative edit plate. Preserve its original camera trajectory, lens behavior, framing, cloudy lighting, sand, shallow water, distant shoreline, depth of field, source motion timing, and every protected pixel. Inside the editable lower-central beach region only, rebuild the visible moving crabs as coherent instances of <Subject 1> from <Picture 1>. The source frames supply each selected crab's position, grounded lateral movement, action phase, speed, perspective, scale, occlusion timing, and motion blur; <Picture 1> supplies the visible species anatomy, shell color, leg color, claw shape, eyes, and wet surface detail. Keep feet in contact with the sand and water, reproduce plausible contact shadows and tiny reflections, and maintain stable anatomy from frame to frame. Blend the generated animals cleanly into the protected plate without a halo, border flicker, duplicated limbs, or changes to nearby unmasked crabs. Do not introduce sculptures, stylization, text, a new camera move, a new background, or a cut.\n\noverall_soundscape:\nReuse the protected synchronized source soundtrack exactly as the complete final soundtrack. Generate no replacement sound.\n\nnon_diegetic_music:\nN/A",
+        960,
+        544,
+        175,
+        "match"
       ],
       "color": "#346434",
       "bgcolor": "rgba(24,24,27,.9)"
-    },
-    {
-      "id": 1635,
-      "type": "LoraLoaderModelOnly",
-      "pos": [
-        -1344,
-        -928
-      ],
-      "size": [
-        288,
-        96
-      ],
-      "flags": {},
-      "order": 14,
-      "mode": 0,
-      "inputs": [
-        {
-          "name": "model",
-          "type": "MODEL",
-          "link": 4
-        }
-      ],
-      "outputs": [
-        {
-          "name": "MODEL",
-          "type": "MODEL",
-          "links": [
-            5
-          ]
-        }
-      ],
-      "title": "LIGHTX2V TURBO — 8 STEP V1.0",
-      "properties": {
-        "cnr_id": "comfy-core",
-        "ver": "0.30.0",
-        "Node name for S&R": "LoraLoaderModelOnly"
-      },
-      "widgets_values": [
-        "MiniMax H3/minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors",
-        1
-      ]
     },
     {
       "id": 1703,
@@ -907,13 +876,13 @@
         {
           "name": "latent",
           "type": "LATENT",
-          "link": 27
+          "link": 94
         },
         {
           "name": "audio_vae",
           "shape": 7,
           "type": "VAE",
-          "link": null
+          "link": 87
         }
       ],
       "outputs": [
@@ -935,9 +904,16 @@
           "name": "is_continuation",
           "type": "BOOLEAN",
           "links": null
+        },
+        {
+          "name": "latent",
+          "type": "LATENT",
+          "links": [
+            95
+          ]
         }
       ],
-      "title": "AUTO CONTEXT — clip 1 bypass / continuation",
+      "title": "MiniMax H3 Contex Loop Context — AUTO CONTEXT — clip 1 bypass / continuation",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -1094,7 +1070,7 @@
           ]
         }
       ],
-      "title": "Loop guider",
+      "title": "Basic Guider — Loop guider",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -1140,15 +1116,15 @@
           ]
         }
       ],
-      "title": "Per-shot scheduler steps",
+      "title": "BasicScheduler — Per-shot scheduler steps",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
         "Node name for S&R": "BasicScheduler"
       },
       "widgets_values": [
-        "beta",
-        8,
+        "simple",
+        20,
         1
       ]
     },
@@ -1190,7 +1166,7 @@
         {
           "name": "latent_image",
           "type": "LATENT",
-          "link": 33
+          "link": 101
         }
       ],
       "outputs": [
@@ -1210,7 +1186,7 @@
           "links": null
         }
       ],
-      "title": "H3 sampler — SINGLE LOOP BODY",
+      "title": "SamplerCustomAdvanced — H3 sampler — SINGLE LOOP BODY",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -1253,7 +1229,7 @@
           ]
         }
       ],
-      "title": "Decode current clip frames",
+      "title": "VAE Decode — Decode current clip frames",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -1296,7 +1272,7 @@
           ]
         }
       ],
-      "title": "Decode current clip audio",
+      "title": "VAE Decode Audio — Decode current clip audio",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.30.0",
@@ -1345,7 +1321,13 @@
           "widget": {
             "name": "retain_overlap_frames"
           },
-          "link": 80
+          "link": null
+        },
+        {
+          "name": "state",
+          "type": "H3_CHAIN_STATE",
+          "link": 108,
+          "shape": 7
         }
       ],
       "outputs": [
@@ -1378,7 +1360,7 @@
           "links": null
         }
       ],
-      "title": "TRIM 22 CONTEXT FRAMES / RETAIN 5 FOR BLEND",
+      "title": "MiniMax H3 Contex Loop Trim — TRIM CONTEXT / AUTO-RESOLVE SCENE BLEND",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -1451,7 +1433,7 @@
           "links": null
         }
       ],
-      "title": "SAVE DELIVERED + BLEND-READY SEGMENTS",
+      "title": "MiniMax H3 Contex Loop Segment + Checkpoint — SAVE DELIVERED + BLEND-READY SEGMENTS",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -1496,7 +1478,7 @@
           "links": null
         }
       ],
-      "title": "FINAL ASSEMBLY — 5-FRAME VISUAL BLEND",
+      "title": "MiniMax H3 Contex Loop Assemble — FINAL ASSEMBLY — 5-FRAME VISUAL BLEND",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -1505,7 +1487,7 @@
       },
       "widgets_values": [
         "plan",
-        "t2v_studio_%date:yyyy-MM-dd%",
+        "cc0_soldier_crabs_ref2v_inpaint_%date:yyyy-MM-dd%",
         256
       ],
       "color": "#24533a",
@@ -1537,11 +1519,11 @@
           "name": "MODEL",
           "type": "MODEL",
           "links": [
-            4
+            5
           ]
         }
       ],
-      "title": "COMFY KITCHEN ATTENTION",
+      "title": "ModelAttentionBackend — COMFY KITCHEN ATTENTION",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.31.0",
@@ -1607,12 +1589,10 @@
       "mode": 0,
       "inputs": [
         {
-          "name": "generation_fingerprint",
-          "type": "STRING",
-          "widget": {
-            "name": "generation_fingerprint"
-          },
-          "link": 90
+          "name": "chain_policy",
+          "type": "H3_CHAIN_POLICY",
+          "link": 109,
+          "shape": 7
         }
       ],
       "outputs": [
@@ -1646,41 +1626,35 @@
         {
           "name": "video_blend_frames",
           "type": "INT",
-          "links": [
-            80
-          ]
+          "links": null
         }
       ],
-      "title": "REF2V STUDIO SCHEDULED PLAN — EDITED THROUGH STUDIO",
+      "title": "MiniMax H3 Contex Loop Plan — TWO-SCENE REF2V SOURCE-INPAINT LOOP — 311 DELIVERED FRAMES",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
         "Node name for S&R": "MiniMaxH3ChainPlan",
         "aux_id": "ethanfel/ComfyUI-MiniMaxH3-Contex-Loop",
-        "h3_chain_scene_colors": {},
-        "h3_chain_plan_layout": {
-          "promptHeights": {
-            "shared": 88
-          }
-        }
+        "h3_chain_scene_colors": {}
       },
       "widgets_values": [
-        "{\"defaults\":{\"duration_seconds\":10,\"steps\":8},\"shots\":[{\"id\":\"market_garden_descent\",\"prompt\":[\"subject_definitions:\\n@style_base is the primary visual reference for <Subject 1>, defining the exact Classic Doom 1993 first-person rendering language, the airborne Market Garden battlefield, the paratrooper viewpoint, muted olive-and-brown palette, chunky low-resolution geometry, pixel texture scale, and period military equipment.\\n<Subject 1> is the same playable first-person Allied paratrooper viewpoint and coherent 1993 DOS-era game world defined by @style_base. Keep the viewpoint, weapon scale, texture density, palette, and interface-free cinematic presentation consistent.\\n\\nsummary:\\n[reference generation] A continuous first-person descent into a Market Garden village begins in the airborne exterior defined by @style_base and advances toward a damaged stone farmhouse.\\n\\nretention_analysis:\\n<Subject 1> (appears in [Shot 1]): fully_preserved - retain the first-person viewpoint, Classic Doom 1993 rendering language, WWII Market Garden identity, palette, texture scale, weapon-view proportions, and coherent level design defined by @style_base while allowing new camera travel and action.\\n@style_base: fully_preserved - use its airborne battlefield, paratrooper silhouettes, landscape layout, olive-and-brown colors, and retro pixel-art treatment as the scene's visual identity.\\n\\ndetailed_description:\\n[Shot 1] Begin in the same first-person paratrooper viewpoint and Classic Doom 1993 visual language as @style_base. The camera descends beneath a canvas parachute over a war-torn Dutch village at dawn. Other Allied parachutes drift at different depths, anti-aircraft bursts expand into coarse pixel smoke, and fields, canals, tiled roofs, and a church tower grow steadily larger below. Keep all movement physically continuous and preserve the reference's low-resolution texture rhythm rather than smoothing it into modern realism.\\n\\nThe viewpoint swings gently toward a damaged stone farmhouse. Boots strike the muddy ground, the parachute canopy collapses behind the camera, and the same first-person momentum becomes a short sprint between hedgerows. A period weapon rises naturally into the lower frame. The camera reaches a splintered doorway and pushes inside without a cut. End while exterior dawn light remains visible behind and a dark timber corridor is emerging ahead; preserve the forward motion through the boundary.\\n\\noverall_soundscape:\\nWind rush and canvas flutter during descent give way to a heavy landing, muddy footfalls, distant artillery, scattered rifle fire, wood creaks, and a close doorframe scrape. Keep the sound spatial and game-world diegetic.\\n\\nnon_diegetic_music:\\nLow martial drums and a restrained ominous brass pulse build gradually beneath the descent, remaining secondary to the battlefield ambience.\"],\"length\":243,\"seed\":\"4201\"},{\"id\":\"farmhouse_interior\",\"prompt\":[\"subject_definitions:\\n@style_base is the continuity reference for <Subject 1>, preserving the Classic Doom 1993 first-person rendering language, WWII Market Garden palette, pixel texture scale, and Allied paratrooper world established before entry.\\n@interior is the primary environment reference for <Subject 1> in this scene, defining the dark timber-and-stone architecture, corridor proportions, weapon-view scale, hard-edged lighting, and readable retro silhouettes.\\n<Subject 1> is the same playable first-person Allied paratrooper viewpoint and uninterrupted 1993 DOS-era game world defined jointly by @style_base, @interior, and the incoming H3 Motion Context.\\n\\nsummary:\\n[reference generation] The uninterrupted first-person movement continues from the farmhouse threshold into a fortified interior, using @interior for the room language while @style_base preserves the same game world.\\n\\nretention_analysis:\\n<Subject 1> (appears in [Shot 1]): fully_preserved - preserve the exact first-person viewpoint, weapon scale, retro rendering language, WWII identity, palette, texture density, and forward screen geography inherited from the incoming context and both active references.\\n@style_base: reference - retain its dawn exterior colors, pixel-art treatment, and battlefield identity wherever the outside remains visible.\\n@interior: fully_preserved - retain its timber beams, stone walls, deep shadows, corridor scale, weapon-view proportions, and Classic Doom 1993 gameplay readability throughout the interior.\\n\\ndetailed_description:\\n[Shot 1] Continue directly from the incoming H3 Motion Context with the camera already crossing the splintered doorway. Do not reset the stride, weapon, lighting direction, or room geometry. Exterior dawn light associated with @style_base remains briefly visible behind while the interior resolves into the timber beams, grey stone, hard shadows, and first-person weapon scale defined by @interior.\\n\\nThe player advances through a narrow corridor as dust shakes from overhead beams. A side door opens, revealing an enemy silhouette; the viewpoint pivots, fires one short burst, and continues forward without a cut. Muzzle light briefly illuminates coarse stone textures and smoke blocks the far end of the hall before clearing. The route bends down a short stair into a wider command room with a field radio, paper maps without readable text, and a bright exit slit beyond sandbags. Keep the forward motion continuous. End as the camera turns toward that exit and the exterior daylight widens, setting up the next movement without freezing.\\n\\noverall_soundscape:\\nContinue the prior battlefield bed through the doorway, adding enclosed boot echoes, timber strain, gear movement, one short weapon burst, stone debris, a field-radio hiss, and muffled artillery transmitted through the walls.\\n\\nnon_diegetic_music:\\nContinue the restrained martial pulse, adding a low sustained string tone inside the farmhouse and withholding any triumphant resolution.\"],\"length\":243,\"seed\":\"4202\"}]}",
-        "ref2v_studio_scheduled_demo",
-        "",
-        896,
-        672,
-        22,
+        "{\n  \"defaults\": {\n    \"length\": 175,\n    \"steps\": 20\n  },\n  \"shots\": [\n    {\n      \"id\": \"ref2v_masked_inpaint_a\",\n      \"prompt\": \"subject_definitions:\\n<Subject 1> is the adult light-blue soldier crab appearance defined by <Picture 1>: a glossy deep cobalt-blue oval carapace, pale sand-tan jointed legs, paired raised claws, small black eye stalks, realistic wet-shell highlights, and natural animal proportions.\\n\\nsummary:\\n[reference generation + video editing + audio reuse] The target video is a spatially masked edit of the supplied source target. Only the crabs inside the editable lower-central beach region are rebuilt as clear, photorealistic instances of <Subject 1>; the protected source picture, performance, environment, and camera remain unchanged, and the synchronized source soundtrack is reused in full.\\n\\nretention_analysis:\\n<Subject 1> (appears in [Shot 1]): fully_preserved - retain the referenced cobalt-blue carapace, sand-tan legs, raised claws, black eye stalks, wet-shell texture, realistic scale, and natural soldier-crab anatomy wherever the masked replacement is visible.\\n\\ndetailed_description:\\nThe target remains live-action natural-history footage with the same cloudy coastal daylight, documentary optics, and realistic color response as the protected source.\\n[Shot 1] Treat the supplied source target as the authoritative edit plate. Preserve its original camera trajectory, lens behavior, framing, cloudy lighting, sand, shallow water, distant shoreline, depth of field, source motion timing, and every protected pixel. Inside the editable lower-central beach region only, rebuild the visible moving crabs as coherent instances of <Subject 1> from <Picture 1>. The source frames supply each selected crab's position, grounded lateral movement, action phase, speed, perspective, scale, occlusion timing, and motion blur; <Picture 1> supplies the visible species anatomy, shell color, leg color, claw shape, eyes, and wet surface detail. Keep feet in contact with the sand and water, reproduce plausible contact shadows and tiny reflections, and maintain stable anatomy from frame to frame. Blend the generated animals cleanly into the protected plate without a halo, border flicker, duplicated limbs, or changes to nearby unmasked crabs. Do not introduce sculptures, stylization, text, a new camera move, a new background, or a cut.\\n\\noverall_soundscape:\\nReuse the protected synchronized source soundtrack exactly as the complete final soundtrack. Generate no replacement sound.\\n\\nnon_diegetic_music:\\nN/A\",\n      \"length\": 175,\n      \"steps\": 20,\n      \"seed\": \"24051621\"\n    },\n    {\n      \"id\": \"ref2v_masked_inpaint_b\",\n      \"prompt\": \"subject_definitions:\\n<Subject 1> is the same adult light-blue soldier crab appearance defined by <Picture 1> and established in the protected incoming overlap: a glossy deep cobalt-blue oval carapace, pale sand-tan jointed legs, paired raised claws, small black eye stalks, realistic wet-shell highlights, and natural animal proportions.\\n\\nsummary:\\n[reference generation + video editing + audio reuse] The target video continues the spatially masked edit of the supplied source target directly from the protected incoming overlap. Keep the same <Subject 1> identity inside the editable lower-central beach region while the protected source picture, performance, environment, and camera remain unchanged, and the synchronized source soundtrack is reused in full.\\n\\nretention_analysis:\\n<Subject 1> (appears in [Shot 1]): fully_preserved - carry forward the exact crab anatomy, cobalt-blue shell, sand-tan legs, claws, eyes, wet texture, scale, and frame-to-frame identity already visible at the incoming boundary.\\n\\ndetailed_description:\\nThe target continues the same live-action natural-history shot without a cut or visual reset.\\n[Shot 1] Begin from the protected incoming overlap exactly as supplied. Do not alter its crab identities, action phase, camera position, lens behavior, framing, cloudy coastal light, sand, water, shoreline, depth of field, or motion blur. As the supplied source target advances, edit only the lower-central masked region. Continue rendering every selected moving crab as the same coherent <Subject 1> established from <Picture 1> and the incoming frames. The corresponding source frames remain authoritative for position, grounded lateral motion, speed, pose, perspective, scale, occlusion timing, sand contact, and interaction with shallow water. Preserve the referenced cobalt-blue carapace, sand-tan legs, raised claws, black eye stalks, realistic shell highlights, and stable anatomy throughout the new frames. Maintain clean contact shadows and reflections and cross the end of the protected overlap with no identity jump, brightness pulse, outline flicker, duplicated limb, temporal stall, or camera change. Preserve every protected pixel and every unmasked crab. Do not introduce a new background, stylization, text, or a cut.\\n\\noverall_soundscape:\\nReuse the protected synchronized source soundtrack exactly as the complete final soundtrack. Generate no replacement sound.\\n\\nnon_diegetic_music:\\nN/A\",\n      \"length\": 175,\n      \"steps\": 20,\n      \"seed\": \"24051622\"\n    }\n  ]\n}",
+        "cc0_soldier_crabs_ref2v_inpaint",
+        "cc0-crab-source-av-v1+picture1-ref2v+static-mask-h3-exact-v1",
+        960,
+        544,
+        39,
         "video",
         "head",
-        "disabled",
+        "center",
         "generated_audio",
-        22,
-        10,
+        39,
         8,
+        20,
         0,
         20,
-        5
+        5,
+        "masked_av"
       ],
       "color": "#1f1f48",
       "bgcolor": "rgba(24,24,27,.9)"
@@ -1704,6 +1678,30 @@
           "name": "plan",
           "type": "H3_CHAIN_PLAN",
           "link": 74
+        },
+        {
+          "name": "source_timeline",
+          "type": "H3_SOURCE_TIMELINE",
+          "link": null,
+          "shape": 7
+        },
+        {
+          "name": "source_audio",
+          "type": "AUDIO",
+          "link": null,
+          "shape": 7
+        },
+        {
+          "name": "tagged_references",
+          "type": "H3_TAGGED_REFERENCES",
+          "link": null,
+          "shape": 7
+        },
+        {
+          "name": "reference_schedule",
+          "type": "H3_REFERENCE_SCHEDULE",
+          "link": null,
+          "shape": 7
         }
       ],
       "outputs": [
@@ -1717,16 +1715,20 @@
           ]
         }
       ],
-      "title": "PLAN STUDIO — TIMELINE / REVISIONS / PREVIEWS",
+      "title": "MiniMax H3 Plan Studio (Experimental) — PLAN STUDIO — TIMELINE / REVISIONS / PREVIEWS",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
         "Node name for S&R": "MiniMaxH3ChainPlanStudio",
         "aux_id": "ethanfel/ComfyUI-MiniMaxH3-Contex-Loop",
-        "h3_plan_studio_active_scene": 1,
+        "h3_plan_studio_active_scene": 0,
         "h3_plan_studio_view": "player"
       },
-      "widgets_values": [],
+      "widgets_values": [
+        1,
+        "",
+        true
+      ],
       "color": "#1f1f48",
       "bgcolor": "rgba(24,24,27,.9)"
     },
@@ -1782,7 +1784,7 @@
           "links": null
         }
       ],
-      "title": "RECOVERY: LOAD ALL SAVED CLIPS",
+      "title": "MiniMax H3 Contex Loop Load Manifest — RECOVERY: LOAD ALL SAVED CLIPS",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -1809,7 +1811,7 @@
       "mode": 0,
       "inputs": [],
       "outputs": [],
-      "title": "RECOVERY / ASSEMBLE LATER",
+      "title": "Note — RECOVERY / ASSEMBLE LATER",
       "properties": {
         "Node name for S&R": "Note"
       },
@@ -1884,7 +1886,7 @@
           "links": null
         }
       ],
-      "title": "LOOP END — ADVANCE REF2V SCENE",
+      "title": "MiniMax H3 Contex Loop End — LOOP END — ADVANCE T2V SCENE",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -1947,7 +1949,7 @@
           "links": null
         }
       ],
-      "title": "REVIEW GATE — APPROVE / EDIT+RETRY / REROLL / STOP",
+      "title": "MiniMax H3 Contex Loop Review Gate — REVIEW GATE — APPROVE / EDIT+RETRY / REROLL / STOP",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.4.0",
@@ -1983,75 +1985,477 @@
       "mode": 0,
       "inputs": [],
       "outputs": [],
-      "title": "REF2V STUDIO SCHEDULED — HOW TO USE",
+      "title": "Note — REF2V MASKED INPAINT — HOW TO USE",
       "properties": {
         "Node name for S&R": "Note"
       },
       "widgets_values": [
-        "REF2V STUDIO SCHEDULED — QUICK START\n\nCopy both bundled PNG files into ComfyUI/input/. @style_base is active in every scene; @interior is active only in scene 2. Keep aliases in the Plan prompt. The Scheduled Ref2VA wrapper compiles them to the native picture numbering for the current scene.\n\nScene 1: @style_base → <Picture 1>.\nScene 2: @style_base → <Picture 1>, @interior → <Picture 2>.\n\nThe Plan uses strict reference compliance, generated audio, 22 motion-context frames, eight-step LightX2V sampling, lcm, and beta. Plan Studio and Rich Scene Prompt Editor stay synchronized with the Plan. The inline Run Manager archives both connected image-loader assets and can restore their loader selections with a saved run."
+        "REF2V MASKED VIDEO INPAINT — CHAIN LOOP\n\nThis is the picture-conditioned counterpart to the T2VA masked-inpaint demo. Picture 1 supplies the species appearance; the source video is encoded as the actual joint AV target. Do not connect the source video again as ref_video_0.\n\nTwo 175-frame generations share a 39-frame protected overlap and deliver 311 frames. Scene 1 selects source frames 0..174; scene 2 selects 136..310. Loop Source AV Target aligns picture and sound to the stock Ref2VA target grid. Chain Context preserves the accepted edited overlap. Apply Target Mask then intersects that temporal protection with the spatial edit mask, so preservation wins.\n\nThe bundled one-frame mask is broadcast. Replace it with a tracked MASK batch for moving subjects; Loop Mask Slice selects the corresponding source interval automatically. Grid Preview shows the exact H3 causal and 32px token coverage before sampling. Source audio remains protected."
       ],
       "color": "#432f66",
       "bgcolor": "rgba(24,24,27,.9)"
     },
     {
-      "id": 1945,
-      "type": "LoadImage",
+      "id": 1950,
+      "type": "VHS_LoadVideo",
       "pos": [
-        -3072,
-        -256
+        -3008,
+        -416
       ],
       "size": [
         416,
         448
       ],
       "flags": {},
-      "order": 39,
+      "order": 8,
       "mode": 0,
-      "inputs": [],
+      "inputs": [
+        {
+          "name": "meta_batch",
+          "shape": 7,
+          "type": "VHS_BatchManager",
+          "link": null
+        },
+        {
+          "name": "vae",
+          "shape": 7,
+          "type": "VAE",
+          "link": null
+        }
+      ],
       "outputs": [
         {
           "name": "IMAGE",
           "type": "IMAGE",
           "links": [
-            84,
             92
           ]
         },
         {
-          "name": "MASK",
-          "type": "MASK",
+          "name": "frame_count",
+          "type": "INT",
+          "links": null
+        },
+        {
+          "name": "audio",
+          "type": "AUDIO",
+          "links": [
+            93
+          ]
+        },
+        {
+          "name": "video_info",
+          "type": "VHS_VIDEOINFO",
           "links": null
         }
       ],
-      "title": "@style_base — ALL SCENES",
+      "title": "Load Video (Upload) 🎥🅥🅗🅢 — CC0 2015 SOLDIER CRABS — SOURCE AV",
       "properties": {
-        "cnr_id": "comfy-core",
-        "ver": "0.31.0",
-        "Node name for S&R": "LoadImage",
+        "cnr_id": "comfyui-videohelpersuite",
+        "Node name for S&R": "VHS_LoadVideo",
         "h3_asset_binding_ids": {
-          "0": "ref2v-style-base-v1"
+          "0": "crab-source-video-cc0-v1"
         }
       },
-      "widgets_values": [
-        "jigen_market_garden_doom_opening.png",
-        "image"
-      ],
-      "color": "#744c8c",
+      "widgets_values": {
+        "video": "soldier_crabs_bribie_island_cc0.webm",
+        "force_rate": 24,
+        "custom_width": 960,
+        "custom_height": 544,
+        "frame_load_cap": 0,
+        "skip_first_frames": 0,
+        "select_every_nth": 1,
+        "format": "AnimateDiff",
+        "videopreview": {
+          "hidden": false,
+          "paused": false,
+          "params": {
+            "force_rate": 24,
+            "frame_load_cap": 0,
+            "skip_first_frames": 0,
+            "select_every_nth": 1,
+            "filename": "soldier_crabs_bribie_island_cc0.webm",
+            "type": "input",
+            "format": "video/webm"
+          },
+          "muted": false
+        }
+      },
+      "color": "#345a73",
       "bgcolor": "rgba(24,24,27,.9)"
     },
     {
-      "id": 1946,
+      "id": 1951,
+      "type": "MiniMaxH3ContexLoopSourceAVTarget",
+      "pos": [
+        1568,
+        96
+      ],
+      "size": [
+        480,
+        430
+      ],
+      "flags": {},
+      "order": 31,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "state",
+          "type": "H3_CHAIN_STATE",
+          "link": 88
+        },
+        {
+          "name": "latent",
+          "type": "LATENT",
+          "link": 89
+        },
+        {
+          "name": "vae",
+          "type": "VAE",
+          "link": 90
+        },
+        {
+          "name": "audio_vae",
+          "type": "VAE",
+          "link": 91
+        },
+        {
+          "name": "source_frames",
+          "type": "IMAGE",
+          "link": 92
+        },
+        {
+          "name": "source_audio",
+          "type": "AUDIO",
+          "link": 93
+        }
+      ],
+      "outputs": [
+        {
+          "name": "source_target",
+          "type": "LATENT",
+          "links": [
+            94
+          ]
+        },
+        {
+          "name": "scene_frames",
+          "type": "IMAGE",
+          "links": [
+            99
+          ]
+        },
+        {
+          "name": "scene_audio",
+          "type": "AUDIO",
+          "links": null
+        },
+        {
+          "name": "status",
+          "type": "STRING",
+          "links": [
+            103
+          ]
+        }
+      ],
+      "title": "MiniMax H3 Masking · Loop Source AV Target — FRAME-LOCK CURRENT LOOP SCENE TO SOURCE AV",
+      "properties": {
+        "cnr_id": "comfyui-minimaxh3-contex-loop",
+        "Node name for S&R": "MiniMaxH3ContexLoopSourceAVTarget",
+        "aux_id": "ethanfel/ComfyUI-MiniMaxH3-Contex-Loop"
+      },
+      "widgets_values": [
+        24,
+        "center"
+      ],
+      "color": "#1f1f48",
+      "bgcolor": "rgba(24,24,27,.9)"
+    },
+    {
+      "id": 1952,
+      "type": "MiniMaxH3ContexMaskedTarget",
+      "pos": [
+        2112,
+        96
+      ],
+      "size": [
+        400,
+        280
+      ],
+      "flags": {},
+      "order": 15,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "target_latent",
+          "type": "LATENT",
+          "link": 95
+        },
+        {
+          "name": "mask",
+          "type": "MASK",
+          "link": 100
+        }
+      ],
+      "outputs": [
+        {
+          "name": "masked_target",
+          "type": "LATENT",
+          "links": [
+            101
+          ]
+        },
+        {
+          "name": "mask_info",
+          "type": "STRING",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "MiniMaxH3ContexMaskedTarget"
+      },
+      "widgets_values": [
+        "white = generate",
+        "preserve source audio",
+        "H3 exact (causal/token max)"
+      ],
+      "title": "MiniMax H3 Masking · Apply Target Mask — APPLY EXACT SPATIAL MASK — SOURCE AUDIO PRESERVED"
+    },
+    {
+      "id": 1953,
+      "type": "LoadImageMask",
+      "pos": [
+        -3008,
+        128
+      ],
+      "size": [
+        310,
+        310
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "MASK",
+          "type": "MASK",
+          "links": [
+            97
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LoadImageMask",
+        "h3_asset_binding_ids": {
+          "0": "crab-inpaint-mask-v1"
+        }
+      },
+      "widgets_values": [
+        "soldier_crabs_inpaint_mask.png",
+        "red"
+      ],
+      "title": "Load Image (as Mask) — STATIC MASK — REPLACE WITH TRACKED MASK BATCH"
+    },
+    {
+      "id": 1954,
+      "type": "MiniMaxH3ContexMaskGridPreview",
+      "pos": [
+        1568,
+        576
+      ],
+      "size": [
+        370,
+        330
+      ],
+      "flags": {},
+      "order": 10,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "link": 99
+        },
+        {
+          "name": "mask",
+          "type": "MASK",
+          "link": 98
+        }
+      ],
+      "outputs": [
+        {
+          "name": "snapped_mask",
+          "type": "MASK",
+          "links": [
+            100
+          ]
+        },
+        {
+          "name": "grid_preview",
+          "type": "IMAGE",
+          "links": [
+            102
+          ]
+        },
+        {
+          "name": "grid_info",
+          "type": "STRING",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "MiniMaxH3ContexMaskGridPreview"
+      },
+      "widgets_values": [
+        "runtime exact (latent max)",
+        0,
+        0,
+        0.38,
+        true,
+        true,
+        "white = generate"
+      ],
+      "title": "MiniMax H3 Masking · Grid Preview — PREVIEW EXACT H3 32PX MASK CELLS"
+    },
+    {
+      "id": 1955,
+      "type": "PreviewImage",
+      "pos": [
+        2112,
+        576
+      ],
+      "size": [
+        380,
+        330
+      ],
+      "flags": {},
+      "order": 14,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 102
+        }
+      ],
+      "outputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "PreviewImage"
+      },
+      "widgets_values": [],
+      "title": "Preview Image — Verify generated 32×32 cells"
+    },
+    {
+      "id": 1956,
+      "type": "PreviewAny",
+      "pos": [
+        2112,
+        816
+      ],
+      "size": [
+        380,
+        90
+      ],
+      "flags": {},
+      "order": 30,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "source",
+          "type": "*",
+          "link": 103
+        }
+      ],
+      "outputs": [
+        {
+          "name": "STRING",
+          "type": "STRING",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "PreviewAny"
+      },
+      "widgets_values": [],
+      "title": "Preview as Text — SOURCE AV ALIGNMENT STATUS"
+    },
+    {
+      "id": 1957,
+      "type": "MiniMaxH3ContexLoopMaskSlice",
+      "pos": [
+        1056,
+        576
+      ],
+      "size": [
+        416,
+        250
+      ],
+      "flags": {},
+      "order": 32,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "state",
+          "type": "H3_CHAIN_STATE",
+          "link": 96
+        },
+        {
+          "name": "mask",
+          "type": "MASK",
+          "link": 97
+        }
+      ],
+      "outputs": [
+        {
+          "name": "scene_mask",
+          "type": "MASK",
+          "links": [
+            98
+          ]
+        },
+        {
+          "name": "scene_mask_frames",
+          "type": "INT",
+          "links": null
+        },
+        {
+          "name": "status",
+          "type": "STRING",
+          "links": null
+        }
+      ],
+      "title": "MiniMax H3 Masking · Loop Mask Slice — SLICE TRACKED MASK TO CURRENT LOOP SCENE",
+      "properties": {
+        "cnr_id": "comfyui-minimaxh3-contex-loop",
+        "Node name for S&R": "MiniMaxH3ContexLoopMaskSlice",
+        "aux_id": "ethanfel/ComfyUI-MiniMaxH3-Contex-Loop"
+      },
+      "widgets_values": [
+        24
+      ],
+      "color": "#1f1f48",
+      "bgcolor": "rgba(24,24,27,.9)"
+    },
+    {
+      "id": 1960,
       "type": "LoadImage",
       "pos": [
-        -2624,
-        -256
+        -3008,
+        512
       ],
       "size": [
         416,
         448
       ],
       "flags": {},
-      "order": 40,
+      "order": 9,
       "mode": 0,
       "inputs": [],
       "outputs": [
@@ -2059,8 +2463,7 @@
           "name": "IMAGE",
           "type": "IMAGE",
           "links": [
-            86,
-            93
+            107
           ]
         },
         {
@@ -2069,122 +2472,46 @@
           "links": null
         }
       ],
-      "title": "@interior — SCENE 2 ONLY",
+      "title": "Load Image — <Picture 1> — CC0 SOLDIER CRAB APPEARANCE",
       "properties": {
         "cnr_id": "comfy-core",
         "ver": "0.31.0",
         "Node name for S&R": "LoadImage",
         "h3_asset_binding_ids": {
-          "0": "ref2v-interior-v1"
+          "0": "crab-reference-image-cc0-v1"
         }
       },
       "widgets_values": [
-        "jigen_market_garden_doom_last.png",
-        "image"
+        "soldier_crabs_reference_cc0.png",
+        "image",
+        null,
+        null,
+        null
       ],
       "color": "#744c8c",
       "bgcolor": "rgba(24,24,27,.9)"
     },
     {
-      "id": 1947,
-      "type": "MiniMaxH3ScheduledPictureReference",
+      "id": 1961,
+      "type": "MiniMaxH3ChainPolicy",
       "pos": [
-        -3072,
-        256
+        -1092,
+        704
       ],
       "size": [
-        416,
-        192
+        340,
+        190
       ],
       "flags": {},
       "order": 41,
       "mode": 0,
-      "inputs": [
-        {
-          "name": "image",
-          "type": "IMAGE",
-          "link": 84
-        },
-        {
-          "name": "previous",
-          "shape": 7,
-          "type": "H3_REFERENCE_SCHEDULE",
-          "link": null
-        }
-      ],
+      "inputs": [],
       "outputs": [
         {
-          "name": "schedule",
-          "type": "H3_REFERENCE_SCHEDULE",
+          "name": "chain_policy",
+          "type": "H3_CHAIN_POLICY",
           "links": [
-            85
-          ]
-        },
-        {
-          "name": "schedule_fingerprint",
-          "type": "STRING",
-          "links": null
-        },
-        {
-          "name": "status",
-          "type": "STRING",
-          "links": null
-        }
-      ],
-      "title": "1 — @style_base / ALL SCENES",
-      "properties": {
-        "cnr_id": "comfyui-minimaxh3-contex-loop",
-        "ver": "0.4.0",
-        "Node name for S&R": "MiniMaxH3ScheduledPictureReference",
-        "aux_id": "ethanfel/ComfyUI-MiniMaxH3-Contex-Loop"
-      },
-      "widgets_values": [
-        "style_base",
-        "all"
-      ],
-      "color": "#744c8c",
-      "bgcolor": "rgba(24,24,27,.9)"
-    },
-    {
-      "id": 1948,
-      "type": "MiniMaxH3ScheduledPictureReference",
-      "pos": [
-        -2624,
-        256
-      ],
-      "size": [
-        416,
-        192
-      ],
-      "flags": {},
-      "order": 42,
-      "mode": 0,
-      "inputs": [
-        {
-          "name": "image",
-          "type": "IMAGE",
-          "link": 86
-        },
-        {
-          "name": "previous",
-          "shape": 7,
-          "type": "H3_REFERENCE_SCHEDULE",
-          "link": 85
-        }
-      ],
-      "outputs": [
-        {
-          "name": "schedule",
-          "type": "H3_REFERENCE_SCHEDULE",
-          "links": [
-            87
-          ]
-        },
-        {
-          "name": "schedule_fingerprint",
-          "type": "STRING",
-          "links": [
-            90
+            109
           ]
         },
         {
@@ -2193,143 +2520,16 @@
           "links": null
         }
       ],
-      "title": "2 — @interior / SCENE 2",
+      "title": "MiniMax H3 Chain Policy — 0.5 CHAIN POLICY",
       "properties": {
-        "cnr_id": "comfyui-minimaxh3-contex-loop",
-        "ver": "0.4.0",
-        "Node name for S&R": "MiniMaxH3ScheduledPictureReference",
-        "aux_id": "ethanfel/ComfyUI-MiniMaxH3-Contex-Loop"
+        "Node name for S&R": "MiniMaxH3ChainPolicy"
       },
       "widgets_values": [
-        "interior",
-        "2"
-      ],
-      "color": "#744c8c",
-      "bgcolor": "rgba(24,24,27,.9)"
-    },
-    {
-      "id": 1949,
-      "type": "MiniMaxH3ChainRunManager",
-      "pos": [
-        -1216,
-        -256
-      ],
-      "size": [
-        480,
-        496
-      ],
-      "flags": {},
-      "order": 43,
-      "mode": 0,
-      "inputs": [
-        {
-          "name": "plan",
-          "type": "H3_CHAIN_PLAN",
-          "link": 75
-        },
-        {
-          "name": "asset_0",
-          "shape": 7,
-          "type": "*",
-          "link": 92,
-          "label": "0: @style_base — ALL SCENES"
-        },
-        {
-          "name": "asset_1",
-          "shape": 7,
-          "type": "*",
-          "link": 93,
-          "label": "1: @interior — SCENE 2 ONLY"
-        },
-        {
-          "name": "asset_2",
-          "shape": 7,
-          "type": "*",
-          "link": null
-        },
-        {
-          "name": "asset_3",
-          "shape": 7,
-          "type": "*",
-          "link": null
-        },
-        {
-          "name": "asset_4",
-          "shape": 7,
-          "type": "*",
-          "link": null
-        },
-        {
-          "name": "asset_5",
-          "shape": 7,
-          "type": "*",
-          "link": null
-        },
-        {
-          "name": "asset_6",
-          "shape": 7,
-          "type": "*",
-          "link": null
-        },
-        {
-          "name": "asset_7",
-          "shape": 7,
-          "type": "*",
-          "link": null
-        },
-        {
-          "name": "asset_8",
-          "shape": 7,
-          "type": "*",
-          "link": null
-        },
-        {
-          "name": "asset_9",
-          "shape": 7,
-          "type": "*",
-          "link": null
-        },
-        {
-          "name": "asset_10",
-          "shape": 7,
-          "type": "*",
-          "link": null
-        },
-        {
-          "name": "asset_11",
-          "shape": 7,
-          "type": "*",
-          "link": null
-        }
-      ],
-      "outputs": [
-        {
-          "name": "plan",
-          "type": "H3_CHAIN_PLAN",
-          "links": [
-            91
-          ]
-        }
-      ],
-      "title": "RUN MANAGER — RESTORE PLAN + REFERENCE ASSETS",
-      "properties": {
-        "cnr_id": "comfyui-minimaxh3-contex-loop",
-        "ver": "0.4.0",
-        "Node name for S&R": "MiniMaxH3ChainRunManager",
-        "aux_id": "ethanfel/ComfyUI-MiniMaxH3-Contex-Loop",
-        "h3_asset_roles": {
-          "ref2v-style-base-v1": "picture",
-          "ref2v-interior-v1": "picture"
-        }
-      },
-      "widgets_values": [
-        true,
-        true,
-        false,
-        "[{\"binding_id\":\"ref2v-style-base-v1\",\"label\":\"@style_base — ALL SCENES\",\"role\":\"picture\",\"node_id\":\"1945\",\"node_type\":\"LoadImage\",\"node_title\":\"@style_base — ALL SCENES\",\"output_slot\":0,\"output_type\":\"IMAGE\",\"widget_name\":\"image\",\"original_value\":\"jigen_market_garden_doom_opening.png\"},{\"binding_id\":\"ref2v-interior-v1\",\"label\":\"@interior — SCENE 2 ONLY\",\"role\":\"picture\",\"node_id\":\"1946\",\"node_type\":\"LoadImage\",\"node_title\":\"@interior — SCENE 2 ONLY\",\"output_slot\":0,\"output_type\":\"IMAGE\",\"widget_name\":\"image\",\"original_value\":\"jigen_market_garden_doom_last.png\"}]"
-      ],
-      "color": "#432f66",
-      "bgcolor": "rgba(24,24,27,.96)"
+        "hard_av",
+        "generated",
+        "off",
+        "on"
+      ]
     }
   ],
   "links": [
@@ -2342,16 +2542,8 @@
       "MODEL"
     ],
     [
-      4,
-      1941,
-      0,
-      1635,
-      0,
-      "MODEL"
-    ],
-    [
       5,
-      1635,
+      1941,
       0,
       5,
       0,
@@ -2378,7 +2570,7 @@
       1702,
       4,
       110,
-      6,
+      9,
       "STRING"
     ],
     [
@@ -2386,7 +2578,7 @@
       1702,
       8,
       110,
-      7,
+      10,
       "INT"
     ],
     [
@@ -2394,7 +2586,7 @@
       1702,
       9,
       110,
-      8,
+      11,
       "INT"
     ],
     [
@@ -2402,7 +2594,7 @@
       1702,
       6,
       110,
-      9,
+      12,
       "INT"
     ],
     [
@@ -2436,14 +2628,6 @@
       1703,
       1,
       "CONDITIONING"
-    ],
-    [
-      27,
-      110,
-      1,
-      1703,
-      3,
-      "LATENT"
     ],
     [
       28,
@@ -2484,14 +2668,6 @@
       124,
       3,
       "SIGMAS"
-    ],
-    [
-      33,
-      110,
-      1,
-      124,
-      4,
-      "LATENT"
     ],
     [
       34,
@@ -2737,7 +2913,7 @@
       75,
       1930,
       0,
-      1949,
+      1701,
       0,
       "H3_CHAIN_PLAN"
     ],
@@ -2774,14 +2950,6 @@
       "H3_CHAIN_SEGMENT"
     ],
     [
-      80,
-      1700,
-      5,
-      132,
-      3,
-      "INT"
-    ],
-    [
       81,
       132,
       2,
@@ -2798,7 +2966,143 @@
       "H3_CHAIN_PLAN"
     ],
     [
-      83,
+      87,
+      4,
+      0,
+      1703,
+      4,
+      "VAE"
+    ],
+    [
+      88,
+      1702,
+      0,
+      1951,
+      0,
+      "H3_CHAIN_STATE"
+    ],
+    [
+      89,
+      110,
+      1,
+      1951,
+      1,
+      "LATENT"
+    ],
+    [
+      90,
+      1916,
+      0,
+      1951,
+      2,
+      "VAE"
+    ],
+    [
+      91,
+      1918,
+      0,
+      1951,
+      3,
+      "VAE"
+    ],
+    [
+      92,
+      1950,
+      0,
+      1951,
+      4,
+      "IMAGE"
+    ],
+    [
+      93,
+      1950,
+      2,
+      1951,
+      5,
+      "AUDIO"
+    ],
+    [
+      94,
+      1951,
+      0,
+      1703,
+      3,
+      "LATENT"
+    ],
+    [
+      95,
+      1703,
+      3,
+      1952,
+      0,
+      "LATENT"
+    ],
+    [
+      96,
+      1702,
+      0,
+      1957,
+      0,
+      "H3_CHAIN_STATE"
+    ],
+    [
+      97,
+      1953,
+      0,
+      1957,
+      1,
+      "MASK"
+    ],
+    [
+      98,
+      1957,
+      0,
+      1954,
+      1,
+      "MASK"
+    ],
+    [
+      99,
+      1951,
+      1,
+      1954,
+      0,
+      "IMAGE"
+    ],
+    [
+      100,
+      1954,
+      0,
+      1952,
+      1,
+      "MASK"
+    ],
+    [
+      101,
+      1952,
+      0,
+      124,
+      4,
+      "LATENT"
+    ],
+    [
+      102,
+      1954,
+      1,
+      1955,
+      0,
+      "IMAGE"
+    ],
+    [
+      103,
+      1951,
+      3,
+      1956,
+      0,
+      "STRING"
+    ],
+    [
+      106,
       4,
       0,
       110,
@@ -2806,84 +3110,28 @@
       "VAE"
     ],
     [
-      84,
-      1945,
-      0,
-      1947,
-      0,
-      "IMAGE"
-    ],
-    [
-      85,
-      1947,
-      0,
-      1948,
-      1,
-      "H3_REFERENCE_SCHEDULE"
-    ],
-    [
-      86,
-      1946,
-      0,
-      1948,
-      0,
-      "IMAGE"
-    ],
-    [
-      87,
-      1948,
+      107,
+      1960,
       0,
       110,
       3,
-      "H3_REFERENCE_SCHEDULE"
+      "IMAGE"
     ],
     [
-      88,
+      108,
       1702,
-      1,
-      110,
+      0,
+      132,
       4,
-      "INT"
+      "H3_CHAIN_STATE"
     ],
     [
-      89,
-      1702,
-      2,
-      110,
-      5,
-      "INT"
-    ],
-    [
-      90,
-      1948,
-      1,
+      109,
+      1961,
+      0,
       1700,
       0,
-      "STRING"
-    ],
-    [
-      91,
-      1949,
-      0,
-      1701,
-      0,
-      "H3_CHAIN_PLAN"
-    ],
-    [
-      92,
-      1945,
-      0,
-      1949,
-      1,
-      "IMAGE"
-    ],
-    [
-      93,
-      1946,
-      0,
-      1949,
-      2,
-      "IMAGE"
+      "H3_CHAIN_POLICY"
     ]
   ],
   "groups": [
@@ -2901,7 +3149,7 @@
     },
     {
       "id": 3,
-      "title": "CORE REF2VA + CHECKPOINTED REVIEW",
+      "title": "CORE REF2VA MASKED TARGET + CHECKPOINTED REVIEW",
       "bounding": [
         -704,
         -352,
@@ -2937,7 +3185,7 @@
     },
     {
       "id": 6,
-      "title": "REF2V — PLAN STUDIO + RICH PROMPT EDITOR",
+      "title": "REF2V MASKED INPAINT — PLAN STUDIO AUTHORING",
       "bounding": [
         -672,
         480,
@@ -2949,26 +3197,14 @@
     },
     {
       "id": 7,
-      "title": "SCENE-SCHEDULED PICTURE REFERENCES",
+      "title": "SOURCE AV + STATIC/TRACKED MASK + PICTURE 1",
       "bounding": [
-        -3136,
-        -352,
-        1000,
-        864
+        -3072,
+        -480,
+        544,
+        1536
       ],
-      "color": "#744c8c",
-      "flags": {}
-    },
-    {
-      "id": 8,
-      "title": "STUDIO RUN RESTORE + ASSET ARCHIVE",
-      "bounding": [
-        -1280,
-        -352,
-        608,
-        688
-      ],
-      "color": "#432f66",
+      "color": "#3f789e",
       "flags": {}
     }
   ],
@@ -2989,7 +3225,7 @@
     "ue_links": [],
     "links_added_by_ue": [],
     "comfyui_mcp": {
-      "workflow_uuid": "35f91652-5f69-4f57-b8cc-4142a1a46119"
+      "workflow_uuid": "40bb5639-7d9a-4e6e-9e3b-c1f4fe866001"
     }
   },
   "version": 0.4

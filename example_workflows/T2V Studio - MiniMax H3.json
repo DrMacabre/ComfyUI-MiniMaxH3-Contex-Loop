@@ -1,8 +1,8 @@
 {
   "id": "c0b8422a-84d4-44f8-91ce-31c68a9a119e",
   "revision": 0,
-  "last_node_id": 1948,
-  "last_link_id": 90,
+  "last_node_id": 1945,
+  "last_link_id": 86,
   "nodes": [
     {
       "id": 1,
@@ -106,7 +106,7 @@
         "Node name for S&R": "KSamplerSelect"
       },
       "widgets_values": [
-        "lcm"
+        "res_multistep"
       ]
     },
     {
@@ -201,48 +201,6 @@
         "PROMPT SOURCE / ATTRIBUTION\n\nScene 1 is reproduced verbatim from a MiniMax H3 prompt shared by 🦙rishappi in Banodoco's #minimax_h3_chatter on August 11, 2026:\nhttps://discord.com/channels/1076117621407223829/1532625331960152124/1536689209761599608\n\nScene 2 is a new continuation written for this repository example using the same three-section H3 T2VA structure. The continuation is not attributed to the original author.\n\nThe generation graph uses ComfyUI's core MiniMaxH3ImageToVideo node with both image inputs intentionally disconnected, which is its T2VA route. The recursive disk-backed Plan, context, review, recovery, and assembly nodes come from this pack."
       ],
       "color": "#432f66",
-      "bgcolor": "rgba(24,24,27,.9)"
-    },
-    {
-      "id": 1930,
-      "type": "MiniMaxH3ChainScenePromptEditor",
-      "pos": [
-        416,
-        544
-      ],
-      "size": [
-        1120,
-        1056
-      ],
-      "flags": {},
-      "order": 13,
-      "mode": 0,
-      "inputs": [
-        {
-          "name": "plan",
-          "type": "H3_CHAIN_PLAN",
-          "link": 74
-        }
-      ],
-      "outputs": [
-        {
-          "name": "plan",
-          "type": "H3_CHAIN_PLAN",
-          "links": [
-            75,
-            76
-          ]
-        }
-      ],
-      "title": "MiniMax H3 Scene Prompt Editor — SCENE PROMPT EDITOR — STANDARD AUTHORING",
-      "properties": {
-        "cnr_id": "comfyui-minimaxh3-contex-loop",
-        "ver": "0.3.10",
-        "Node name for S&R": "MiniMaxH3ChainScenePromptEditor",
-        "aux_id": "ethanfel/ComfyUI-MiniMaxH3-Contex-Loop"
-      },
-      "widgets_values": [],
-      "color": "#1f1f48",
       "bgcolor": "rgba(24,24,27,.9)"
     },
     {
@@ -358,7 +316,7 @@
         {
           "name": "plan",
           "type": "H3_CHAIN_PLAN",
-          "link": 88
+          "link": 75
         },
         {
           "name": "source_audio",
@@ -491,7 +449,7 @@
         512
       ],
       "flags": {},
-      "order": 21,
+      "order": 22,
       "mode": 0,
       "inputs": [
         {
@@ -514,8 +472,8 @@
             24,
             41,
             46,
-            82,
-            89
+            77,
+            85
           ]
         },
         {
@@ -618,7 +576,7 @@
       "id": 1708,
       "type": "MiniMaxH3ChainAssemble",
       "pos": [
-        5568,
+        5632,
         416
       ],
       "size": [
@@ -626,7 +584,7 @@
         256
       ],
       "flags": {},
-      "order": 22,
+      "order": 23,
       "mode": 2,
       "inputs": [
         {
@@ -657,7 +615,7 @@
       },
       "widgets_values": [
         "plan",
-        "t2v_normal_recovered_%date:yyyy-MM-dd%",
+        "t2v_studio_recovered_%date:yyyy-MM-dd%",
         256
       ],
       "color": "#59451e",
@@ -675,7 +633,7 @@
         26
       ],
       "flags": {},
-      "order": 20,
+      "order": 21,
       "mode": 0,
       "inputs": [
         {
@@ -710,7 +668,7 @@
         96
       ],
       "flags": {},
-      "order": 24,
+      "order": 25,
       "mode": 0,
       "inputs": [
         {
@@ -754,7 +712,7 @@
         384
       ],
       "flags": {},
-      "order": 25,
+      "order": 26,
       "mode": 0,
       "inputs": [
         {
@@ -855,7 +813,7 @@
         288
       ],
       "flags": {},
-      "order": 27,
+      "order": 28,
       "mode": 0,
       "inputs": [
         {
@@ -936,7 +894,7 @@
         160
       ],
       "flags": {},
-      "order": 19,
+      "order": 20,
       "mode": 0,
       "inputs": [
         {
@@ -976,7 +934,7 @@
         26
       ],
       "flags": {},
-      "order": 23,
+      "order": 24,
       "mode": 0,
       "inputs": [
         {
@@ -1011,7 +969,7 @@
         26
       ],
       "flags": {},
-      "order": 26,
+      "order": 27,
       "mode": 0,
       "inputs": [
         {
@@ -1047,7 +1005,7 @@
         96
       ],
       "flags": {},
-      "order": 29,
+      "order": 30,
       "mode": 0,
       "inputs": [
         {
@@ -1090,7 +1048,7 @@
         128
       ],
       "flags": {},
-      "order": 28,
+      "order": 29,
       "mode": 0,
       "inputs": [
         {
@@ -1123,8 +1081,8 @@
         "Node name for S&R": "BasicScheduler"
       },
       "widgets_values": [
-        "beta",
-        8,
+        "simple",
+        20,
         1
       ]
     },
@@ -1137,10 +1095,10 @@
       ],
       "size": [
         320,
-        672
+        657.4117647058823
       ],
       "flags": {},
-      "order": 30,
+      "order": 31,
       "mode": 0,
       "inputs": [
         {
@@ -1206,7 +1164,7 @@
         96
       ],
       "flags": {},
-      "order": 31,
+      "order": 32,
       "mode": 0,
       "inputs": [
         {
@@ -1249,7 +1207,7 @@
         96
       ],
       "flags": {},
-      "order": 32,
+      "order": 33,
       "mode": 0,
       "inputs": [
         {
@@ -1292,7 +1250,7 @@
         224
       ],
       "flags": {},
-      "order": 33,
+      "order": 34,
       "mode": 0,
       "inputs": [
         {
@@ -1326,7 +1284,7 @@
         {
           "name": "state",
           "type": "H3_CHAIN_STATE",
-          "link": 89,
+          "link": 85,
           "shape": 7
         }
       ],
@@ -1344,7 +1302,7 @@
           "type": "AUDIO",
           "links": [
             44,
-            84
+            78
           ]
         },
         {
@@ -1371,7 +1329,7 @@
         0,
         24,
         true,
-        0
+        5
       ],
       "color": "#1f1f48",
       "bgcolor": "rgba(24,24,27,.9)"
@@ -1388,7 +1346,7 @@
         288
       ],
       "flags": {},
-      "order": 34,
+      "order": 35,
       "mode": 0,
       "inputs": [
         {
@@ -1424,7 +1382,7 @@
           "name": "segment",
           "type": "H3_CHAIN_SEGMENT",
           "links": [
-            83
+            49
           ]
         },
         {
@@ -1448,7 +1406,7 @@
       "id": 1706,
       "type": "MiniMaxH3ChainAssemble",
       "pos": [
-        5120,
+        5184,
         -256
       ],
       "size": [
@@ -1456,7 +1414,7 @@
         480
       ],
       "flags": {},
-      "order": 37,
+      "order": 38,
       "mode": 0,
       "inputs": [
         {
@@ -1487,7 +1445,7 @@
       },
       "widgets_values": [
         "plan",
-        "t2v_normal_%date:yyyy-MM-dd%",
+        "t2v_studio_%date:yyyy-MM-dd%",
         256
       ],
       "color": "#24533a",
@@ -1519,7 +1477,7 @@
           "name": "MODEL",
           "type": "MODEL",
           "links": [
-            4
+            5
           ]
         }
       ],
@@ -1534,147 +1492,44 @@
       ]
     },
     {
-      "id": 1635,
-      "type": "LoraLoaderModelOnly",
+      "id": 1942,
+      "type": "MiniMaxH3ChainRichScenePromptEditor",
       "pos": [
-        -1344,
-        -928
-      ],
-      "size": [
-        288,
-        96
-      ],
-      "flags": {},
-      "order": 14,
-      "mode": 0,
-      "inputs": [
-        {
-          "name": "model",
-          "type": "MODEL",
-          "link": 4
-        }
-      ],
-      "outputs": [
-        {
-          "name": "MODEL",
-          "type": "MODEL",
-          "links": [
-            5
-          ]
-        }
-      ],
-      "title": "Load LoRA — LIGHTX2V TURBO — 8 STEP V1.0",
-      "properties": {
-        "cnr_id": "comfy-core",
-        "ver": "0.30.0",
-        "Node name for S&R": "LoraLoaderModelOnly"
-      },
-      "widgets_values": [
-        "MiniMax H3/minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors",
-        1
-      ]
-    },
-    {
-      "id": 1705,
-      "type": "MiniMaxH3ChainLoopEnd",
-      "pos": [
-        4544,
-        -288
-      ],
-      "size": [
-        352,
-        320
-      ],
-      "flags": {},
-      "order": 36,
-      "mode": 0,
-      "inputs": [
-        {
-          "name": "flow",
-          "type": "H3_CHAIN_FLOW",
-          "link": 45
-        },
-        {
-          "name": "state",
-          "type": "H3_CHAIN_STATE",
-          "link": 46
-        },
-        {
-          "name": "images",
-          "type": "IMAGE",
-          "link": 47
-        },
-        {
-          "name": "sampled_latent",
-          "type": "LATENT",
-          "link": 48
-        },
-        {
-          "name": "segment",
-          "type": "H3_CHAIN_SEGMENT",
-          "link": 85
-        }
-      ],
-      "outputs": [
-        {
-          "name": "manifest",
-          "type": "H3_CHAIN_MANIFEST",
-          "links": [
-            50
-          ]
-        },
-        {
-          "name": "manifest_json",
-          "type": "STRING",
-          "links": null
-        },
-        {
-          "name": "last_context_frames",
-          "type": "IMAGE",
-          "links": null
-        },
-        {
-          "name": "last_context_latent",
-          "type": "LATENT",
-          "links": null
-        }
-      ],
-      "title": "MiniMax H3 Contex Loop End — LOOP END — ADVANCE T2V SCENE",
-      "properties": {
-        "cnr_id": "comfyui-minimaxh3-contex-loop",
-        "ver": "0.3.10",
-        "Node name for S&R": "MiniMaxH3ChainLoopEnd",
-        "aux_id": "ethanfel/ComfyUI-MiniMaxH3-Contex-Loop"
-      },
-      "widgets_values": [],
-      "color": "#1f1f48",
-      "bgcolor": "rgba(24,24,27,.9)"
-    },
-    {
-      "id": 1932,
-      "type": "Note",
-      "pos": [
-        1568,
+        1984,
         544
       ],
       "size": [
-        896,
-        1184
+        1088,
+        1312
       ],
       "flags": {},
-      "order": 7,
+      "order": 19,
       "mode": 0,
-      "inputs": [],
-      "outputs": [],
-      "title": "Note — T2V NORMAL — HOW TO USE",
-      "properties": {
-        "Node name for S&R": "Note"
-      },
-      "widgets_values": [
-        "T2V NORMAL — QUICK START\n\nThis is the standard node-level authoring workflow. It uses Scene Prompt Editor and no Plan Studio.\n\n1. Both first_frame and last_frame are intentionally disconnected: this is T2VA.\n2. Edit the two prompts in Scene Prompt Editor, then queue.\n3. Review Gate can approve, retry the edited prompt, reroll, or stop with a partial video.\n4. Final Assemble joins accepted segments and preserves generated audio.\n\nTIMING\nEach requested 10-second scene is 243 raw H3 frames. Scene 2 repeats 22 context frames, so delivery is 243 + (243 - 22) = 464 frames = 19.333 seconds at 24 fps.\n\nBLENDING\nPlan carries 22 frames of motion context and uses video_blend_frames = 0, so the repeated context is trimmed at a hard boundary without an additional visual crossfade. Generated audio remains frame-locked and is not crossfaded."
+      "inputs": [
+        {
+          "name": "plan",
+          "type": "H3_CHAIN_PLAN",
+          "link": 82
+        }
       ],
-      "color": "#432f66",
-      "bgcolor": "rgba(24,24,27,.9)"
+      "outputs": [
+        {
+          "name": "plan",
+          "type": "H3_CHAIN_PLAN",
+          "links": null
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfyui-minimaxh3-contex-loop",
+        "ver": "d8ac6bc7b47a0c791f393d9300b7cc44773a66ff",
+        "Node name for S&R": "MiniMaxH3ChainRichScenePromptEditor",
+        "h3_rich_prompt_active_scene": 0,
+        "h3_rich_prompt_font_size": 17,
+        "h3_rich_prompt_guide": "auto"
+      },
+      "widgets_values": [],
+      "color": "#223",
+      "bgcolor": "#335"
     },
     {
       "id": 1700,
@@ -1684,17 +1539,17 @@
         544
       ],
       "size": [
-        1024,
-        1600
+        992,
+        1184
       ],
       "flags": {},
-      "order": 8,
+      "order": 7,
       "mode": 0,
       "inputs": [
         {
           "name": "chain_policy",
           "type": "H3_CHAIN_POLICY",
-          "link": 90,
+          "link": 86,
           "shape": 7
         }
       ],
@@ -1732,7 +1587,7 @@
           "links": null
         }
       ],
-      "title": "MiniMax H3 Contex Loop Plan — T2V PLAN — NORMAL EDITOR",
+      "title": "MiniMax H3 Contex Loop Plan — T2V PLAN — EDITED THROUGH STUDIO",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
@@ -1748,8 +1603,8 @@
         }
       },
       "widgets_values": [
-        "{\"defaults\":{\"duration_seconds\":10,\"steps\":8},\"shots\":[{\"id\":\"confessional_opening\",\"prompt\":[\"integrated_multimodal_description: The target video is in a hyper-realistic, cinematic single-take confessional style, shallow depth of field, soft moody key light on one side of the face, dark neutral background, portrait orientation.\\n[Shot 1] A tight portrait shot frames a weary 40-year-old man seated close to camera, stubble catching the light, eyes glistening as he stares just past the lens. His breath catches once before he speaks. The raw, trembling-voiced man (S1) says, <d>[English] I have to be honest with you. I left Wan. It wasn't working anymore — the consistency, the way it just... let me down when I needed it most.</d> His hand comes up, rubbing his brow, a bitter half-smile breaking through. [Shot 2] At 00:04.500, he leans in slightly, voice steadying, a flicker of guilty excitement crossing his face. He continues, <d>[English] I'm with MiniMax now. And I know how that sounds. But for the first time in a long time... I feel understood.</d> His eyes well up, lip trembling, before he lets out a short, broken laugh and looks down, shaking his head at himself.\",\"\",\"overall_soundscape: A quiet room tone hums beneath, with a single sharp intake of breath before he speaks, a soft rustle as his hand moves to his face, and a faint, choked exhale on the laugh.\",\"\",\"non_diegetic_music: A single sustained low piano note holds under the first line, joined by a soft, melancholic string swell, dropping away entirely on the final broken laugh.\"],\"length\":243,\"seed\":\"1001\"},{\"id\":\"confessional_continuation\",\"prompt\":[\"integrated_multimodal_description: [Shot 1] Hyper-realistic, cinematic portrait footage continues directly from the incoming H3 Motion Context in the same dark confessional room. Preserve the weary 40-year-old man's identity, stubble, clothing, seated position, shallow depth of field, one-sided moody key light, dark neutral background, lens, portrait framing, and the downward head movement already in progress. His broken laugh trails off without resetting. The camera holds close and pushes in with small amplitude at slow speed as he draws one controlled breath, rubs his thumb against his brow, then lifts his wet eyes back toward the lens. The same raw, trembling-voiced man (S1) says quietly: <d>[English] I guess this is me moving on.</d> His lips move naturally with only those words. He lets the silence remain, lowers his hand into his lap, and holds eye contact while the camera gradually becomes still. No cut, no new person, no duplicated face, no change of room, wardrobe, lighting direction, or screen geography.\",\"\",\"overall_soundscape: Continue the same quiet room tone across the scene boundary without a restart. The last broken exhale fades into one controlled breath, accompanied by a soft sleeve rustle and the subtle movement of his hand returning to his lap.\",\"\",\"non_diegetic_music: The previous piano and strings have already stopped; use no non-diegetic music during this continuation.\"],\"length\":243,\"seed\":\"1002\"}]}",
-        "t2v_normal_demo",
+        "{\"defaults\":{\"duration_seconds\":10,\"steps\":20},\"shots\":[{\"id\":\"confessional_opening\",\"prompt\":[\"integrated_multimodal_description: The target video is in a hyper-realistic, cinematic single-take confessional style, shallow depth of field, soft moody key light on one side of the face, dark neutral background, portrait orientation.\\n[Shot 1] A tight portrait shot frames a weary 40-year-old man seated close to camera, stubble catching the light, eyes glistening as he stares just past the lens. His breath catches once before he speaks. The raw, trembling-voiced man (S1) says, <d>[English] I have to be honest with you. I left Wan. It wasn't working anymore — the consistency, the way it just... let me down when I needed it most.</d> His hand comes up, rubbing his brow, a bitter half-smile breaking through. [Shot 2] At 00:04.500, he leans in slightly, voice steadying, a flicker of guilty excitement crossing his face. He continues, <d>[English] I'm with MiniMax now. And I know how that sounds. But for the first time in a long time... I feel understood.</d> His eyes well up, lip trembling, before he lets out a short, broken laugh and looks down, shaking his head at himself.\",\"\",\"overall_soundscape: A quiet room tone hums beneath, with a single sharp intake of breath before he speaks, a soft rustle as his hand moves to his face, and a faint, choked exhale on the laugh.\",\"\",\"non_diegetic_music: A single sustained low piano note holds under the first line, joined by a soft, melancholic string swell, dropping away entirely on the final broken laugh.\"],\"length\":243,\"seed\":\"1001\"},{\"id\":\"confessional_continuation\",\"prompt\":[\"integrated_multimodal_description: [Shot 1] Hyper-realistic, cinematic portrait footage continues directly from the incoming H3 Motion Context in the same dark confessional room. Preserve the weary 40-year-old man's identity, stubble, clothing, seated position, shallow depth of field, one-sided moody key light, dark neutral background, lens, portrait framing, and the downward head movement already in progress. His broken laugh trails off without resetting. The camera holds close and pushes in with small amplitude at slow speed as he draws one controlled breath, rubs his thumb against his brow, then lifts his wet eyes back toward the lens. The same raw, trembling-voiced man (S1) says quietly: <d>[English] I guess this is me moving on.</d> His lips move naturally with only those words. He lets the silence remain, lowers his hand into his lap, and holds eye contact while the camera gradually becomes still. No cut, no new person, no duplicated face, no change of room, wardrobe, lighting direction, or screen geography.\",\"\",\"overall_soundscape: Continue the same quiet room tone across the scene boundary without a restart. The last broken exhale fades into one controlled breath, accompanied by a soft sleeve rustle and the subtle movement of his hand returning to his lap.\",\"\",\"non_diegetic_music: The previous piano and strings have already stopped; use no non-diegetic music during this continuation.\"],\"length\":243,\"seed\":\"1002\"}]}",
+        "t2v_studio_demo",
         "t2v-community-confessional-v1",
         544,
         960,
@@ -1760,91 +1615,92 @@
         "generated_audio",
         22,
         10,
-        8,
+        20,
         0,
         20,
-        0
+        5
       ],
       "color": "#1f1f48",
       "bgcolor": "rgba(24,24,27,.9)"
     },
     {
-      "id": 1944,
-      "type": "MiniMaxH3ChainReview",
+      "id": 1930,
+      "type": "MiniMaxH3ChainPlanStudio",
       "pos": [
-        3744,
-        -256
+        384,
+        544
       ],
       "size": [
-        736,
-        1376
+        1536,
+        1056
       ],
       "flags": {},
-      "order": 35,
+      "order": 13,
       "mode": 0,
       "inputs": [
         {
-          "name": "state",
-          "type": "H3_CHAIN_STATE",
-          "link": 82
+          "name": "plan",
+          "type": "H3_CHAIN_PLAN",
+          "link": 74
         },
         {
-          "name": "segment",
-          "type": "H3_CHAIN_SEGMENT",
-          "link": 83
-        },
-        {
-          "name": "audio",
-          "shape": 7,
-          "type": "AUDIO",
-          "link": 84
+          "name": "source_timeline",
+          "type": "H3_SOURCE_TIMELINE",
+          "link": null,
+          "shape": 7
         },
         {
           "name": "source_audio",
-          "shape": 7,
           "type": "AUDIO",
-          "link": null
+          "link": null,
+          "shape": 7
+        },
+        {
+          "name": "tagged_references",
+          "type": "H3_TAGGED_REFERENCES",
+          "link": null,
+          "shape": 7
+        },
+        {
+          "name": "reference_schedule",
+          "type": "H3_REFERENCE_SCHEDULE",
+          "link": null,
+          "shape": 7
         }
       ],
       "outputs": [
         {
-          "name": "segment",
-          "type": "H3_CHAIN_SEGMENT",
+          "name": "plan",
+          "type": "H3_CHAIN_PLAN",
           "links": [
-            85
+            75,
+            76,
+            82
           ]
-        },
-        {
-          "name": "status",
-          "type": "STRING",
-          "links": null
         }
       ],
-      "title": "MiniMax H3 Contex Loop Review Gate — REVIEW GATE — APPROVE / EDIT+RETRY / REROLL / STOP",
+      "title": "MiniMax H3 Plan Studio (Experimental) — PLAN STUDIO — TIMELINE / REVISIONS / PREVIEWS",
       "properties": {
         "cnr_id": "comfyui-minimaxh3-contex-loop",
         "ver": "0.3.10",
-        "Node name for S&R": "MiniMaxH3ChainReview",
+        "Node name for S&R": "MiniMaxH3ChainPlanStudio",
         "aux_id": "ethanfel/ComfyUI-MiniMaxH3-Contex-Loop",
-        "h3_chain_review_prompt_height": 442,
-        "h3_chain_review_video_height": 373
+        "h3_plan_studio_active_scene": 1,
+        "h3_plan_studio_view": "player"
       },
       "widgets_values": [
-        true,
-        false,
-        0,
-        false,
-        true,
-        "checkpointed"
+        1,
+        "",
+        true
       ],
-      "color": "#3f4e2f",
-      "bgcolor": "rgba(24,24,27,.96)"
+      "color": "#1f1f48",
+      "bgcolor": "rgba(24,24,27,.9)"
     },
     {
       "id": 1707,
       "type": "MiniMaxH3ChainManifestLoad",
       "pos": [
-        5152,
+        5216,
         416
       ],
       "size": [
@@ -1907,7 +1763,7 @@
       "id": 1901,
       "type": "Note",
       "pos": [
-        5152,
+        5184,
         736
       ],
       "size": [
@@ -1915,7 +1771,7 @@
         320
       ],
       "flags": {},
-      "order": 9,
+      "order": 8,
       "mode": 0,
       "inputs": [],
       "outputs": [],
@@ -1930,91 +1786,181 @@
       "bgcolor": "rgba(24,24,27,.9)"
     },
     {
-      "id": 1947,
-      "type": "MiniMaxH3ChainPreflight",
+      "id": 1705,
+      "type": "MiniMaxH3ChainLoopEnd",
       "pos": [
-        -992,
-        0
+        4704,
+        -256
       ],
       "size": [
-        384,
-        260
+        352,
+        320
       ],
       "flags": {},
-      "order": 40,
+      "order": 37,
       "mode": 0,
       "inputs": [
         {
-          "name": "plan",
-          "type": "H3_CHAIN_PLAN",
-          "link": 75
+          "name": "flow",
+          "type": "H3_CHAIN_FLOW",
+          "link": 45
         },
         {
-          "name": "source_timeline",
+          "name": "state",
+          "type": "H3_CHAIN_STATE",
+          "link": 46
+        },
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 47
+        },
+        {
+          "name": "sampled_latent",
+          "type": "LATENT",
+          "link": 48
+        },
+        {
+          "name": "segment",
+          "type": "H3_CHAIN_SEGMENT",
+          "link": 79
+        }
+      ],
+      "outputs": [
+        {
+          "name": "manifest",
+          "type": "H3_CHAIN_MANIFEST",
+          "links": [
+            50
+          ]
+        },
+        {
+          "name": "manifest_json",
+          "type": "STRING",
+          "links": null
+        },
+        {
+          "name": "last_context_frames",
+          "type": "IMAGE",
+          "links": null
+        },
+        {
+          "name": "last_context_latent",
+          "type": "LATENT",
+          "links": null
+        }
+      ],
+      "title": "MiniMax H3 Contex Loop End — LOOP END — ADVANCE T2V SCENE",
+      "properties": {
+        "cnr_id": "comfyui-minimaxh3-contex-loop",
+        "ver": "0.3.10",
+        "Node name for S&R": "MiniMaxH3ChainLoopEnd",
+        "aux_id": "ethanfel/ComfyUI-MiniMaxH3-Contex-Loop"
+      },
+      "widgets_values": [],
+      "color": "#1f1f48",
+      "bgcolor": "rgba(24,24,27,.9)"
+    },
+    {
+      "id": 1931,
+      "type": "MiniMaxH3ChainReview",
+      "pos": [
+        3744,
+        -256
+      ],
+      "size": [
+        864,
+        1120
+      ],
+      "flags": {},
+      "order": 36,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "state",
+          "type": "H3_CHAIN_STATE",
+          "link": 77
+        },
+        {
+          "name": "segment",
+          "type": "H3_CHAIN_SEGMENT",
+          "link": 49
+        },
+        {
+          "name": "audio",
           "shape": 7,
-          "type": "H3_SOURCE_TIMELINE",
-          "link": null
+          "type": "AUDIO",
+          "link": 78
         },
         {
           "name": "source_audio",
           "shape": 7,
           "type": "AUDIO",
           "link": null
-        },
-        {
-          "name": "tagged_references",
-          "shape": 7,
-          "type": "H3_TAGGED_REFERENCES",
-          "link": null
-        },
-        {
-          "name": "reference_schedule",
-          "shape": 7,
-          "type": "H3_REFERENCE_SCHEDULE",
-          "link": null
         }
       ],
       "outputs": [
         {
-          "name": "plan",
-          "type": "H3_CHAIN_PLAN",
+          "name": "segment",
+          "type": "H3_CHAIN_SEGMENT",
           "links": [
-            88
+            79
           ]
-        },
-        {
-          "name": "preflight",
-          "type": "H3_PREFLIGHT",
-          "links": null
-        },
-        {
-          "name": "ready",
-          "type": "BOOLEAN",
-          "links": null
         },
         {
           "name": "status",
           "type": "STRING",
           "links": null
-        },
-        {
-          "name": "report_json",
-          "type": "STRING",
-          "links": null
         }
       ],
-      "title": "MiniMax H3 Chain Preflight — 0.5 PREFLIGHT — BLOCKS BEFORE MODELS",
+      "title": "MiniMax H3 Contex Loop Review Gate — REVIEW GATE — APPROVE / EDIT+RETRY / REROLL / STOP",
       "properties": {
-        "Node name for S&R": "MiniMaxH3ChainPreflight"
+        "cnr_id": "comfyui-minimaxh3-contex-loop",
+        "ver": "0.4.0",
+        "Node name for S&R": "MiniMaxH3ChainReview",
+        "aux_id": "ethanfel/ComfyUI-MiniMaxH3-Contex-Loop",
+        "h3_chain_review_prompt_height": 120,
+        "h3_chain_review_video_height": 420
       },
       "widgets_values": [
-        1,
-        "",
-        true
-      ]
+        true,
+        false,
+        0,
+        false,
+        true,
+        "checkpointed"
+      ],
+      "color": "#3f4e2f",
+      "bgcolor": "rgba(24,24,27,.96)"
     },
     {
-      "id": 1948,
+      "id": 1932,
+      "type": "Note",
+      "pos": [
+        3136,
+        512
+      ],
+      "size": [
+        576,
+        1344
+      ],
+      "flags": {},
+      "order": 9,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "title": "Note — T2V STUDIO — HOW TO USE",
+      "properties": {
+        "Node name for S&R": "Note"
+      },
+      "widgets_values": [
+        "T2V STUDIO — QUICK START\n\nThis workflow keeps the same T2VA prompts, seeds, and sampling graph as the Normal version, but uses the advanced authoring pair: Plan Studio plus the separate Rich Scene Prompt Editor.\n\nUse Plan Studio for timeline navigation, scene prompt revisions, saved-segment status, and preview playback. Use Rich Scene Prompt Editor for decorated references and optional prompt optimization. Both write edits back into the connected Plan; neither replaces ComfyUI execution or changes sampling.\n\nTIMING\nEach requested 10-second scene is 243 raw H3 frames. Scene 2 repeats 22 context frames, so delivery is 243 + (243 - 22) = 464 frames = 19.333 seconds at 24 fps.\n\nBLENDING\nPlan carries 22 frames of motion context but blends only 5 frames at the visible boundary. This intentionally demonstrates that video_blend_frames is independent from context_length. The final video is re-encoded for the cumulative linear blend; generated audio remains frame-locked and is not crossfaded."
+      ],
+      "color": "#432f66",
+      "bgcolor": "rgba(24,24,27,.9)"
+    },
+    {
+      "id": 1945,
       "type": "MiniMaxH3ChainPolicy",
       "pos": [
         -1092,
@@ -2033,7 +1979,7 @@
           "name": "chain_policy",
           "type": "H3_CHAIN_POLICY",
           "links": [
-            90
+            86
           ]
         },
         {
@@ -2064,16 +2010,8 @@
       "MODEL"
     ],
     [
-      4,
-      1941,
-      0,
-      1635,
-      0,
-      "MODEL"
-    ],
-    [
       5,
-      1635,
+      1941,
       0,
       5,
       0,
@@ -2320,6 +2258,14 @@
       "LATENT"
     ],
     [
+      49,
+      1704,
+      0,
+      1931,
+      1,
+      "H3_CHAIN_SEGMENT"
+    ],
+    [
       50,
       1705,
       0,
@@ -2451,7 +2397,7 @@
       75,
       1930,
       0,
-      1947,
+      1701,
       0,
       "H3_CHAIN_PLAN"
     ],
@@ -2464,6 +2410,30 @@
       "H3_CHAIN_PLAN"
     ],
     [
+      77,
+      1702,
+      0,
+      1931,
+      0,
+      "H3_CHAIN_STATE"
+    ],
+    [
+      78,
+      132,
+      1,
+      1931,
+      2,
+      "AUDIO"
+    ],
+    [
+      79,
+      1931,
+      0,
+      1705,
+      4,
+      "H3_CHAIN_SEGMENT"
+    ],
+    [
       81,
       132,
       2,
@@ -2473,46 +2443,14 @@
     ],
     [
       82,
-      1702,
+      1930,
       0,
-      1944,
-      0,
-      "H3_CHAIN_STATE"
-    ],
-    [
-      83,
-      1704,
-      0,
-      1944,
-      1,
-      "H3_CHAIN_SEGMENT"
-    ],
-    [
-      84,
-      132,
-      1,
-      1944,
-      2,
-      "AUDIO"
-    ],
-    [
-      85,
-      1944,
-      0,
-      1705,
-      4,
-      "H3_CHAIN_SEGMENT"
-    ],
-    [
-      88,
-      1947,
-      0,
-      1701,
+      1942,
       0,
       "H3_CHAIN_PLAN"
     ],
     [
-      89,
+      85,
       1702,
       0,
       132,
@@ -2520,8 +2458,8 @@
       "H3_CHAIN_STATE"
     ],
     [
-      90,
-      1948,
+      86,
+      1945,
       0,
       1700,
       0,
@@ -2547,7 +2485,7 @@
       "bounding": [
         -704,
         -352,
-        5728,
+        5792,
         800
       ],
       "color": "#744c8c",
@@ -2557,7 +2495,7 @@
       "id": 4,
       "title": "FINAL ASSEMBLY",
       "bounding": [
-        5056,
+        5120,
         -352,
         800,
         640
@@ -2569,22 +2507,22 @@
       "id": 5,
       "title": "DISABLED RECOVERY PATH",
       "bounding": [
-        5056,
+        5120,
         320,
         1056,
-        736
+        768
       ],
       "color": "#8a5a2b",
       "flags": {}
     },
     {
       "id": 6,
-      "title": "T2V — PLAN + STANDARD PROMPT EDITOR",
+      "title": "T2V — PLAN STUDIO AUTHORING",
       "bounding": [
-        -704,
+        -672,
         480,
-        3216,
-        1280
+        3764,
+        1392
       ],
       "color": "#3f789e",
       "flags": {}
@@ -2593,10 +2531,10 @@
   "config": {},
   "extra": {
     "ds": {
-      "scale": 0.3361571272434445,
+      "scale": 0.38554328942953164,
       "offset": [
-        3359.2185131289407,
-        1561.8409198172365
+        2034.6092391418879,
+        937.8713924487479
       ]
     },
     "frontendVersion": "1.48.7",
@@ -2607,7 +2545,7 @@
     "ue_links": [],
     "links_added_by_ue": [],
     "comfyui_mcp": {
-      "workflow_uuid": "64bb2ac2-33a8-4fa6-ae38-8a4da4ee2077"
+      "workflow_uuid": "0caab59d-5b36-453a-8646-2180c636ac04"
     }
   },
   "version": 0.4

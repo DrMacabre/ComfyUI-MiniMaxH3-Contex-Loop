@@ -39,7 +39,7 @@ def assert_original_names_first(workflow):
 def main():
     archived = load(
         "example_workflows/Archive/"
-        "MiniMax H3 Ref2V - Studio Legacy Scheduled.json")
+        "Ref2V Studio Legacy Scheduled - MiniMax H3.json")
     original_identity = {
         node["id"]: node["type"] for node in archived["nodes"]}
     migrated = migration.migrate(
@@ -80,7 +80,7 @@ def main():
 
     source_demo = load(
         "example_workflows/"
-        "MiniMax H3 Ref2V - Studio Tagged Source Audio.json")
+        "Ref2V Studio Tagged Source Audio - MiniMax H3.json")
     migration.migrate(source_demo, migration.SOURCE_AUDIO_DEMO)
     assert_original_names_first(source_demo)
     stable_demo = copy.deepcopy(source_demo)

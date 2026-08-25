@@ -22,24 +22,24 @@ example_workflows/
 │   ├── soldier_crabs_bribie_island_cc0.webm
 │   ├── soldier_crabs_inpaint_mask.png
 │   └── soldier_crabs_reference_cc0.png
-├── EXPERIMENTAL MiniMax H3 Ref2V - Sequential Motion.json
-├── MiniMax H3 Deferred Upscale + De-Rope - H3 LBH 3D.json
-├── MiniMax H3 Deferred Upscale - H3 LBH 3D.json
-├── MiniMax H3 Deferred Upscale - SeedVR2 Full Chain.json
-├── MiniMax H3 - Masked AV Bridge - Two Clips.json
-├── MiniMax H3 - Masked AV Extension - Chain + Reference Image.json
-├── MiniMax H3 - Masked AV Extension - Single Clip.json
-├── MiniMax H3 - Masked Video Inpaint.json
-├── MiniMax H3 FL2V - Normal.json
-├── MiniMax H3 I2V - Normal.json
-├── MiniMax H3 I2V - Studio.json
-├── MiniMax H3 Ref2V - Basic.json
-├── MiniMax H3 Ref2V - Masked Video Inpaint.json
-├── MiniMax H3 Ref2V - Tagged.json
-├── MiniMax H3 Ref2V - Studio Tagged.json
-├── MiniMax H3 Ref2V - Studio Tagged Source Audio.json
-├── MiniMax H3 T2V - Normal.json
-├── MiniMax H3 T2V - Studio.json
+├── Ref2V Sequential Motion - EXPERIMENTAL - MiniMax H3.json
+├── Deferred Upscale + De-Rope - H3 LBH 3D - MiniMax H3.json
+├── Deferred Upscale - H3 LBH 3D - MiniMax H3.json
+├── Deferred Upscale - SeedVR2 Full Chain - MiniMax H3.json
+├── Masked AV Bridge - Two Clips - MiniMax H3.json
+├── Masked AV Extension - Chain + Reference Image - MiniMax H3.json
+├── Masked AV Extension - Single Clip - MiniMax H3.json
+├── Masked Video Inpaint - MiniMax H3.json
+├── FL2V Normal - MiniMax H3.json
+├── I2V Normal - MiniMax H3.json
+├── I2V Studio - MiniMax H3.json
+├── Ref2V Basic - MiniMax H3.json
+├── Ref2V Masked Video Inpaint - MiniMax H3.json
+├── Ref2V Tagged - MiniMax H3.json
+├── Ref2V Studio Tagged - MiniMax H3.json
+├── Ref2V Studio Tagged Source Audio - MiniMax H3.json
+├── T2V Normal - MiniMax H3.json
+├── T2V Studio - MiniMax H3.json
 └── Archive/
     └── previous mixed and experimental examples
 ```
@@ -57,7 +57,7 @@ recursive Motion Context.
 
 ## Deferred H3 upscale
 
-[`MiniMax H3 Deferred Upscale + De-Rope - H3 LBH 3D.json`](<MiniMax H3 Deferred Upscale + De-Rope - H3 LBH 3D.json>)
+[`Deferred Upscale + De-Rope - H3 LBH 3D - MiniMax H3.json`](<Deferred Upscale + De-Rope - H3 LBH 3D - MiniMax H3.json>)
 combines the working LBH 3D spatial latent upscale with MAINodes' stable
 decoded `H3 Jerk Oracle → H3 Time Smear → H3 V2V Init → H3 Exact Recover`
 route in the same H3 regeneration pass. It deliberately does not use the
@@ -95,7 +95,7 @@ can still grow two to three times on high-motion scenes; use the adapter's
 scene range controls or a less aggressive oracle preset if RAM or wall time is
 too high.
 
-[`MiniMax H3 Deferred Upscale - SeedVR2 Full Chain.json`](<MiniMax H3 Deferred Upscale - SeedVR2 Full Chain.json>)
+[`Deferred Upscale - SeedVR2 Full Chain - MiniMax H3.json`](<Deferred Upscale - SeedVR2 Full Chain - MiniMax H3.json>)
 is the low-RAM whole-video route. Checkpoint Manager supplies the selected
 generated lineage, including a partial run when later planned scenes have not
 been rendered yet; Full-Chain Latent Video Adapter re-decodes the original H3 video
@@ -108,7 +108,7 @@ VIDEO directly to core Save Video. Install the
 [ethanfel SeedVR2 fork](https://github.com/ethanfel/ComfyUI-SeedVR2_VideoUpscaler)
 before opening the graph.
 
-[`MiniMax H3 Deferred Upscale - H3 LBH 3D.json`](<MiniMax H3 Deferred Upscale - H3 LBH 3D.json>)
+[`Deferred Upscale - H3 LBH 3D - MiniMax H3.json`](<Deferred Upscale - H3 LBH 3D - MiniMax H3.json>)
 is a standalone second-pass workflow: it contains no first-pass generation
 loop or source Plan. Select the latest generated scene you want in Checkpoint
 Manager, then queue the child upscale profile. The selected lineage may be
@@ -181,15 +181,15 @@ copyrighted *Crab Rave* soundtrack, music video, choreography, or branding.
 Copy the WebM to `ComfyUI/input/`; the chained Ref2VA example additionally
 needs `soldier_crabs_reference_cc0.png`.
 
-- [`MiniMax H3 - Masked AV Extension - Single Clip.json`](<MiniMax H3 - Masked AV Extension - Single Clip.json>)
+- [`Masked AV Extension - Single Clip - MiniMax H3.json`](<Masked AV Extension - Single Clip - MiniMax H3.json>)
   uses the normal recursive Chain Loop with a one-scene Plan. Existing Video
   Context preserves the source tail as scene 1's 39-frame/65-audio-step target
   prefix, and Assemble prepends the complete normalized source once.
-- [`MiniMax H3 - Masked AV Extension - Chain + Reference Image.json`](<MiniMax H3 - Masked AV Extension - Chain + Reference Image.json>)
+- [`Masked AV Extension - Chain + Reference Image - MiniMax H3.json`](<Masked AV Extension - Chain + Reference Image - MiniMax H3.json>)
   runs three sequential Ref2VA extensions through the same loop. The protected
   AV prefix is authoritative for pose, motion, camera, lighting, and timing;
   the tagged `@crabs` image only stabilizes species appearance.
-- [`MiniMax H3 - Masked AV Bridge - Two Clips.json`](<MiniMax H3 - Masked AV Bridge - Two Clips.json>)
+- [`Masked AV Bridge - Two Clips - MiniMax H3.json`](<Masked AV Bridge - Two Clips - MiniMax H3.json>)
   splits the 313-frame 24-fps source into frames 0–98 and 213–312. The
   192-frame bridge protects 39 frames at each endpoint and generates the exact
   114-frame gap before the graph reassembles the original 313-frame timeline.
@@ -201,12 +201,12 @@ node with an ordinary ComfyUI sampler rather than pretending it is recursive.
 
 ## Masked video inpaint
 
-[`MiniMax H3 - Masked Video Inpaint.json`](<MiniMax H3 - Masked Video Inpaint.json>)
+[`Masked Video Inpaint - MiniMax H3.json`](<Masked Video Inpaint - MiniMax H3.json>)
 adapts the earlier standalone PerRowMasking experiment to this pack's
 native-first H3 mask runtime and full Chain Loop. It contains no MODEL patch
 or LTX AV concat/separate node.
 
-[`MiniMax H3 Ref2V - Masked Video Inpaint.json`](<MiniMax H3 Ref2V - Masked Video Inpaint.json>)
+[`Ref2V Masked Video Inpaint - MiniMax H3.json`](<Ref2V Masked Video Inpaint - MiniMax H3.json>)
 uses the identical source-target, mask, loop, review, and assembly graph with
 the Ref2VA base model and a single global `<Picture 1>`. The picture defines
 the regenerated crab appearance; the source movie remains the real masked AV
@@ -255,14 +255,13 @@ and `last_frame` deliberately disconnected, which selects its T2VA path. They
 share the same two-scene portrait plan, model graph, seeds, generated-audio
 route, 22-frame motion context, checkpointing, Review Gate, recovery path, and
 final assembly. The shared model stack uses ComfyUI's
-core `ModelAttentionBackend` set to `comfy kitchen attention`, followed by
-`minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors` at strength 1.0.
-Both the Plan default and scheduler fallback use eight sampling steps with the
-`lcm` sampler and `beta` scheduler.
+core `ModelAttentionBackend` set to `comfy kitchen attention` with no bundled
+sampling LoRA. Both the Plan default and scheduler fallback use 20 sampling
+steps with the `res_multistep` sampler and `simple` scheduler.
 
-- [`MiniMax H3 T2V - Normal.json`](<MiniMax H3 T2V - Normal.json>)
+- [`T2V Normal - MiniMax H3.json`](<T2V Normal - MiniMax H3.json>)
   uses the standard Scene Prompt Editor.
-- [`MiniMax H3 T2V - Studio.json`](<MiniMax H3 T2V - Studio.json>)
+- [`T2V Studio - MiniMax H3.json`](<T2V Studio - MiniMax H3.json>)
   uses the optional timeline-oriented Plan Studio plus the separate Rich Scene
   Prompt Editor. Neither changes sampling or ComfyUI execution.
 
@@ -299,15 +298,15 @@ Shot's `clip_index`, connect the switch output to the gate's `last_frame`, and
 connect the gate output to core `MiniMaxH3ImageToVideo.last_frame`. The bundled
 I2V pair leaves this optional route disconnected.
 
-- [`MiniMax H3 I2V - Normal.json`](<MiniMax H3 I2V - Normal.json>) uses the
+- [`I2V Normal - MiniMax H3.json`](<I2V Normal - MiniMax H3.json>) uses the
   stable Scene Prompt Editor with rich token presentation but no active prompt
   optimizer UI.
-- [`MiniMax H3 I2V - Studio.json`](<MiniMax H3 I2V - Studio.json>) uses Plan
+- [`I2V Studio - MiniMax H3.json`](<I2V Studio - MiniMax H3.json>) uses Plan
   Studio plus the separate Rich Scene Prompt Editor and its optional optimizer.
 
-The pair uses the same Comfy Kitchen attention, LightX2V eight-step LoRA,
-`lcm` sampler, `beta` scheduler, generated-audio route, checkpoint/review path,
-and final assembly as T2V. It renders at 896 × 672 to preserve the bundled
+The pair uses the same LoRA-free Comfy Kitchen model path, 20-step
+`res_multistep` sampler, `simple` scheduler, generated-audio route,
+checkpoint/review path, and final assembly as T2V. It renders at 896 × 672 to preserve the bundled
 image's 4:3 composition. Each scene requests 362 raw frames; after removing 22
 repeated frames from scene 2, delivery is 702 frames, or 29.25 seconds at 24
 fps. Normal uses a hard boundary and Studio demonstrates a five-frame blend.
@@ -329,7 +328,7 @@ repository-authored continuation and intentionally contains no Picture label.
 
 ## FL2V
 
-[`MiniMax H3 FL2V - Normal.json`](<MiniMax H3 FL2V - Normal.json>) is a
+[`FL2V Normal - MiniMax H3.json`](<FL2V Normal - MiniMax H3.json>) is a
 two-scene A→B→A loop built from the same working I2V graph. It adds this pack's
 Frame Index Switch between two Load Image nodes and the Frame Gate:
 
@@ -361,17 +360,17 @@ That output is a no-op pass-through in the default `guide` mode and carries the
 prepared target prefix in `masked_av`, so changing modes cannot silently leave
 the sampler on the unprepared conditioner latent.
 
-- [`MiniMax H3 Ref2V - Basic.json`](<MiniMax H3 Ref2V - Basic.json>) connects
+- [`Ref2V Basic - MiniMax H3.json`](<Ref2V Basic - MiniMax H3.json>) connects
   both Load Image nodes directly to ComfyUI's core
   `MiniMaxH3ReferenceToVideo`. Both images are global, so the prompts use the
   native `<Picture 1>` and `<Picture 2>` labels in both scenes.
-- [`MiniMax H3 Ref2V - Tagged.json`](<MiniMax H3 Ref2V - Tagged.json>) chains
+- [`Ref2V Tagged - MiniMax H3.json`](<Ref2V Tagged - MiniMax H3.json>) chains
   two Tagged Picture nodes into `MiniMaxH3TaggedReferenceToVideo`. There are no
   numeric scene selectors: `@style_base` is present in both scene prompts,
   while `@interior` appears only in scene 2. Current Shot supplies
   `clip_index` and `clip_count`, and the final reference fingerprint is
   connected to the Plan for checkpoint safety.
-- [`MiniMax H3 Ref2V - Studio Tagged.json`](<MiniMax H3 Ref2V - Studio Tagged.json>)
+- [`Ref2V Studio Tagged - MiniMax H3.json`](<Ref2V Studio Tagged - MiniMax H3.json>)
   keeps that prompt-driven generation path and adds Plan Studio, Rich Scene
   Prompt Editor, and an inline Run Manager. It is also the experimental
   `masked_av` example: Chain Context's latent output feeds the sampler, and a
@@ -380,14 +379,14 @@ the sampler on the unprepared conditioner latent.
   sockets as well as their Tagged Picture nodes. The manager archives image
   fallbacks by default and restores each saved run's Plan plus the matching
   loader selections.
-- [`MiniMax H3 Ref2V - Studio Tagged Source Audio.json`](<MiniMax H3 Ref2V - Studio Tagged Source Audio.json>)
+- [`Ref2V Studio Tagged Source Audio - MiniMax H3.json`](<Ref2V Studio Tagged Source Audio - MiniMax H3.json>)
   derives from Studio Tagged and registers Load Audio once with Source
   Timeline. The descriptor feeds Plan Studio preflight, Loop Start, recovery,
   and assembly through saved state. Current Shot's scene-local slice feeds the
   `@audio_1` Tagged Audio Ref with `align_audio_reference` enabled; its
   downstream fingerprint is deliberately not returned to Plan, avoiding a
   cycle while structured dependencies retain exact PCM provenance.
-- [`EXPERIMENTAL MiniMax H3 Ref2V - Sequential Motion.json`](<EXPERIMENTAL MiniMax H3 Ref2V - Sequential Motion.json>)
+- [`Ref2V Sequential Motion - EXPERIMENTAL - MiniMax H3.json`](<Ref2V Sequential Motion - EXPERIMENTAL - MiniMax H3.json>)
   adds one long video with embedded audio as `@motion` + `@motion_audio` and
   predates the dedicated Tagged Motion Ref. For new motion-transfer workflows,
   replace its generic Tagged Video node with Tagged Motion Ref so `@motion`

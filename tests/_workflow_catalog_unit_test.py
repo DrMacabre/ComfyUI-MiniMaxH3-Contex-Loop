@@ -77,6 +77,35 @@ def comparable_plan(plan):
     }
 
 
+def validate_sampling_defaults(path):
+    workflow = load(path)
+    for item in workflow.get("nodes", []):
+        identity = "%s %s %s" % (
+            item.get("type", ""), item.get("title", ""),
+            json.dumps(item.get("widgets_values", [])))
+        assert not (
+            item.get("type") == "LoraLoaderModelOnly"
+            and ("lightx" in identity.lower()
+                 or "turbo" in identity.lower())), path.name
+        assert "cache" not in (
+            "%s %s" % (item.get("type", ""), item.get("title", ""))
+        ).lower(), (path.name, item.get("type"))
+        if item.get("type") == "KSamplerSelect":
+            assert item["widgets_values"] == ["res_multistep"], path.name
+        elif item.get("type") == "BasicScheduler":
+            assert item["widgets_values"][:2] == ["simple", 20], path.name
+        elif item.get("type") == "H3InjectSchedule":
+            assert item["widgets_values"][:2] == ["simple", 20], path.name
+        elif item.get("type") == "MiniMaxH3ChainPlan":
+            assert item["widgets_values"][12] == 20, path.name
+            plan = json.loads(item["widgets_values"][0])
+            if plan.get("defaults"):
+                assert plan["defaults"]["steps"] == 20, path.name
+            for shot in plan.get("shots", []):
+                if "steps" in shot:
+                    assert shot["steps"] == 20, (path.name, shot.get("id"))
+
+
 def validate_v05_topology(workflow):
     """Maintained recursive examples teach the 0.5 semantic graph."""
     plan = node(workflow, "MiniMaxH3ChainPlan")
@@ -284,13 +313,8 @@ def validate_t2v(path, editor_type, expected_blend):
 
     attention = node(workflow, "ModelAttentionBackend")
     assert attention["widgets_values"] == ["comfy kitchen attention"]
-    lora = node(workflow, "LoraLoaderModelOnly")
-    assert lora["widgets_values"] == [
-        "MiniMax H3/minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors",
-        1.0,
-    ]
+    assert "LoraLoaderModelOnly" not in node_types
     assert socket(attention["inputs"], "model")["link"] is not None
-    assert socket(lora["inputs"], "model")["link"] is not None
 
     conditioner = node(workflow, "MiniMaxH3ImageToVideo")
     assert socket(conditioner["inputs"], "first_frame")["link"] is None
@@ -301,12 +325,13 @@ def validate_t2v(path, editor_type, expected_blend):
     plan = json.loads(plan_node["widgets_values"][0])
     assert plan_node["widgets_values"][3:6] == [544, 960, 22]
     assert plan_node["widgets_values"][9] == "generated_audio"
-    assert plan_node["widgets_values"][12] == 8
+    assert plan_node["widgets_values"][12] == 20
     assert plan_node["widgets_values"][15] == expected_blend
-    assert plan["defaults"]["steps"] == 8
-    assert node(workflow, "KSamplerSelect")["widgets_values"] == ["lcm"]
+    assert plan["defaults"]["steps"] == 20
+    assert node(workflow, "KSamplerSelect")["widgets_values"] == [
+        "res_multistep"]
     scheduler = node(workflow, "BasicScheduler")
-    assert scheduler["widgets_values"][0:2] == ["beta", 8]
+    assert scheduler["widgets_values"][0:2] == ["simple", 20]
     assert len(plan["shots"]) == 2
     assert [shot["length"] for shot in plan["shots"]] == [243, 243]
     for shot in plan["shots"]:
@@ -368,13 +393,11 @@ def validate_i2v(path, editor_type, expected_blend):
 
     assert node(workflow, "ModelAttentionBackend")["widgets_values"] == [
         "comfy kitchen attention"]
-    assert node(workflow, "LoraLoaderModelOnly")["widgets_values"] == [
-        "MiniMax H3/minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors",
-        1.0,
-    ]
-    assert node(workflow, "KSamplerSelect")["widgets_values"] == ["lcm"]
+    assert "LoraLoaderModelOnly" not in node_types
+    assert node(workflow, "KSamplerSelect")["widgets_values"] == [
+        "res_multistep"]
     assert node(workflow, "BasicScheduler")["widgets_values"][0:2] == [
-        "beta", 8]
+        "simple", 20]
 
     loader = node(workflow, "LoadImage")
     assert loader["widgets_values"][0] == (
@@ -395,9 +418,9 @@ def validate_i2v(path, editor_type, expected_blend):
     plan = json.loads(plan_node["widgets_values"][0])
     assert plan_node["widgets_values"][3:6] == [896, 672, 22]
     assert plan_node["widgets_values"][9] == "generated_audio"
-    assert plan_node["widgets_values"][10:13] == [22, 15, 8]
+    assert plan_node["widgets_values"][10:13] == [22, 15, 20]
     assert plan_node["widgets_values"][15] == expected_blend
-    assert plan["defaults"] == {"duration_seconds": 15, "steps": 8}
+    assert plan["defaults"] == {"duration_seconds": 15, "steps": 20}
     assert [shot["length"] for shot in plan["shots"]] == [362, 362]
     opening = "\n".join(plan["shots"][0]["prompt"])
     continuation = "\n".join(plan["shots"][1]["prompt"])
@@ -502,13 +525,11 @@ def validate_ref2v(path, variant):
         "comfy kitchen attention"]
     assert node(workflow, "UNETLoader")["widgets_values"][0] == (
         "MiniMax-H3/minimax_h3_ref2va_pruned_int8_convrot.safetensors")
-    assert node(workflow, "LoraLoaderModelOnly")["widgets_values"] == [
-        "MiniMax H3/minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors",
-        1.0,
-    ]
-    assert node(workflow, "KSamplerSelect")["widgets_values"] == ["lcm"]
+    assert "LoraLoaderModelOnly" not in node_types
+    assert node(workflow, "KSamplerSelect")["widgets_values"] == [
+        "res_multistep"]
     assert node(workflow, "BasicScheduler")["widgets_values"][0:2] == [
-        "beta", 8]
+        "simple", 20]
 
     loaders = [item for item in workflow["nodes"]
                if item.get("type") == "LoadImage"]
@@ -526,14 +547,14 @@ def validate_ref2v(path, variant):
     expected_audio_mode = (
         "source_track" if variant == "source_audio" else "generated_audio")
     assert plan_node["widgets_values"][9:13] == [
-        expected_audio_mode, expected_context, 10, 8]
+        expected_audio_mode, expected_context, 10, 20]
     defaults = plan.get("defaults")
     if defaults is not None:
-        assert defaults == {"duration_seconds": 10, "steps": 8}
+        assert defaults == {"duration_seconds": 10, "steps": 20}
     else:
         # Saving through Plan Studio expands defaults into each scene and
         # stores prompts as strings. This is equivalent runtime Plan JSON.
-        assert all(shot.get("steps") == 8 for shot in plan["shots"])
+        assert all(shot.get("steps") == 20 for shot in plan["shots"])
     assert [shot["length"] for shot in plan["shots"]] == [243, 243]
     assert [shot["seed"] for shot in plan["shots"]] == ["4201", "4202"]
     for shot in plan["shots"]:
@@ -712,7 +733,7 @@ def validate_ref2v_source_audio(path):
 def validate_sequential_motion_ref(path):
     workflow = load(path)
     validate_links(workflow)
-    assert path.name.startswith("EXPERIMENTAL ")
+    assert "EXPERIMENTAL" in path.name
     assert node(workflow, "UNETLoader")["widgets_values"][0] == (
         "MiniMax-H3/minimax_h3_ref2va_pruned_int8_convrot.safetensors")
 
@@ -855,7 +876,7 @@ def validate_deferred_h3_upscale(path):
         socket(sync["inputs"], "upscaled_latent")["link"]]
     assert sync["widgets_values"] == [
         "bilinear", "conditioning_policy"]
-    assert scheduler["widgets_values"] == ["simple", 2, 0.24]
+    assert scheduler["widgets_values"] == ["simple", 20, 0.24]
     assert learned["widgets_values"] == [
         "minimax_h3_latent_upscaler_3d_fp16.safetensors", "megapixels",
         1.5, 32, "cuda", "fp16"]
@@ -869,7 +890,8 @@ def validate_deferred_h3_upscale(path):
         socket(guider["inputs"], "conditioning")["link"]]
     assert socket(prepare["outputs"], "latent")["links"] == [
         socket(sampler["inputs"], "latent_image")["link"]]
-    assert node(workflow, "KSamplerSelect")["widgets_values"] == ["euler"]
+    assert node(workflow, "KSamplerSelect")["widgets_values"] == [
+        "res_multistep"]
     assert socket(sampler["outputs"], "output")["links"]
     assert socket(saver["inputs"], "images")["link"] is not None
     assert socket(saver["inputs"], "upscaled_latent")["link"] is not None
@@ -991,7 +1013,9 @@ def validate_deferred_h3_derope(path):
     assert init["widgets_values"][6] == (
         "follow the original performance (0.5)")
     assert schedule["widgets_values"] == [
-        "beta", 8, 0.5, "faithful detail 0.50 (metric best)"]
+        "simple", 20, 0.5, "20-step simple schedule"]
+    assert node(workflow, "KSamplerSelect")["widgets_values"] == [
+        "res_multistep"]
     assert recover_audio["widgets_values"][-1] == (
         "keep the original performance (safe default)")
     assert origin_for_input(
@@ -1060,42 +1084,44 @@ def validate_seedvr2_full_chain(path):
 
 
 def main():
+    for path in EXAMPLES.rglob("*.json"):
+        validate_sampling_defaults(path)
     assert EXAMPLES.joinpath("README.md").is_file()
     assert ARCHIVE.joinpath("README.md").is_file()
     assert len(list(ARCHIVE.glob("*.json"))) == 9
     for path in ARCHIVE.glob("*.json"):
         validate_links(load(path))
 
-    t2v_normal_path = EXAMPLES / "MiniMax H3 T2V - Normal.json"
-    t2v_studio_path = EXAMPLES / "MiniMax H3 T2V - Studio.json"
-    i2v_normal_path = EXAMPLES / "MiniMax H3 I2V - Normal.json"
-    i2v_studio_path = EXAMPLES / "MiniMax H3 I2V - Studio.json"
-    fl2v_normal_path = EXAMPLES / "MiniMax H3 FL2V - Normal.json"
-    ref2v_basic_path = EXAMPLES / "MiniMax H3 Ref2V - Basic.json"
-    ref2v_tagged_path = EXAMPLES / "MiniMax H3 Ref2V - Tagged.json"
-    ref2v_studio_path = EXAMPLES / "MiniMax H3 Ref2V - Studio Tagged.json"
+    t2v_normal_path = EXAMPLES / "T2V Normal - MiniMax H3.json"
+    t2v_studio_path = EXAMPLES / "T2V Studio - MiniMax H3.json"
+    i2v_normal_path = EXAMPLES / "I2V Normal - MiniMax H3.json"
+    i2v_studio_path = EXAMPLES / "I2V Studio - MiniMax H3.json"
+    fl2v_normal_path = EXAMPLES / "FL2V Normal - MiniMax H3.json"
+    ref2v_basic_path = EXAMPLES / "Ref2V Basic - MiniMax H3.json"
+    ref2v_tagged_path = EXAMPLES / "Ref2V Tagged - MiniMax H3.json"
+    ref2v_studio_path = EXAMPLES / "Ref2V Studio Tagged - MiniMax H3.json"
     ref2v_source_audio_path = (
-        EXAMPLES / "MiniMax H3 Ref2V - Studio Tagged Source Audio.json")
+        EXAMPLES / "Ref2V Studio Tagged Source Audio - MiniMax H3.json")
     sequential_path = (
-        EXAMPLES / "EXPERIMENTAL MiniMax H3 Ref2V - Sequential Motion.json")
+        EXAMPLES / "Ref2V Sequential Motion - EXPERIMENTAL - MiniMax H3.json")
     deferred_upscale_path = (
-        EXAMPLES / "MiniMax H3 Deferred Upscale - H3 LBH 3D.json")
+        EXAMPLES / "Deferred Upscale - H3 LBH 3D - MiniMax H3.json")
     deferred_derope_path = (
         EXAMPLES /
-        "MiniMax H3 Deferred Upscale + De-Rope - H3 LBH 3D.json")
+        "Deferred Upscale + De-Rope - H3 LBH 3D - MiniMax H3.json")
     seedvr2_full_chain_path = (
-        EXAMPLES / "MiniMax H3 Deferred Upscale - SeedVR2 Full Chain.json")
+        EXAMPLES / "Deferred Upscale - SeedVR2 Full Chain - MiniMax H3.json")
     masked_inpaint_path = (
-        EXAMPLES / "MiniMax H3 - Masked Video Inpaint.json")
+        EXAMPLES / "Masked Video Inpaint - MiniMax H3.json")
     masked_ref_inpaint_path = (
-        EXAMPLES / "MiniMax H3 Ref2V - Masked Video Inpaint.json")
+        EXAMPLES / "Ref2V Masked Video Inpaint - MiniMax H3.json")
     masked_single_extension_path = (
-        EXAMPLES / "MiniMax H3 - Masked AV Extension - Single Clip.json")
+        EXAMPLES / "Masked AV Extension - Single Clip - MiniMax H3.json")
     masked_chain_extension_path = (
         EXAMPLES /
-        "MiniMax H3 - Masked AV Extension - Chain + Reference Image.json")
+        "Masked AV Extension - Chain + Reference Image - MiniMax H3.json")
     masked_bridge_path = (
-        EXAMPLES / "MiniMax H3 - Masked AV Bridge - Two Clips.json")
+        EXAMPLES / "Masked AV Bridge - Two Clips - MiniMax H3.json")
     assert set(path.name for path in EXAMPLES.glob("*.json")) == {
         t2v_normal_path.name, t2v_studio_path.name,
         i2v_normal_path.name, i2v_studio_path.name,

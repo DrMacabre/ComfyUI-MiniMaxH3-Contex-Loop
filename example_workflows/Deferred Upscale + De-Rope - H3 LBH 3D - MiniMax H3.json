@@ -287,7 +287,7 @@
           "name": "MODEL",
           "type": "MODEL",
           "links": [
-            12
+            13
           ]
         }
       ],
@@ -298,46 +298,6 @@
       },
       "widgets_values": [
         "comfy kitchen attention"
-      ]
-    },
-    {
-      "id": 7,
-      "type": "LoraLoaderModelOnly",
-      "pos": [
-        -1280,
-        -704
-      ],
-      "size": [
-        288,
-        96
-      ],
-      "flags": {},
-      "order": 5,
-      "mode": 0,
-      "inputs": [
-        {
-          "name": "model",
-          "type": "MODEL",
-          "link": 12
-        }
-      ],
-      "outputs": [
-        {
-          "name": "MODEL",
-          "type": "MODEL",
-          "links": [
-            13
-          ]
-        }
-      ],
-      "properties": {
-        "cnr_id": "comfy-core",
-        "ver": "0.30.0",
-        "Node name for S&R": "LoraLoaderModelOnly"
-      },
-      "widgets_values": [
-        "MiniMax H3/minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors",
-        1
       ]
     },
     {
@@ -754,7 +714,7 @@
         "Node name for S&R": "KSamplerSelect"
       },
       "widgets_values": [
-        "gradient_estimation"
+        "res_multistep"
       ]
     },
     {
@@ -1088,7 +1048,7 @@
         "Node name for S&R": "Note"
       },
       "widgets_values": [
-        "REQUIRES\nhttps://github.com/LBH-123-AI/Comfyui_Minimax_h3_latent_Upscaler\nhttps://github.com/matlowai/ComfyUI-MAINodes\n\nThis uses MAINodes' stable decoded pixel-smear path, not experimental latent temporal insertion. The longer smeared IMAGE batch lives on CPU, then VAE Encode and LBH operate scene by scene; effective time can still reach roughly 2-3x on high-motion clips. If RAM or generation time is excessive, process a smaller start/end scene range or use a less aggressive oracle preset before lowering target resolution.\n\nDefaults: balanced oracle q=0.75 / d_max=4 / ramp ON / bridge=8; 1.5 MP LBH 3D; 8-step beta schedule injected from 0.50; gradient_estimation sampler; audio init follows the original performance at 0.5; Audio Recover delivers the original performance. Community testing consistently places d_max=4 at the useful H3 threshold and recommends doing spatial upscale and de-rope in this same regeneration pass.\n\nH3 Conditioning Sync now permits the longer target clock while resizing only spatial reference/keyframe latents. Motion refs remain excluded by default. The pass-2 Comfy Kitchen override is bypassed because large H3 sequences can exceed Sage prequantized int32 strides. save_latent remains OFF; the compact HQ continuation tail is retained automatically when the next scene needs it."
+        "REQUIRES\nhttps://github.com/LBH-123-AI/Comfyui_Minimax_h3_latent_Upscaler\nhttps://github.com/matlowai/ComfyUI-MAINodes\n\nThis uses MAINodes' stable decoded pixel-smear path, not experimental latent temporal insertion. The longer smeared IMAGE batch lives on CPU, then VAE Encode and LBH operate scene by scene; effective time can still reach roughly 2-3x on high-motion clips. If RAM or generation time is excessive, process a smaller start/end scene range or use a less aggressive oracle preset before lowering target resolution.\n\nDefaults: balanced oracle q=0.75 / d_max=4 / ramp ON / bridge=8; 1.5 MP LBH 3D; 20-step simple schedule injected from 0.50; res_multistep sampler; audio init follows the original performance at 0.5; Audio Recover delivers the original performance. Community testing consistently places d_max=4 at the useful H3 threshold and recommends doing spatial upscale and de-rope in this same regeneration pass.\n\nH3 Conditioning Sync now permits the longer target clock while resizing only spatial reference/keyframe latents. Motion refs remain excluded by default. The pass-2 Comfy Kitchen override is bypassed because large H3 sequences can exceed Sage prequantized int32 strides. save_latent remains OFF; the compact HQ continuation tail is retained automatically when the next scene needs it."
       ],
       "title": "DEPENDENCIES / QUALITY AND MEMORY"
     },
@@ -1952,10 +1912,10 @@
         "Node name for S&R": "H3InjectSchedule"
       },
       "widgets_values": [
-        "beta",
-        8,
+        "simple",
+        20,
         0.5,
-        "faithful detail 0.50 (metric best)"
+        "20-step simple schedule"
       ]
     },
     {
@@ -2328,16 +2288,8 @@
       "MODEL"
     ],
     [
-      12,
-      6,
-      0,
-      7,
-      0,
-      "MODEL"
-    ],
-    [
       13,
-      7,
+      6,
       0,
       8,
       0,
