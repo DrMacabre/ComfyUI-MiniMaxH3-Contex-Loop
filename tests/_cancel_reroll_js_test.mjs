@@ -64,6 +64,11 @@ assert.match(source, /\/api\/jobs\/\$\{encodeURIComponent\(record\.promptId\)\}\
 assert.match(source, /execution_interrupted/);
 assert.match(source, /await waiter\.promise/);
 assert.match(source, /requireVisibleWorkflow\(record\);[\s\S]*verifyPredecessorCheckpoint/);
+assert.match(source, /function activeWorkflowIdentity\(\)/);
+assert.match(source, /workflowIdentity !== record\.workflowIdentity/);
+assert.match(source, /widgetByName\(planNode, "run_name"\)/);
+assert.match(source, /record\.currentNode = currentNode/);
+assert.doesNotMatch(source, /currentNode !== record\.currentNode/);
 assert.match(source, /active = null;[\s\S]*Waiting for ComfyUI to finish interrupting/);
 assert.match(source, /applySceneReroll/);
 assert.match(source, /resumeSelection/);

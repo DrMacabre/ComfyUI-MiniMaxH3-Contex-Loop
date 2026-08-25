@@ -163,6 +163,69 @@ with tempfile.TemporaryDirectory() as temporary:
     assert standalone_plan["shots"][0]["id"] == "standalone"
     assert standalone["result"][-4:] == (1, 64, 96, 0)
 
+    tagged = chain._append_tagged_reference(
+        None, kind="picture", tag="future", value="future-picture",
+        content_hash="future-picture-v1")
+    semantic_draft = chain.MiniMaxH3SemanticPictureAnchor().add(
+        torch.zeros((1, 2, 2, 3)), "story_beat")[0]
+    tagged_with_semantic = chain.MiniMaxH3SemanticAnchorBundle().bundle(
+        semantic_draft, "512", "timestamped_video",
+        references=tagged)[0]
+    semantic_token = chain._plan_studio_generation_fingerprint(
+        "", tagged_with_semantic)
+    semantic_current, semantic_lineage = (
+        chain._generation_fingerprint_value(semantic_token))
+    assert semantic_current == tagged_with_semantic[
+        "combined_reference_fingerprint"]
+    assert [entry["tag"] for entry in semantic_lineage["entries"]] == [
+        "future", "story_beat"]
+    automatic = chain.MiniMaxH3ChainPlanStudio().passthrough(
+        plan_json=json.dumps({"shots": [{
+            "id": "automatic", "prompt": "Independent shot.",
+            "length": 22,
+        }]}),
+        run_name="studio_automatic_fingerprint",
+        generation_fingerprint="", tagged_references=tagged,
+        width=64, height=96, context_length=1,
+        encode_mode="video", anchor_mode="head", crop="disabled",
+        audio_mode="generated_audio", audio_context_length=0,
+        default_duration_seconds=1.0, default_steps=8,
+        base_seed=11, segment_crf=17, video_blend_frames=0,
+        continuation_mode="guide", chain_policy=standalone_policy,
+    )["result"][0]
+    assert automatic["compatibility"]["generation_fingerprint"] == (
+        tagged["fingerprint"])
+    assert automatic["compatibility"][
+        "generation_fingerprint_lineage"]["entries"][0]["tag"] == "future"
+
+    combined = chain.MiniMaxH3ChainPlanStudio().passthrough(
+        plan_json=json.dumps({"shots": [{
+            "id": "combined", "prompt": "Independent shot.", "length": 22,
+        }]}),
+        run_name="studio_combined_fingerprint",
+        generation_fingerprint="model-stack:v2", tagged_references=tagged,
+        width=64, height=96, context_length=1,
+        encode_mode="video", anchor_mode="head", crop="disabled",
+        audio_mode="generated_audio", audio_context_length=0,
+        default_duration_seconds=1.0, default_steps=8,
+        base_seed=11, segment_crf=17, video_blend_frames=0,
+        continuation_mode="guide", chain_policy=standalone_policy,
+    )["result"][0]
+    combined_compatibility = combined["compatibility"]
+    assert combined_compatibility["generation_fingerprint"] != (
+        tagged["fingerprint"])
+    assert combined_compatibility["generation_fingerprint_lineage"][
+        "wrapper"]["contract"]["external_generation_fingerprint"] == (
+            "model-stack:v2")
+
+    empty_tagged = chain._make_tagged_references([])
+    assert chain._plan_studio_generation_fingerprint("", empty_tagged) == ""
+
+    connected = chain.MiniMaxH3ChainPlanStudio().passthrough(
+        plan, source_timeline=timeline, tagged_references=tagged,
+        generation_fingerprint="must-not-replace-connected-plan")
+    assert connected["result"][0] is plan
+
     short = deferred_timeline(30)
     _prepared, failed = chain._preflight_chain(
         plan, source_timeline=short)
