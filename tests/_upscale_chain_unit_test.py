@@ -70,6 +70,14 @@ def main():
     assert upscale.MiniMaxH3ChainUpscaleLoopEnd.RETURN_TYPES[0] == (
         chain.MANIFEST_TYPE)
     assert upscale.MiniMaxH3ChainUpscaleMerge.DEPRECATED is True
+    expected_derope_union = "H3_CHAIN_UPSCALE_STATE,H3_CHAIN_STATE"
+    for node_name in (
+            "MiniMaxH3ChainDeropeGuard",
+            "MiniMaxH3ChainDeropeFreezeMask",
+            "MiniMaxH3ChainDeropeContinuity",
+            "MiniMaxH3ChainRecoveredAV"):
+        assert str(package.NODE_CLASS_MAPPINGS[node_name].INPUT_TYPES()[
+            "required"]["state"][0]) == expected_derope_union
     for name in required:
         node = package.NODE_CLASS_MAPPINGS[name]
         schema = node.INPUT_TYPES()
@@ -508,6 +516,11 @@ def main():
             "raw_frames": 39,
             "delivered_frames": 22,
         })
+        derope_manifest["segments"][1].update({
+            "raw_frames": 39,
+            "delivered_frames": 22,
+            "visual_context_source_scene": 1,
+        })
         derope_state = {
             **upscale_state,
             "source_manifest": derope_manifest,
@@ -664,6 +677,104 @@ def main():
             previous_hq_video[:, :, -12:])
         assert "previous HQ latent tail spliced and protected" in (
             derope_continuity[1])
+
+        # The same nodes may run inline from Current Shot. Boundary guarding
+        # follows actual future visual consumers rather than scene numbering,
+        # and continuity uses Chain Context's resolved non-linear/composed
+        # visual state instead of the immediate predecessor's video stream.
+        direct_plan = {
+            "compatibility": {
+                "continuation_mode": "drift_control_av",
+                "context_length": 39,
+            },
+            "shots": [{
+                "id": "direct_1",
+                "raw_frames": 56,
+                "delivered_frames": 17,
+                "continuation_mode": "drift_control_av",
+            }, {
+                "id": "direct_2_hard_cut",
+                "raw_frames": 56,
+                "delivered_frames": 17,
+                "continuation_mode": "drift_control_av",
+                "context_length": 0,
+            }, {
+                "id": "direct_3_from_1",
+                "raw_frames": 56,
+                "delivered_frames": 17,
+                "continuation_mode": "drift_control_av",
+                "context_length": 39,
+                "visual_context_source": "direct_1",
+            }],
+        }
+        direct_state_1 = {
+            "plan": direct_plan,
+            "index": 1,
+            "previous_latent": None,
+            "segments": [],
+        }
+        direct_guard_1 = upscale.MiniMaxH3ChainDeropeGuard().guard(
+            direct_state_1, json.dumps({
+                "holds": [4] * 56,
+                "world_len": 56,
+            }))
+        assert direct_guard_1[1:4] == (False, 39, 17)
+        assert json.loads(direct_guard_1[0])[
+            "h3_chain_visual_consumers"] == [3]
+        direct_state_2 = {**direct_state_1, "index": 2}
+        direct_guard_2 = upscale.MiniMaxH3ChainDeropeGuard().guard(
+            direct_state_2, json.dumps({
+                "holds": [4] * 56,
+                "world_len": 56,
+            }))
+        assert direct_guard_2[1:4] == (True, 39, 0)
+
+        immediate_video = torch.full(
+            (1, 24, 17, 4, 4), 9.0, dtype=torch.float32)
+        selected_video = torch.full(
+            (1, 24, 17, 4, 4), 3.0, dtype=torch.float32)
+        context_audio = torch.zeros(
+            (1, 32, 2, 9), dtype=torch.float32)
+        direct_state_3 = {
+            "plan": direct_plan,
+            "index": 3,
+            "previous_latent": {
+                "samples": [immediate_video, context_audio]},
+            "segments": [],
+            "_visual_context_state": {
+                "_visual_context_target": 3,
+                "_visual_context_source": 1,
+                "_visual_context_lead_source": 0,
+                "_visual_context_lead_frames": 0,
+                "previous_latent": {
+                    "samples": [selected_video, context_audio]},
+            },
+        }
+        direct_continuity = (
+            upscale.MiniMaxH3ChainDeropeContinuity().splice(
+                direct_state_3,
+                {"samples": torch.ones(
+                    (1, 24, 17, 4, 4), dtype=torch.float32)}))
+        assert torch.allclose(
+            direct_continuity[0]["samples"][:, :, :12],
+            selected_video[:, :, -12:])
+        assert "resolved chain visual context" in direct_continuity[1]
+        try:
+            upscale.MiniMaxH3ChainRecoveredAV().pack(
+                direct_state_3,
+                {"samples": torch.ones(
+                    (1, 24, 17, 4, 4), dtype=torch.float32)})
+        except ValueError as exc:
+            assert "requires recovered audio_latent" in str(exc)
+        else:
+            raise AssertionError(
+                "Live-chain Recovered AV accepted a video-only checkpoint")
+        direct_recovered = upscale.MiniMaxH3ChainRecoveredAV().pack(
+            direct_state_3,
+            {"samples": torch.ones(
+                (1, 24, 17, 4, 4), dtype=torch.float32)},
+            {"samples": context_audio})
+        assert len(chain._streams_from_latent(direct_recovered[0])) == 2
         fallback_state = {**resumed_drift_state, "previous_latent": None}
         fallback_prepared = upscale.MiniMaxH3ChainPass2Prepare().prepare(
             {"samples": torch.ones(

@@ -4,6 +4,13 @@ Newest first. This file keeps release history out of the onboarding README.
 
 ## Unreleased — Deferred checkpoint upscaling
 
+- Live generation can now route **Current Shot** directly through the four
+  H3 de-rope adapter nodes, recover the exact AV clock, and save that recovered
+  latent back into the normal chain. The same nodes still accept deferred
+  Upscale Loop state. Inline continuity resolves the Plan's actual linear,
+  non-linear, or composed visual-context source, and a recovered scene tail is
+  protected only when a later scene really consumes it.
+
 - Added phase-safe **Composed visual context** in Plan and Plan Studio. A
   continuation can prepend a selected frame/latent tail from one saved scene
   to the tail of a different saved scene, producing one ordered H3 prefix
