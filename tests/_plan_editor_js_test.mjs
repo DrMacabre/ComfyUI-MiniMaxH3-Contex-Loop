@@ -25,6 +25,8 @@ import {
     sceneContinuationMode,
     sceneLoRARoute,
     scenePromptSeedMode,
+    sceneVisualContextLeadFrames,
+    sceneVisualContextLeadSource,
     sceneVisualContextSource,
     sceneVideoBlendFrames,
     setScenePromptSeedMode,
@@ -675,7 +677,44 @@ blendedNonlinearPlan.shots[4].video_blend_frames = 2;
 assert.match(calculatePlanTiming(blendedNonlinearPlan, {
     contextLength:5, videoBlendFrames:0, anchorMode:"head",
     defaultDurationSeconds:5, defaultSteps:10,
-}).errors.join("\n"), /non-linear visual context requires 0 assembly blend/i);
+}).errors.join("\n"), /non-linear or composed visual context requires 0 assembly blend/i);
+
+const composedPlan = structuredClone(nonlinearPlan);
+for (const shot of composedPlan.shots) shot.length = 90;
+Object.assign(composedPlan.shots[4], {
+    visual_context_lead_source:"four",
+    visual_context_lead_frames:5,
+});
+assert.equal(sceneVisualContextLeadSource(composedPlan, 5), 4);
+assert.equal(sceneVisualContextLeadFrames(composedPlan.shots[4], 39), 5);
+const composedTiming = calculatePlanTiming(composedPlan, {
+    contextLength:39, videoBlendFrames:0, anchorMode:"head",
+    defaultDurationSeconds:5, defaultSteps:10,
+});
+assert.deepEqual(composedTiming.errors, []);
+assert.equal(composedTiming.shots[4].visualContextSource, 3);
+assert.equal(composedTiming.shots[4].visualContextLeadSource, 4);
+assert.equal(composedTiming.shots[4].visualContextLeadSourceId, "four");
+assert.equal(composedTiming.shots[4].visualContextLeadFrames, 5);
+
+const sameSourceComposition = structuredClone(composedPlan);
+sameSourceComposition.shots[4].visual_context_lead_source = "three";
+assert.match(calculatePlanTiming(sameSourceComposition, {
+    contextLength:39, videoBlendFrames:0, anchorMode:"head",
+    defaultDurationSeconds:5, defaultSteps:10,
+}).errors.join("\n"), /must be different scenes/i);
+const invalidCompositionSpan = structuredClone(composedPlan);
+invalidCompositionSpan.shots[4].visual_context_lead_frames = 6;
+assert.match(calculatePlanTiming(invalidCompositionSpan, {
+    contextLength:39, videoBlendFrames:0, anchorMode:"head",
+    defaultDurationSeconds:5, defaultSteps:10,
+}).errors.join("\n"), /lead frames must be one of 5, 22/i);
+const blendedComposition = structuredClone(composedPlan);
+blendedComposition.shots[4].video_blend_frames = 2;
+assert.match(calculatePlanTiming(blendedComposition, {
+    contextLength:39, videoBlendFrames:0, anchorMode:"head",
+    defaultDurationSeconds:5, defaultSteps:10,
+}).errors.join("\n"), /non-linear or composed visual context requires 0 assembly blend/i);
 
 duplicateShot(plan.shots, 0);
 assert.equal(plan.shots.length, 3);
@@ -728,6 +767,8 @@ assert.match(editorSource, /field\("Generated continuity", generatedContinuity\)
 assert.match(editorSource, /field\("Lock source audio", lockSourceAudio\)/);
 assert.match(editorSource, /applySceneAudioOverride/);
 assert.match(editorSource, /Advanced visual context/);
+assert.match(editorSource, /Composed context lead/);
+assert.match(editorSource, /Composed lead span/);
 assert.match(editorSource, /Visual context source/);
 assert.match(editorSource, /Advanced audio context/);
 assert.match(editorSource, /Advanced implementation/);

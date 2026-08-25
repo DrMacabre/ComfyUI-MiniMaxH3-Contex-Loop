@@ -391,7 +391,7 @@ assert chain._resume_context_predecessor(independent_start_plan, 2) is None
 # consume scene 3's saved picture state while retaining scene 4's audio latent.
 nonlinear_plan = chain._normalize_plan(
     json.dumps({"shots": [
-        {"id": name, "prompt": name, "length": 39,
+        {"id": name, "prompt": name, "length": 90,
          **({"visual_context_source": "three",
              "video_blend_frames": 0} if name == "five" else {})}
         for name in ("one", "two", "three", "four", "five")
@@ -448,6 +448,160 @@ try:
 finally:
     chain._st_load = original_loader
     chain._streams_from_latent = original_streams
+
+# Two independent saved picture tails can form one H3-phase-safe prefix. The
+# first block may come from a chronologically newer scene than the second;
+# their explicit order in the Plan is what matters. Audio stays the complete
+# immediate-predecessor latent and is never spliced at the visual seam.
+composed_plan = chain._normalize_plan(
+    json.dumps({"shots": [
+        {"id": name, "prompt": name, "length": 90,
+         **({"visual_context_source": "three",
+             "visual_context_lead_source": "four",
+             "visual_context_lead_frames": 5,
+             "video_blend_frames": 0} if name == "five" else {})}
+        for name in ("one", "two", "three", "four", "five")
+    ]}),
+    "composed-context-test", 64, 64, 39, "video", "head", "disabled",
+    "generated_audio", 39, 1.0, 8, 11, 18, "body:auto:v1", 0,
+    "masked_av")
+assert composed_plan["shots"][4]["visual_context_source"] == "three"
+assert composed_plan["shots"][4]["visual_context_lead_source"] == "four"
+assert composed_plan["shots"][4]["visual_context_lead_frames"] == 5
+assert chain._resume_context_predecessors(composed_plan, 5) == {
+    "visual": 3, "audio": 4, "scenes": [3, 4], "visual_lead": 4,
+}
+composed_boundary = chain._scene_dependency_record(
+    composed_plan, 5, None)["scopes"]["incoming_boundary"]
+assert composed_boundary["visual_context_source_scene"] == 3
+assert composed_boundary["visual_context_lead_source_scene"] == 4
+assert composed_boundary["visual_context_lead_source_id"] == "four"
+assert composed_boundary["visual_context_lead_frames"] == 5
+composed_revision = chain._checkpoint_plan_revision({
+    "index": 5, "id": "five", "revision": "r5",
+    "seed": "5", "steps": 8, "raw_frames": 90,
+    "segment": "scene_5.mp4",
+    "visual_context_source_id": "three",
+    "visual_context_lead_source_id": "four",
+    "visual_context_lead_frames": 5,
+})
+assert composed_revision["visual_context_source"] == "three"
+assert composed_revision["visual_context_lead_source"] == "four"
+assert composed_revision["visual_context_lead_frames"] == 5
+
+scene3_frames = torch.full((39, 2, 2, 3), 3.0)
+scene4_frames = torch.full((39, 2, 2, 3), 4.0)
+scene3_video = torch.full((1, 24, 12, 2, 2), 30.0)
+scene4_video = torch.full((1, 24, 12, 2, 2), 40.0)
+full_immediate_audio = torch.full((1, 32, 2, 80), 44.0)
+
+def composed_loader(path):
+    scene = 4 if "scene_4" in str(path) else 3
+    return {
+        "context_frames": scene4_frames if scene == 4 else scene3_frames,
+        "video": scene4_video if scene == 4 else scene3_video,
+    }
+
+chain._st_load = composed_loader
+chain._streams_from_latent = lambda value: value["samples"]
+try:
+    composed_state = {
+        "plan": composed_plan, "index": 5,
+        "previous_frames": scene4_frames,
+        "previous_latent": {
+            "samples": [scene4_video, full_immediate_audio]},
+        "segments": [
+            {"index": scene, "id": composed_plan["shots"][scene - 1]["id"],
+             "checkpoint": "scene_%d.safetensors" % scene,
+             "revision": "r%d" % scene,
+             "checkpoint_sha256": "h%d" % scene}
+            for scene in range(1, 5)
+        ],
+    }
+    composed_state = chain._visual_context_state(composed_state)
+    frames = composed_state["previous_frames"]
+    video, audio_latent = composed_state["previous_latent"]["samples"]
+    assert frames.shape[0] == 39
+    assert torch.all(frames[:5] == 4.0)
+    assert torch.all(frames[5:] == 3.0)
+    assert video.shape[2] == 12
+    assert torch.all(video[:, :, :2] == 40.0)
+    assert torch.all(video[:, :, 2:] == 30.0)
+    assert audio_latent is full_immediate_audio
+    assert composed_state["visual_context_source_segment"]["index"] == 3
+    assert composed_state["visual_context_lead_segment"]["index"] == 4
+finally:
+    chain._st_load = original_loader
+    chain._streams_from_latent = original_streams
+
+short_scene3_frames = scene3_frames[-5:]
+short_scene4_frames = scene4_frames[-5:]
+
+def short_composed_loader(path):
+    scene = 4 if "scene_4" in str(path) else 3
+    return {
+        "context_frames": (
+            short_scene4_frames if scene == 4 else short_scene3_frames),
+        "video": scene4_video if scene == 4 else scene3_video,
+    }
+
+class ComposedDecodeVAE:
+    def __init__(self):
+        self.input = None
+
+    def decode(self, latent):
+        self.input = latent
+        return torch.full((39, 2, 2, 3), 9.0)
+
+chain._st_load = short_composed_loader
+chain._streams_from_latent = lambda value: value["samples"]
+try:
+    short_state = chain._visual_context_state({
+        "plan": composed_plan, "index": 5,
+        "previous_frames": short_scene4_frames,
+        "previous_latent": {
+            "samples": [scene4_video, full_immediate_audio]},
+        "segments": [
+            {"index": scene, "id": composed_plan["shots"][scene - 1]["id"],
+             "checkpoint": "scene_%d.safetensors" % scene}
+            for scene in range(1, 5)
+        ],
+    })
+    assert short_state["previous_frames"].shape[0] == 0
+    decoder = ComposedDecodeVAE()
+    recovered = chain._previous_context_frames(short_state, decoder, 39)
+    assert recovered.shape[0] == 39
+    assert torch.all(recovered == 9.0)
+    assert decoder.input is short_state["previous_latent"]["samples"][0]
+    assert short_state["previous_frames"] is recovered
+finally:
+    chain._st_load = original_loader
+    chain._streams_from_latent = original_streams
+
+for invalid_patch, expected in (
+        ({"visual_context_lead_source": "three",
+          "visual_context_lead_frames": 5}, "different from"),
+        ({"visual_context_lead_source": "four",
+          "visual_context_lead_frames": 6}, "must be one of"),
+        ({"visual_context_lead_source": "four",
+          "visual_context_lead_frames": 5,
+          "video_blend_frames": 2}, "video_blend_frames must be 0")):
+    invalid_shots = [
+        {"id": name, "prompt": name, "length": 90,
+         **({"visual_context_source": "three", **invalid_patch}
+            if name == "five" else {})}
+        for name in ("one", "two", "three", "four", "five")
+    ]
+    try:
+        chain._normalize_plan(
+            json.dumps({"shots": invalid_shots}),
+            "invalid-composed-context", 64, 64, 39, "video", "head",
+            "disabled", "generated_audio", 39, 1.0, 8, 11, 18,
+            "body:auto:v1", 0, "masked_av")
+    except ValueError as exc:
+        assert expected in str(exc)
+    else:
+        raise AssertionError("invalid composed visual context was accepted")
 
 try:
     chain._normalize_plan(

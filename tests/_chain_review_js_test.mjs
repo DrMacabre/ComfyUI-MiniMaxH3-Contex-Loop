@@ -185,6 +185,37 @@ assert.deepEqual(activatedAlternate.shots, [
         source_audio_target: "locked", prompt_seed_mode: "randomize"},
 ]);
 
+const restoredComposition = applyCheckpointRevisionSet({
+    prompt_prefix: ["keep"],
+    shots: [
+        {id:"one", prompt:["one"], length:39, steps:8, seed:"1"},
+        {id:"two", prompt:["two"], length:39, steps:8, seed:"2"},
+        {id:"three", prompt:["three"], length:39, steps:8, seed:"3"},
+    ],
+}, [{
+    scene:3, scene_id:"three", scene_prompt:"three", seed:"303",
+    raw_frames:39, steps:9, prompt_prefix:"keep", context_length:39,
+    visual_context_source:"one", visual_context_lead_source:"two",
+    visual_context_lead_frames:5, video_blend_frames:0,
+}]);
+assert.equal(restoredComposition.shots[2].visual_context_source, "one");
+assert.equal(restoredComposition.shots[2].visual_context_lead_source, "two");
+assert.equal(restoredComposition.shots[2].visual_context_lead_frames, 5);
+
+assert.throws(() => applyCheckpointRevisionSet({
+    prompt_prefix: ["keep"],
+    shots: [
+        {id:"one", prompt:["one"], length:39, steps:8, seed:"1"},
+        {id:"two", prompt:["two"], length:39, steps:8, seed:"2"},
+        {id:"three", prompt:["three"], length:39, steps:8, seed:"3"},
+    ],
+}, [{
+    scene:3, scene_id:"three", scene_prompt:"three", seed:"303",
+    raw_frames:39, steps:9, prompt_prefix:"keep", context_length:39,
+    visual_context_source:"one", visual_context_lead_source:"one",
+    visual_context_lead_frames:5, video_blend_frames:0,
+}]), /same scene for both composed visual context blocks/i);
+
 const seedOnlyPlan = applyCheckpointRevisionSeeds({
     prompt_prefix: ["keep prefix"],
     shots: [

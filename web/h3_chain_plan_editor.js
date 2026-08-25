@@ -21,6 +21,8 @@ import {
     sceneContinuationMode,
     sceneLoRARoute,
     sceneVisualContextSource,
+    sceneVisualContextLeadFrames,
+    sceneVisualContextLeadSource,
     scenePromptSeedMode,
     sceneVideoBlendFrames,
     setScenePromptSeedMode,
@@ -28,8 +30,8 @@ import {
     setSharedPrompt,
     shotLengthMode,
     sharedPrompt,
-} from "./h3_chain_plan_core.mjs?v=0.5.23";
-import {availableReferenceRecords} from "./h3_reference_preview_core.mjs?v=0.5.23";
+} from "./h3_chain_plan_core.mjs?v=0.6.19";
+import {availableReferenceRecords} from "./h3_reference_preview_core.mjs?v=0.6.19";
 import {
     applySceneAudioOverride,
     applySceneTransitionPreset,
@@ -38,12 +40,12 @@ import {
     sceneAudioPolicy,
     sceneTransitionPreset,
     transitionPresetLabel,
-} from "./h3_policy_core.mjs?v=0.5.23";
+} from "./h3_policy_core.mjs?v=0.6.19";
 import {
     resolveAudioContextLength,
     resolveAudioPolicy,
     resolveTransitionPolicy,
-} from "./h3_socket_presentation_core.mjs?v=0.5.23";
+} from "./h3_socket_presentation_core.mjs?v=0.6.19";
 
 // This scene editor is an original implementation. Its quick @ reference and
 // # dialogue interactions are inspired by nkxx188/ComfyUI-MiniMaxH3-Easy,
@@ -942,6 +944,23 @@ function mountEditor(node) {
         const context = element("select", "h3c-context");
         const resolvedPlanSettings = currentSettings();
         const planContextLength = Number(resolvedPlanSettings.contextLength);
+        function normalizeVisualLeadSpan() {
+            if (!Object.hasOwn(shot, "visual_context_lead_source")) return;
+            const resolved = sceneContextLength(shot, planContextLength);
+            const allowed = H3_CONTEXT_LENGTHS.filter(
+                (value) => value >= 5 && value < resolved,
+            );
+            if (!allowed.length) {
+                delete shot.visual_context_lead_source;
+                delete shot.visual_context_lead_frames;
+                return;
+            }
+            try {
+                sceneVisualContextLeadFrames(shot, resolved);
+            } catch (_error) {
+                shot.visual_context_lead_frames = allowed[0];
+            }
+        }
         const incomingTransition = element("select", "h3c-incoming-transition");
         const inheritedPreset = resolvedPlanSettings.transitionPreset;
         const inheritOption = element(
@@ -990,6 +1009,7 @@ function mountEditor(node) {
                     && Number(shot.video_blend_frames) > nextContext) {
                 shot.video_blend_frames = nextContext;
             }
+            normalizeVisualLeadSpan();
             syncPlan();
             render();
         });
@@ -1011,9 +1031,11 @@ function mountEditor(node) {
             if (context.value === "") delete shot.context_length;
             else shot.context_length = Number(context.value);
             sceneContextLength(shot, planContextLength);
+            normalizeVisualLeadSpan();
             refreshBlendControl();
             refreshIncomingTransition();
             syncPlan();
+            render();
         });
         const visualSource = element("select", "h3c-visual-source");
         if (index === 0) {
@@ -1080,6 +1102,103 @@ function mountEditor(node) {
                 delete shot.visual_context_source;
             } else {
                 shot.visual_context_source = visualSource.value;
+                shot.video_blend_frames = 0;
+            }
+            const recentSource = sceneVisualContextSource(
+                state.plan, index + 1,
+            );
+            const leadSource = sceneVisualContextLeadSource(
+                state.plan, index + 1,
+            );
+            if (leadSource !== null && leadSource === recentSource) {
+                delete shot.visual_context_lead_source;
+                delete shot.visual_context_lead_frames;
+            }
+            refreshBlendControl();
+            syncPlan();
+            render();
+        });
+        const visualLeadSource = element("select", "h3c-visual-lead-source");
+        const noLead = element("option", "", "Off · one visual source");
+        noLead.value = "";
+        visualLeadSource.append(noLead);
+        const recentSourceIndex = index === 0 ? null
+            : sceneVisualContextSource(state.plan, index + 1);
+        if (recentSourceIndex !== null) {
+            for (let sourceOffset = 0;
+                sourceOffset < index; sourceOffset += 1) {
+                if (sourceOffset + 1 === recentSourceIndex) continue;
+                const sourceId = safeShotId(
+                    state.plan.shots[sourceOffset]?.id,
+                    `clip_${String(sourceOffset + 1).padStart(4, "0")}`,
+                );
+                const option = element(
+                    "option", "", `Scene ${sourceOffset + 1} · ${sourceId}`,
+                );
+                option.value = sourceId;
+                visualLeadSource.append(option);
+            }
+        }
+        visualLeadSource.disabled = index === 0 || index < 2;
+        try {
+            const resolvedLead = sceneVisualContextLeadSource(
+                state.plan, index + 1,
+            );
+            visualLeadSource.value = resolvedLead === null ? ""
+                : safeShotId(
+                    state.plan.shots[resolvedLead - 1]?.id,
+                    `clip_${String(resolvedLead).padStart(4, "0")}`,
+                );
+        } catch (_error) {
+            visualLeadSource.value = "";
+        }
+        visualLeadSource.title = "Optional first scene in a composed visual context. The normal Visual context source supplies the second block nearest generation. Either source may be chronologically newer, but they must differ; audio remains one continuous tail from the immediate timeline scene.";
+
+        const visualLeadFrames = element("select", "h3c-visual-lead-frames");
+        const resolvedVisualContext = sceneContextLength(
+            shot, planContextLength,
+        );
+        const leadChoices = H3_CONTEXT_LENGTHS.filter(
+            (value) => value >= 5 && value < resolvedVisualContext,
+        );
+        visualLeadSource.disabled = visualLeadSource.disabled
+            || !leadChoices.length;
+        for (const value of leadChoices) {
+            const option = element("option", "", `${value} frames first`);
+            option.value = String(value);
+            visualLeadFrames.append(option);
+        }
+        visualLeadFrames.disabled = !visualLeadSource.value
+            || !leadChoices.length;
+        if (visualLeadSource.value) {
+            try {
+                visualLeadFrames.value = String(
+                    sceneVisualContextLeadFrames(shot, resolvedVisualContext),
+                );
+            } catch (_error) {
+                visualLeadFrames.value = String(leadChoices[0] ?? "");
+            }
+        }
+        visualLeadFrames.title = "Phase-safe duration taken from the first selected scene. The remaining context comes from Visual context source as the second block. For 39 frames, the choices are 5+34 or 22+17.";
+        visualLeadSource.addEventListener("change", () => {
+            if (!visualLeadSource.value) {
+                delete shot.visual_context_lead_source;
+                delete shot.visual_context_lead_frames;
+            } else {
+                shot.visual_context_lead_source = visualLeadSource.value;
+                shot.visual_context_lead_frames = Number(
+                    visualLeadFrames.value || leadChoices[0]);
+                shot.video_blend_frames = 0;
+            }
+            refreshBlendControl();
+            syncPlan();
+            render();
+        });
+        visualLeadFrames.addEventListener("change", () => {
+            if (visualLeadSource.value) {
+                shot.visual_context_lead_frames = Number(
+                    visualLeadFrames.value);
+                sceneVisualContextLeadFrames(shot, resolvedVisualContext);
                 shot.video_blend_frames = 0;
             }
             refreshBlendControl();
@@ -1247,6 +1366,8 @@ function mountEditor(node) {
             field("Steps (blank = default)", steps),
             field("Advanced visual context", context),
             field("Visual context source", visualSource),
+            field("Composed context lead", visualLeadSource),
+            field("Composed lead span", visualLeadFrames),
             field("Advanced audio context", audioContext),
             field("Advanced implementation", continuation),
             field("Boundary spatial proxy", spatialProxy),

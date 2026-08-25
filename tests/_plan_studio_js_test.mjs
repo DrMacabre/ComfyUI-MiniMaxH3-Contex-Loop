@@ -134,6 +134,8 @@ assert.match(source, /h3studio-timeline/);
 assert.match(source, /Scene prompt/);
 assert.match(source, /Shared prompt/);
 assert.match(source, /Plan settings/);
+assert.match(source, /Composed context lead/);
+assert.match(source, /Composed lead span/);
 assert.match(source, /Standalone mode · this node owns, validates, and outputs/);
 assert.match(source, /Connected mode · changes are written to the H3 Chain Plan and mirrored into Studio/);
 assert.match(source, /const planOwner = planNode \?\? node/);

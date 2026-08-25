@@ -524,22 +524,23 @@ export function sceneContextLength(shot, planDefault = 22) {
     return resolved;
 }
 
-export function sceneVisualContextSource(plan, index) {
+function resolvePriorSceneSource(plan, index, raw, field, defaultPrevious) {
     const shots = plan?.shots;
     const target = Number(index);
     if (!Array.isArray(shots) || !Number.isInteger(target)
             || target < 1 || target > shots.length) {
-        throw new Error("Visual context source has an invalid target scene.");
+        throw new Error(`${field} has an invalid target scene.`);
     }
     if (target === 1) return null;
-    const raw = shots[target - 1]?.visual_context_source;
     if (raw === undefined || raw === null
             || (typeof raw === "string" && [
                 "", "previous", "immediate",
-            ].includes(raw.trim().toLowerCase()))) return target - 1;
+            ].includes(raw.trim().toLowerCase()))) {
+        return defaultPrevious ? target - 1 : null;
+    }
     if (typeof raw === "boolean") {
         throw new Error(
-            "Visual context source must name an earlier scene ID or index.",
+            `${field} must name an earlier scene ID or index.`,
         );
     }
     let source = null;
@@ -556,15 +557,47 @@ export function sceneVisualContextSource(plan, index) {
     }
     if (source === null) {
         throw new Error(
-            `Visual context source “${String(raw)}” does not match a scene ID or index.`,
+            `${field} “${String(raw)}” does not match a scene ID or index.`,
         );
     }
     if (source < 1 || source >= target) {
         throw new Error(
-            `Visual context source for scene ${target} must point to an earlier scene.`,
+            `${field} for scene ${target} must point to an earlier scene.`,
         );
     }
     return source;
+}
+
+export function sceneVisualContextSource(plan, index) {
+    return resolvePriorSceneSource(
+        plan, index, plan?.shots?.[Number(index) - 1]?.visual_context_source,
+        "Visual context source", true,
+    );
+}
+
+export function sceneVisualContextLeadSource(plan, index) {
+    return resolvePriorSceneSource(
+        plan, index,
+        plan?.shots?.[Number(index) - 1]?.visual_context_lead_source,
+        "Composed context lead source", false,
+    );
+}
+
+export function sceneVisualContextLeadFrames(shot, contextLength) {
+    const raw = shot?.visual_context_lead_frames;
+    if (raw === undefined || raw === null
+            || (typeof raw === "string" && !raw.trim())) return 0;
+    const resolved = Number(raw);
+    const allowed = H3_CONTEXT_LENGTHS.filter(
+        (value) => value >= 5 && value < Number(contextLength),
+    );
+    if (typeof raw === "boolean" || !Number.isInteger(resolved)
+            || !allowed.includes(resolved)) {
+        throw new Error(
+            `Composed context lead frames must be one of ${allowed.join(", ")} and smaller than this scene's ${contextLength}-frame context.`,
+        );
+    }
+    return resolved;
 }
 
 export function sceneAudioContextLength(
@@ -727,6 +760,34 @@ export function calculatePlanTiming(plan, settings = {}) {
             rowErrors.push(error.message);
         }
 
+        let visualContextLeadSource = null;
+        let visualContextLeadFrames = 0;
+        try {
+            visualContextLeadSource = sceneVisualContextLeadSource(plan, index);
+            if (visualContextLeadSource !== null) {
+                visualContextLeadFrames = sceneVisualContextLeadFrames(
+                    shot, sceneContext,
+                );
+                if (!visualContextLeadFrames) {
+                    rowErrors.push(
+                        "Composed context lead source requires a phase-safe lead frame span.",
+                    );
+                }
+                if (visualContextSource !== null
+                        && visualContextLeadSource === visualContextSource) {
+                    rowErrors.push(
+                        "The two composed visual context sources must be different scenes.",
+                    );
+                }
+            } else if (Object.hasOwn(shot, "visual_context_lead_frames")) {
+                rowErrors.push(
+                    "Composed context lead frames require a lead source.",
+                );
+            }
+        } catch (error) {
+            rowErrors.push(error.message);
+        }
+
         let sceneAudioContext = audioContextLength || sceneContext;
         try {
             sceneAudioContext = sceneAudioContextLength(
@@ -746,10 +807,13 @@ export function calculatePlanTiming(plan, settings = {}) {
             if (sceneBlendFrames > 0 && anchorMode !== "head") {
                 rowErrors.push("Video blending requires head anchor mode.");
             }
-            if (sceneBlendFrames > 0 && visualContextSource !== null
-                    && visualContextSource !== index - 1) {
+            if (sceneBlendFrames > 0 && (
+                (visualContextSource !== null
+                    && visualContextSource !== index - 1)
+                || visualContextLeadSource !== null
+            )) {
                 rowErrors.push(
-                    "Non-linear visual context requires 0 assembly blend frames; the timeline still cuts from the immediately previous scene.",
+                    "Non-linear or composed visual context requires 0 assembly blend frames; the timeline still cuts from the immediately previous scene.",
                 );
             }
         } catch (error) {
@@ -876,6 +940,13 @@ export function calculatePlanTiming(plan, settings = {}) {
                     plan.shots[visualContextSource - 1]?.id,
                     `clip_${String(visualContextSource).padStart(4, "0")}`,
                 ),
+            visualContextLeadSource,
+            visualContextLeadSourceId: visualContextLeadSource === null ? null
+                : safeShotId(
+                    plan.shots[visualContextLeadSource - 1]?.id,
+                    `clip_${String(visualContextLeadSource).padStart(4, "0")}`,
+                ),
+            visualContextLeadFrames,
             videoBlendFrames: sceneBlendFrames,
             audioContextLength: [
                 "masked_av", "tapered_av", "feathered_av",
@@ -897,9 +968,18 @@ export function calculatePlanTiming(plan, settings = {}) {
         const target = rows[offset];
         const source = target.visualContextSource === null ? null
             : rows[target.visualContextSource - 1];
-        if (source && source.deliveredFrames < target.contextLength) {
+        const recentFrames = target.contextLength
+            - target.visualContextLeadFrames;
+        if (source && source.deliveredFrames < recentFrames) {
             target.errors.push(
-                `Selected visual source scene ${source.index} delivers fewer than ${target.contextLength} required context frames.`,
+                `Selected second visual source scene ${source.index} delivers fewer than ${recentFrames} required context frames.`,
+            );
+        }
+        const lead = target.visualContextLeadSource === null ? null
+            : rows[target.visualContextLeadSource - 1];
+        if (lead && lead.deliveredFrames < target.visualContextLeadFrames) {
+            target.errors.push(
+                `Selected composed-context lead scene ${lead.index} delivers fewer than ${target.visualContextLeadFrames} required lead frames.`,
             );
         }
     }
