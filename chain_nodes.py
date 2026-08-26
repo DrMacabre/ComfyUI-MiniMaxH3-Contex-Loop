@@ -20299,5 +20299,5 @@ CHAIN_NODE_DISPLAY_NAME_MAPPINGS = {
     "MiniMaxH3ChainExportPNG": "MiniMax H3 Contex Loop Export PNG Sequence",
     "MiniMaxH3ChainLatentVideoAdapter": (
         "MiniMax H3 Full-Chain Latent Video Adapter"),
-    "MiniMaxH3ChainAssemble": "MiniMax H3 Contex Loop Assemble",
+    "MiniMaxH3ChainAssemble": "MiniMax H3 Context Loop Assemble",
 }

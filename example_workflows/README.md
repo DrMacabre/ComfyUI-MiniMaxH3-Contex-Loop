@@ -117,8 +117,9 @@ shorter than the saved Plan; for example, scene 1 can be upscaled while scenes
 directly; recovery-only Source Timeline metadata stays embedded in the manifest.
 
 The loop sends only the clean 24-channel video x0 through LBH's temporal
-**MiniMax H3 Latent Upscaler (3D)**. The default target is 1.5 MP on a grid-32
-canvas, followed by a conservative two-step pass at denoise 0.24 with Euler.
+**MiniMax H3 Latent Upscaler (3D)**. The default is an exact 2.0x spatial
+multiplier on a grid-32 canvas, followed by a conservative two-step pass at
+denoise 0.24 with Euler.
 The pack rejoins the untouched 32-channel audio, performs NestedTensor-safe
 video-only CONST re-noise, and masks audio out of pass 2. For Drift-Control AV
 scene 2+, it replaces the 12-step prefix with the previous HQ latent tail,

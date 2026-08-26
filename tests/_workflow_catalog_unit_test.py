@@ -923,8 +923,8 @@ def validate_deferred_h3_upscale(path):
         "bilinear", "conditioning_policy"]
     assert scheduler["widgets_values"] == ["simple", 20, 0.24]
     assert learned["widgets_values"] == [
-        "minimax_h3_latent_upscaler_3d_fp16.safetensors", "megapixels",
-        1.5, 32, "cuda", "fp16"]
+        "minimax_h3_latent_upscaler_3d_fp16.safetensors",
+        "scale by multiplier", 2, 32, "cuda", "fp16"]
     attention = node(workflow, "ModelAttentionBackend")
     assert attention["mode"] == 4
     for functional in workflow["nodes"]:
@@ -1020,6 +1020,10 @@ def validate_deferred_h3_derope(path):
     saver = node(workflow, "MiniMaxH3ChainUpscaleSegmentSave")
     loop_end = node(workflow, "MiniMaxH3ChainUpscaleLoopEnd")
     assembler = node(workflow, "MiniMaxH3ChainAssemble")
+
+    assert learned["widgets_values"] == [
+        "minimax_h3_latent_upscaler_3d_fp16.safetensors",
+        "scale by multiplier", 2, 32, "cuda", "fp16"]
 
     assert adapter["widgets_values"][0:2] == [
         "h3_lbh_3d_derope", "h3_latent"]
