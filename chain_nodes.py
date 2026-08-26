@@ -13427,13 +13427,6 @@ class MiniMaxH3ChainContext:
         previous_frames = _previous_context_frames(
             visual_state, vae, context_length)
         if continuation_mode in MASKED_CONTINUATION_MODES:
-            if (abs(float(visual_cond_noise_aug)
-                    - VISUAL_COND_NOISE_AUG_DEFAULT) > 5e-7):
-                _LOG.warning(
-                    "H3 Chain visual_cond_noise_aug %.3f is a Guide-only "
-                    "diagnostic and is ignored by %s; AV prefix strength is "
-                    "controlled by its denoise mask.",
-                    float(visual_cond_noise_aug), continuation_mode)
             from .masked_context import apply_masked_prefix
 
             previous_latent = visual_state.get("previous_latent")
@@ -13468,24 +13461,6 @@ class MiniMaxH3ChainContext:
                 context_spatial_proxy=context_spatial_proxy,
                 latent_color_carry=latent_color_carry,
             )
-            if explicit_future_anchor is not None:
-                from .nodes import _append_explicit_future_end_anchor
-
-                out_conditioning = _append_explicit_future_end_anchor(
-                    out_conditioning, out_latent, explicit_future_anchor,
-                    visual_cond_noise_aug=VISUAL_COND_NOISE_AUG_DEFAULT)
-            elif bool(future_end_anchor):
-                # Keep this experimental dependency local so lightweight
-                # plan/archive consumers can import Chain Nodes without
-                # needing to construct the full conditioning helper surface.
-                from .nodes import _append_future_end_anchor
-
-                out_conditioning = _append_future_end_anchor(
-                    out_conditioning,
-                    out_latent,
-                    trim,
-                    visual_cond_noise_aug=VISUAL_COND_NOISE_AUG_DEFAULT,
-                )
             out_model = model
             if continuation_mode in DRIFT_CONTROL_CONTINUATION_MODES:
                 if trim != int(DRIFT_CONTROL_AV_RECIPE["context_frames"]):
@@ -13594,12 +13569,6 @@ class MiniMaxH3ChainContext:
             context_audio=previous_audio,
             video_context_latent=video_context_latent,
         )
-        if explicit_future_anchor is not None:
-            from .nodes import _append_explicit_future_end_anchor
-
-            out = _append_explicit_future_end_anchor(
-                out, target_latent, explicit_future_anchor,
-                visual_cond_noise_aug=VISUAL_COND_NOISE_AUG_DEFAULT)
         return (out, trim, True, target_latent, model)
 
 

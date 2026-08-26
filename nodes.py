@@ -436,9 +436,7 @@ class MiniMaxH3MotionContext:
     def apply(self, conditioning, vae, latent, context_frames, context_length,
               encode_mode, anchor_mode, crop, audio_context_length=22,
               audio_mode="timeline", context_latent=None, audio_vae=None,
-              context_audio=None, video_context_latent=None,
-              visual_cond_noise_aug=VISUAL_COND_NOISE_AUG_DEFAULT,
-              future_end_anchor=False):
+              context_audio=None, video_context_latent=None):
         guide_api = _activate_inline_patches()
         native_guides = guide_api == "native"
 
