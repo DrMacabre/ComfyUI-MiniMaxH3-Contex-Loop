@@ -40,18 +40,18 @@ import {
     sharedPrompt,
     shotLengthMode,
     visualContextCompositions,
-} from "./h3_chain_plan_core.mjs?v=0.6.32";
+} from "./h3_chain_plan_core.mjs?v=0.6.33";
 import {
     promptRevisionHelp,
     promptRevisionLabel,
     promptRevisionNavigation,
-} from "./h3_prompt_history_core.mjs?v=0.6.32";
+} from "./h3_prompt_history_core.mjs?v=0.6.33";
 import {
     availableReferenceRecords,
     convertTaggedPictureReference,
     taggedPictureReferenceMode,
     taggedPictureReferenceToken,
-} from "./h3_reference_preview_core.mjs?v=0.6.32";
+} from "./h3_reference_preview_core.mjs?v=0.6.33";
 import {
     applySceneAudioOverride,
     applySceneTransitionPreset,
@@ -60,12 +60,12 @@ import {
     sceneAudioPolicy,
     sceneTransitionPreset,
     transitionPresetLabel,
-} from "./h3_policy_core.mjs?v=0.6.32";
+} from "./h3_policy_core.mjs?v=0.6.33";
 import {
     resolveAudioContextLength,
     resolveAudioPolicy,
     resolveTransitionPolicy,
-} from "./h3_socket_presentation_core.mjs?v=0.6.32";
+} from "./h3_socket_presentation_core.mjs?v=0.6.33";
 import {
     locateStudioTimelineSecond,
     h3StudioGridMarkers,
@@ -80,8 +80,8 @@ import {
     studioSourceSecond,
     studioTimelineLayout,
     studioWaveformSceneSamples,
-} from "./h3_chain_plan_studio_core.mjs?v=0.6.32";
-import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.6.32";
+} from "./h3_chain_plan_studio_core.mjs?v=0.6.33";
+import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.6.33";
 
 const {connectedPromptEditors, publishCompanionScene} = promptCompanionSync;
 function publishCompanionPrompt(...args) {
@@ -1704,7 +1704,7 @@ function mount(node) {
             else length.value = "";
         }
         mode.addEventListener("change", () => {
-            setShotLengthMode(shot, mode.value, state.plan.defaults?.duration_seconds ?? settings().defaultDurationSeconds);
+            setShotLengthMode(shot, mode.value, settings().defaultDurationSeconds);
             refreshLength(); writePlan(); renderShell();
         });
         length.addEventListener("change", () => {
@@ -1715,7 +1715,7 @@ function mount(node) {
         refreshLength();
         const lengthControl = element("span", "h3studio-length"); lengthControl.append(mode, length);
         const steps = element("input"); steps.type = "number"; steps.min = "1"; steps.max = "10000";
-        steps.placeholder = String(state.plan.defaults?.steps ?? settings().defaultSteps); steps.value = shot.steps ?? "";
+        steps.placeholder = String(settings().defaultSteps); steps.value = shot.steps ?? "";
         steps.addEventListener("change", () => { if (steps.value) shot.steps = Number(steps.value); else delete shot.steps; writePlan(); });
         const promptSeedMode = element("select");
         for (const [value, label] of [
@@ -2404,17 +2404,7 @@ function mount(node) {
         textarea.value = sharedPrompt(state.plan).text;
         textarea.placeholder = "Identity, wardrobe, style, reference definitions, audio rules, and global continuity…";
         textarea.addEventListener("input", () => { setSharedPrompt(state.plan, textarea.value); writePlan(); });
-        state.plan.defaults = state.plan.defaults && typeof state.plan.defaults === "object" && !Array.isArray(state.plan.defaults)
-            ? state.plan.defaults : {};
-        const duration = element("input"); duration.type = "number"; duration.step = ".01";
-        duration.placeholder = String(settings().defaultDurationSeconds); duration.value = state.plan.defaults.duration_seconds ?? "";
-        duration.addEventListener("change", () => { if (duration.value) state.plan.defaults.duration_seconds = Number(duration.value); else delete state.plan.defaults.duration_seconds; writePlan(); renderShell(); });
-        const steps = element("input"); steps.type = "number"; steps.min = "1"; steps.max = "10000";
-        steps.placeholder = String(settings().defaultSteps); steps.value = state.plan.defaults.steps ?? "";
-        steps.addEventListener("change", () => { if (steps.value) state.plan.defaults.steps = Number(steps.value); else delete state.plan.defaults.steps; writePlan(); });
-        const defaults = element("div", "h3studio-defaults");
-        defaults.append(field("Default seconds (blank = Plan widget)", duration), field("Default steps (blank = Plan widget)", steps));
-        panel.append(textarea, defaults);
+        panel.append(textarea);
         return panel;
     }
 
