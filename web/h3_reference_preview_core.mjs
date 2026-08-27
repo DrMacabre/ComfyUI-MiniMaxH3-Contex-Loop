@@ -37,6 +37,8 @@ export function nodeType(node) {
 }
 
 function widgetValue(node, name, fallback = "") {
+    const connected = connectedInputValue(node, name);
+    if (connected !== undefined) return connected;
     return node?.widgets?.find((item) => item.name === name)?.value ?? fallback;
 }
 
@@ -125,11 +127,164 @@ export function replacePromptReferenceOccurrence(
     return `${source.slice(0, first)}${replacement}${source.slice(last)}`;
 }
 
+const TRANSPARENT_REROUTE_TYPES = new Set([
+    "Reroute",
+    "Reroute (rgthree)",
+]);
+
+function graphLink(graph, linkId) {
+    if (linkId == null) return null;
+    return graph?.links?.get?.(linkId) ?? graph?.links?.[linkId] ?? null;
+}
+
+function directInputConnection(node, name = null) {
+    const input = name === null
+        ? node?.inputs?.find((item) => item.link != null)
+        : node?.inputs?.find((item) => item.name === name);
+    const link = graphLink(node?.graph, input?.link);
+    const source = link
+        ? node.graph?.getNodeById?.(link.origin_id) ?? null
+        : null;
+    return source ? {source, originSlot: Number(link.origin_slot ?? 0)} : null;
+}
+
+function rootGraph(graph) {
+    return graph?.rootGraph ?? graph ?? null;
+}
+
+function graphAncestors(graph) {
+    if (!graph) return [];
+    const root = rootGraph(graph);
+    if (!root || graph === root) return root ? [root] : [];
+
+    const result = [graph];
+    const seen = new Set(result);
+    let current = graph;
+    while (current !== root) {
+        let parent = null;
+        const candidates = [root];
+        const subgraphs = root?._subgraphs ?? root?.subgraphs;
+        if (subgraphs?.values) candidates.push(...subgraphs.values());
+        for (const candidate of candidates) {
+            if (!candidate?._nodes || candidate === current) continue;
+            if (candidate._nodes.some((node) => node.subgraph === current)) {
+                parent = candidate;
+                break;
+            }
+        }
+        if (!parent || seen.has(parent)) {
+            if (!seen.has(root)) result.push(root);
+            break;
+        }
+        result.push(parent);
+        seen.add(parent);
+        current = parent;
+    }
+    return result;
+}
+
+function graphDescendants(graph, seen = new Set()) {
+    if (!graph?._nodes || seen.has(graph)) return [];
+    seen.add(graph);
+    const result = [];
+    for (const node of graph._nodes) {
+        if (!node?.subgraph || seen.has(node.subgraph)) continue;
+        result.push(node.subgraph);
+        result.push(...graphDescendants(node.subgraph, seen));
+    }
+    return result;
+}
+
+function setGetName(node) {
+    return String(node?.widgets?.[0]?.value ?? "");
+}
+
+function setNodeFor(getNode) {
+    const name = setGetName(getNode);
+    if (!name) return null;
+    for (const graph of graphAncestors(getNode?.graph)) {
+        const setter = graph?._nodes?.find(
+            (node) => nodeType(node) === "SetNode" && setGetName(node) === name,
+        );
+        if (setter) return setter;
+    }
+    return null;
+}
+
+function getNodesFor(setNode) {
+    const name = setGetName(setNode);
+    if (!name || !setNode?.graph) return [];
+    const graphs = [setNode.graph, ...graphDescendants(setNode.graph)];
+    return graphs.flatMap((graph) => (graph?._nodes ?? []).filter(
+        (node) => nodeType(node) === "GetNode" && setGetName(node) === name,
+    ));
+}
+
+function transparentInputConnection(node) {
+    const type = nodeType(node);
+    if (type === "GetNode") {
+        const setter = setNodeFor(node);
+        return setter ? directInputConnection(setter) : null;
+    }
+    if (type === "SetNode" || TRANSPARENT_REROUTE_TYPES.has(type)) {
+        return directInputConnection(node);
+    }
+    return null;
+}
+
+function resolveInputConnection(connection) {
+    let current = connection;
+    const seen = new Set();
+    while (current?.source && !seen.has(current.source)) {
+        seen.add(current.source);
+        const next = transparentInputConnection(current.source);
+        if (!next) break;
+        current = next;
+    }
+    return current;
+}
+
 function inputConnection(node, name) {
     const input = node?.inputs?.find((item) => item.name === name);
-    const link = input?.link == null ? null : node.graph?.links?.[input.link];
+    const link = graphLink(node?.graph, input?.link);
     const source = link ? node.graph?.getNodeById?.(link.origin_id) ?? null : null;
-    return source ? {source, originSlot: Number(link.origin_slot ?? 0)} : null;
+    return source
+        ? resolveInputConnection({
+            source,
+            originSlot: Number(link.origin_slot ?? 0),
+        })
+        : null;
+}
+
+function connectedInputValue(node, name) {
+    const connection = inputConnection(node, name);
+    if (!connection?.source) return undefined;
+    const {source, originSlot} = connection;
+    const output = source.outputs?.[originSlot];
+    if (output?.value !== undefined) return output.value;
+    if (source.output_values?.[originSlot] !== undefined) {
+        return source.output_values[originSlot];
+    }
+
+    const widgets = source.widgets ?? [];
+    const outputName = String(output?.name ?? "").trim().toLowerCase();
+    const matching = outputName
+        ? widgets.find((widget) => String(
+            widget?.name ?? "",
+        ).trim().toLowerCase() === outputName)
+        : null;
+    if (matching?.value !== undefined) return matching.value;
+
+    for (const candidate of ["value", "string", "text", "tag"]) {
+        const widget = widgets.find((item) => String(
+            item?.name ?? "",
+        ).trim().toLowerCase() === candidate);
+        if (widget?.value !== undefined) return widget.value;
+    }
+    if (widgets.length === 1 && widgets[0]?.value !== undefined) {
+        return widgets[0].value;
+    }
+    return undefined;
 }
 
 function inputSource(node, name) {
@@ -140,11 +295,12 @@ function outputTargets(node) {
     const targets = [];
     for (const output of node?.outputs ?? []) {
         for (const linkId of output.links ?? []) {
-            const link = node.graph?.links?.[linkId];
+            const link = graphLink(node?.graph, linkId);
             const target = link ? node.graph?.getNodeById?.(link.target_id) : null;
             if (target) targets.push(target);
         }
     }
+    if (nodeType(node) === "SetNode") targets.push(...getNodesFor(node));
     return targets;
 }
 
