@@ -50,6 +50,10 @@ from .chain_nodes import (
     CHAIN_NODE_CLASS_MAPPINGS,
     CHAIN_NODE_DISPLAY_NAME_MAPPINGS,
 )
+from .exact_final_timeline import install as _install_exact_final_timeline
+
+_EXACT_FINAL_TIMELINE_BUILD = _install_exact_final_timeline()
+
 from .upscale_nodes import (
     UPSCALE_NODE_CLASS_MAPPINGS,
     UPSCALE_NODE_DISPLAY_NAME_MAPPINGS,
