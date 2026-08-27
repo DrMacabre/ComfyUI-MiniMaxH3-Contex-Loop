@@ -129,6 +129,12 @@ assert.match(source, /createElementNS\("http:\/\/www\.w3\.org\/2000\/svg", "path
 assert.match(source, /h3cm-shared-link/);
 assert.match(source, /padding-left:28px/);
 assert.match(source, /matching color \+ side rail = same saved clip/);
+assert.match(source, /h3cm-chapter-tabs/);
+assert.match(source, /function chapterRanges/);
+assert.match(source, /All scenes/);
+assert.match(source, /Unassigned/);
+assert.match(source, /prior scene/);
+assert.match(source, /state\.payload\?\.editorial\?\.chapters/);
 assert.match(source, /pathData \+= ` M \$\{laneX\} \$\{anchor\.y\} H \$\{anchor\.x\}`/);
 assert.doesNotMatch(source, /stroke-dasharray/);
 assert.match(source, /new ResizeObserver\(scheduleSharedLinks\)/);

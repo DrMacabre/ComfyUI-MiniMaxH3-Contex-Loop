@@ -11,6 +11,7 @@ import {
     formatClock,
     makeShot,
     moveShot,
+    removePlanShot,
     parsePlanJson,
     planToJson,
     promptTextToLines,
@@ -31,8 +32,8 @@ import {
     shotLengthMode,
     sharedPrompt,
     visualContextCompositions,
-} from "./h3_chain_plan_core.mjs?v=0.6.29";
-import {availableReferenceRecords} from "./h3_reference_preview_core.mjs?v=0.6.29";
+} from "./h3_chain_plan_core.mjs?v=0.6.30";
+import {availableReferenceRecords} from "./h3_reference_preview_core.mjs?v=0.6.30";
 import {
     applySceneAudioOverride,
     applySceneTransitionPreset,
@@ -41,12 +42,12 @@ import {
     sceneAudioPolicy,
     sceneTransitionPreset,
     transitionPresetLabel,
-} from "./h3_policy_core.mjs?v=0.6.29";
+} from "./h3_policy_core.mjs?v=0.6.30";
 import {
     resolveAudioContextLength,
     resolveAudioPolicy,
     resolveTransitionPolicy,
-} from "./h3_socket_presentation_core.mjs?v=0.6.29";
+} from "./h3_socket_presentation_core.mjs?v=0.6.30";
 
 // This scene editor is an original implementation. Its quick @ reference and
 // # dialogue interactions are inspired by nkxx188/ComfyUI-MiniMaxH3-Easy,
@@ -693,8 +694,19 @@ function mountEditor(node) {
         id.title = "Stable scene ID used in checkpoint filenames and resume validation. Keep it unique and avoid changing it after rendering.";
         id.addEventListener("input", () => {
             const previousKey = sceneColorKey(shot, index);
+            const previousId = safeShotId(
+                shot.id, `clip_${String(index + 1).padStart(4, "0")}`,
+            );
             if (id.value) shot.id = id.value;
             else delete shot.id;
+            const nextId = safeShotId(
+                shot.id, `clip_${String(index + 1).padStart(4, "0")}`,
+            );
+            for (const chapter of state.plan.chapters ?? []) {
+                if (chapter.start_scene_id === previousId) {
+                    chapter.start_scene_id = nextId;
+                }
+            }
             const nextKey = sceneColorKey(shot, index);
             const colors = colorOverrides(node);
             if (previousKey !== nextKey && colors[previousKey]) {
@@ -735,7 +747,7 @@ function mountEditor(node) {
             if (state.plan.shots.length <= 1) return;
             if (!window.confirm(`Delete scene ${index + 1}?`)) return;
             saveSceneColor(sceneColorKey(shot, index), null);
-            state.plan.shots.splice(index, 1);
+            removePlanShot(state.plan, index);
             syncPlan();
             render();
         });
