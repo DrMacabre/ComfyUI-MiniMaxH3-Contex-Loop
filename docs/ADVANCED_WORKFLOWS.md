@@ -89,6 +89,33 @@ verifies both consumed dependencies independently: the selected visual scene
 and, when enabled, the immediate generated-audio predecessor. Other earlier
 scenes remain assembly-only and do not become false resume blockers.
 
+### Selecting a source segment instead of its tail
+
+Plan Studio's **Context** tab previews the complete delivered video for every
+visual context block. Move the range, use the player's current frame as its
+start, and play only the selected window. **Tail (default)** removes the
+override and preserves the historical direct-latent path.
+
+The stored values are zero-based frame indexes within the source scene's
+delivered video (after that source's own incoming overlap was trimmed):
+
+```json
+{
+  "id": "scene_5",
+  "context_length": 22,
+  "visual_context_source": "scene_3",
+  "visual_context_start_frame": 120,
+  "video_blend_frames": 0
+}
+```
+
+This selects delivered frames 120 through 141 from scene 3. A non-tail window
+is decoded from the source's complete saved video latent. Guide modes consume
+the exact selected RGB frames; modes that require latent context re-encode the
+selected window once so an arbitrary RGB start is never mistaken for a
+different H3 temporal-latent phase. Generated-audio continuity remains the
+immediate previous scene's tail.
+
 ## Composed visual context
 
 A continuation can use two saved picture histories back to back. In Plan or
@@ -139,6 +166,11 @@ override still works. Final assembly still follows normal scene order and must
 use `video_blend_frames: 0` at this boundary. Checkpoint preflight verifies
 both selected visual revisions plus the immediate audio predecessor when that
 audio continuity is active.
+
+The Context tab exposes one independent range for each composed block. The
+second block uses `visual_context_start_frame`; the first block uses
+`visual_context_lead_start_frame`. Either or both may be omitted to keep that
+block on its source tail.
 
 ## Last-frame destinations
 

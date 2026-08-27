@@ -27,6 +27,7 @@ import {
     sceneVisualContextSource,
     sceneVisualContextLeadFrames,
     sceneVisualContextLeadSource,
+    sceneVisualContextStartFrame,
     sceneVideoBlendFrames,
     setScenePromptSeedMode,
     setSharedPrompt,
@@ -34,18 +35,18 @@ import {
     sharedPrompt,
     shotLengthMode,
     visualContextCompositions,
-} from "./h3_chain_plan_core.mjs?v=0.6.25";
+} from "./h3_chain_plan_core.mjs?v=0.6.26";
 import {
     promptRevisionHelp,
     promptRevisionLabel,
     promptRevisionNavigation,
-} from "./h3_prompt_history_core.mjs?v=0.6.25";
+} from "./h3_prompt_history_core.mjs?v=0.6.26";
 import {
     availableReferenceRecords,
     convertTaggedPictureReference,
     taggedPictureReferenceMode,
     taggedPictureReferenceToken,
-} from "./h3_reference_preview_core.mjs?v=0.6.25";
+} from "./h3_reference_preview_core.mjs?v=0.6.26";
 import {
     applySceneAudioOverride,
     applySceneTransitionPreset,
@@ -54,12 +55,12 @@ import {
     sceneAudioPolicy,
     sceneTransitionPreset,
     transitionPresetLabel,
-} from "./h3_policy_core.mjs?v=0.6.25";
+} from "./h3_policy_core.mjs?v=0.6.26";
 import {
     resolveAudioContextLength,
     resolveAudioPolicy,
     resolveTransitionPolicy,
-} from "./h3_socket_presentation_core.mjs?v=0.6.25";
+} from "./h3_socket_presentation_core.mjs?v=0.6.26";
 import {
     locateStudioTimelineSecond,
     h3StudioGridMarkers,
@@ -72,8 +73,8 @@ import {
     studioSourceSecond,
     studioTimelineLayout,
     studioWaveformSceneSamples,
-} from "./h3_chain_plan_studio_core.mjs?v=0.6.25";
-import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.6.25";
+} from "./h3_chain_plan_studio_core.mjs?v=0.6.26";
+import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.6.26";
 
 const {connectedPromptEditors, publishCompanionScene} = promptCompanionSync;
 function publishCompanionPrompt(...args) {
@@ -252,6 +253,27 @@ function injectStyles() {
         .h3studio-compare-label-generated { right:7px; }
         .h3studio-compare-label-source { left:7px; }
         .h3studio-player-controls input[type=range] { flex:1; padding:0; }
+        .h3studio-context-selector { display:flex; flex-direction:column; gap:9px; }
+        .h3studio-context-help { color:var(--hs-muted); }
+        .h3studio-context-blocks { display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:9px; }
+        .h3studio-context-block { min-width:0; padding:8px; border:1px solid var(--hs-border);
+            border-radius:7px; background:var(--hs-bg); }
+        .h3studio-context-block-head { display:flex; align-items:baseline; justify-content:space-between;
+            gap:8px; margin-bottom:7px; }
+        .h3studio-context-block-head span { color:var(--hs-muted); overflow:hidden;
+            text-overflow:ellipsis; white-space:nowrap; }
+        .h3studio-context-video { display:block; width:100%; min-height:180px; max-height:330px;
+            object-fit:contain; background:#050608; border-radius:6px; }
+        .h3studio-context-empty { display:grid; place-items:center; width:100%; min-height:180px;
+            padding:18px; color:var(--hs-muted); text-align:center; border:1px dashed var(--hs-border);
+            border-radius:6px; background:#050608; }
+        .h3studio-context-range { display:grid; grid-template-columns:minmax(100px,1fr) auto;
+            gap:6px; align-items:center; margin-top:7px; }
+        .h3studio-context-range input[type=range] { padding:0; }
+        .h3studio-context-range-label { min-width:150px; color:var(--hs-muted);
+            font-variant-numeric:tabular-nums; text-align:right; }
+        .h3studio-context-actions { display:flex; align-items:center; gap:6px; margin-top:7px;
+            flex-wrap:wrap; }
         .h3studio-compare-controls { display:grid; grid-template-columns:auto minmax(100px,1fr) auto; gap:6px; align-items:center; }
         .h3studio-compare-controls.h3studio-no-motion { grid-template-columns:1fr; }
         .h3studio-audio-mix { display:flex; align-items:center; justify-content:flex-end; gap:8px; flex-wrap:wrap; }
@@ -274,7 +296,7 @@ function injectStyles() {
         .h3studio-ref-preview audio { width:100%; height:36px; }
         @media(max-width:760px) { .h3studio-form,.h3studio-advanced-grid,.h3studio-plan-settings,
             .h3studio-audio-overrides { grid-template-columns:1fr 1fr; }
-            .h3studio-defaults { grid-template-columns:1fr; } }
+            .h3studio-defaults,.h3studio-context-blocks { grid-template-columns:1fr; } }
     `;
     document.head.appendChild(style);
 }
@@ -432,7 +454,7 @@ function mount(node) {
         lastValue:"", lastRunName:"",
         lastSettingsSignature:"",
         active:Math.max(0, Number(node.properties[ACTIVE_PROPERTY]) || 0),
-        view:["scene","shared","settings","player","json"].includes(node.properties[VIEW_PROPERTY])
+        view:["scene","shared","settings","context","player","json"].includes(node.properties[VIEW_PROPERTY])
             ? node.properties[VIEW_PROPERTY] : "scene",
         timelineZoom:normalizedTimelineZoom(
             node.properties[TIMELINE_ZOOM_PROPERTY]),
@@ -451,6 +473,7 @@ function mount(node) {
         planNotifyTimer:null,
         playhead:null, player:null, playerAudio:null, sourceAudioPlayer:null,
         sourcePlayer:null, sourceLayer:null,
+        contextPlayers:[],
         playerSlider:null, playerIndex:-1,
         playerPreloadVideo:null, playerPreloadAudio:null,
         primePlayerNext:null, playPlayerTransport:null,
@@ -474,6 +497,7 @@ function mount(node) {
     const pausePlayerMonitors = () => {
         for (const media of [
             state.playerAudio, state.sourceAudioPlayer, state.sourcePlayer,
+            ...state.contextPlayers,
         ]) {
             try { media?.pause(); } catch (_error) {}
         }
@@ -804,6 +828,7 @@ function mount(node) {
             return;
         }
         renderTimeline(); renderStatus();
+        if (state.view === "context") renderPanel();
         if (state.view === "player" && state.player?.paused) {
             const media = playerCheckpoint(state.playerIndex);
             const desired = media?.video ? videoUrl(media.video) : "";
@@ -1536,6 +1561,7 @@ function mount(node) {
             if (!allowed.length) {
                 delete shot.visual_context_lead_source;
                 delete shot.visual_context_lead_frames;
+                delete shot.visual_context_lead_start_frame;
                 return;
             }
             try {
@@ -1593,6 +1619,8 @@ function mount(node) {
                 shot.video_blend_frames = nextContext;
             }
             normalizeVisualLeadSpan();
+            delete shot.visual_context_start_frame;
+            delete shot.visual_context_lead_start_frame;
             writePlan();
             renderShell();
         });
@@ -1616,6 +1644,8 @@ function mount(node) {
             else shot.context_length = Number(context.value);
             sceneContextLength(shot, settings().contextLength);
             normalizeVisualLeadSpan();
+            delete shot.visual_context_start_frame;
+            delete shot.visual_context_lead_start_frame;
             refreshBlendControl();
             refreshIncomingTransition();
             writePlan();
@@ -1689,6 +1719,7 @@ function mount(node) {
                 shot.visual_context_source = visualSource.value;
                 shot.video_blend_frames = 0;
             }
+            delete shot.visual_context_start_frame;
             const recentSource = sceneVisualContextSource(
                 state.plan, state.active + 1,
             );
@@ -1698,6 +1729,7 @@ function mount(node) {
             if (leadSource !== null && leadSource === recentSource) {
                 delete shot.visual_context_lead_source;
                 delete shot.visual_context_lead_frames;
+                delete shot.visual_context_lead_start_frame;
             }
             refreshBlendControl();
             writePlan();
@@ -1792,10 +1824,13 @@ function mount(node) {
             if (!visualLeadSource.value) {
                 delete shot.visual_context_lead_source;
                 delete shot.visual_context_lead_frames;
+                delete shot.visual_context_lead_start_frame;
             } else {
                 shot.visual_context_lead_source = visualLeadSource.value;
                 applyVisualComposition();
             }
+            delete shot.visual_context_start_frame;
+            delete shot.visual_context_lead_start_frame;
             refreshBlendControl();
             writePlan();
             renderShell();
@@ -1804,6 +1839,8 @@ function mount(node) {
             if (visualLeadSource.value) {
                 applyVisualComposition();
             }
+            delete shot.visual_context_start_frame;
+            delete shot.visual_context_lead_start_frame;
             refreshBlendControl();
             writePlan();
             renderShell();
@@ -2200,6 +2237,210 @@ function mount(node) {
         };
     }
 
+    function renderContextPanel() {
+        const panel = element("div", "h3studio-context-selector");
+        const result = timing();
+        const row = result.shots[state.active];
+        const shot = state.plan.shots[state.active];
+        const title = element(
+            "div", "h3studio-scene-head",
+            `Scene ${state.active + 1} selected visual context`,
+        );
+        panel.append(title);
+        if (!row || state.active === 0) {
+            panel.append(element(
+                "div", "h3studio-context-empty",
+                "Scene 1 has no saved predecessor. Existing Video Context remains configured by its dedicated workflow input.",
+            ));
+            return panel;
+        }
+        if (!Number(row.contextLength)) {
+            panel.append(element(
+                "div", "h3studio-context-empty",
+                "This scene has 0 visual context. Choose a positive context in Scene settings before selecting a source segment.",
+            ));
+            return panel;
+        }
+        panel.append(element(
+            "div", "h3studio-context-help",
+            "Choose the exact delivered-video window supplied to this scene. Tail is the default and stores no override. This changes visual context only; generated-audio continuity still follows the immediate previous scene.",
+        ));
+        const blocksHost = element("div", "h3studio-context-blocks");
+        const blocks = [];
+        if (row.visualContextLeadSource !== null) {
+            blocks.push({
+                label:"Block 1 · first in composed context",
+                sourceIndex:row.visualContextLeadSource - 1,
+                span:Number(row.visualContextLeadFrames),
+                field:"visual_context_lead_start_frame",
+                lead:true,
+            });
+        }
+        blocks.push({
+            label:row.visualContextLeadSource === null
+                ? "Context block" : "Block 2 · nearest generation",
+            sourceIndex:row.visualContextSource - 1,
+            span:Number(row.contextLength - row.visualContextLeadFrames),
+            field:"visual_context_start_frame",
+            lead:false,
+        });
+
+        for (const block of blocks) {
+            const sourceRow = result.shots[block.sourceIndex];
+            const card = element("div", "h3studio-context-block");
+            const head = element("div", "h3studio-context-block-head");
+            head.append(
+                element("strong", "", `${block.label} · ${block.span}f`),
+                element(
+                    "span", "",
+                    sourceRow
+                        ? `Scene ${sourceRow.index} · ${sourceRow.id}`
+                        : "Missing source scene",
+                ),
+            );
+            card.append(head);
+            if (!sourceRow || !Number.isInteger(block.span) || block.span < 1) {
+                card.append(element(
+                    "div", "h3studio-context-empty",
+                    "The selected source or context split is invalid. Fix it in Scene settings.",
+                ));
+                blocksHost.append(card);
+                continue;
+            }
+            const latest = Math.max(0, sourceRow.deliveredFrames - block.span);
+            let start = latest;
+            let rangeError = "";
+            try {
+                start = sceneVisualContextStartFrame(
+                    shot, sourceRow.deliveredFrames, block.span, block.lead,
+                );
+            } catch (error) {
+                rangeError = error?.message || String(error);
+                const raw = Number(shot[block.field]);
+                start = Number.isInteger(raw)
+                    ? Math.max(0, Math.min(latest, raw)) : latest;
+            }
+            const media = playerCheckpoint(block.sourceIndex);
+            let video = null;
+            if (media?.video) {
+                video = element("video", "h3studio-context-video");
+                video.controls = true;
+                video.playsInline = true;
+                video.preload = "metadata";
+                video.muted = true;
+                video.src = videoUrl(media.video);
+                state.contextPlayers.push(video);
+                card.append(video);
+            } else {
+                card.append(element(
+                    "div", "h3studio-context-empty",
+                    `Scene ${sourceRow.index} has no active saved video yet. The frame window can still be planned now.`,
+                ));
+            }
+            const rangeWrap = element("div", "h3studio-context-range");
+            const range = element("input");
+            range.type = "range";
+            range.min = "0";
+            range.max = String(latest);
+            range.step = "1";
+            range.value = String(start);
+            range.title = "Start frame within the source scene's delivered video";
+            const rangeLabel = element("span", "h3studio-context-range-label");
+            const error = element("div", "h3studio-error", rangeError);
+            error.hidden = !rangeError;
+            const updateLabel = () => {
+                const selected = Number(range.value);
+                const end = selected + block.span;
+                rangeLabel.textContent = `frames ${selected + 1}–${end} · ${(selected / FPS).toFixed(3)}–${(end / FPS).toFixed(3)}s`;
+            };
+            const previewStart = () => {
+                if (!video || video.readyState < 1) return;
+                try { video.currentTime = Number(range.value) / FPS; }
+                catch (_error) {}
+            };
+            const commitStart = () => {
+                const selected = Number(range.value);
+                if (selected === latest) delete shot[block.field];
+                else {
+                    shot[block.field] = selected;
+                    shot.video_blend_frames = 0;
+                }
+                error.hidden = true;
+                error.textContent = "";
+                writePlan();
+                renderStatus();
+            };
+            range.addEventListener("input", () => {
+                updateLabel();
+                previewStart();
+            });
+            range.addEventListener("change", commitStart);
+            rangeWrap.append(range, rangeLabel);
+            card.append(rangeWrap);
+            updateLabel();
+            if (video) {
+                video.addEventListener("loadedmetadata", previewStart, {once:true});
+            }
+            const actions = element("div", "h3studio-context-actions");
+            const usePlayhead = button(
+                "Start at playhead",
+                "Set the context window's first frame from this player's current position",
+                () => {
+                    if (!video) return;
+                    range.value = String(Math.max(
+                        0, Math.min(latest, Math.round(video.currentTime * FPS)),
+                    ));
+                    updateLabel();
+                    previewStart();
+                    commitStart();
+                },
+            );
+            usePlayhead.disabled = !video;
+            const playSelection = button(
+                "Play selection",
+                "Play only this context window",
+                async () => {
+                    if (!video) return;
+                    for (const item of state.contextPlayers) {
+                        if (item !== video) item.pause();
+                    }
+                    const endSeconds = (
+                        Number(range.value) + block.span
+                    ) / FPS;
+                    video.dataset.contextEnd = String(endSeconds);
+                    video.currentTime = Number(range.value) / FPS;
+                    try { await video.play(); } catch (_error) {}
+                },
+            );
+            playSelection.disabled = !video;
+            if (video) {
+                video.addEventListener("timeupdate", () => {
+                    const end = Number(video.dataset.contextEnd);
+                    if (Number.isFinite(end) && video.currentTime >= end) {
+                        delete video.dataset.contextEnd;
+                        video.pause();
+                        video.currentTime = end;
+                    }
+                });
+            }
+            const tail = button(
+                "Tail (default)",
+                "Use the final source frames and remove the stored override",
+                () => {
+                    range.value = String(latest);
+                    updateLabel();
+                    previewStart();
+                    commitStart();
+                },
+            );
+            actions.append(usePlayhead, playSelection, tail);
+            card.append(actions, error);
+            blocksHost.append(card);
+        }
+        panel.append(blocksHost);
+        return panel;
+    }
+
     function disposePlayer() {
         const current = state.player;
         const generatedAudio = state.playerAudio;
@@ -2212,6 +2453,8 @@ function mount(node) {
         state.sourceAudioPlayer = null;
         state.sourcePlayer = null;
         state.sourceLayer = null;
+        const contextPlayers = state.contextPlayers;
+        state.contextPlayers = [];
         state.playerSlider = null;
         state.playerPreloadVideo = null;
         state.playerPreloadAudio = null;
@@ -2220,7 +2463,7 @@ function mount(node) {
         state.togglePlayerPlayback = null;
         for (const media of [
             current, generatedAudio, sourceAudioCurrent, sourceCurrent,
-            preloadVideo, preloadAudio,
+            preloadVideo, preloadAudio, ...contextPlayers,
         ]) {
             if (!media) continue;
             try { media.pause(); } catch (_error) {}
@@ -2819,6 +3062,7 @@ function mount(node) {
         disposePlayer();
         const content = state.view === "shared" ? renderSharedPanel()
             : state.view === "settings" ? renderPlanSettingsPanel()
+            : state.view === "context" ? renderContextPanel()
             : state.view === "player" ? renderPlayerPanel()
               : state.view === "json" ? renderJsonPanel() : renderScenePanel();
         state.panelHost.replaceChildren(content);
@@ -2876,7 +3120,8 @@ function mount(node) {
         toolbar.append(add, duplicate, remove, left, right, element("span", "h3studio-spacer"));
         const sceneViewLabel = state.promptEditors.length ? "Scene settings" : "Scene prompt";
         for (const [value,label] of [["scene",sceneViewLabel],["shared","Shared prompt"],
-            ["settings","Plan settings"],["player","Player"],["json","JSON"]]) {
+            ["settings","Plan settings"],["context","Context"],
+            ["player","Player"],["json","JSON"]]) {
             const item = button(label, `Open ${label.toLowerCase()} view`, () => {
                 void flushHistoryDraft();
                 if (value === "player" && state.timelinePosition == null) {

@@ -27,6 +27,7 @@ import {
     scenePromptSeedMode,
     sceneVisualContextLeadFrames,
     sceneVisualContextLeadSource,
+    sceneVisualContextStartFrame,
     sceneVisualContextSource,
     sceneVideoBlendFrames,
     setScenePromptSeedMode,
@@ -707,7 +708,7 @@ blendedNonlinearPlan.shots[4].video_blend_frames = 2;
 assert.match(calculatePlanTiming(blendedNonlinearPlan, {
     contextLength:5, videoBlendFrames:0, anchorMode:"head",
     defaultDurationSeconds:5, defaultSteps:10,
-}).errors.join("\n"), /non-linear or composed visual context requires 0 assembly blend/i);
+}).errors.join("\n"), /non-linear, composed, or windowed visual context requires 0 assembly blend/i);
 
 const composedPlan = structuredClone(nonlinearPlan);
 for (const shot of composedPlan.shots) shot.length = 90;
@@ -743,6 +744,16 @@ assert.deepEqual(
 assert.equal(sceneVisualContextLeadFrames({
     visual_context_lead_frames:17,
 }, 39), 17);
+assert.equal(sceneVisualContextStartFrame({}, 85, 22), 63);
+assert.equal(sceneVisualContextStartFrame({
+    visual_context_start_frame:12,
+}, 85, 22), 12);
+assert.equal(sceneVisualContextStartFrame({
+    visual_context_lead_start_frame:7,
+}, 85, 17, true), 7);
+assert.throws(() => sceneVisualContextStartFrame({
+    visual_context_start_frame:64,
+}, 85, 22), /must be between 0 and 63/i);
 assert.equal(contextCompositions.at(-1).total, 243);
 const composedTiming = calculatePlanTiming(composedPlan, {
     contextLength:39, videoBlendFrames:0, anchorMode:"head",
@@ -753,6 +764,18 @@ assert.equal(composedTiming.shots[4].visualContextSource, 3);
 assert.equal(composedTiming.shots[4].visualContextLeadSource, 4);
 assert.equal(composedTiming.shots[4].visualContextLeadSourceId, "four");
 assert.equal(composedTiming.shots[4].visualContextLeadFrames, 5);
+assert.equal(composedTiming.shots[4].visualContextStartFrame, 17);
+assert.equal(composedTiming.shots[4].visualContextLeadStartFrame, 46);
+const windowedComposition = structuredClone(composedPlan);
+windowedComposition.shots[4].visual_context_start_frame = 10;
+windowedComposition.shots[4].visual_context_lead_start_frame = 20;
+const windowedTiming = calculatePlanTiming(windowedComposition, {
+    contextLength:39, videoBlendFrames:0, anchorMode:"head",
+    defaultDurationSeconds:5, defaultSteps:10,
+});
+assert.deepEqual(windowedTiming.errors, []);
+assert.equal(windowedTiming.shots[4].visualContextStartFrame, 10);
+assert.equal(windowedTiming.shots[4].visualContextLeadStartFrame, 20);
 
 const sameSourceComposition = structuredClone(composedPlan);
 sameSourceComposition.shots[4].visual_context_lead_source = "three";
@@ -771,7 +794,7 @@ blendedComposition.shots[4].video_blend_frames = 2;
 assert.match(calculatePlanTiming(blendedComposition, {
     contextLength:39, videoBlendFrames:0, anchorMode:"head",
     defaultDurationSeconds:5, defaultSteps:10,
-}).errors.join("\n"), /non-linear or composed visual context requires 0 assembly blend/i);
+}).errors.join("\n"), /non-linear, composed, or windowed visual context requires 0 assembly blend/i);
 
 duplicateShot(plan.shots, 0);
 assert.equal(plan.shots.length, 3);

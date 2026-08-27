@@ -4469,6 +4469,43 @@ def _shot_visual_context_lead_frames(
     return resolved
 
 
+def _shot_visual_context_start_frame(
+        shot: dict[str, Any], field: str, delivered_frames: int,
+        span_frames: int) -> int:
+    """Resolve one delivered-video window; absence is the historical tail."""
+    delivered_frames = int(delivered_frames)
+    span_frames = int(span_frames)
+    if span_frames < 1:
+        if field in shot:
+            raise ValueError(
+                "%s requires a positive visual context span." % field)
+        return delivered_frames
+    latest = delivered_frames - span_frames
+    if latest < 0:
+        raise ValueError(
+            "%s requests %d frames from a source delivering only %d." %
+            (field, span_frames, delivered_frames))
+    value = shot.get(field)
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return latest
+    if isinstance(value, bool) or (
+            isinstance(value, float) and not value.is_integer()):
+        raise ValueError(
+            "%s must be an integer delivered-video frame index." % field)
+    try:
+        resolved = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "%s must be an integer delivered-video frame index." % field
+        ) from exc
+    if resolved < 0 or resolved > latest:
+        raise ValueError(
+            "%s must be between 0 and %d so its %d-frame window fits inside "
+            "the source's %d delivered frames." %
+            (field, latest, span_frames, delivered_frames))
+    return resolved
+
+
 def _shot_audio_context_length(shot: dict[str, Any],
                                default_audio_context_length: int,
                                video_context_length: int) -> int:
@@ -4646,9 +4683,10 @@ def _low_grid_guide_context(
             "H3 low-grid Guide video VAE returned image shape %s; expected "
             "[frames,height,width,channels]." % (tuple(decoded.shape),))
 
-    if int(state.get("_visual_context_lead_source", 0)):
-        # Composed state already contains exactly the synthetic prefix rather
-        # than a complete predecessor clip. Decode and consume it as-is.
+    if bool(state.get("_visual_context_exact_prefix", False)):
+        # A composed or explicitly windowed state already contains exactly
+        # the selected prefix rather than a complete predecessor clip.
+        # Decode and consume it as-is.
         if int(decoded.shape[0]) != requested:
             raise ValueError(
                 "H3 low-grid Guide composed context decoded to %d frames; "
@@ -4715,11 +4753,17 @@ def _legacy_history_contract(
         if "visual_context_source" in shot:
             contract["visual_context_source"] = shot[
                 "visual_context_source"]
+        if "visual_context_start_frame" in shot:
+            contract["visual_context_start_frame"] = int(
+                shot["visual_context_start_frame"])
         if "visual_context_lead_source" in shot:
             contract["visual_context_lead_source"] = shot[
                 "visual_context_lead_source"]
             contract["visual_context_lead_frames"] = int(
                 shot["visual_context_lead_frames"])
+            if "visual_context_lead_start_frame" in shot:
+                contract["visual_context_lead_start_frame"] = int(
+                    shot["visual_context_lead_start_frame"])
         if "audio_context_length" in shot:
             contract["audio_context_length"] = shot["audio_context_length"]
         if "context_spatial_proxy" in shot:
@@ -4944,6 +4988,9 @@ def _scene_dependency_record(
             "visual_context_source_id": str(
                 plan["shots"][visual_source - 1]["id"]),
         })
+    if "visual_context_start_frame" in shot and context > 0:
+        scopes["incoming_boundary"]["visual_context_start_frame"] = int(
+            shot["visual_context_start_frame"])
     visual_lead_source = (
         _shot_visual_context_lead_source(plan, index)
         if index > 1 and context > 0 else None)
@@ -4955,6 +5002,10 @@ def _scene_dependency_record(
             "visual_context_lead_frames": int(
                 _shot_visual_context_lead_frames(shot, context)),
         })
+        if "visual_context_lead_start_frame" in shot:
+            scopes["incoming_boundary"][
+                "visual_context_lead_start_frame"] = int(
+                    shot["visual_context_lead_start_frame"])
     if _audio_policy_locks_source_audio(compatibility, shot):
         # Omit the disabled spelling so pre-switch scene-dependency records
         # remain byte-for-byte compatible with unchanged 0.5 runs.
@@ -5535,6 +5586,9 @@ def _plan_with_external_context(
                 "visual source." %
                 (source["index"], source["id"],
                  source["delivered_frames"], recent_frames, target_index))
+        _shot_visual_context_start_frame(
+            target, "visual_context_start_frame",
+            int(source["delivered_frames"]), recent_frames)
         if lead_source_index is not None:
             lead_source = prepared["shots"][lead_source_index - 1]
             if int(lead_source["delivered_frames"]) < lead_frames:
@@ -5544,6 +5598,9 @@ def _plan_with_external_context(
                     (lead_source["index"], lead_source["id"],
                      lead_source["delivered_frames"], target_index,
                      lead_frames))
+            _shot_visual_context_start_frame(
+                target, "visual_context_lead_start_frame",
+                int(lead_source["delivered_frames"]), lead_frames)
 
     prepared["total_delivered_frames"] = stitched_frames
     prepared["plan_hash"] = _fingerprint({
@@ -5747,6 +5804,9 @@ def _retime_review_plan(plan: dict[str, Any]) -> None:
                 "visual source." %
                 (source["index"], source["id"],
                  source["delivered_frames"], recent_frames, target_index))
+        _shot_visual_context_start_frame(
+            target, "visual_context_start_frame",
+            int(source["delivered_frames"]), recent_frames)
         if lead_source_index is not None:
             lead_source = plan["shots"][lead_source_index - 1]
             if int(lead_source["delivered_frames"]) < lead_frames:
@@ -5756,6 +5816,9 @@ def _retime_review_plan(plan: dict[str, Any]) -> None:
                     (lead_source["index"], lead_source["id"],
                      lead_source["delivered_frames"], target_index,
                      lead_frames))
+            _shot_visual_context_start_frame(
+                target, "visual_context_lead_start_frame",
+                int(lead_source["delivered_frames"]), lead_frames)
     plan["total_delivered_frames"] = stitched_frames
     cfg = plan["compatibility"]
     imported = "; imported video" if external_span else ""
@@ -6237,6 +6300,11 @@ def _normalize_plan(
             # numeric scene indexes.
             shot["visual_context_source"] = item.get(
                 "visual_context_source")
+        if "visual_context_start_frame" in item:
+            # Delivered-video frame zero is the first frame visible in the
+            # saved segment, after its own incoming overlap was trimmed.
+            shot["visual_context_start_frame"] = item.get(
+                "visual_context_start_frame")
         if "visual_context_lead_source" in item:
             # Optional first block of a composed visual prefix. The ordinary
             # visual_context_source remains the second block nearest the new
@@ -6245,10 +6313,21 @@ def _normalize_plan(
                 "visual_context_lead_source")
             shot["visual_context_lead_frames"] = item.get(
                 "visual_context_lead_frames")
+            if "visual_context_lead_start_frame" in item:
+                shot["visual_context_lead_start_frame"] = item.get(
+                    "visual_context_lead_start_frame")
         elif "visual_context_lead_frames" in item:
             raise ValueError(
                 "Shot %d defines visual_context_lead_frames without a "
                 "visual_context_lead_source." % index)
+        elif "visual_context_lead_start_frame" in item:
+            raise ValueError(
+                "Shot %d defines visual_context_lead_start_frame without a "
+                "visual_context_lead_source." % index)
+        if index == 1 and "visual_context_start_frame" in shot:
+            raise ValueError(
+                "Shot 1 cannot define visual_context_start_frame; its "
+                "optional Existing Video Context is prepared separately.")
         shots.append(shot)
         stitched_frames += delivered_frames
 
@@ -6291,6 +6370,16 @@ def _normalize_plan(
                 (source["index"], source["id"],
                  source["delivered_frames"], recent_frames,
                  target_index))
+        recent_start = _shot_visual_context_start_frame(
+            target, "visual_context_start_frame",
+            int(source["delivered_frames"]), recent_frames)
+        if "visual_context_start_frame" in target:
+            if recent_start == int(source["delivered_frames"]) - recent_frames:
+                # Tail is represented by absence so existing plans, hashes,
+                # and direct-latent continuation remain byte-for-byte stable.
+                target.pop("visual_context_start_frame", None)
+            else:
+                target["visual_context_start_frame"] = recent_start
         if lead_source_index is not None:
             lead_source = shots[lead_source_index - 1]
             if int(lead_source["delivered_frames"]) < lead_frames:
@@ -6300,13 +6389,25 @@ def _normalize_plan(
                     (lead_source["index"], lead_source["id"],
                      lead_source["delivered_frames"], target_index,
                      lead_frames))
+            lead_start = _shot_visual_context_start_frame(
+                target, "visual_context_lead_start_frame",
+                int(lead_source["delivered_frames"]), lead_frames)
+            if "visual_context_lead_start_frame" in target:
+                if lead_start == int(
+                        lead_source["delivered_frames"]) - lead_frames:
+                    target.pop("visual_context_lead_start_frame", None)
+                else:
+                    target["visual_context_lead_start_frame"] = lead_start
         if ((source_index != target_index - 1
-                or lead_source_index is not None)
+                or lead_source_index is not None
+                or "visual_context_start_frame" in target
+                or "visual_context_lead_start_frame" in target)
                 and int(target.get("video_blend_frames", video_blend_frames))):
             raise ValueError(
-                "Shot %d selects non-linear or composed visual context, so "
-                "its video_blend_frames must be 0. Timeline assembly still "
-                "cuts from scene %d." % (target_index, target_index - 1))
+                "Shot %d selects non-linear, composed, or windowed visual "
+                "context, so its video_blend_frames must be 0. Timeline "
+                "assembly still cuts from scene %d." %
+                (target_index, target_index - 1))
 
     compatibility = {
         "fps": FPS,
@@ -6699,11 +6800,17 @@ def _effective_editor_plan(plan: dict[str, Any]) -> dict[str, Any]:
                 if "context_length" in shot else {}),
              **({"visual_context_source": shot["visual_context_source"]}
                 if "visual_context_source" in shot else {}),
+             **({"visual_context_start_frame": int(
+                    shot["visual_context_start_frame"])}
+                if "visual_context_start_frame" in shot else {}),
              **({"visual_context_lead_source": shot[
                     "visual_context_lead_source"],
                  "visual_context_lead_frames": shot[
                     "visual_context_lead_frames"]}
                 if "visual_context_lead_source" in shot else {}),
+             **({"visual_context_lead_start_frame": int(
+                    shot["visual_context_lead_start_frame"])}
+                if "visual_context_lead_start_frame" in shot else {}),
              **({"audio_context_length": shot["audio_context_length"]}
                 if "audio_context_length" in shot else {}),
              **({"video_blend_frames": shot["video_blend_frames"]}
@@ -7378,12 +7485,13 @@ def _public_segment(value: dict[str, Any]) -> dict[str, Any]:
         "resolved_context_length",
         "resolved_audio_context_length",
         "visual_context_source_scene", "visual_context_source_id",
+        "visual_context_start_frame",
         "visual_context_source_revision",
         "visual_context_source_checkpoint_sha256",
         "visual_context_lead_source_scene", "visual_context_lead_source_id",
         "visual_context_lead_source_revision",
         "visual_context_lead_checkpoint_sha256",
-        "visual_context_lead_frames",
+        "visual_context_lead_frames", "visual_context_lead_start_frame",
         "sample_rate", "segment_sha256",
         "checkpoint_sha256", "prompt_file_sha256", "predecessor_revision",
         "predecessor_checkpoint_sha256") if key in value}
@@ -7409,15 +7517,20 @@ def _visual_context_state(
     index = int(state["index"])
     source_index = _shot_visual_context_source(plan, index)
     lead_source_index = _shot_visual_context_lead_source(plan, index)
-    if (source_index is None
-            or (source_index == index - 1 and lead_source_index is None)):
-        return state
     shot = plan["shots"][index - 1]
     context_length = _shot_context_length(
         shot, int(plan["compatibility"].get("context_length", 0)))
+    context_spatial_proxy = _shot_context_spatial_proxy(shot)
     lead_frames = (
         _shot_visual_context_lead_frames(shot, context_length)
         if lead_source_index is not None else 0)
+    recent_frames = int(context_length) - int(lead_frames)
+    range_selected = "visual_context_start_frame" in shot
+    lead_range_selected = "visual_context_lead_start_frame" in shot
+    if (source_index is None
+            or (source_index == index - 1 and lead_source_index is None
+                and not range_selected)):
+        return state
     cache = state.get("_visual_context_state")
     if (isinstance(cache, dict)
             and int(cache.get("_visual_context_target", 0)) == index
@@ -7425,7 +7538,12 @@ def _visual_context_state(
             and int(cache.get("_visual_context_lead_source", 0)) == int(
                 lead_source_index or 0)
             and int(cache.get("_visual_context_lead_frames", 0)) ==
-            lead_frames):
+            lead_frames
+            and int(cache.get("_visual_context_start_frame", -1)) == int(
+                shot.get("visual_context_start_frame", -1))
+            and int(cache.get(
+                "_visual_context_lead_start_frame", -1)) == int(
+                    shot.get("visual_context_lead_start_frame", -1))):
         return cache
     if _st_load is None:
         raise RuntimeError(
@@ -7460,16 +7578,36 @@ def _visual_context_state(
             video = video.unsqueeze(0)
         return position, segment, tensors, frames, video
 
-    def delivered_rgb_tail(segment, retained_frames, video, wanted):
+    def delivered_rgb_window(
+            segment, retained_frames, video, start_frame, wanted,
+            planned_delivered_frames):
         wanted = int(wanted)
-        if int(retained_frames.shape[0]) >= wanted:
-            return retained_frames[-wanted:].detach().contiguous().clone()
+        delivered_frames = int(segment.get(
+            "delivered_frames", planned_delivered_frames))
+        start_frame = int(start_frame)
+        end_frame = start_frame + wanted
+        if start_frame < 0 or end_frame > delivered_frames:
+            raise ValueError(
+                "H3 scene %d context window %d..%d does not fit inside "
+                "scene %d's %d delivered frames." %
+                (index, start_frame, end_frame - 1,
+                 int(segment.get("index", 0)), delivered_frames))
+        retained_count = int(retained_frames.shape[0])
+        retained_start = delivered_frames - retained_count
+        if (retained_start >= 0 and start_frame >= retained_start
+                and end_frame <= delivered_frames):
+            local_start = start_frame - retained_start
+            return retained_frames[
+                local_start:local_start + wanted
+            ].detach().contiguous().clone()
         if vae is None:
             raise ValueError(
-                "H3 scene %d composed context needs %d RGB frames from "
-                "scene %d, whose checkpoint retained only %d. Execute it "
+                "H3 scene %d context window needs frames %d..%d from "
+                "scene %d, whose checkpoint retained only its final %d. "
+                "Execute it "
                 "through Chain Context with the video VAE connected." %
-                (index, wanted, int(segment.get("index", 0)),
+                (index, start_frame, end_frame - 1,
+                 int(segment.get("index", 0)),
                  int(retained_frames.shape[0])))
         decoded = vae.decode(video)
         if not torch.is_tensor(decoded):
@@ -7480,22 +7618,46 @@ def _visual_context_state(
             decoded = decoded.reshape(
                 -1, decoded.shape[-3], decoded.shape[-2], decoded.shape[-1])
         raw_frames = int(segment.get("raw_frames", 0))
-        delivered_frames = int(segment.get("delivered_frames", 0))
         trim_frames = raw_frames - delivered_frames
         if (decoded.ndim != 4 or raw_frames <= 0 or delivered_frames <= 0
                 or trim_frames < 0 or int(decoded.shape[0]) != raw_frames
                 or wanted > delivered_frames):
             raise ValueError(
-                "H3 composed context cannot recover scene %d's %d-frame "
-                "tail: decoded shape %s, metadata %d raw / %d delivered." %
-                (int(segment.get("index", 0)), wanted,
+                "H3 context cannot recover scene %d's frames %d..%d: "
+                "decoded shape %s, metadata %d raw / %d delivered." %
+                (int(segment.get("index", 0)), start_frame, end_frame - 1,
                  tuple(getattr(decoded, "shape", ())), raw_frames,
                  delivered_frames))
         delivered = decoded[trim_frames:trim_frames + delivered_frames]
-        return _tensor_cpu_clone(delivered[-wanted:])
+        return _tensor_cpu_clone(delivered[start_frame:end_frame])
+
+    def encode_visual_prefix(frames, source_video, expected_steps, label):
+        if vae is None:
+            raise ValueError(
+                "H3 %s requires the video VAE connected to Chain Context "
+                "to normalize the selected context window." % label)
+        encoded = vae.encode(frames[..., :3])
+        if (not torch.is_tensor(encoded) or encoded.ndim != 5
+                or int(encoded.shape[2]) != int(expected_steps)
+                or tuple(encoded.shape[:2] + encoded.shape[3:]) != tuple(
+                    source_video.shape[:2] + source_video.shape[3:])):
+            raise ValueError(
+                "H3 %s encoded to latent shape %s; expected %d steps with "
+                "source geometry %s." %
+                (label, tuple(getattr(encoded, "shape", ())),
+                 int(expected_steps), tuple(source_video.shape)))
+        return encoded
 
     source_position, source_segment, tensors, source_frames, source_video = (
         load_visual_source(source_index))
+    source_delivered_frames = int(source_segment.get(
+        "delivered_frames",
+        plan["shots"][source_index - 1].get("delivered_frames", 0)))
+    source_start = _shot_visual_context_start_frame(
+        shot, "visual_context_start_frame",
+        source_delivered_frames, recent_frames)
+    total_steps = max(
+        1, 2 + 5 * ((int(context_length) - 5) // 17))
     audio_source_index = _resume_context_predecessors(
         plan, index)["audio"]
     if audio_source_index is not None:
@@ -7516,18 +7678,34 @@ def _visual_context_state(
                 "latent placeholder." % source_index)
     selected_frames = source_frames
     selected_video = source_video
+    if range_selected and lead_source_index is None:
+        selected_frames = delivered_rgb_window(
+            source_segment, source_frames, source_video,
+            source_start, recent_frames, source_delivered_frames)
+        selected_video = encode_visual_prefix(
+            selected_frames, source_video, total_steps,
+            "scene %d selected context window" % index)
     lead_segment = None
     if lead_source_index is not None:
         (_lead_position, lead_segment, _lead_tensors, lead_source_frames,
          lead_video) = load_visual_source(lead_source_index)
-        recent_frames = int(context_length) - int(lead_frames)
-        total_steps = 2 + 5 * ((int(context_length) - 5) // 17)
+        lead_start = _shot_visual_context_start_frame(
+            shot, "visual_context_lead_start_frame",
+            int(lead_segment.get(
+                "delivered_frames", plan["shots"][
+                    lead_source_index - 1].get("delivered_frames", 0))),
+            lead_frames)
+        lead_delivered_frames = int(lead_segment.get(
+            "delivered_frames", plan["shots"][
+                lead_source_index - 1].get("delivered_frames", 0)))
         if tuple(lead_video.shape[:2] + lead_video.shape[3:]) != tuple(
                 source_video.shape[:2] + source_video.shape[3:]):
             raise ValueError(
                 "H3 composed context scenes %d and %d use different latent "
                 "geometry." % (lead_source_index, source_index))
-        direct_latent_split = int(lead_frames) in H3_CONTEXT_LENGTHS
+        direct_latent_split = (
+            int(lead_frames) in H3_CONTEXT_LENGTHS
+            and not range_selected and not lead_range_selected)
         if direct_latent_split:
             retained_rgb_available = (
                 int(lead_source_frames.shape[0]) >= int(lead_frames)
@@ -7572,40 +7750,29 @@ def _visual_context_state(
                     lead_frames, recent_frames)
         else:
             selected_frames = torch.cat((
-                delivered_rgb_tail(
-                    lead_segment, lead_source_frames, lead_video, lead_frames),
-                delivered_rgb_tail(
-                    source_segment, source_frames, source_video, recent_frames),
+                delivered_rgb_window(
+                    lead_segment, lead_source_frames, lead_video,
+                    lead_start, lead_frames, lead_delivered_frames),
+                delivered_rgb_window(
+                    source_segment, source_frames, source_video,
+                    source_start, recent_frames, source_delivered_frames),
             ), dim=0)
             continuation_mode = migrate_continuation_mode(shot.get(
                 "continuation_mode", plan["compatibility"].get(
                     "continuation_mode", "guide")))
             requires_video_latent = (
-                continuation_mode in MASKED_CONTINUATION_MODES
+                range_selected or lead_range_selected
+                or context_spatial_proxy == "rgb_5_6"
+                or continuation_mode in MASKED_CONTINUATION_MODES
                 or continuation_mode == "latent_guide")
             if requires_video_latent:
-                if vae is None:
-                    raise ValueError(
-                        "H3 reversed composed context requires the video VAE "
-                        "connected to Chain Context for %s." %
-                        continuation_mode)
-                selected_video = vae.encode(selected_frames[..., :3])
-                if (not torch.is_tensor(selected_video)
-                        or selected_video.ndim != 5
-                        or int(selected_video.shape[2]) != total_steps
-                        or tuple(selected_video.shape[:2]
-                                 + selected_video.shape[3:]) != tuple(
-                                     source_video.shape[:2]
-                                     + source_video.shape[3:])):
-                    raise ValueError(
-                        "H3 reversed composed context encoded to latent shape "
-                        "%s; expected %d steps with source geometry %s." %
-                        (tuple(getattr(selected_video, "shape", ())),
-                         total_steps, tuple(source_video.shape)))
+                selected_video = encode_visual_prefix(
+                    selected_frames, source_video, total_steps,
+                    "scene %d composed context" % index)
                 _LOG.info(
-                    "H3 Chain scene %d normalized reversed %d+%d composed "
-                    "context through the video VAE for %s.", index,
-                    lead_frames, recent_frames, continuation_mode)
+                    "H3 Chain scene %d normalized selected/reversed %d+%d "
+                    "composed context through the video VAE for %s.",
+                    index, lead_frames, recent_frames, continuation_mode)
         # Keep the complete immediate audio latent. The consumer selects its
         # own scene-local audio context, which may intentionally be longer,
         # shorter, or disabled independently from this composed video prefix.
@@ -7620,6 +7787,15 @@ def _visual_context_state(
         "_visual_context_source": source_index,
         "_visual_context_lead_source": int(lead_source_index or 0),
         "_visual_context_lead_frames": int(lead_frames),
+        "_visual_context_start_frame": int(
+            shot.get("visual_context_start_frame", -1)),
+        "_visual_context_lead_start_frame": int(
+            shot.get("visual_context_lead_start_frame", -1)),
+        "_visual_context_resolved_start_frame": int(source_start),
+        "_visual_context_resolved_lead_start_frame": int(
+            lead_start if lead_source_index is not None else -1),
+        "_visual_context_exact_prefix": bool(
+            lead_source_index is not None or range_selected),
         "visual_context_source_segment": source_segment,
         **({"visual_context_lead_segment": lead_segment}
            if lead_segment is not None else {}),
@@ -7628,16 +7804,20 @@ def _visual_context_state(
     if lead_source_index is not None:
         _LOG.info(
             "H3 Chain scene %d composed visual context: %d frames from scene "
-            "%d (%s), then %d frames from scene %d (%s); generated-audio "
+            "%d (%s) at %d, then %d frames from scene %d (%s) at %d; "
+            "generated-audio "
             "continuity remains one tail from immediate scene %d.",
             index, lead_frames, lead_source_index,
-            lead_segment.get("id", "scene"), context_length - lead_frames,
-            source_index, source_segment.get("id", "scene"), index - 1)
+            lead_segment.get("id", "scene"), lead_start,
+            context_length - lead_frames, source_index,
+            source_segment.get("id", "scene"), source_start, index - 1)
     else:
         _LOG.info(
-            "H3 Chain scene %d visual context uses scene %d (%s); generated-"
-            "audio continuity remains sourced from immediate scene %d.",
-            index, source_index, source_segment.get("id", "scene"), index - 1)
+            "H3 Chain scene %d visual context uses scene %d (%s), frames "
+            "%d..%d; generated-audio continuity remains sourced from "
+            "immediate scene %d.", index, source_index,
+            source_segment.get("id", "scene"), source_start,
+            source_start + recent_frames - 1, index - 1)
     return selected
 
 
@@ -14743,6 +14923,9 @@ class MiniMaxH3ChainSegmentSave:
                         visual_source_segment.get(
                             "checkpoint_sha256") or ""),
                 })
+                if "visual_context_start_frame" in shot:
+                    segment["visual_context_start_frame"] = int(
+                        shot["visual_context_start_frame"])
             if (visual_lead_source_index is not None
                     and isinstance(visual_lead_segment, dict)):
                 segment.update({
@@ -14759,6 +14942,9 @@ class MiniMaxH3ChainSegmentSave:
                         _shot_visual_context_lead_frames(
                             shot, effective_context_length)),
                 })
+                if "visual_context_lead_start_frame" in shot:
+                    segment["visual_context_lead_start_frame"] = int(
+                        shot["visual_context_lead_start_frame"])
             if "source_audio_target" in shot:
                 # Keep an explicit scene-local "off" as well as "locked".
                 # Without it, activating this revision under a globally
@@ -19965,11 +20151,17 @@ def _checkpoint_plan_revision(segment: dict[str, Any]) -> dict[str, Any]:
     if "visual_context_source_id" in segment:
         revision["visual_context_source"] = str(
             segment["visual_context_source_id"])
+    if "visual_context_start_frame" in segment:
+        revision["visual_context_start_frame"] = int(
+            segment["visual_context_start_frame"])
     if "visual_context_lead_source_id" in segment:
         revision["visual_context_lead_source"] = str(
             segment["visual_context_lead_source_id"])
         revision["visual_context_lead_frames"] = int(
             segment["visual_context_lead_frames"])
+    if "visual_context_lead_start_frame" in segment:
+        revision["visual_context_lead_start_frame"] = int(
+            segment["visual_context_lead_start_frame"])
     if "lora_route" in segment:
         revision["lora_route"] = str(segment["lora_route"])
     for key in (

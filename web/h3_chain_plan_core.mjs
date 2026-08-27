@@ -601,6 +601,43 @@ export function sceneVisualContextLeadFrames(shot, contextLength) {
     return resolved;
 }
 
+export function sceneVisualContextStartFrame(
+    shot, deliveredFrames, spanFrames, lead = false,
+) {
+    const field = lead
+        ? "visual_context_lead_start_frame"
+        : "visual_context_start_frame";
+    const delivered = Number(deliveredFrames);
+    const span = Number(spanFrames);
+    if (!Number.isInteger(delivered) || delivered < 0
+            || !Number.isInteger(span) || span < 0) {
+        throw new Error(`${field} requires valid delivered and context frame counts.`);
+    }
+    if (span < 1) {
+        if (Object.hasOwn(shot ?? {}, field)) {
+            throw new Error(`${field} requires a positive visual context span.`);
+        }
+        return delivered;
+    }
+    const latest = delivered - span;
+    if (latest < 0) {
+        throw new Error(
+            `${field} requests ${span} frames from a source delivering only ${delivered}.`,
+        );
+    }
+    const raw = shot?.[field];
+    if (raw === undefined || raw === null
+            || (typeof raw === "string" && !raw.trim())) return latest;
+    const resolved = Number(raw);
+    if (typeof raw === "boolean" || !Number.isInteger(resolved)
+            || resolved < 0 || resolved > latest) {
+        throw new Error(
+            `${field} must be between 0 and ${latest} so its ${span}-frame window fits inside the source's ${delivered} delivered frames.`,
+        );
+    }
+    return resolved;
+}
+
 export function visualContextLeadFrameOptions(contextLength) {
     const total = Number(contextLength);
     if (!Number.isInteger(total)) return Object.freeze([]);
@@ -786,6 +823,13 @@ export function calculatePlanTiming(plan, settings = {}) {
         } catch (error) {
             rowErrors.push(error.message);
         }
+        if (index === 1 && Object.hasOwn(
+            shot, "visual_context_start_frame",
+        )) {
+            rowErrors.push(
+                "Scene 1 cannot select a saved-scene context window.",
+            );
+        }
 
         let visualContextSource = index > 1 ? index - 1 : null;
         try {
@@ -817,6 +861,12 @@ export function calculatePlanTiming(plan, settings = {}) {
                 rowErrors.push(
                     "Composed context lead frames require a lead source.",
                 );
+            } else if (Object.hasOwn(
+                shot, "visual_context_lead_start_frame",
+            )) {
+                rowErrors.push(
+                    "Composed context lead start frame requires a lead source.",
+                );
             }
         } catch (error) {
             rowErrors.push(error.message);
@@ -845,9 +895,11 @@ export function calculatePlanTiming(plan, settings = {}) {
                 (visualContextSource !== null
                     && visualContextSource !== index - 1)
                 || visualContextLeadSource !== null
+                || Object.hasOwn(shot, "visual_context_start_frame")
+                || Object.hasOwn(shot, "visual_context_lead_start_frame")
             )) {
                 rowErrors.push(
-                    "Non-linear or composed visual context requires 0 assembly blend frames; the timeline still cuts from the immediately previous scene.",
+                    "Non-linear, composed, or windowed visual context requires 0 assembly blend frames; the timeline still cuts from the immediately previous scene.",
                 );
             }
         } catch (error) {
@@ -995,6 +1047,8 @@ export function calculatePlanTiming(plan, settings = {}) {
                     `clip_${String(visualContextLeadSource).padStart(4, "0")}`,
                 ),
             visualContextLeadFrames,
+            visualContextStartFrame:null,
+            visualContextLeadStartFrame:null,
             videoBlendFrames: sceneBlendFrames,
             audioContextLength: [
                 "masked_av", "tapered_av", "feathered_av",
@@ -1031,12 +1085,31 @@ export function calculatePlanTiming(plan, settings = {}) {
                 `Selected second visual source scene ${source.index} delivers fewer than ${recentFrames} required context frames.`,
             );
         }
+        if (source) {
+            try {
+                target.visualContextStartFrame = sceneVisualContextStartFrame(
+                    plan.shots[offset], source.deliveredFrames, recentFrames,
+                );
+            } catch (error) {
+                target.errors.push(error.message);
+            }
+        }
         const lead = target.visualContextLeadSource === null ? null
             : rows[target.visualContextLeadSource - 1];
         if (lead && lead.deliveredFrames < target.visualContextLeadFrames) {
             target.errors.push(
                 `Selected composed-context lead scene ${lead.index} delivers fewer than ${target.visualContextLeadFrames} required lead frames.`,
             );
+        }
+        if (lead) {
+            try {
+                target.visualContextLeadStartFrame = sceneVisualContextStartFrame(
+                    plan.shots[offset], lead.deliveredFrames,
+                    target.visualContextLeadFrames, true,
+                );
+            } catch (error) {
+                target.errors.push(error.message);
+            }
         }
     }
     for (const row of rows) {
