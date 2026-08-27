@@ -6,16 +6,16 @@ import {
     promptTextToLines,
     promptValueToText,
     sharedPrompt,
-} from "./h3_chain_plan_core.mjs?v=0.6.34";
+} from "./h3_chain_plan_core.mjs?v=0.6.35";
 import {
     buildPromptAssistantContext,
     makePromptAssistRequest,
-} from "./h3_prompt_assistant_core.mjs?v=0.6.34";
-import {PromptAssistantClient} from "./h3_prompt_assistant_client.mjs?v=0.6.34";
+} from "./h3_prompt_assistant_core.mjs?v=0.6.35";
+import {PromptAssistantClient} from "./h3_prompt_assistant_client.mjs?v=0.6.35";
 import {
     directOptimizerConfigurationError,
     makeDirectPromptOptimizeRequest,
-} from "./h3_prompt_optimizer_core.mjs?v=0.6.34";
+} from "./h3_prompt_optimizer_core.mjs?v=0.6.35";
 import {
     openPromptOptimizerSettings,
     promptOptimizerBackend,
@@ -27,7 +27,7 @@ import {
     promptRevisionLabel,
     promptRevisionNavigation,
     promptRevisionTree,
-} from "./h3_prompt_history_core.mjs?v=0.6.34";
+} from "./h3_prompt_history_core.mjs?v=0.6.35";
 import {
     availableReferenceRecords,
     convertTaggedPictureReference,
@@ -35,7 +35,7 @@ import {
     replacePromptReferenceOccurrence,
     taggedPictureReferenceMode,
     taggedPictureReferenceToken,
-} from "./h3_reference_preview_core.mjs?v=0.6.34";
+} from "./h3_reference_preview_core.mjs?v=0.6.35";
 import {
     PromptUndoHistory,
     RICH_PROMPT_GUIDES,
@@ -45,10 +45,10 @@ import {
     richGenerationMode,
     richGuideInstruction,
     tokenizeRichPrompt,
-} from "./h3_rich_prompt_editor_core.mjs?v=0.6.34";
-import {createPromptCompletionController} from "./h3_prompt_completion_core.mjs?v=0.6.34";
-import {createH3PromptSchemaController} from "./h3_prompt_schema_ui.mjs?v=0.6.34";
-import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.6.34";
+} from "./h3_rich_prompt_editor_core.mjs?v=0.6.35";
+import {createPromptCompletionController} from "./h3_prompt_completion_core.mjs?v=0.6.35";
+import {createH3PromptSchemaController} from "./h3_prompt_schema_ui.mjs?v=0.6.35";
+import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.6.35";
 
 const {publishCompanionScene, rebaseScenePrompt} = promptCompanionSync;
 function publishCompanionPrompt(...args) {
@@ -982,7 +982,9 @@ function mount(node) {
             ? `${displayToken} → ${record.label}` : displayToken;
         popover.append(element("div", "h3rp-popover-title", title));
         const mediaKind = record.kind === "picture" ? "image" : record.kind;
-        const media = findMediaPreview(record.source, mediaKind);
+        const media = record.previewUrl
+            ? api.apiURL(record.previewUrl)
+            : findMediaPreview(record.source, mediaKind);
         if (media.url) {
             const mediaElement = element(mediaKind === "image" ? "img" : mediaKind);
             mediaElement.className = "h3rp-popover-media";
@@ -1158,7 +1160,10 @@ function mount(node) {
             return token;
         }
         const mediaKind = kind === "picture" ? "image" : kind;
-        const media = part.record?.source ? findMediaPreview(part.record.source, mediaKind) : null;
+        const media = part.record?.previewUrl
+            ? api.apiURL(part.record.previewUrl)
+            : part.record?.source
+                ? findMediaPreview(part.record.source, mediaKind) : null;
         if (kind === "picture" && media?.url) {
             const thumb = element("img", "h3rp-token-thumb");
             thumb.src = media.url;
@@ -1386,7 +1391,9 @@ function mount(node) {
             card.classList.add("h3rp-ref-card");
             if (!record.active) card.classList.add("h3rp-inactive");
             const mediaKind = record.kind === "picture" ? "image" : record.kind;
-            const media = findMediaPreview(record.source, mediaKind);
+            const media = record.previewUrl
+                ? api.apiURL(record.previewUrl)
+                : findMediaPreview(record.source, mediaKind);
             if (record.kind === "picture" && media.url) {
                 const thumb = element("img", "h3rp-token-thumb");
                 thumb.src = media.url;

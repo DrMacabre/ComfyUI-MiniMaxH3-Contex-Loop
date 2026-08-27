@@ -40,18 +40,18 @@ import {
     sharedPrompt,
     shotLengthMode,
     visualContextCompositions,
-} from "./h3_chain_plan_core.mjs?v=0.6.34";
+} from "./h3_chain_plan_core.mjs?v=0.6.35";
 import {
     promptRevisionHelp,
     promptRevisionLabel,
     promptRevisionNavigation,
-} from "./h3_prompt_history_core.mjs?v=0.6.34";
+} from "./h3_prompt_history_core.mjs?v=0.6.35";
 import {
     availableReferenceRecords,
     convertTaggedPictureReference,
     taggedPictureReferenceMode,
     taggedPictureReferenceToken,
-} from "./h3_reference_preview_core.mjs?v=0.6.34";
+} from "./h3_reference_preview_core.mjs?v=0.6.35";
 import {
     applySceneAudioOverride,
     applySceneTransitionPreset,
@@ -60,12 +60,12 @@ import {
     sceneAudioPolicy,
     sceneTransitionPreset,
     transitionPresetLabel,
-} from "./h3_policy_core.mjs?v=0.6.34";
+} from "./h3_policy_core.mjs?v=0.6.35";
 import {
     resolveAudioContextLength,
     resolveAudioPolicy,
     resolveTransitionPolicy,
-} from "./h3_socket_presentation_core.mjs?v=0.6.34";
+} from "./h3_socket_presentation_core.mjs?v=0.6.35";
 import {
     locateStudioTimelineSecond,
     h3StudioGridMarkers,
@@ -80,8 +80,8 @@ import {
     studioSourceSecond,
     studioTimelineLayout,
     studioWaveformSceneSamples,
-} from "./h3_chain_plan_studio_core.mjs?v=0.6.34";
-import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.6.34";
+} from "./h3_chain_plan_studio_core.mjs?v=0.6.35";
+import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.6.35";
 
 const {connectedPromptEditors, publishCompanionScene} = promptCompanionSync;
 function publishCompanionPrompt(...args) {
@@ -1564,7 +1564,9 @@ function mount(node) {
         function show(record) {
             preview.replaceChildren();
             const kind = record.kind === "picture" ? "image" : record.kind;
-            const url = findMediaPreview(record.source, kind);
+            const url = record.previewUrl
+                ? api.apiURL(record.previewUrl)
+                : findMediaPreview(record.source, kind);
             if (url) {
                 const media = element(kind === "image" ? "img" : kind);
                 media.src = url;
