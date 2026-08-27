@@ -208,6 +208,15 @@ assert.match(source, /MOTION REF/);
 assert.match(source, /plan-studio\/source-preview/);
 assert.match(source, /plan-studio\/source-audio/);
 assert.match(source, /plan-studio\/source-waveform/);
+assert.match(source, /plan-studio\/presentation/);
+assert.match(source, /plan-studio\/checkpoint-thumbnail/);
+assert.match(source, /function refreshTimelineCheckpoints/);
+assert.match(source, /h3studio-card-thumbnail/);
+assert.match(source, /image\.loading = "lazy"/);
+assert.doesNotMatch(
+    source,
+    /const preview = checkpoint\?\.preview_video[\s\S]{0,800}element\("video"\)/,
+);
 assert.match(source, /SOURCE AUDIO/);
 assert.match(source, /SOURCE_AUDIO_MUTES_PROPERTY/);
 assert.match(source, /studioSourceAudioSecond/);
