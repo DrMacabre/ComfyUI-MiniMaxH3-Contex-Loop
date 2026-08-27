@@ -34,18 +34,18 @@ import {
     sharedPrompt,
     shotLengthMode,
     visualContextCompositions,
-} from "./h3_chain_plan_core.mjs?v=0.5.25";
+} from "./h3_chain_plan_core.mjs?v=0.5.26";
 import {
     promptRevisionHelp,
     promptRevisionLabel,
     promptRevisionNavigation,
-} from "./h3_prompt_history_core.mjs?v=0.5.25";
+} from "./h3_prompt_history_core.mjs?v=0.5.26";
 import {
     availableReferenceRecords,
     convertTaggedPictureReference,
     taggedPictureReferenceMode,
     taggedPictureReferenceToken,
-} from "./h3_reference_preview_core.mjs?v=0.5.25";
+} from "./h3_reference_preview_core.mjs?v=0.5.26";
 import {
     applySceneAudioOverride,
     applySceneTransitionPreset,
@@ -54,12 +54,12 @@ import {
     sceneAudioPolicy,
     sceneTransitionPreset,
     transitionPresetLabel,
-} from "./h3_policy_core.mjs?v=0.5.25";
+} from "./h3_policy_core.mjs?v=0.5.26";
 import {
     resolveAudioContextLength,
     resolveAudioPolicy,
     resolveTransitionPolicy,
-} from "./h3_socket_presentation_core.mjs?v=0.5.25";
+} from "./h3_socket_presentation_core.mjs?v=0.5.26";
 import {
     locateStudioTimelineSecond,
     h3StudioGridMarkers,
@@ -72,8 +72,8 @@ import {
     studioSourceSecond,
     studioTimelineLayout,
     studioWaveformSceneSamples,
-} from "./h3_chain_plan_studio_core.mjs?v=0.5.25";
-import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.5.25";
+} from "./h3_chain_plan_studio_core.mjs?v=0.5.26";
+import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.5.26";
 
 const {connectedPromptEditors, publishCompanionScene} = promptCompanionSync;
 function publishCompanionPrompt(...args) {
@@ -168,7 +168,7 @@ function injectStyles() {
             height:70px; overflow:hidden; padding:0 !important; text-align:left; border:1px solid var(--scene) !important;
             background:color-mix(in srgb,var(--scene) 13%,var(--comfy-input-bg,#15171d)) !important; }
         .h3studio-card.h3studio-selected { box-shadow:0 0 0 2px var(--scene) inset; }
-        .h3studio-card video { position:absolute; inset:0; width:100%; height:100%; object-fit:cover;
+        .h3studio-card video, .h3studio-card-thumbnail { position:absolute; inset:0; width:100%; height:100%; object-fit:cover;
             opacity:.58; z-index:-1; background:#08090c; pointer-events:none; }
         .h3studio-card::after { content:""; position:absolute; inset:0; z-index:-1;
             background:linear-gradient(180deg,transparent 10%,rgba(5,7,12,.88)); }
@@ -441,6 +441,7 @@ function mount(node) {
         checkpoints:new Map(), checkpointSignature:"", checkpointError:"", checkpointToken:0,
         checkpointPromise:null, checkpointRefreshQueued:false, disposed:false,
         sourcePreview:null, sourceWaveform:null, sourceWaveformToken:"",
+        presentationToken:0,
         sourceWaveformPromise:null,
         pollTimer:null, checkpointTimer:null, timelineHost:null, sourceTimelineHost:null,
         sourceAudioTimelineHost:null, sourceTrack:null, sourceAudioTrack:null,
@@ -776,7 +777,7 @@ function mount(node) {
                 || Boolean(state.checkpointSignature) || Boolean(state.checkpointError);
             state.checkpoints = new Map(); state.checkpointSignature = "";
             state.checkpointError = "";
-            if (changed) { renderTimeline(); renderStatus(); }
+            if (changed) { refreshTimelineCheckpoints(); renderStatus(); }
             return;
         }
         try {
@@ -803,7 +804,7 @@ function mount(node) {
             renderStatus();
             return;
         }
-        renderTimeline(); renderStatus();
+        refreshTimelineCheckpoints(); renderStatus();
         if (state.view === "player" && state.player?.paused) {
             const media = playerCheckpoint(state.playerIndex);
             const desired = media?.video ? videoUrl(media.video) : "";
@@ -970,6 +971,17 @@ function mount(node) {
         return api.apiURL(`/minimax_h3_context_loop/plan-studio/source-preview?${query.toString()}`);
     }
 
+    function checkpointThumbnailUrl(index, checkpoint) {
+        const revision = String(checkpoint?.revision ?? "").trim().toLowerCase();
+        if (!checkpoint?.ready || !/^[0-9a-f]{32}$/.test(revision) || !runName()) {
+            return "";
+        }
+        const query = new URLSearchParams({
+            run_name:runName(), scene:String(index + 1), revision,
+        });
+        return api.apiURL(`/minimax_h3_context_loop/plan-studio/checkpoint-thumbnail?${query.toString()}`);
+    }
+
     function sourceAudio() {
         return matchingStudioSourceAudio(state.sourcePreview, timing().shots);
     }
@@ -1079,6 +1091,93 @@ function mount(node) {
         }
     }
 
+    function applySourcePresentation(payload) {
+        if (!payload || String(payload.run_name ?? "") !== runName()) return;
+        if (state.sourceWaveformToken !== String(payload.token ?? "")) {
+            state.sourceWaveform = null;
+            state.sourceWaveformToken = "";
+            state.sourceWaveformPromise = null;
+        }
+        state.sourcePreview = payload;
+        renderSourceTimeline();
+        renderSourceAudioTimeline();
+        if (payload.source_audio?.available) void loadSourceWaveform(payload);
+        if (state.view === "player" && state.player) {
+            seekTimeline(
+                state.timelinePosition ?? studioSceneStartSeconds(
+                    timing().shots, state.active),
+                false,
+            );
+        }
+    }
+
+    async function restoreSourcePresentation() {
+        const currentRun = runName();
+        if (!currentRun || state.disposed) return;
+        const token = ++state.presentationToken;
+        try {
+            const query = new URLSearchParams({run_name:currentRun});
+            const response = await api.fetchApi(
+                `/minimax_h3_context_loop/plan-studio/presentation?${query.toString()}`,
+            );
+            const payload = await response.json();
+            if (response.status === 404) return;
+            if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+            if (state.disposed || token !== state.presentationToken
+                    || currentRun !== runName()) return;
+            applySourcePresentation(payload);
+        } catch (error) {
+            if (token === state.presentationToken) {
+                console.warn("Plan Studio could not restore its saved track", error);
+            }
+        }
+    }
+
+    function updateTimelineCheckpointCard(card, index, result = timing()) {
+        if (!card) return;
+        const row = result.shots[index];
+        const checkpoint = matchingStudioCheckpoint(
+            state.checkpoints, index, row,
+        );
+        card.classList.toggle("h3studio-rendered", Boolean(checkpoint?.ready));
+        const url = checkpointThumbnailUrl(index, checkpoint);
+        const current = card.querySelector(".h3studio-card-thumbnail");
+        if (!url) {
+            current?.remove();
+            delete card.dataset.checkpointThumbnail;
+            return;
+        }
+        if (card.dataset.checkpointThumbnail === url && current) return;
+        current?.remove();
+        const image = element("img", "h3studio-card-thumbnail");
+        image.alt = "";
+        image.loading = "lazy";
+        image.decoding = "async";
+        image.src = url;
+        image.addEventListener("error", () => {
+            image.remove();
+            if (card.dataset.checkpointThumbnail === url) {
+                delete card.dataset.checkpointThumbnail;
+            }
+        }, {once:true});
+        card.dataset.checkpointThumbnail = url;
+        card.prepend(image);
+    }
+
+    function refreshTimelineCheckpoints() {
+        if (!state.timelineHost || !state.plan) return;
+        const result = timing();
+        for (const card of state.timelineHost.querySelectorAll(
+            ".h3studio-card[data-scene-index]",
+        )) {
+            const index = Number(card.dataset.sceneIndex);
+            if (Number.isInteger(index) && index >= 0
+                    && index < result.shots.length) {
+                updateTimelineCheckpointCard(card, index, result);
+            }
+        }
+    }
+
     function renderTimeline() {
         const host = state.timelineHost;
         if (!host || !state.plan) return;
@@ -1096,18 +1195,7 @@ function mount(node) {
                     "--h3-scene-width", `${state.timelineWidths[index]}px`,
                 );
             }
-            const preview = checkpoint?.preview_video ?? checkpoint?.video;
-            if (preview) {
-                const media = element("video");
-                media.muted = true; media.playsInline = true; media.preload = "metadata"; media.src = videoUrl(preview);
-                media.addEventListener("loadedmetadata", () => {
-                    if (Number.isFinite(media.duration) && media.duration > .1) {
-                        try { media.currentTime = Math.min(.15, media.duration / 2); }
-                        catch (_error) {}
-                    }
-                }, {once:true});
-                card.append(media);
-            }
+            updateTimelineCheckpointCard(card, index, result);
             const copy = element("span", "h3studio-card-copy");
             copy.append(element("span", "h3studio-card-title", `${index + 1}. ${row.id}`),
                 element("span", "h3studio-card-meta", `${formatClock(row.deliveredSeconds)} · ${row.rawFrames || "—"}f raw${row.loraRoute === "base" ? "" : ` · LoRA ${row.loraRoute.toUpperCase()}`}`));
@@ -3028,11 +3116,15 @@ function mount(node) {
             if (runChanged) {
                 state.checkpoints = new Map(); state.checkpointSignature = "";
                 state.checkpointError = ""; state.timelinePosition = null;
+                state.presentationToken += 1;
                 state.sourcePreview = null;
                 state.sourceWaveform = null; state.sourceWaveformToken = "";
                 state.sourceWaveformPromise = null;
             }
-            state.active = Math.min(state.active, state.plan.shots.length - 1); renderShell(); void refreshCheckpoints();
+            state.active = Math.min(state.active, state.plan.shots.length - 1);
+            renderShell();
+            void refreshCheckpoints();
+            if (runChanged && currentRun) void restoreSourcePresentation();
         } catch (error) {
             showFailure(`${planNode ? "Connected Plan" : "Standalone Plan Studio"} JSON is invalid:\n${error.message}`);
         }
@@ -3055,24 +3147,8 @@ function mount(node) {
         const displayNode = event.detail?.display_node ?? event.detail?.node;
         if (sourcePayload && String(displayNode ?? "") === String(node.id ?? "")
                 && String(sourcePayload.run_name ?? "") === runName()) {
-            if (state.sourceWaveformToken !== String(sourcePayload.token ?? "")) {
-                state.sourceWaveform = null;
-                state.sourceWaveformToken = "";
-                state.sourceWaveformPromise = null;
-            }
-            state.sourcePreview = sourcePayload;
-            renderSourceTimeline();
-            renderSourceAudioTimeline();
-            if (sourcePayload.source_audio?.available) {
-                void loadSourceWaveform(sourcePayload);
-            }
-            if (state.view === "player" && state.player) {
-                seekTimeline(
-                    state.timelinePosition ?? studioSceneStartSeconds(
-                        timing().shots, state.active),
-                    false,
-                );
-            }
+            state.presentationToken += 1;
+            applySourcePresentation(sourcePayload);
         }
         const values = event.detail?.output?.h3_chain_active_scene;
         const scene = Array.isArray(values) ? values.at(-1) : null;
@@ -3092,6 +3168,7 @@ function mount(node) {
     node.onRemoved = function () {
         state.disposed = true;
         state.checkpointToken += 1;
+        state.presentationToken += 1;
         if (state.pollTimer != null) clearInterval(state.pollTimer);
         if (state.checkpointTimer != null) clearInterval(state.checkpointTimer);
         if (state.planNotifyTimer != null) clearTimeout(state.planNotifyTimer);

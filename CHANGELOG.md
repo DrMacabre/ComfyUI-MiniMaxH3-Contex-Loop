@@ -4,6 +4,16 @@ Newest first. This file keeps release history out of the onboarding README.
 
 ## Unreleased
 
+- Plan Studio now persists its discovered motion-reference and Source Timeline
+  audio presentation beside the run, then restores it automatically after a
+  workflow, browser, or server reload. This UI-only record does not participate
+  in generation fingerprints, checkpoint branches, or resume validation.
+
+- Long Plan timelines no longer rebuild one live video element per saved scene
+  on every checkpoint poll. Generated cards use immutable, lazy, disk-cached
+  JPEG thumbnails and update in place, substantially reducing browser media
+  churn and the associated Windows Proactor `WinError 10054` disconnect noise.
+
 - The two-clip masked AV bridge now accepts silent source videos. Start and end
   audio are independent optional inputs: an available endpoint is encoded and
   protected, while a missing endpoint remains unmasked so H3 generates audio

@@ -155,10 +155,14 @@ PLAN_STUDIO_PREVIEW_MAX_SESSIONS = 32
 PLAN_STUDIO_PREVIEW_MAX_HEIGHT = 480
 PLAN_STUDIO_WAVEFORM_SAMPLE_RATE = 192
 PLAN_STUDIO_WAVEFORM_POINTS_PER_SECOND = 12
+PLAN_STUDIO_THUMBNAIL_WIDTH = 320
 _PLAN_STUDIO_SOURCE_PREVIEWS: dict[str, dict[str, Any]] = {}
 _PLAN_STUDIO_PREVIEW_BUILD_LOOP: asyncio.AbstractEventLoop | None = None
 _PLAN_STUDIO_PREVIEW_BUILD_GATE: asyncio.Semaphore | None = None
 _PLAN_STUDIO_PREVIEW_BUILD_TASKS: dict[str, asyncio.Task[str]] = {}
+_PLAN_STUDIO_THUMBNAIL_BUILD_LOOP: asyncio.AbstractEventLoop | None = None
+_PLAN_STUDIO_THUMBNAIL_BUILD_GATE: asyncio.Semaphore | None = None
+_PLAN_STUDIO_THUMBNAIL_BUILD_TASKS: dict[str, asyncio.Task[str]] = {}
 H3_CONTEXT_LENGTHS = (
     1, 5, 22, 39, 56, 73, 90, 107, 124,
     141, 158, 175, 192, 209, 226, 243,
@@ -12009,6 +12013,76 @@ def _plan_studio_preview_cleanup() -> None:
             _PLAN_STUDIO_SOURCE_PREVIEWS.pop(token, None)
 
 
+def _plan_studio_presentation_path(run_name: Any) -> str:
+    normalized = _safe_name(run_name, "")
+    if not normalized:
+        raise ValueError("A non-empty H3 chain run_name is required.")
+    return os.path.join(
+        _output_root(), "h3_chains", normalized,
+        "plan_studio_presentation.json")
+
+
+def _save_plan_studio_presentation(
+        payload: dict[str, Any], records: dict[str, dict[str, Any]],
+        source_audio: dict[str, Any] | None) -> None:
+    """Persist UI-only media discovery without changing the generation plan."""
+    run_name = _safe_name(payload.get("run_name"), "")
+    if not run_name:
+        return
+    public = dict(payload)
+    public["run_name"] = run_name
+    public["token"] = ""
+    document = {
+        "version": 1,
+        "run_name": run_name,
+        "updated_at": datetime.now(timezone.utc).isoformat(
+            timespec="seconds").replace("+00:00", "Z"),
+        "public": public,
+        "records": records,
+        "source_audio": source_audio,
+    }
+    _atomic_json(_plan_studio_presentation_path(run_name), document)
+
+
+def _restore_plan_studio_presentation(run_name: Any) -> dict[str, Any]:
+    """Restore a saved presentation and issue a fresh in-memory media token."""
+    normalized = _safe_name(run_name, "")
+    if not normalized:
+        raise ValueError("A non-empty H3 chain run_name is required.")
+    path = _plan_studio_presentation_path(normalized)
+    if not os.path.isfile(path):
+        raise FileNotFoundError(
+            "No saved Plan Studio track exists for run %s." % normalized)
+    document = _read_json(path)
+    if not isinstance(document, dict) or int(document.get("version", 0)) != 1:
+        raise ValueError("Saved Plan Studio presentation is invalid.")
+    if _safe_name(document.get("run_name"), "") != normalized:
+        raise ValueError("Saved Plan Studio presentation belongs to another run.")
+    public = document.get("public")
+    records = document.get("records")
+    source_audio = document.get("source_audio")
+    if not isinstance(public, dict) or not isinstance(records, dict):
+        raise ValueError("Saved Plan Studio presentation is incomplete.")
+    if source_audio is not None and not isinstance(source_audio, dict):
+        raise ValueError("Saved Plan Studio source audio record is invalid.")
+    clean_records = {
+        str(key): dict(value) for key, value in records.items()
+        if isinstance(value, dict)
+    }
+    token = ""
+    if clean_records or source_audio is not None:
+        token = secrets.token_urlsafe(24)
+        _plan_studio_preview_cleanup()
+        _PLAN_STUDIO_SOURCE_PREVIEWS[token] = {
+            "created": time.monotonic(),
+            "records": clean_records,
+            "source_audio": dict(source_audio) if source_audio is not None else None,
+        }
+    payload = dict(public)
+    payload.update({"version": 2, "run_name": normalized, "token": token})
+    return payload
+
+
 def _plan_studio_preview_media(
         value: Any, window: dict[str, Any]) -> dict[str, Any] | None:
     start = int(window["start_frame"])
@@ -12208,6 +12282,10 @@ def _register_plan_studio_source_previews(
         if timeline_available else "none")
     source_has_audio = source_audio_kind != "none"
     if not records and source_audio is None and not timeline_available:
+        try:
+            _save_plan_studio_presentation(payload, {}, None)
+        except OSError as exc:
+            _LOG.warning("Plan Studio could not save its empty track: %s", exc)
         return payload
     if records or source_audio is not None:
         _plan_studio_preview_cleanup()
@@ -12252,6 +12330,10 @@ def _register_plan_studio_source_previews(
         "source_audio": source_audio_public,
         "status": "; ".join(status_parts) + ".",
     })
+    try:
+        _save_plan_studio_presentation(payload, records, source_audio)
+    except OSError as exc:
+        _LOG.warning("Plan Studio could not save its track: %s", exc)
     return payload
 
 
@@ -19765,6 +19847,179 @@ async def _save_run_assets(request):
     return web.json_response(payload)
 
 
+async def _plan_studio_presentation(request):
+    run_name = _safe_name(request.query.get("run_name", ""), "")
+    if not run_name:
+        return web.json_response(
+            {"error": "A non-empty H3 chain run_name is required."}, status=400)
+    try:
+        payload = await asyncio.to_thread(
+            _restore_plan_studio_presentation, run_name)
+    except FileNotFoundError as exc:
+        return web.json_response({"error": str(exc)}, status=404)
+    except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        return web.json_response({"error": str(exc)}, status=400)
+    return web.json_response(payload, headers={
+        "Cache-Control": "no-store",
+    })
+
+
+def _plan_studio_checkpoint_thumbnail_record(
+        run_name: str, scene: Any, revision: Any) -> dict[str, Any]:
+    index = int(scene)
+    token = str(revision or "").strip().lower()
+    if index < 1 or index > MAX_SHOTS:
+        raise ValueError(
+            "Checkpoint scene must be between 1 and %d." % MAX_SHOTS)
+    if re.fullmatch(r"[0-9a-f]{32}", token) is None:
+        raise ValueError(
+            "Checkpoint revision must be a 32-character revision id.")
+    metadata_path = os.path.join(
+        _output_root(), "h3_chains", run_name, "checkpoints",
+        "clip_%04d.%s.json" % (index, token))
+    if not os.path.isfile(metadata_path):
+        active_path = os.path.join(
+            _output_root(), "h3_chains", run_name, "checkpoints",
+            "clip_%04d.json" % index)
+        if not os.path.isfile(active_path):
+            raise FileNotFoundError(
+                "Scene %d revision %s is no longer available." %
+                (index, token[:8]))
+        metadata_path = active_path
+    metadata = _read_json(metadata_path)
+    segment = metadata.get("segment") if isinstance(metadata, dict) else None
+    if not isinstance(segment, dict):
+        raise ValueError("Checkpoint revision has no segment record.")
+    if (_safe_name(metadata.get("run_name") or run_name, "") != run_name or
+            int(segment.get("index", -1)) != index or
+            str(segment.get("revision") or "").lower() != token):
+        raise ValueError("Checkpoint revision identity does not match its metadata.")
+    path = _absolute_output_path(segment["segment"])
+    if not os.path.isfile(path):
+        raise FileNotFoundError(
+            "Scene %d video is no longer available." % index)
+    return {
+        "run_name": run_name,
+        "scene": index,
+        "revision": token,
+        "video_path": path,
+    }
+
+
+def _plan_studio_checkpoint_thumbnail_path(
+        record: dict[str, Any]) -> str:
+    cache_key = _fingerprint({
+        "version": 1,
+        "run_name": record["run_name"],
+        "scene": int(record["scene"]),
+        "revision": record["revision"],
+        "width": PLAN_STUDIO_THUMBNAIL_WIDTH,
+    })
+    cache_dir = os.path.join(
+        _output_root(), "h3_chains", ".plan_studio_thumbnails")
+    os.makedirs(cache_dir, exist_ok=True)
+    return os.path.join(cache_dir, "%s.jpg" % cache_key)
+
+
+def _build_plan_studio_checkpoint_thumbnail(
+        record: dict[str, Any]) -> str:
+    output_path = _plan_studio_checkpoint_thumbnail_path(record)
+    if os.path.isfile(output_path) and os.path.getsize(output_path) > 0:
+        return output_path
+    ffmpeg = _usable_ffmpeg()
+    if ffmpeg is None:
+        raise RuntimeError(
+            "Plan Studio checkpoint thumbnails require a working ffmpeg.")
+    temporary = "%s.%s.tmp.jpg" % (output_path, uuid.uuid4().hex)
+    command = [
+        ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+        "-ss", "0.150000000", "-i", str(record["video_path"]),
+        "-frames:v", "1", "-an",
+        "-vf", "scale=%d:-2:force_original_aspect_ratio=decrease" %
+               PLAN_STUDIO_THUMBNAIL_WIDTH,
+        "-q:v", "5", temporary,
+    ]
+    try:
+        _run_ffmpeg(command, timeout_seconds=60.0)
+        if not os.path.isfile(temporary) or os.path.getsize(temporary) < 1:
+            raise RuntimeError("ffmpeg produced an empty checkpoint thumbnail.")
+        os.replace(temporary, output_path)
+    finally:
+        _safe_unlink(temporary)
+    return output_path
+
+
+def _plan_studio_thumbnail_async_state(
+        ) -> tuple[asyncio.Semaphore, dict[str, asyncio.Task[str]]]:
+    global _PLAN_STUDIO_THUMBNAIL_BUILD_LOOP
+    global _PLAN_STUDIO_THUMBNAIL_BUILD_GATE
+    global _PLAN_STUDIO_THUMBNAIL_BUILD_TASKS
+    loop = asyncio.get_running_loop()
+    if (_PLAN_STUDIO_THUMBNAIL_BUILD_LOOP is not loop or
+            _PLAN_STUDIO_THUMBNAIL_BUILD_GATE is None):
+        _PLAN_STUDIO_THUMBNAIL_BUILD_LOOP = loop
+        _PLAN_STUDIO_THUMBNAIL_BUILD_GATE = asyncio.Semaphore(2)
+        _PLAN_STUDIO_THUMBNAIL_BUILD_TASKS = {}
+    gate = _PLAN_STUDIO_THUMBNAIL_BUILD_GATE
+    assert gate is not None
+    return gate, _PLAN_STUDIO_THUMBNAIL_BUILD_TASKS
+
+
+async def _ensure_plan_studio_checkpoint_thumbnail(
+        record: dict[str, Any]) -> str:
+    path = _plan_studio_checkpoint_thumbnail_path(record)
+    if os.path.isfile(path) and os.path.getsize(path) > 0:
+        return path
+    gate, tasks = _plan_studio_thumbnail_async_state()
+    task = tasks.get(path)
+    if task is None:
+        async def build() -> str:
+            async with gate:
+                if os.path.isfile(path) and os.path.getsize(path) > 0:
+                    return path
+                return await asyncio.to_thread(
+                    _build_plan_studio_checkpoint_thumbnail, dict(record))
+
+        task = asyncio.create_task(build())
+        tasks[path] = task
+
+        def finished(completed: asyncio.Task[str]) -> None:
+            if tasks.get(path) is completed:
+                tasks.pop(path, None)
+            if not completed.cancelled():
+                try:
+                    completed.exception()
+                except Exception:
+                    pass
+
+        task.add_done_callback(finished)
+    return await asyncio.shield(task)
+
+
+async def _plan_studio_checkpoint_thumbnail(request):
+    run_name = _safe_name(request.query.get("run_name", ""), "")
+    if not run_name:
+        return web.json_response(
+            {"error": "A non-empty H3 chain run_name is required."}, status=400)
+    try:
+        record = await asyncio.to_thread(
+            _plan_studio_checkpoint_thumbnail_record, run_name,
+            request.query.get("scene", 0), request.query.get("revision", ""))
+        path = await _ensure_plan_studio_checkpoint_thumbnail(record)
+    except asyncio.CancelledError:
+        raise
+    except FileNotFoundError as exc:
+        return web.json_response({"error": str(exc)}, status=404)
+    except (OSError, RuntimeError, TypeError, ValueError,
+            json.JSONDecodeError, KeyError) as exc:
+        _LOG.warning("Plan Studio checkpoint thumbnail failed: %s", exc)
+        return web.json_response({"error": str(exc)}, status=400)
+    return web.FileResponse(path, headers={
+        "Cache-Control": "private, max-age=31536000, immutable",
+        "Content-Type": "image/jpeg",
+    })
+
+
 def _plan_studio_source_preview_path(record: dict[str, Any]) -> str:
     cache_key = _fingerprint({
         "version": 1,
@@ -20181,6 +20436,12 @@ if (PromptServer is not None and web is not None and
         "/minimax_h3_context_loop/run")(_load_saved_run)
     PromptServer.instance.routes.post(
         "/minimax_h3_context_loop/run-assets")(_save_run_assets)
+    PromptServer.instance.routes.get(
+        "/minimax_h3_context_loop/plan-studio/presentation")(
+            _plan_studio_presentation)
+    PromptServer.instance.routes.get(
+        "/minimax_h3_context_loop/plan-studio/checkpoint-thumbnail")(
+            _plan_studio_checkpoint_thumbnail)
     PromptServer.instance.routes.get(
         "/minimax_h3_context_loop/plan-studio/source-preview")(
             _plan_studio_source_preview)

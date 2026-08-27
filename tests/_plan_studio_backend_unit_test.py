@@ -171,6 +171,18 @@ async def check():
         record = chain._PLAN_STUDIO_SOURCE_PREVIEWS[
             source_payload["token"]]["records"]["1:0"]
         assert record["video_seek_seconds"] == 2.0 + 100 / 24
+        presentation_path = run / "plan_studio_presentation.json"
+        saved_presentation = json.loads(
+            presentation_path.read_text(encoding="utf-8"))
+        assert saved_presentation["public"]["token"] == ""
+        assert saved_presentation["records"]["1:0"] == record
+        chain._PLAN_STUDIO_SOURCE_PREVIEWS.clear()
+        restored_presentation = chain._restore_plan_studio_presentation(
+            "studio")
+        assert restored_presentation["token"]
+        assert restored_presentation["scenes"] == source_payload["scenes"]
+        assert chain._PLAN_STUDIO_SOURCE_PREVIEWS[
+            restored_presentation["token"]]["records"]["1:0"] == record
 
         source_audio_file = pathlib.Path(temporary) / "source_audio.m4a"
         source_audio_file.write_bytes(b"source audio")
@@ -225,6 +237,50 @@ async def check():
             "kind": "none",
         }
         assert "connected without audio" in no_audio_payload["status"]
+        restored_no_audio = chain._restore_plan_studio_presentation("studio")
+        assert restored_no_audio["token"] == ""
+        assert restored_no_audio["source_audio"]["timeline_available"] is True
+
+        revision = "a" * 32
+        revision_metadata = checkpoints / (
+            "clip_0001.%s.json" % revision)
+        revision_metadata.write_text(json.dumps({
+            "run_name": "studio",
+            "segment": {
+                "index": 1,
+                "revision": revision,
+                "segment": str(segment.relative_to(temporary)),
+            },
+        }), encoding="utf-8")
+        thumbnail_record = chain._plan_studio_checkpoint_thumbnail_record(
+            "studio", 1, revision)
+        thumbnail_commands = []
+        original_usable = chain._usable_ffmpeg
+        original_run = chain._run_ffmpeg
+        try:
+            chain._usable_ffmpeg = lambda: "/fake/ffmpeg"
+
+            def fake_thumbnail(command, timeout_seconds=None):
+                thumbnail_commands.append((command, timeout_seconds))
+                pathlib.Path(command[-1]).write_bytes(b"thumbnail jpeg")
+
+            chain._run_ffmpeg = fake_thumbnail
+            thumbnail_path = pathlib.Path(
+                chain._build_plan_studio_checkpoint_thumbnail(
+                    thumbnail_record))
+            cached_thumbnail_path = pathlib.Path(
+                chain._build_plan_studio_checkpoint_thumbnail(
+                    thumbnail_record))
+        finally:
+            chain._usable_ffmpeg = original_usable
+            chain._run_ffmpeg = original_run
+        assert thumbnail_path == cached_thumbnail_path
+        assert thumbnail_path.read_bytes() == b"thumbnail jpeg"
+        assert len(thumbnail_commands) == 1
+        thumbnail_command = thumbnail_commands[0][0]
+        assert thumbnail_command[thumbnail_command.index("-frames:v") + 1] == "1"
+        assert "scale=320:-2" in thumbnail_command[
+            thumbnail_command.index("-vf") + 1]
 
         original_usable = chain._usable_ffmpeg
         original_capture = chain._run_ffmpeg_capture
