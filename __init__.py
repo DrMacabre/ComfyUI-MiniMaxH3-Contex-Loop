@@ -54,6 +54,18 @@ from .exact_final_timeline import install as _install_exact_final_timeline
 
 _EXACT_FINAL_TIMELINE_BUILD = _install_exact_final_timeline()
 
+# Fool for Love 0.6.37 continuation sanitation is intentionally activated only
+# after the existing exact-final-timeline layer.  It wraps Loop End recursion
+# and disk resume state only; the existing _context_apply_exact policy remains
+# the sole owner of Masked AV / latent-guide / generated-audio fallback logic.
+from . import chain_nodes as _exact_final_timeline_chain
+from .exact_final_timeline_continuation_0637 import (
+    activate_exact_continuation as _activate_exact_continuation,
+)
+
+_EXACT_FINAL_TIMELINE_CONTINUATION = _activate_exact_continuation(
+    _exact_final_timeline_chain)
+
 from .upscale_nodes import (
     UPSCALE_NODE_CLASS_MAPPINGS,
     UPSCALE_NODE_DISPLAY_NAME_MAPPINGS,

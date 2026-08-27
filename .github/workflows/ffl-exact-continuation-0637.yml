@@ -1,0 +1,37 @@
+name: FFL 0.6.37 continuation sanitation
+
+on:
+  push:
+    branches:
+      - fool-for-love-0.6.37-continuation-sanitized
+
+permissions:
+  contents: read
+
+jobs:
+  continuation-regression:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile sanitation integration
+        run: python -m py_compile exact_final_timeline_continuation_0637.py __init__.py
+      - name: Run focused LIVE and RESUME regression
+        env:
+          PYTHONPATH: .
+        run: python tests/_exact_final_timeline_continuation_0637_unit_test.py
+      - name: Verify activation order and context owner preservation
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          init = Path('__init__.py').read_text(encoding='utf-8')
+          exact = Path('exact_final_timeline.py').read_text(encoding='utf-8')
+          assert 'def _context_apply_exact(' in exact
+          assert '_chain.MiniMaxH3ChainContext.apply = _context_apply_exact' in exact
+          base = init.index('_EXACT_FINAL_TIMELINE_BUILD = _install_exact_final_timeline()')
+          sanitation = init.index('_EXACT_FINAL_TIMELINE_CONTINUATION = _activate_exact_continuation(')
+          assert base < sanitation
+          assert 'MiniMaxH3ChainContext.apply' not in Path(
+              'exact_final_timeline_continuation_0637.py').read_text(encoding='utf-8')
+          print('PASS existing _context_apply_exact preserved; sanitation activates after base exact layer')
+          PY
