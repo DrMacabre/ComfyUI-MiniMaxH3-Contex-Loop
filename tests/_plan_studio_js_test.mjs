@@ -179,6 +179,8 @@ assert.match(source, /Start at playhead/);
 assert.match(source, /Play selection/);
 assert.match(source, /h3studio-context-window/);
 assert.match(source, /studioContextWindowStartAtRatio/);
+assert.match(source, /nativeContextWindowStarts/);
+assert.match(source, /native latent crop/);
 assert.match(source, /visual_context_start_frame/);
 assert.match(source, /visual_context_lead_start_frame/);
 assert.match(source, /Composed context first source/);

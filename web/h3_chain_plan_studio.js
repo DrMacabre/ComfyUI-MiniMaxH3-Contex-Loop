@@ -14,6 +14,8 @@ import {
     formatClock,
     makeShot,
     moveShot,
+    nativeContextWindowStarts,
+    nearestNativeContextWindowStart,
     parsePlanJson,
     planToJson,
     promptTextToLines,
@@ -35,18 +37,18 @@ import {
     sharedPrompt,
     shotLengthMode,
     visualContextCompositions,
-} from "./h3_chain_plan_core.mjs?v=0.6.28";
+} from "./h3_chain_plan_core.mjs?v=0.6.29";
 import {
     promptRevisionHelp,
     promptRevisionLabel,
     promptRevisionNavigation,
-} from "./h3_prompt_history_core.mjs?v=0.6.28";
+} from "./h3_prompt_history_core.mjs?v=0.6.29";
 import {
     availableReferenceRecords,
     convertTaggedPictureReference,
     taggedPictureReferenceMode,
     taggedPictureReferenceToken,
-} from "./h3_reference_preview_core.mjs?v=0.6.28";
+} from "./h3_reference_preview_core.mjs?v=0.6.29";
 import {
     applySceneAudioOverride,
     applySceneTransitionPreset,
@@ -55,12 +57,12 @@ import {
     sceneAudioPolicy,
     sceneTransitionPreset,
     transitionPresetLabel,
-} from "./h3_policy_core.mjs?v=0.6.28";
+} from "./h3_policy_core.mjs?v=0.6.29";
 import {
     resolveAudioContextLength,
     resolveAudioPolicy,
     resolveTransitionPolicy,
-} from "./h3_socket_presentation_core.mjs?v=0.6.28";
+} from "./h3_socket_presentation_core.mjs?v=0.6.29";
 import {
     locateStudioTimelineSecond,
     h3StudioGridMarkers,
@@ -75,8 +77,8 @@ import {
     studioSourceSecond,
     studioTimelineLayout,
     studioWaveformSceneSamples,
-} from "./h3_chain_plan_studio_core.mjs?v=0.6.28";
-import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.6.28";
+} from "./h3_chain_plan_studio_core.mjs?v=0.6.29";
+import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.6.29";
 
 const {connectedPromptEditors, publishCompanionScene} = promptCompanionSync;
 function publishCompanionPrompt(...args) {
@@ -2281,7 +2283,7 @@ function mount(node) {
         }
         panel.append(element(
             "div", "h3studio-context-help",
-            "Drag the highlighted fixed-width zone across the complete source movie. Its width is the configured context span. Tail is the default and stores no override. This changes visual context only; generated-audio continuity still follows the immediate previous scene.",
+            "Drag the fixed-width zone between native H3 latent positions. The selector advances on the 17-frame / 5-latent-step lattice and crops saved latent steps directly; it never re-encodes an arbitrary RGB window. Latest aligned is the default. Generated-audio continuity still follows the immediate previous scene.",
         ));
         const blocksHost = element("div", "h3studio-context-blocks");
         const blocks = [];
@@ -2292,6 +2294,7 @@ function mount(node) {
                 span:Number(row.visualContextLeadFrames),
                 field:"visual_context_lead_start_frame",
                 lead:true,
+                prefixFrames:0,
             });
         }
         blocks.push({
@@ -2301,6 +2304,7 @@ function mount(node) {
             span:Number(row.contextLength - row.visualContextLeadFrames),
             field:"visual_context_start_frame",
             lead:false,
+            prefixFrames:Number(row.visualContextLeadFrames),
         });
 
         for (const block of blocks) {
@@ -2326,17 +2330,32 @@ function mount(node) {
                 continue;
             }
             const latest = Math.max(0, sourceRow.deliveredFrames - block.span);
-            let start = latest;
+            const validStarts = nativeContextWindowStarts(
+                sourceRow.rawFrames, sourceRow.deliveredFrames, block.span,
+                block.prefixFrames,
+            );
+            if (!validStarts.length) {
+                card.append(element(
+                    "div", "h3studio-context-empty",
+                    "This block has no native latent-aligned position in the selected source scene.",
+                ));
+                blocksHost.append(card);
+                continue;
+            }
+            const defaultStart = validStarts.at(-1);
+            let start = defaultStart;
             let rangeError = "";
             try {
                 start = sceneVisualContextStartFrame(
-                    shot, sourceRow.deliveredFrames, block.span, block.lead,
+                    shot, sourceRow.rawFrames, sourceRow.deliveredFrames,
+                    block.span, block.lead, block.prefixFrames,
                 );
             } catch (error) {
                 rangeError = error?.message || String(error);
                 const raw = Number(shot[block.field]);
-                start = Number.isInteger(raw)
-                    ? Math.max(0, Math.min(latest, raw)) : latest;
+                start = nearestNativeContextWindowStart(
+                    validStarts, Number.isInteger(raw) ? raw : defaultStart,
+                );
             }
             const media = playerCheckpoint(block.sourceIndex);
             let video = null;
@@ -2362,7 +2381,7 @@ function mount(node) {
             movieTrack.setAttribute("aria-label", `${block.label} position in source movie`);
             movieTrack.setAttribute("aria-valuemin", "0");
             movieTrack.setAttribute("aria-valuemax", String(latest));
-            movieTrack.title = `Drag the fixed ${block.span}-frame context zone across the full source movie`;
+            movieTrack.title = `Drag the fixed ${block.span}-frame context zone across ${validStarts.length} native latent-aligned positions`;
             const selectedZone = element(
                 "div", "h3studio-context-window", `${block.span}f`,
             );
@@ -2383,8 +2402,9 @@ function mount(node) {
                 selectedStart = layout.start;
                 selectedZone.style.left = `${layout.leftFraction * 100}%`;
                 selectedZone.style.width = `${layout.widthFraction * 100}%`;
-                selectedZone.title = `${block.span} context frames · ${layout.start + 1}–${layout.end}`;
-                rangeLabel.textContent = `selected frames ${layout.start + 1}–${layout.end} · ${(layout.start / FPS).toFixed(3)}–${(layout.end / FPS).toFixed(3)}s`;
+                selectedZone.title = `${block.span} context frames · ${layout.start + 1}–${layout.end} · native latent crop`;
+                const slot = validStarts.indexOf(layout.start) + 1;
+                rangeLabel.textContent = `aligned ${slot}/${validStarts.length} · frames ${layout.start + 1}–${layout.end} · ${(layout.start / FPS).toFixed(3)}–${(layout.end / FPS).toFixed(3)}s`;
                 movieTrack.setAttribute("aria-valuenow", String(layout.start));
                 movieTrack.setAttribute(
                     "aria-valuetext", `frames ${layout.start + 1} through ${layout.end}`,
@@ -2396,7 +2416,7 @@ function mount(node) {
                 catch (_error) {}
             };
             const commitStart = () => {
-                if (selectedStart === latest) delete shot[block.field];
+                if (selectedStart === defaultStart) delete shot[block.field];
                 else {
                     shot[block.field] = selectedStart;
                     shot.video_blend_frames = 0;
@@ -2407,7 +2427,9 @@ function mount(node) {
                 renderStatus();
             };
             const selectStart = (value, {seek = true, commit = false} = {}) => {
-                selectedStart = Math.max(0, Math.min(latest, Math.round(value)));
+                selectedStart = nearestNativeContextWindowStart(
+                    validStarts, Math.max(0, Math.min(latest, Math.round(value))),
+                );
                 updateSelection();
                 if (seek) previewStart();
                 if (commit) commitStart();
@@ -2452,13 +2474,18 @@ function mount(node) {
             movieTrack.addEventListener("pointercancel", finishDrag);
             movieTrack.addEventListener("keydown", (event) => {
                 let next = null;
+                const currentSlot = Math.max(0, validStarts.indexOf(selectedStart));
                 const step = event.shiftKey ? 5 : 1;
-                if (event.key === "ArrowLeft") next = selectedStart - step;
-                else if (event.key === "ArrowRight") next = selectedStart + step;
-                else if (event.key === "PageUp") next = selectedStart - block.span;
-                else if (event.key === "PageDown") next = selectedStart + block.span;
-                else if (event.key === "Home") next = 0;
-                else if (event.key === "End") next = latest;
+                if (event.key === "ArrowLeft") {
+                    next = validStarts[Math.max(0, currentSlot - step)];
+                } else if (event.key === "ArrowRight") {
+                    next = validStarts[Math.min(validStarts.length - 1, currentSlot + step)];
+                } else if (event.key === "PageUp") {
+                    next = validStarts[Math.max(0, currentSlot - 5)];
+                } else if (event.key === "PageDown") {
+                    next = validStarts[Math.min(validStarts.length - 1, currentSlot + 5)];
+                } else if (event.key === "Home") next = validStarts[0];
+                else if (event.key === "End") next = defaultStart;
                 if (next === null) return;
                 event.preventDefault();
                 selectStart(next, {commit:true});
@@ -2512,10 +2539,10 @@ function mount(node) {
                 });
             }
             const tail = button(
-                "Tail (default)",
-                "Use the final source frames and remove the stored override",
+                defaultStart === latest ? "Tail (default)" : "Latest aligned (default)",
+                "Use the latest native latent-aligned crop and remove the stored override",
                 () => {
-                    selectStart(latest, {commit:true});
+                    selectStart(defaultStart, {commit:true});
                 },
             );
             actions.append(usePlayhead, playSelection, tail);

@@ -15,6 +15,7 @@ import {
     derivedSceneSeed,
     duplicateShot,
     h3FrameLength,
+    nativeContextWindowStarts,
     moveShot,
     parsePlanJson,
     planToJson,
@@ -744,16 +745,25 @@ assert.deepEqual(
 assert.equal(sceneVisualContextLeadFrames({
     visual_context_lead_frames:17,
 }, 39), 17);
-assert.equal(sceneVisualContextStartFrame({}, 85, 22), 63);
+assert.deepEqual(nativeContextWindowStarts(90, 85, 22, 0), [
+    12, 29, 46, 63,
+]);
+assert.deepEqual(nativeContextWindowStarts(90, 85, 17, 22), [
+    0, 17, 34, 51, 68,
+]);
+assert.equal(sceneVisualContextStartFrame({}, 90, 85, 22), 63);
 assert.equal(sceneVisualContextStartFrame({
     visual_context_start_frame:12,
-}, 85, 22), 12);
+}, 90, 85, 22), 12);
 assert.equal(sceneVisualContextStartFrame({
-    visual_context_lead_start_frame:7,
-}, 85, 17, true), 7);
+    visual_context_lead_start_frame:12,
+}, 90, 85, 17, true), 12);
 assert.throws(() => sceneVisualContextStartFrame({
     visual_context_start_frame:64,
-}, 85, 22), /must be between 0 and 63/i);
+}, 90, 85, 22), /must be between 0 and 63/i);
+assert.throws(() => sceneVisualContextStartFrame({
+    visual_context_start_frame:10,
+}, 90, 85, 22), /native temporal latent lattice/i);
 assert.equal(contextCompositions.at(-1).total, 243);
 const composedTiming = calculatePlanTiming(composedPlan, {
     contextLength:39, videoBlendFrames:0, anchorMode:"head",
@@ -767,15 +777,15 @@ assert.equal(composedTiming.shots[4].visualContextLeadFrames, 5);
 assert.equal(composedTiming.shots[4].visualContextStartFrame, 17);
 assert.equal(composedTiming.shots[4].visualContextLeadStartFrame, 46);
 const windowedComposition = structuredClone(composedPlan);
-windowedComposition.shots[4].visual_context_start_frame = 10;
-windowedComposition.shots[4].visual_context_lead_start_frame = 20;
+windowedComposition.shots[4].visual_context_start_frame = 0;
+windowedComposition.shots[4].visual_context_lead_start_frame = 29;
 const windowedTiming = calculatePlanTiming(windowedComposition, {
     contextLength:39, videoBlendFrames:0, anchorMode:"head",
     defaultDurationSeconds:5, defaultSteps:10,
 });
 assert.deepEqual(windowedTiming.errors, []);
-assert.equal(windowedTiming.shots[4].visualContextStartFrame, 10);
-assert.equal(windowedTiming.shots[4].visualContextLeadStartFrame, 20);
+assert.equal(windowedTiming.shots[4].visualContextStartFrame, 0);
+assert.equal(windowedTiming.shots[4].visualContextLeadStartFrame, 29);
 
 const sameSourceComposition = structuredClone(composedPlan);
 sameSourceComposition.shots[4].visual_context_lead_source = "three";

@@ -601,17 +601,72 @@ export function sceneVisualContextLeadFrames(shot, contextLength) {
     return resolved;
 }
 
+export function h3NativeFrameBoundaryStep(frame) {
+    const resolved = Number(frame);
+    if (!Number.isInteger(resolved) || resolved < 0) return null;
+    if (resolved % 17 === 0) return 5 * (resolved / 17);
+    if (resolved >= 5 && (resolved - 5) % 17 === 0) {
+        return 2 + 5 * ((resolved - 5) / 17);
+    }
+    return null;
+}
+
+export function nativeContextWindowStarts(
+    rawFrames, deliveredFrames, spanFrames, prefixFrames = 0,
+) {
+    const raw = Number(rawFrames);
+    const delivered = Number(deliveredFrames);
+    const span = Number(spanFrames);
+    const prefix = Number(prefixFrames);
+    if (!Number.isInteger(raw) || !Number.isInteger(delivered)
+            || !Number.isInteger(span) || !Number.isInteger(prefix)
+            || raw < delivered || delivered < 1 || span < 1
+            || span > delivered || prefix < 0) return Object.freeze([]);
+    const latest = delivered - span;
+    if (span === 1 && prefix === 0) return Object.freeze([latest]);
+    const targetStart = h3NativeFrameBoundaryStep(prefix);
+    const targetEnd = h3NativeFrameBoundaryStep(prefix + span);
+    if (targetStart === null || targetEnd === null) return Object.freeze([]);
+    const expectedSteps = targetEnd - targetStart;
+    const trim = raw - delivered;
+    const starts = [];
+    for (let start = 0; start <= latest; start += 1) {
+        const sourceStart = h3NativeFrameBoundaryStep(trim + start);
+        const sourceEnd = h3NativeFrameBoundaryStep(trim + start + span);
+        if (sourceStart !== null && sourceEnd !== null
+                && sourceStart % 5 === targetStart % 5
+                && sourceEnd - sourceStart === expectedSteps) {
+            starts.push(start);
+        }
+    }
+    return Object.freeze(starts);
+}
+
+export function nearestNativeContextWindowStart(starts, requested) {
+    const options = Array.isArray(starts) ? starts : [];
+    if (!options.length) return null;
+    const value = Number(requested);
+    if (!Number.isFinite(value)) return options.at(-1);
+    return options.reduce((nearest, candidate) => (
+        Math.abs(candidate - value) < Math.abs(nearest - value)
+            ? candidate : nearest
+    ), options[0]);
+}
+
 export function sceneVisualContextStartFrame(
-    shot, deliveredFrames, spanFrames, lead = false,
+    shot, rawFrames, deliveredFrames, spanFrames, lead = false,
+    prefixFrames = 0,
 ) {
     const field = lead
         ? "visual_context_lead_start_frame"
         : "visual_context_start_frame";
+    const rawFramesResolved = Number(rawFrames);
     const delivered = Number(deliveredFrames);
     const span = Number(spanFrames);
-    if (!Number.isInteger(delivered) || delivered < 0
+    if (!Number.isInteger(rawFramesResolved) || rawFramesResolved < delivered
+            || !Number.isInteger(delivered) || delivered < 0
             || !Number.isInteger(span) || span < 0) {
-        throw new Error(`${field} requires valid delivered and context frame counts.`);
+        throw new Error(`${field} requires valid raw, delivered, and context frame counts.`);
     }
     if (span < 1) {
         if (Object.hasOwn(shot ?? {}, field)) {
@@ -625,14 +680,28 @@ export function sceneVisualContextStartFrame(
             `${field} requests ${span} frames from a source delivering only ${delivered}.`,
         );
     }
-    const raw = shot?.[field];
-    if (raw === undefined || raw === null
-            || (typeof raw === "string" && !raw.trim())) return latest;
-    const resolved = Number(raw);
-    if (typeof raw === "boolean" || !Number.isInteger(resolved)
+    const starts = nativeContextWindowStarts(
+        rawFramesResolved, delivered, span, prefixFrames,
+    );
+    if (!starts.length) {
+        throw new Error(
+            `${field} has no native latent-aligned ${span}-frame window inside the source's ${rawFramesResolved} raw / ${delivered} delivered frames.`,
+        );
+    }
+    const authored = shot?.[field];
+    if (authored === undefined || authored === null
+            || (typeof authored === "string" && !authored.trim())) return starts.at(-1);
+    const resolved = Number(authored);
+    if (typeof authored === "boolean" || !Number.isInteger(resolved)
             || resolved < 0 || resolved > latest) {
         throw new Error(
             `${field} must be between 0 and ${latest} so its ${span}-frame window fits inside the source's ${delivered} delivered frames.`,
+        );
+    }
+    if (!starts.includes(resolved)) {
+        const nearest = nearestNativeContextWindowStart(starts, resolved);
+        throw new Error(
+            `${field}=${resolved} is not on H3's native temporal latent lattice. Use ${nearest} (nearest aligned start).`,
         );
     }
     return resolved;
@@ -1088,7 +1157,9 @@ export function calculatePlanTiming(plan, settings = {}) {
         if (source) {
             try {
                 target.visualContextStartFrame = sceneVisualContextStartFrame(
-                    plan.shots[offset], source.deliveredFrames, recentFrames,
+                    plan.shots[offset], source.rawFrames,
+                    source.deliveredFrames, recentFrames, false,
+                    target.visualContextLeadFrames,
                 );
             } catch (error) {
                 target.errors.push(error.message);
@@ -1104,8 +1175,8 @@ export function calculatePlanTiming(plan, settings = {}) {
         if (lead) {
             try {
                 target.visualContextLeadStartFrame = sceneVisualContextStartFrame(
-                    plan.shots[offset], lead.deliveredFrames,
-                    target.visualContextLeadFrames, true,
+                    plan.shots[offset], lead.rawFrames, lead.deliveredFrames,
+                    target.visualContextLeadFrames, true, 0,
                 );
             } catch (error) {
                 target.errors.push(error.message);
