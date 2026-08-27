@@ -9,18 +9,18 @@ import {
     checkpointSelectionJson,
     formatCheckpointBytes,
     selectedCheckpointRevision,
-} from "./h3_checkpoint_manager_core.mjs?v=0.6.31";
+} from "./h3_checkpoint_manager_core.mjs?v=0.6.32";
 import {
     parsePlanJson,
     planToJson,
     promptValueToText,
-} from "./h3_chain_plan_core.mjs?v=0.6.31";
-import {applyCheckpointRevisionSet} from "./h3_chain_review_core.mjs?v=0.6.31";
-import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.6.31";
+} from "./h3_chain_plan_core.mjs?v=0.6.32";
+import {applyCheckpointRevisionSet} from "./h3_chain_review_core.mjs?v=0.6.32";
+import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.6.32";
 import {
     refreshRestoredPlanEditors,
     restoreConnectedPolicyInputs,
-} from "./h3_plan_restore_core.mjs?v=0.6.31";
+} from "./h3_plan_restore_core.mjs?v=0.6.32";
 
 const NODE_NAME = "MiniMaxH3ChainCheckpointManager";
 const PLAN_NAME = "MiniMaxH3ChainPlan";
@@ -177,7 +177,7 @@ function injectStyles() {
         border-radius:7px; background:color-mix(in srgb,var(--h3cm-panel) 90%,transparent); }
       .h3cm-panel-title { display:flex; justify-content:space-between; gap:8px; margin-bottom:7px; font-weight:750; }
       .h3cm-shared-legend { color:var(--h3cm-muted); font-size:10px; font-weight:500; }
-      .h3cm-branches { position:relative; padding-left:28px; }
+      .h3cm-branches { position:relative; }
       .h3cm-branch { position:relative; z-index:1; margin-bottom:8px; padding:6px;
         border:1px solid color-mix(in srgb,var(--h3cm-border) 75%,transparent); border-radius:6px; }
       .h3cm-branch-head { justify-content:space-between; margin-bottom:5px; }
@@ -201,10 +201,6 @@ function injectStyles() {
       .h3cm-shared-label { display:block; width:max-content; margin:2px 0; padding:1px 5px;
         border-radius:999px; background:color-mix(in srgb,var(--h3cm-shared-color) 23%,transparent);
         color:color-mix(in srgb,var(--h3cm-shared-color) 72%,var(--h3cm-text)); font-size:9px; font-weight:750; }
-      .h3cm-shared-links { position:absolute; inset:0 auto auto 0; z-index:2; overflow:visible;
-        pointer-events:none; }
-      .h3cm-shared-link { fill:none; stroke-width:1.5; stroke-linecap:round;
-        stroke-linejoin:round; vector-effect:non-scaling-stroke; opacity:.82; }
       .h3cm-detail { display:flex; flex-direction:column; gap:8px; }
       .h3cm-preview { width:100%; max-height:280px; min-height:150px; object-fit:contain; border-radius:6px; background:#08090c; }
       .h3cm-audio { width:100%; height:36px; }
@@ -251,7 +247,7 @@ function mount(node) {
         scene:Number(node.properties[SCENE_PROPERTY]) || null,
         revision:String(node.properties[REVISION_PROPERTY] ?? ""),
         chapterTab:String(node.properties[CHAPTER_PROPERTY] ?? "all"),
-        selected:null, deletion:null, busy:false, requestToken:0, sharedLinkFrame:0,
+        selected:null, deletion:null, busy:false, requestToken:0,
         initialRefresh:true, attribution:null, attributionButton:null,
     };
     const root = element("div", "h3cm-root");
@@ -269,7 +265,7 @@ function mount(node) {
     const main = element("div", "h3cm-main");
     const branchesPanel = element("section", "h3cm-panel");
     const branchesTitle = element("div", "h3cm-panel-title", "Revision branches");
-    branchesTitle.append(element("span", "h3cm-shared-legend", "matching color + side rail = same saved clip"));
+    branchesTitle.append(element("span", "h3cm-shared-legend", "matching color = same saved clip"));
     const branches = element("div", "h3cm-branches");
     branchesPanel.append(branchesTitle, branches);
     const detail = element("section", "h3cm-panel h3cm-detail");
@@ -580,61 +576,7 @@ function mount(node) {
             }
             row.append(header, path);
             branches.append(row);
-            path.addEventListener("scroll", scheduleSharedLinks, {passive:true});
         }
-        scheduleSharedLinks();
-    }
-
-    function drawSharedLinks() {
-        branches.querySelector(".h3cm-shared-links")?.remove();
-        const cards = [...branches.querySelectorAll("[data-shared-key]")];
-        if (!cards.length) return;
-        const bounds = branches.getBoundingClientRect();
-        const width = Math.max(1, branches.scrollWidth);
-        const height = Math.max(1, branches.scrollHeight);
-        const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-        svg.classList.add("h3cm-shared-links");
-        svg.setAttribute("width", String(width));
-        svg.setAttribute("height", String(height));
-        svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
-        svg.setAttribute("aria-hidden", "true");
-        const grouped = new Map();
-        for (const card of cards) {
-            const key = card.dataset.sharedKey;
-            if (!grouped.has(key)) grouped.set(key, []);
-            grouped.get(key).push(card);
-        }
-        for (const [key, members] of grouped) {
-            members.sort((left, right) =>
-                left.getBoundingClientRect().top - right.getBoundingClientRect().top);
-            const scene = Number(String(key).split(":", 1)[0]);
-            const laneX = 7 + ((Number.isFinite(scene) ? scene - 1 : 0) % 4) * 5;
-            const anchors = members.map((card) => {
-                const cardBounds = card.getBoundingClientRect();
-                return {
-                    x: Math.max(laneX, cardBounds.left - bounds.left),
-                    y: cardBounds.top + cardBounds.height / 2 - bounds.top,
-                };
-            });
-            let pathData = `M ${laneX} ${anchors[0].y} V ${anchors.at(-1).y}`;
-            for (const anchor of anchors) {
-                pathData += ` M ${laneX} ${anchor.y} H ${anchor.x}`;
-            }
-            const link = document.createElementNS("http://www.w3.org/2000/svg", "path");
-            link.classList.add("h3cm-shared-link");
-            link.setAttribute("stroke", sharedColor(key));
-            link.setAttribute("d", pathData);
-            svg.append(link);
-        }
-        if (svg.childNodes.length) branches.prepend(svg);
-    }
-
-    function scheduleSharedLinks() {
-        if (state.sharedLinkFrame) window.cancelAnimationFrame(state.sharedLinkFrame);
-        state.sharedLinkFrame = window.requestAnimationFrame(() => {
-            state.sharedLinkFrame = 0;
-            drawSharedLinks();
-        });
     }
 
     function addInspector(label, value) {
@@ -1233,13 +1175,8 @@ function mount(node) {
         return result;
     };
     node._h3CheckpointManagerRefresh = () => void refreshRuns();
-    const sharedLinksResizeObserver = typeof ResizeObserver === "function"
-        ? new ResizeObserver(scheduleSharedLinks) : null;
-    sharedLinksResizeObserver?.observe(branchesPanel);
     const removed = node.onRemoved;
     node.onRemoved = function () {
-        if (state.sharedLinkFrame) window.cancelAnimationFrame(state.sharedLinkFrame);
-        sharedLinksResizeObserver?.disconnect();
         return removed?.apply(this, arguments);
     };
     void refreshRuns();

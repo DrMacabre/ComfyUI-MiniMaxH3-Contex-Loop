@@ -6,16 +6,16 @@ import {
     promptTextToLines,
     promptValueToText,
     sharedPrompt,
-} from "./h3_chain_plan_core.mjs?v=0.6.31";
+} from "./h3_chain_plan_core.mjs?v=0.6.32";
 import {
     buildPromptAssistantContext,
     makePromptAssistRequest,
-} from "./h3_prompt_assistant_core.mjs?v=0.6.31";
-import {PromptAssistantClient} from "./h3_prompt_assistant_client.mjs?v=0.6.31";
+} from "./h3_prompt_assistant_core.mjs?v=0.6.32";
+import {PromptAssistantClient} from "./h3_prompt_assistant_client.mjs?v=0.6.32";
 import {
     directOptimizerConfigurationError,
     makeDirectPromptOptimizeRequest,
-} from "./h3_prompt_optimizer_core.mjs?v=0.6.31";
+} from "./h3_prompt_optimizer_core.mjs?v=0.6.32";
 import {
     openPromptOptimizerSettings,
     promptOptimizerBackend,
@@ -27,7 +27,7 @@ import {
     promptRevisionLabel,
     promptRevisionNavigation,
     promptRevisionTree,
-} from "./h3_prompt_history_core.mjs?v=0.6.31";
+} from "./h3_prompt_history_core.mjs?v=0.6.32";
 import {
     availableReferenceRecords,
     convertTaggedPictureReference,
@@ -35,7 +35,7 @@ import {
     replacePromptReferenceOccurrence,
     taggedPictureReferenceMode,
     taggedPictureReferenceToken,
-} from "./h3_reference_preview_core.mjs?v=0.6.31";
+} from "./h3_reference_preview_core.mjs?v=0.6.32";
 import {
     PromptUndoHistory,
     RICH_PROMPT_GUIDES,
@@ -45,10 +45,10 @@ import {
     richGenerationMode,
     richGuideInstruction,
     tokenizeRichPrompt,
-} from "./h3_rich_prompt_editor_core.mjs?v=0.6.31";
-import {createPromptCompletionController} from "./h3_prompt_completion_core.mjs?v=0.6.31";
-import {createH3PromptSchemaController} from "./h3_prompt_schema_ui.mjs?v=0.6.31";
-import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.6.31";
+} from "./h3_rich_prompt_editor_core.mjs?v=0.6.32";
+import {createPromptCompletionController} from "./h3_prompt_completion_core.mjs?v=0.6.32";
+import {createH3PromptSchemaController} from "./h3_prompt_schema_ui.mjs?v=0.6.32";
+import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.6.32";
 
 const {publishCompanionScene, rebaseScenePrompt} = promptCompanionSync;
 function publishCompanionPrompt(...args) {
