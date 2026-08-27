@@ -4,6 +4,9 @@ Newest first. This file keeps release history out of the onboarding README.
 
 ## Unreleased
 
+- Checkpoint Manager branch rows keep their compact shared-revision colors and
+  badges without drawing long SVG lineage rails across the branch list.
+
 - Plan Studio now persists its discovered motion-reference and Source Timeline
   audio presentation beside the run, then restores it automatically after a
   workflow, browser, or server reload. This UI-only record does not participate
