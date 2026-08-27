@@ -181,12 +181,35 @@ assert.deepEqual(
 const taggedEditor = add(makeNode(30, "MiniMaxH3ChainScenePromptEditor"));
 const taggedRelay = add(makeNode(31, "MiniMaxH3ChainCurrent"));
 const taggedWrapper = add(makeNode(32, "MiniMaxH3TaggedReferenceToVideo"));
+const taggedPromptSet = add(makeNode(64, "SetNode", {
+    Constant: "tagged_prompt",
+}));
+const taggedPromptGet = add(makeNode(65, "GetNode", {
+    Constant: "tagged_prompt",
+}));
+const taggedReferenceReroute = add(makeNode(66, "Reroute"));
+const taggedReferenceSet = add(makeNode(67, "SetNode", {
+    Constant: "tagged_references",
+}));
+const taggedReferenceGet = add(makeNode(68, "GetNode", {
+    Constant: "tagged_references",
+}));
 const taggedImageA = add(makeNode(33, "LoadImage", {image: "face.png"}));
 const taggedImageB = add(makeNode(34, "LoadImage", {image: "look.png"}));
 const taggedVideoFile = add(makeNode(35, "LoadVideo", {video: "motion.mp4"}));
 const taggedVideoAudio = add(makeNode(36, "LoadAudio", {audio: "motion.wav"}));
 const taggedPictureA = add(makeNode(37, "MiniMaxH3TaggedPictureReference", {
     tag: "hero_face",
+}));
+const taggedPictureTagText = add(makeNode(169, "PrimitiveNode", {
+    value: "connected_face",
+}));
+taggedPictureTagText.outputs[0].name = "STRING";
+const taggedPictureTagSet = add(makeNode(170, "SetNode", {
+    Constant: "picture_tag_text",
+}));
+const taggedPictureTagGet = add(makeNode(171, "GetNode", {
+    Constant: "picture_tag_text",
 }));
 const taggedPictureB = add(makeNode(38, "MiniMaxH3TaggedPictureReference", {
     tag: "hero_look",
@@ -210,9 +233,12 @@ const taggedLazyMotion = add(makeNode(
         audio_tag: "lazy_motion_audio",
     },
 ));
-connect(taggedEditor, taggedRelay, "state");
+connect(taggedEditor, taggedPromptSet, "*");
+connect(taggedPromptGet, taggedRelay, "state");
 connect(taggedRelay, taggedWrapper, "prompt");
 connect(taggedImageA, taggedPictureA, "image");
+connect(taggedPictureTagText, taggedPictureTagSet, "*");
+connect(taggedPictureTagGet, taggedPictureA, "tag");
 connect(taggedPictureA, taggedPictureB, "previous");
 connect(taggedImageB, taggedPictureB, "image");
 connect(taggedPictureB, taggedVideo, "previous");
@@ -222,7 +248,9 @@ connect(taggedVideo, taggedMotion, "previous");
 connect(taggedMotionVideo, taggedMotion, "video");
 connect(taggedMotion, taggedLazyMotion, "previous");
 connect(taggedLazyLoader, taggedLazyMotion, "source_video");
-connect(taggedLazyMotion, taggedWrapper, "references");
+connect(taggedLazyMotion, taggedReferenceReroute, "*");
+connect(taggedReferenceReroute, taggedReferenceSet, "*");
+connect(taggedReferenceGet, taggedWrapper, "references");
 
 assert.equal(findTaggedRef2VA(taggedEditor), taggedWrapper);
 assert.deepEqual(
@@ -240,7 +268,7 @@ assert.deepEqual(
         tag, label, active, sourceLabel,
     })),
     [
-        {tag: "hero_face", label: null, active: false,
+        {tag: "connected_face", label: null, active: false,
             sourceLabel: undefined},
         {tag: "hero_look", label: "<Picture 1>", active: true,
             sourceLabel: undefined},
@@ -265,15 +293,17 @@ assert.equal(
     taggedLazyLoader,
 );
 const semanticPromptRefs = taggedReferenceRecords(
-    taggedEditor, "Use #hero_face[1.50s].",
+    taggedEditor, "Use #connected_face[1.50s].",
 ).records;
-const semanticHero = semanticPromptRefs.find(({tag}) => tag === "hero_face");
+const semanticHero = semanticPromptRefs.find(
+    ({tag}) => tag === "connected_face",
+);
 assert.equal(semanticHero.active, true);
 assert.equal(semanticHero.nativeActive, false);
 assert.equal(semanticHero.semanticActive, true);
 assert.equal(semanticHero.label, null);
-assert.equal(semanticHero.nativeToken, "@hero_face");
-assert.equal(semanticHero.semanticToken, "#hero_face[0.00s]");
+assert.equal(semanticHero.nativeToken, "@connected_face");
+assert.equal(semanticHero.semanticToken, "#connected_face[0.00s]");
 assert.equal(semanticHero.supportsSemantic, true);
 assert.equal(referencePreviewRecords(
     taggedEditor, 2, {prompt: "Use @hero_look."}).mode, "tagged");
@@ -287,7 +317,7 @@ assert.deepEqual(
     availableReferenceRecords(taggedEditor, 2, {
         prompt: "Use @hero_look.", includeInactive: true,
     }).records.map(({tag}) => tag),
-    ["hero_face", "hero_look", "performance", "motion", "lazy_motion",
+    ["connected_face", "hero_look", "performance", "motion", "lazy_motion",
         "performance_audio", "lazy_motion_audio"],
 );
 
