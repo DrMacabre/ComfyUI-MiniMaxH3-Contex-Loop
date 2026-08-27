@@ -1,0 +1,114 @@
+name: FFL exact timeline port probe
+
+on:
+  push:
+    branches:
+      - fool-for-love-upstream-0.6.37
+    paths:
+      - .github/workflows/ffl-exact-timeline-port-probe.yml
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Probe old exact-timeline hunks against 0.6.37
+        shell: bash
+        run: |
+          set -euo pipefail
+          OLD=2f6c6d7556a8bcc8be67fa48a819c0de3691b099
+          git cat-file -e "$OLD^{commit}"
+          git show --format= --unified=3 "$OLD" -- \
+            chain_nodes.py \
+            web/h3_chain_plan_core.mjs \
+            web/h3_chain_plan_editor.js \
+            > /tmp/old-exact.patch
+
+          python - <<'PY'
+          from pathlib import Path
+          import re, subprocess, tempfile
+
+          patch = Path('/tmp/old-exact.patch').read_text(encoding='utf-8')
+          file_header = None
+          hunks = []
+          current = None
+
+          exact_markers = (
+              '_validate_h3_length', '_quantized_h3_delivery',
+              '_tagged_audio_reference_value', '_plan_with_external_context',
+              '_retime_review_plan', '_plan_with_review_revision',
+              '_normalize_plan', '_effective_editor_plan', '_public_segment',
+              '_source_audio_slice_for_shot', 'def current(', 'def save(',
+              'def end(', '_checkpoint_export_segments', 'def export(',
+              'h3FrameLength', 'quantizedH3Delivery', 'calculatePlanTiming',
+              'validateRequestedFrameLength', 'h3c-timing', 'Exact frames',
+              'Rounded up to 17k+5', 'requested_frames', 'tail_trim_frames',
+          )
+          reject_markers = (
+              'CHAIN_BUILD', '_RESUME_IGNORED_COMPATIBILITY',
+              '_legacy_history_hash_for_resume', '_resume_difference_summary',
+              'local_resume', 'SEITANISM',
+          )
+
+          lines = patch.splitlines(keepends=True)
+          i = 0
+          while i < len(lines):
+              if lines[i].startswith('diff --git '):
+                  start = i
+                  i += 1
+                  while i < len(lines) and not lines[i].startswith('@@ ') and not lines[i].startswith('diff --git '):
+                      i += 1
+                  file_header = ''.join(lines[start:i])
+                  continue
+              if lines[i].startswith('@@ '):
+                  start = i
+                  i += 1
+                  while i < len(lines) and not lines[i].startswith('@@ ') and not lines[i].startswith('diff --git '):
+                      i += 1
+                  body = ''.join(lines[start:i])
+                  selected = any(m in body for m in exact_markers) and not any(m in body for m in reject_markers)
+                  if selected:
+                      hunks.append((file_header, body))
+                  continue
+              i += 1
+
+          print(f'Selected exact-timeline hunks: {len(hunks)}')
+          passed = 0
+          failed = 0
+          selected_patch_parts = []
+          for n, (header, hunk) in enumerate(hunks, 1):
+              candidate = header + hunk
+              with tempfile.NamedTemporaryFile('w', suffix='.patch', delete=False, encoding='utf-8') as fh:
+                  fh.write(candidate)
+                  name = fh.name
+              result = subprocess.run(
+                  ['git', 'apply', '--check', '--recount', name],
+                  text=True, capture_output=True,
+              )
+              title = hunk.splitlines()[0]
+              path_match = re.search(r'^\+\+\+ b/(.+)$', header, re.M)
+              path = path_match.group(1) if path_match else '?'
+              if result.returncode == 0:
+                  passed += 1
+                  state = 'PASS'
+                  selected_patch_parts.append(candidate)
+              else:
+                  failed += 1
+                  state = 'FAIL'
+              print(f'[{state}] {n:02d} {path} {title}')
+              if result.returncode:
+                  print((result.stderr or result.stdout).strip())
+
+          print(f'\nDirectly applicable: {passed}; need manual adaptation: {failed}')
+          Path('/tmp/directly-applicable.patch').write_text(
+              ''.join(selected_patch_parts), encoding='utf-8')
+          PY
+
+          echo '--- working tree ---'
+          git status --short
