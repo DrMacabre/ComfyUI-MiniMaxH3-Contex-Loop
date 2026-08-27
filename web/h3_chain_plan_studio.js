@@ -35,18 +35,18 @@ import {
     sharedPrompt,
     shotLengthMode,
     visualContextCompositions,
-} from "./h3_chain_plan_core.mjs?v=0.6.26";
+} from "./h3_chain_plan_core.mjs?v=0.6.27";
 import {
     promptRevisionHelp,
     promptRevisionLabel,
     promptRevisionNavigation,
-} from "./h3_prompt_history_core.mjs?v=0.6.26";
+} from "./h3_prompt_history_core.mjs?v=0.6.27";
 import {
     availableReferenceRecords,
     convertTaggedPictureReference,
     taggedPictureReferenceMode,
     taggedPictureReferenceToken,
-} from "./h3_reference_preview_core.mjs?v=0.6.26";
+} from "./h3_reference_preview_core.mjs?v=0.6.27";
 import {
     applySceneAudioOverride,
     applySceneTransitionPreset,
@@ -55,12 +55,12 @@ import {
     sceneAudioPolicy,
     sceneTransitionPreset,
     transitionPresetLabel,
-} from "./h3_policy_core.mjs?v=0.6.26";
+} from "./h3_policy_core.mjs?v=0.6.27";
 import {
     resolveAudioContextLength,
     resolveAudioPolicy,
     resolveTransitionPolicy,
-} from "./h3_socket_presentation_core.mjs?v=0.6.26";
+} from "./h3_socket_presentation_core.mjs?v=0.6.27";
 import {
     locateStudioTimelineSecond,
     h3StudioGridMarkers,
@@ -68,13 +68,15 @@ import {
     matchingStudioSourceAudio,
     matchingStudioSourceScene,
     studioCheckpointSignature,
+    studioContextWindowLayout,
+    studioContextWindowStartAtRatio,
     studioSceneStartSeconds,
     studioSourceAudioSecond,
     studioSourceSecond,
     studioTimelineLayout,
     studioWaveformSceneSamples,
-} from "./h3_chain_plan_studio_core.mjs?v=0.6.26";
-import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.6.26";
+} from "./h3_chain_plan_studio_core.mjs?v=0.6.27";
+import * as promptCompanionSync from "./h3_prompt_companion_sync.mjs?v=0.6.27";
 
 const {connectedPromptEditors, publishCompanionScene} = promptCompanionSync;
 function publishCompanionPrompt(...args) {
@@ -267,9 +269,25 @@ function injectStyles() {
         .h3studio-context-empty { display:grid; place-items:center; width:100%; min-height:180px;
             padding:18px; color:var(--hs-muted); text-align:center; border:1px dashed var(--hs-border);
             border-radius:6px; background:#050608; }
-        .h3studio-context-range { display:grid; grid-template-columns:minmax(100px,1fr) auto;
-            gap:6px; align-items:center; margin-top:7px; }
-        .h3studio-context-range input[type=range] { padding:0; }
+        .h3studio-context-range { display:flex; flex-direction:column; gap:5px; margin-top:7px; }
+        .h3studio-context-movie-track { position:relative; width:100%; height:38px; overflow:hidden;
+            border:1px solid var(--hs-border); border-radius:6px; cursor:pointer; touch-action:none;
+            background:repeating-linear-gradient(90deg,#151922 0,#151922 11px,#0e1118 11px,#0e1118 13px); }
+        .h3studio-context-movie-track:focus-visible { outline:2px solid #79a7ff; outline-offset:2px; }
+        .h3studio-context-window { position:absolute; top:3px; bottom:3px; min-width:1px;
+            box-sizing:border-box; border:2px solid #7ec8ff; border-radius:5px;
+            background:rgba(47,143,220,.42); box-shadow:0 0 0 1px rgba(0,0,0,.55) inset;
+            display:grid; place-items:center; overflow:hidden; color:#fff; font-size:10px;
+            font-variant-numeric:tabular-nums; cursor:grab; user-select:none; }
+        .h3studio-context-movie-track.h3studio-dragging .h3studio-context-window { cursor:grabbing; }
+        .h3studio-context-window::before,.h3studio-context-window::after { content:"";
+            position:absolute; top:6px; bottom:6px; width:2px; background:rgba(255,255,255,.78); }
+        .h3studio-context-window::before { left:4px; }
+        .h3studio-context-window::after { right:4px; }
+        .h3studio-context-playhead { position:absolute; z-index:2; top:0; bottom:0; width:2px;
+            pointer-events:none; background:#ff9a3c; transform:translateX(-1px); }
+        .h3studio-context-range-readout { display:flex; justify-content:space-between; gap:8px; }
+        .h3studio-context-movie-length { color:var(--hs-muted); font-variant-numeric:tabular-nums; }
         .h3studio-context-range-label { min-width:150px; color:var(--hs-muted);
             font-variant-numeric:tabular-nums; text-align:right; }
         .h3studio-context-actions { display:flex; align-items:center; gap:6px; margin-top:7px;
@@ -2263,7 +2281,7 @@ function mount(node) {
         }
         panel.append(element(
             "div", "h3studio-context-help",
-            "Choose the exact delivered-video window supplied to this scene. Tail is the default and stores no override. This changes visual context only; generated-audio continuity still follows the immediate previous scene.",
+            "Drag the highlighted fixed-width zone across the complete source movie. Its width is the configured context span. Tail is the default and stores no override. This changes visual context only; generated-audio continuity still follows the immediate previous scene.",
         ));
         const blocksHost = element("div", "h3studio-context-blocks");
         const blocks = [];
@@ -2338,31 +2356,49 @@ function mount(node) {
                 ));
             }
             const rangeWrap = element("div", "h3studio-context-range");
-            const range = element("input");
-            range.type = "range";
-            range.min = "0";
-            range.max = String(latest);
-            range.step = "1";
-            range.value = String(start);
-            range.title = "Start frame within the source scene's delivered video";
+            const movieTrack = element("div", "h3studio-context-movie-track");
+            movieTrack.tabIndex = 0;
+            movieTrack.setAttribute("role", "slider");
+            movieTrack.setAttribute("aria-label", `${block.label} position in source movie`);
+            movieTrack.setAttribute("aria-valuemin", "0");
+            movieTrack.setAttribute("aria-valuemax", String(latest));
+            movieTrack.title = `Drag the fixed ${block.span}-frame context zone across the full source movie`;
+            const selectedZone = element(
+                "div", "h3studio-context-window", `${block.span}f`,
+            );
+            const playhead = element("div", "h3studio-context-playhead");
+            movieTrack.append(selectedZone, playhead);
             const rangeLabel = element("span", "h3studio-context-range-label");
+            const movieLength = element(
+                "span", "h3studio-context-movie-length",
+                `source movie · ${sourceRow.deliveredFrames}f · ${(sourceRow.deliveredFrames / FPS).toFixed(3)}s`,
+            );
             const error = element("div", "h3studio-error", rangeError);
             error.hidden = !rangeError;
-            const updateLabel = () => {
-                const selected = Number(range.value);
-                const end = selected + block.span;
-                rangeLabel.textContent = `frames ${selected + 1}–${end} · ${(selected / FPS).toFixed(3)}–${(end / FPS).toFixed(3)}s`;
+            let selectedStart = start;
+            const updateSelection = () => {
+                const layout = studioContextWindowLayout(
+                    sourceRow.deliveredFrames, block.span, selectedStart,
+                );
+                selectedStart = layout.start;
+                selectedZone.style.left = `${layout.leftFraction * 100}%`;
+                selectedZone.style.width = `${layout.widthFraction * 100}%`;
+                selectedZone.title = `${block.span} context frames · ${layout.start + 1}–${layout.end}`;
+                rangeLabel.textContent = `selected frames ${layout.start + 1}–${layout.end} · ${(layout.start / FPS).toFixed(3)}–${(layout.end / FPS).toFixed(3)}s`;
+                movieTrack.setAttribute("aria-valuenow", String(layout.start));
+                movieTrack.setAttribute(
+                    "aria-valuetext", `frames ${layout.start + 1} through ${layout.end}`,
+                );
             };
             const previewStart = () => {
                 if (!video || video.readyState < 1) return;
-                try { video.currentTime = Number(range.value) / FPS; }
+                try { video.currentTime = selectedStart / FPS; }
                 catch (_error) {}
             };
             const commitStart = () => {
-                const selected = Number(range.value);
-                if (selected === latest) delete shot[block.field];
+                if (selectedStart === latest) delete shot[block.field];
                 else {
-                    shot[block.field] = selected;
+                    shot[block.field] = selectedStart;
                     shot.video_blend_frames = 0;
                 }
                 error.hidden = true;
@@ -2370,14 +2406,68 @@ function mount(node) {
                 writePlan();
                 renderStatus();
             };
-            range.addEventListener("input", () => {
-                updateLabel();
-                previewStart();
+            const selectStart = (value, {seek = true, commit = false} = {}) => {
+                selectedStart = Math.max(0, Math.min(latest, Math.round(value)));
+                updateSelection();
+                if (seek) previewStart();
+                if (commit) commitStart();
+            };
+            let drag = null;
+            movieTrack.addEventListener("pointerdown", (event) => {
+                if (event.button !== 0) return;
+                event.preventDefault();
+                const bounds = movieTrack.getBoundingClientRect();
+                if (event.target !== selectedZone) {
+                    selectStart(studioContextWindowStartAtRatio(
+                        sourceRow.deliveredFrames,
+                        block.span,
+                        (event.clientX - bounds.left) / Math.max(1, bounds.width),
+                    ));
+                }
+                drag = {
+                    id:event.pointerId,
+                    x:event.clientX,
+                    start:selectedStart,
+                    width:Math.max(1, bounds.width),
+                };
+                movieTrack.classList.add("h3studio-dragging");
+                movieTrack.setPointerCapture(event.pointerId);
             });
-            range.addEventListener("change", commitStart);
-            rangeWrap.append(range, rangeLabel);
+            movieTrack.addEventListener("pointermove", (event) => {
+                if (!drag || drag.id !== event.pointerId) return;
+                const frameDelta = (
+                    (event.clientX - drag.x) / drag.width
+                ) * sourceRow.deliveredFrames;
+                selectStart(drag.start + frameDelta);
+            });
+            const finishDrag = (event) => {
+                if (!drag || drag.id !== event.pointerId) return;
+                drag = null;
+                movieTrack.classList.remove("h3studio-dragging");
+                try { movieTrack.releasePointerCapture(event.pointerId); }
+                catch (_error) {}
+                commitStart();
+            };
+            movieTrack.addEventListener("pointerup", finishDrag);
+            movieTrack.addEventListener("pointercancel", finishDrag);
+            movieTrack.addEventListener("keydown", (event) => {
+                let next = null;
+                const step = event.shiftKey ? 5 : 1;
+                if (event.key === "ArrowLeft") next = selectedStart - step;
+                else if (event.key === "ArrowRight") next = selectedStart + step;
+                else if (event.key === "PageUp") next = selectedStart - block.span;
+                else if (event.key === "PageDown") next = selectedStart + block.span;
+                else if (event.key === "Home") next = 0;
+                else if (event.key === "End") next = latest;
+                if (next === null) return;
+                event.preventDefault();
+                selectStart(next, {commit:true});
+            });
+            const rangeReadout = element("div", "h3studio-context-range-readout");
+            rangeReadout.append(movieLength, rangeLabel);
+            rangeWrap.append(movieTrack, rangeReadout);
             card.append(rangeWrap);
-            updateLabel();
+            updateSelection();
             if (video) {
                 video.addEventListener("loadedmetadata", previewStart, {once:true});
             }
@@ -2387,12 +2477,7 @@ function mount(node) {
                 "Set the context window's first frame from this player's current position",
                 () => {
                     if (!video) return;
-                    range.value = String(Math.max(
-                        0, Math.min(latest, Math.round(video.currentTime * FPS)),
-                    ));
-                    updateLabel();
-                    previewStart();
-                    commitStart();
+                    selectStart(video.currentTime * FPS, {commit:true});
                 },
             );
             usePlayhead.disabled = !video;
@@ -2405,16 +2490,19 @@ function mount(node) {
                         if (item !== video) item.pause();
                     }
                     const endSeconds = (
-                        Number(range.value) + block.span
+                        selectedStart + block.span
                     ) / FPS;
                     video.dataset.contextEnd = String(endSeconds);
-                    video.currentTime = Number(range.value) / FPS;
+                    video.currentTime = selectedStart / FPS;
                     try { await video.play(); } catch (_error) {}
                 },
             );
             playSelection.disabled = !video;
             if (video) {
                 video.addEventListener("timeupdate", () => {
+                    playhead.style.left = `${Math.max(0, Math.min(
+                        1, video.currentTime * FPS / sourceRow.deliveredFrames,
+                    )) * 100}%`;
                     const end = Number(video.dataset.contextEnd);
                     if (Number.isFinite(end) && video.currentTime >= end) {
                         delete video.dataset.contextEnd;
@@ -2427,10 +2515,7 @@ function mount(node) {
                 "Tail (default)",
                 "Use the final source frames and remove the stored override",
                 () => {
-                    range.value = String(latest);
-                    updateLabel();
-                    previewStart();
-                    commitStart();
+                    selectStart(latest, {commit:true});
                 },
             );
             actions.append(usePlayhead, playSelection, tail);

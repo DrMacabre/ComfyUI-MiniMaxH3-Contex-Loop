@@ -9,6 +9,8 @@ import {
     matchingStudioSourceAudio,
     matchingStudioSourceScene,
     studioCheckpointSignature,
+    studioContextWindowLayout,
+    studioContextWindowStartAtRatio,
     studioSceneStartSeconds,
     studioSourceAudioSecond,
     studioSourceSecond,
@@ -54,6 +56,16 @@ assert.ok(expandedTimeline.widths.every(
 ));
 assert.equal(studioTimelineLayout(rows, 600, .25).zoom, 1);
 assert.equal(studioTimelineLayout(rows, 600, 20).zoom, 6);
+
+const contextWindow = studioContextWindowLayout(340, 39, 100);
+assert.deepEqual(contextWindow, {
+    delivered:340, span:39, latest:301, start:100, end:139,
+    leftFraction:100 / 340, widthFraction:39 / 340,
+});
+assert.equal(studioContextWindowLayout(340, 39, 999).start, 301);
+assert.equal(studioContextWindowStartAtRatio(340, 39, 0), 0);
+assert.equal(studioContextWindowStartAtRatio(340, 39, .5), 151);
+assert.equal(studioContextWindowStartAtRatio(340, 39, 1), 301);
 
 const checkpoints = new Map([[1, {
     scene:1, scene_id:"one", ready:true, delivered_frames:362,
@@ -165,6 +177,8 @@ assert.match(source, /renderContextPanel/);
 assert.match(source, /Tail \(default\)/);
 assert.match(source, /Start at playhead/);
 assert.match(source, /Play selection/);
+assert.match(source, /h3studio-context-window/);
+assert.match(source, /studioContextWindowStartAtRatio/);
 assert.match(source, /visual_context_start_frame/);
 assert.match(source, /visual_context_lead_start_frame/);
 assert.match(source, /Composed context first source/);

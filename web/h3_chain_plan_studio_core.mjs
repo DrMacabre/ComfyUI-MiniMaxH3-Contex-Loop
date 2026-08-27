@@ -32,6 +32,43 @@ export function matchingStudioCheckpoint(checkpoints, index, timingRow) {
     return item;
 }
 
+export function studioContextWindowLayout(
+    deliveredFrames, spanFrames, startFrame,
+) {
+    const delivered = Number(deliveredFrames);
+    const span = Number(spanFrames);
+    const requestedStart = Number(startFrame);
+    if (!Number.isInteger(delivered) || delivered < 1
+            || !Number.isInteger(span) || span < 1 || span > delivered) {
+        throw new Error("Context window must fit inside delivered source frames.");
+    }
+    const latest = delivered - span;
+    const start = Number.isInteger(requestedStart)
+        ? Math.max(0, Math.min(latest, requestedStart)) : latest;
+    return {
+        delivered,
+        span,
+        latest,
+        start,
+        end:start + span,
+        leftFraction:start / delivered,
+        widthFraction:span / delivered,
+    };
+}
+
+export function studioContextWindowStartAtRatio(
+    deliveredFrames, spanFrames, ratio,
+) {
+    const layout = studioContextWindowLayout(
+        deliveredFrames, spanFrames, 0,
+    );
+    const position = Math.max(0, Math.min(1, Number(ratio) || 0));
+    return Math.max(0, Math.min(
+        layout.latest,
+        Math.round(position * layout.delivered - layout.span / 2),
+    ));
+}
+
 export function studioSceneStartSeconds(rows, index) {
     const bounded = Math.max(0, Math.min(
         Array.isArray(rows) ? rows.length : 0,

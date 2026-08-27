@@ -92,9 +92,11 @@ scenes remain assembly-only and do not become false resume blockers.
 ### Selecting a source segment instead of its tail
 
 Plan Studio's **Context** tab previews the complete delivered video for every
-visual context block. Move the range, use the player's current frame as its
-start, and play only the selected window. **Tail (default)** removes the
-override and preserves the historical direct-latent path.
+visual context block. The highlighted zone is the actual fixed-size context
+window: its width is proportional to the configured frame span. Drag that
+zone across the full movie, place it at the player's current frame, or play
+only the selected window. **Tail (default)** removes the override and
+preserves the historical direct-latent path.
 
 The stored values are zero-based frame indexes within the source scene's
 delivered video (after that source's own incoming overlap was trimmed):
