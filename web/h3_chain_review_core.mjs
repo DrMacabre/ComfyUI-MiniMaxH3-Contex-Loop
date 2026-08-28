@@ -54,6 +54,26 @@ export function reviewDurationText(rawFrames) {
     return (length / FPS).toFixed(6).replace(/0+$/, "").replace(/\.$/, "");
 }
 
+export function reviewFrameLength(value) {
+    const length = Number(value);
+    if (!Number.isInteger(length) || length < 1 || length > MAX_H3_FRAMES) {
+        throw new Error(`Final frame count must be an integer between 1 and ${MAX_H3_FRAMES}.`);
+    }
+    return length;
+}
+
+export function reviewFrameLengthText(value) {
+    return String(reviewFrameLength(value));
+}
+
+export function reviewAcceptedFrameLength(payload, fallback = null) {
+    for (const value of [payload?.requested_frames, payload?.delivered_frames, fallback]) {
+        if (value === null || value === undefined || value === "") continue;
+        return reviewFrameLength(value);
+    }
+    throw new Error("Review response does not expose an exact final frame count.");
+}
+
 export function reviewPlanScenePrompt(plan, oneBasedIndex, shotId = "") {
     if (!Array.isArray(plan?.shots)) return null;
     const index = Number(oneBasedIndex) - 1;
@@ -63,6 +83,19 @@ export function reviewPlanScenePrompt(plan, oneBasedIndex, shotId = "") {
         : null) ?? (Number.isInteger(index) ? plan.shots[index] : null);
     if (!shot) return null;
     return promptValueToText(shot.prompt);
+}
+
+export function reviewPlanSceneLength(plan, oneBasedIndex, shotId = "") {
+    if (!Array.isArray(plan?.shots)) return null;
+    const index = Number(oneBasedIndex) - 1;
+    const wantedId = String(shotId ?? "").trim();
+    const shot = (wantedId
+        ? plan.shots.find((item) => String(item?.id ?? "").trim() === wantedId)
+        : null) ?? (Number.isInteger(index) ? plan.shots[index] : null);
+    if (!shot) return null;
+    const value = shot.length ?? shot.frames;
+    if (value === null || value === undefined || value === "") return null;
+    return reviewFrameLength(value);
 }
 
 export function applyReviewEdit(plan, oneBasedIndex, scenePrompt, seed, length = null) {
@@ -78,12 +111,7 @@ export function applyReviewEdit(plan, oneBasedIndex, scenePrompt, seed, length =
     plan.shots[index].prompt = promptTextToLines(prompt);
     plan.shots[index].seed = normalizedSeed;
     if (length !== null && length !== undefined) {
-        const normalizedLength = Number(length);
-        if (!Number.isInteger(normalizedLength) || normalizedLength < 5
-                || normalizedLength > MAX_H3_FRAMES
-                || normalizedLength % 17 !== 5) {
-            throw new Error("Length must be an H3-valid frame count (17k+5).");
-        }
+        const normalizedLength = reviewFrameLength(length);
         plan.shots[index].length = normalizedLength;
         delete plan.shots[index].frames;
         delete plan.shots[index].duration_seconds;
@@ -211,10 +239,16 @@ export function applyCheckpointRevisionSet(plan, revisions, {
         if (!Number.isInteger(scene) || index < 0 || index >= plan.shots.length) {
             throw new Error("A restored checkpoint scene is outside the active Plan.");
         }
-        const length = Number(revision.raw_frames);
-        if (!Number.isInteger(length) || length < 5 || length > MAX_H3_FRAMES
-                || length % 17 !== 5) {
-            throw new Error(`Restored scene ${scene} has an invalid H3 frame length.`);
+        const hasExactLength = revision.requested_frames !== null
+            && revision.requested_frames !== undefined
+            || revision.delivered_frames !== null
+            && revision.delivered_frames !== undefined;
+        const length = hasExactLength
+            ? reviewAcceptedFrameLength(revision)
+            : Number(revision.raw_frames);
+        if (!hasExactLength && (!Number.isInteger(length) || length < 5
+                || length > MAX_H3_FRAMES || length % 17 !== 5)) {
+            throw new Error(`Restored legacy scene ${scene} has an invalid H3 frame length.`);
         }
         const steps = Number(revision.steps);
         if (!Number.isInteger(steps) || steps < 1) {

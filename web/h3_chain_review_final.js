@@ -16,10 +16,12 @@ import {
     applyReviewEdit,
     checkpointRevisionChain,
     checkpointResumeOptions,
+    reviewAcceptedFrameLength,
     reviewCountdown,
-    reviewDuration,
-    reviewDurationText,
+    reviewFrameLength,
+    reviewFrameLengthText,
     reviewLocalDeadline,
+    reviewPlanSceneLength,
     reviewPlanScenePrompt,
     reviewSeed,
 } from "./h3_chain_review_core.mjs?v=0.6.37";
@@ -381,6 +383,26 @@ function planScenePrompt(reviewNode, review) {
     }
 }
 
+function planSceneLength(reviewNode, review) {
+    try {
+        const planNode = upstreamPlanNode(reviewNode);
+        const widget = widgetByName(planNode, "plan_json");
+        if (!widget) return null;
+        return reviewPlanSceneLength(
+            parsePlanJson(String(widget.value ?? "")),
+            review?.clip_index,
+            review?.shot_id,
+        );
+    } catch (_error) {
+        return null;
+    }
+}
+
+function exactResponseLength(reviewNode, review, payload, fallback = null) {
+    const authored = fallback ?? planSceneLength(reviewNode, review);
+    return reviewAcceptedFrameLength(payload, authored);
+}
+
 function updatePlanFromCheckpointRevisions(reviewNode, revisions) {
     const planNode = upstreamPlanNode(reviewNode);
     const widget = planNode?.widgets?.find((item) => item.name === "plan_json");
@@ -524,8 +546,13 @@ async function activateAcceptedCandidate(reviewNode, submittedReview, body) {
                 "immediately; the selection remains armed at the safe boundary.",
         };
     }
+    const acceptedLength = exactResponseLength(
+        reviewNode,
+        {clip_index: clipIndex, scene_id: body.scene_id ?? ""},
+        body,
+    );
     const saved = updatePlan(
-        reviewNode, clipIndex, body.scene_prompt, body.seed, body.length);
+        reviewNode, clipIndex, body.scene_prompt, body.seed, acceptedLength);
     if (!saved) {
         return {
             immediate: false,
@@ -902,15 +929,15 @@ function mount(node) {
     seedField.append(seed);
     const durationField = document.createElement("label");
     durationField.className = "h3r-field h3r-field-duration";
-    durationField.append("Duration (s)");
+    durationField.append("Final frames");
     const duration = document.createElement("input");
     duration.className = "h3r-duration";
     duration.type = "number";
-    duration.inputMode = "decimal";
-    duration.min = String(5 / 24);
-    duration.max = String(3592 / 24);
-    duration.step = String(17 / 24);
-    duration.title = "Generated scene duration. Retry and Reroll round this upward to H3's exact 17k+5 frame grid, revise the full Plan, and retime downstream scenes. Prompt wording and written timestamps are not changed.";
+    duration.inputMode = "numeric";
+    duration.min = "1";
+    duration.max = "3592";
+    duration.step = "1";
+    duration.title = "Exact final timeline frame count. H3 raw 17k+5 padding is computed internally and never replaces this authored duration.";
     durationField.append(duration);
     seedRow.append(seedField, durationField);
 
@@ -1608,8 +1635,8 @@ function mount(node) {
                     ?? submittedReview.scene_prompt
                     ?? prompt.value);
             const normalizedSeed = action === "retry" ? reviewSeed(seed.value) : seed.value;
-            const normalizedDuration = action === "retry" || action === "reroll"
-                ? reviewDuration(duration.value) : null;
+            const normalizedLength = action === "retry" || action === "reroll"
+                ? reviewFrameLength(duration.value) : null;
             stopCountdown();
             root.classList.add("h3r-busy");
             setActionsEnabled(false);
@@ -1631,7 +1658,7 @@ function mount(node) {
                     action: candidateBatchAction || action,
                     scene_prompt: submittedPrompt,
                     seed: normalizedSeed,
-                    length: normalizedDuration?.length,
+                    length: normalizedLength,
                     candidate_revision: (candidateBatchAction === "accept" ||
                             action === "approve" || action === "stop") &&
                             Number(submittedReview.candidate_count) > 1
@@ -1673,8 +1700,11 @@ function mount(node) {
                     `${body.kept_candidate_count === 1 ? " is" : "s are"} retained.`;
             } else if (action === "approve") {
                 const selected = Number(body.candidate_count) > 1;
+                const acceptedLength = selected
+                    ? exactResponseLength(node, submittedReview, body)
+                    : null;
                 const saved = selected && updatePlan(
-                    node, submittedIndex, body.scene_prompt, body.seed, body.length);
+                    node, submittedIndex, body.scene_prompt, body.seed, acceptedLength);
                 status.textContent = submittedReview.unload_models_while_waiting
                     ? "Approval received — workflow is resuming and reloading the model stack."
                     : "Approval received — workflow resumed.";
@@ -1686,21 +1716,26 @@ function mount(node) {
             } else if (action === "retry" || action === "reroll") {
                 const acceptedPrompt = typeof body.scene_prompt === "string"
                     ? body.scene_prompt : submittedPrompt.trim();
-                const acceptedDuration = reviewDurationText(body.length);
+                const acceptedLength = exactResponseLength(
+                    node, submittedReview, body, normalizedLength);
+                const acceptedFrames = reviewFrameLengthText(acceptedLength);
                 const saved = updatePlan(
-                    node, submittedIndex, acceptedPrompt, body.seed, body.length);
+                    node, submittedIndex, acceptedPrompt, body.seed, acceptedLength);
                 if (current?.token === submittedToken) {
                     prompt.value = acceptedPrompt;
                     promptEditedInGate = false;
                     seed.value = body.seed;
-                    duration.value = acceptedDuration;
+                    duration.value = acceptedFrames;
                 }
-                status.textContent = `Retrying scene with seed ${body.seed} at ${body.length} frames (${acceptedDuration}s).` +
+                status.textContent = `Retrying scene with seed ${body.seed} at ${acceptedLength} final frames.` +
                     (saved ? " The Plan editor was updated." : "");
             } else if (action === "stop") {
                 const selected = Number(body.candidate_count) > 1;
+                const acceptedLength = selected
+                    ? exactResponseLength(node, submittedReview, body)
+                    : null;
                 const saved = selected && updatePlan(
-                    node, submittedIndex, body.scene_prompt, body.seed, body.length);
+                    node, submittedIndex, body.scene_prompt, body.seed, acceptedLength);
                 const prepared = submittedReview.clip_index < submittedReview.clip_count &&
                     prepareResume(node, submittedReview.clip_index + 1);
                 status.textContent = (submittedReview.assemble_partial_on_stop
@@ -1774,7 +1809,8 @@ function mount(node) {
             prompt.value = data.scene_prompt ?? "";
             promptEditedInGate = false;
             seed.value = data.seed ?? "";
-            duration.value = reviewDurationText(data.raw_frames);
+            duration.value = reviewFrameLengthText(
+                exactResponseLength(node, data, data));
             prefix.textContent = data.prompt_prefix ?
                 `Shared prompt (unchanged)\n${data.prompt_prefix}` : "";
             prefix.hidden = !data.prompt_prefix;

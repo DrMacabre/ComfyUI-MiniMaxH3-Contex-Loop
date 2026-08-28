@@ -323,8 +323,8 @@ assert.match(
 assert.match(reviewSource, /revision\.scene < selectedResumeScene/);
 assert.match(reviewSource, /data\.final_video \?\? data\.partial_video/);
 assert.match(reviewSource, /final assembled video/);
-assert.match(reviewSource, /Duration \(s\)/);
-assert.match(reviewSource, /body\.length/);
+assert.match(reviewSource, /Final frames/);
+assert.match(reviewSource, /length: normalizedLength/);
 const submitStart = reviewSource.indexOf("async function submit");
 const submitSource = reviewSource.slice(
     submitStart,
@@ -337,14 +337,16 @@ assert.match(submitSource, /reviewPromptEditorEnabled\(\)/);
 assert.match(submitSource, /planScenePrompt/);
 assert.match(submitSource, /token: submittedToken/);
 assert.match(submitSource, /scene_prompt: submittedPrompt/);
-assert.match(
+assert.doesNotMatch(
     submitSource,
     /updatePlan\(\s*node, submittedIndex, acceptedPrompt, body\.seed, body\.length\)/,
 );
 assert.match(reviewSource, /publishCompanionPrompt/);
 assert.match(reviewSource, /publishPlanCompanionScene/);
 assert.match(reviewSource, /_h3PromptCompanionSetScenePrompt/);
-assert.match(reviewSource, /reviewDurationText\(data\.raw_frames\)/);
+assert.doesNotMatch(reviewSource, /reviewDurationText\(data\.raw_frames\)/);
+assert.match(reviewSource, /durationField\.append\("Final frames"\)/);
+assert.match(reviewSource, /exactResponseLength/);
 assert.match(reviewSource, /h3r-video-panel/);
 assert.match(reviewSource, /checkpoint-revisions\/restore/);
 assert.match(reviewSource, /checkpoint-revisions\/delete-preview/);
