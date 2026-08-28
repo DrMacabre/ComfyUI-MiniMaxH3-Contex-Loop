@@ -48,6 +48,7 @@ _ORIG_RECURSE = _chain.MiniMaxH3ChainLoopEnd._recurse
 _ORIG_BLEND_VIDEO_RECORDS = _chain._blend_video_records
 _ORIG_GENERATED_AUDIO = _chain._generated_audio
 _ORIG_SELECT_REVIEW_CANDIDATE = _chain._select_review_candidate
+_ORIG_REVIEW_VIDEO = _chain._review_video
 
 
 def _validate_requested_frame_length(length: Any, label: str) -> int:
@@ -785,6 +786,21 @@ def _select_review_candidate_exact(
         _SELECTED_REVIEW_REQUESTED.reset(token)
 
 
+
+def _review_video_exact(
+        plan: dict[str, Any], segment: dict[str, Any], audio: Any,
+        retain_previous: bool = False):
+    """Use exact delivered duration for Review without mutating saved RAW AV."""
+    if audio is not None and isinstance(segment, dict):
+        delivered = int(segment.get(
+            "delivered_frames",
+            int(segment.get("raw_frames", 0)) -
+            int(segment.get("tail_trim_frames", 0))))
+        if delivered > 0:
+            audio = _trim_audio_to_frames(audio, delivered)
+    return _ORIG_REVIEW_VIDEO(
+        plan, segment, audio, retain_previous=retain_previous)
+
 def install() -> str:
     if getattr(_chain, "_FFL_EXACT_FINAL_TIMELINE_BUILD", None) == BUILD:
         return BUILD
@@ -804,6 +820,7 @@ def install() -> str:
     _chain._blend_video_records = _blend_video_records_exact
     _chain._generated_audio = _generated_audio_exact
     _chain._select_review_candidate = _select_review_candidate_exact
+    _chain._review_video = _review_video_exact
 
     _chain.MiniMaxH3ChainCurrent.current = _current_exact
     _chain.MiniMaxH3ChainSegmentSave.save = _segment_save_exact
