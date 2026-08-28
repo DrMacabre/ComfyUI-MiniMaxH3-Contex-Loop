@@ -1,0 +1,63 @@
+name: FFL 0.6.37 exact-final review audio
+
+on:
+  push:
+    branches:
+      - fool-for-love-upstream-0.6.37
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fool-for-love-upstream-0.6.37
+          fetch-depth: 0
+      - name: Apply focused Exact Final Timeline Review audio patch
+        run: python tools/ffl_patch_exact_review_audio_0637.py
+      - name: Compile backend
+        run: python -m py_compile chain_nodes.py exact_final_timeline.py exact_final_timeline_continuation_0637.py
+      - name: Verify exact-final timeline port regression
+        env:
+          PYTHONPATH: .
+        run: python tests/_exact_final_timeline_port_probe.py
+      - name: Verify continuation sanitation regression
+        env:
+          PYTHONPATH: .
+        run: python tests/_exact_final_timeline_continuation_0637_unit_test.py
+      - name: Verify frontend exact-final regression
+        run: node tests/_plan_editor_js_test.mjs
+      - name: Focused Review-audio contract assertions
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          text = Path('exact_final_timeline.py').read_text(encoding='utf-8')
+          required = [
+              '_ORIG_REVIEW_VIDEO = _chain._review_video',
+              'def _review_video_exact(',
+              'audio = _trim_audio_to_frames(audio, delivered)',
+              '_chain._review_video = _review_video_exact',
+          ]
+          missing = [item for item in required if item not in text]
+          if missing:
+              raise SystemExit('missing review-audio contract: ' + repr(missing))
+          print('PASS exact-final Review audio contract')
+          PY
+      - name: Diff hygiene
+        run: |
+          git diff --check
+          git diff -- exact_final_timeline.py
+      - name: Commit validated backend fix when needed
+        run: |
+          if git diff --quiet -- exact_final_timeline.py; then
+            echo "Exact-final Review audio patch already committed."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add exact_final_timeline.py
+          git commit -m "fix: conform exact-final Review audio to delivered frames"
+          git push origin HEAD:fool-for-love-upstream-0.6.37
