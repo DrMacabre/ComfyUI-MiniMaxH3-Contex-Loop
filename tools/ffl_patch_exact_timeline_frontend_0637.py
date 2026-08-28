@@ -23,6 +23,15 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
 
 core = CORE.read_text(encoding="utf-8")
 
+# JavaScript '%' preserves the sign of the dividend. Normalize the wrap so
+# residues above 5 round UP to the next native 17k+5 boundary instead of down.
+core = replace_once(
+    core,
+    '    const length = requested + ((5 - (requested % 17)) % 17);',
+    '    const length = requested + (((5 - (requested % 17)) + 17) % 17);',
+    "native H3 modulo normalization",
+)
+
 core = replace_once(
     core,
     '    const replacement = mode === "frames" ? h3FrameLength(currentSeconds)\n'
@@ -91,7 +100,7 @@ export function quantizedH3Delivery(deliveredFrames, repeatedHeadFrames = 0) {
         throw new Error("Repeated head context must be a non-negative integer.");
     }
     const targetRaw = delivered + repeatedHead;
-    let raw = targetRaw + ((5 - (targetRaw % 17)) % 17);
+    let raw = targetRaw + (((5 - (targetRaw % 17)) + 17) % 17);
     raw = Math.max(5, raw);
     if (raw > MAX_H3_FRAMES) {
         throw new Error(
@@ -191,6 +200,8 @@ replacements = [
      'assert.deepEqual(requestedSecondsShot, {duration_seconds: 10});'),
     ('assert.deepEqual(inheritedLengthShot, {length: 362});',
      'assert.deepEqual(inheritedLengthShot, {length: 360});'),
+    ('assert.equal(h3FrameLength(15), 362);',
+     'assert.equal(h3FrameLength(15), 362);\nassert.equal(h3FrameLength(7), 175);'),
     ('assert.throws(() => validateH3Length(240), /length % 17/);',
      'assert.throws(() => validateH3Length(240), /length % 17/);\n'
      'const exactFinalTiming = calculatePlanTiming({shots:[\n'
