@@ -3069,11 +3069,21 @@ def _tagged_audio_reference_value(
             entry.get("tag", "audio"))
     expected_hash = str(compatibility.get("source_audio_hash") or "")
     entry_hash = str(entry.get("content_hash") or "")
+    timeline_content_hash = ""
+    source_timeline = state.get("source_timeline")
+    if source_timeline is not None:
+        source_timeline = _validate_source_timeline(
+            source_timeline, require_runtime=True)
+        timeline_content_hash = str(
+            source_timeline["audio"].get("content_sha256") or "")
     if not expected_hash or expected_hash == "none":
         raise ValueError(
             "Tagged audio @%s source_timeline has no Loop Start source-audio "
             "fingerprint to validate." % entry.get("tag", "audio"))
-    if not entry_hash or entry_hash != expected_hash:
+    accepted_hashes = {expected_hash}
+    if timeline_content_hash:
+        accepted_hashes.add(timeline_content_hash)
+    if not entry_hash or entry_hash not in accepted_hashes:
         raise ValueError(
             "Tagged audio @%s source_timeline received a different full "
             "source track than H3 Chain Loop Start. Wire the same Load Audio "
