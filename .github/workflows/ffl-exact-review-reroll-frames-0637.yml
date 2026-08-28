@@ -1,0 +1,78 @@
+name: FFL 0.6.37 exact Review reroll frames
+
+on:
+  push:
+    branches:
+      - fool-for-love-upstream-0.6.37
+
+permissions:
+  contents: write
+
+jobs:
+  patch-test-commit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fool-for-love-upstream-0.6.37
+          fetch-depth: 0
+      - name: Apply focused Review requested/raw separation patch
+        run: python tools/ffl_patch_exact_review_reroll_frames_0637.py
+      - name: Compile exact backend overlays
+        run: python -m py_compile exact_final_timeline.py exact_final_timeline_continuation_0637.py
+      - name: Existing Review frontend regression
+        run: node tests/_chain_review_js_test.mjs
+      - name: Exact 129 requested / 141 raw reroll regression
+        run: node tests/_ffl_review_exact_reroll_0637_test.mjs
+      - name: Existing Plan frontend regression
+        run: node tests/_plan_editor_js_test.mjs
+      - name: Existing continuation sanitation regression
+        env:
+          PYTHONPATH: .
+        run: python tests/_exact_final_timeline_continuation_0637_unit_test.py
+      - name: Review exact-frame source assertions
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          core = Path('web/h3_chain_review_core.mjs').read_text(encoding='utf-8')
+          final = Path('web/h3_chain_review_final.js').read_text(encoding='utf-8')
+          required_core = [
+              'export function reviewFrameLength(value)',
+              'export function reviewAcceptedFrameLength(payload, fallback = null)',
+              'export function reviewPlanSceneLength(plan, oneBasedIndex, shotId = "")',
+              'const normalizedLength = reviewFrameLength(length);',
+              'revision.requested_frames',
+          ]
+          required_final = [
+              'durationField.append("Final frames")',
+              'length: normalizedLength',
+              'exactResponseLength(',
+              'reviewFrameLengthText(',
+          ]
+          missing = [x for x in required_core if x not in core]
+          missing += [x for x in required_final if x not in final]
+          forbidden = [
+              'body.scene_prompt, body.seed, body.length',
+              'acceptedPrompt, body.seed, body.length',
+              'reviewDurationText(data.raw_frames)',
+          ]
+          present = [x for x in forbidden if x in final]
+          if missing or present:
+              raise SystemExit(f'missing={missing!r} forbidden_present={present!r}')
+          print('PASS Review exact-frame source assertions')
+          PY
+      - name: Diff hygiene
+        run: |
+          git diff --check
+          git diff -- web/h3_chain_review_core.mjs web/h3_chain_review_final.js
+      - name: Commit validated Review exact-frame fix when needed
+        run: |
+          if git diff --quiet -- web/h3_chain_review_core.mjs web/h3_chain_review_final.js; then
+            echo "Review exact-frame patch already committed."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add web/h3_chain_review_core.mjs web/h3_chain_review_final.js
+          git commit -m "fix: keep exact requested frames across Review rerolls"
+          git push origin HEAD:fool-for-love-upstream-0.6.37
