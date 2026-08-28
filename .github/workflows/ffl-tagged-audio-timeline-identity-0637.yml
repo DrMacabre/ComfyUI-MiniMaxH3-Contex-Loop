@@ -1,0 +1,39 @@
+name: FFL 0.6.37 tagged-audio timeline identity
+
+on:
+  push:
+    branches:
+      - fool-for-love-upstream-0.6.37
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fool-for-love-upstream-0.6.37
+          fetch-depth: 0
+      - name: Apply focused tagged-audio identity patch
+        run: python tools/ffl_patch_tagged_audio_timeline_identity_0637.py
+      - name: Compile backend
+        run: python -m py_compile chain_nodes.py exact_final_timeline.py exact_final_timeline_continuation_0637.py
+      - name: Verify exact-final frontend regression still passes
+        run: node tests/_plan_editor_js_test.mjs
+      - name: Verify continuation sanitation regression still passes
+        env:
+          PYTHONPATH: .
+        run: python tests/_exact_final_timeline_continuation_0637_unit_test.py
+      - name: Diff hygiene
+        run: |
+          git diff --check
+          git diff -- chain_nodes.py
+      - name: Commit validated backend fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add chain_nodes.py
+          git commit -m "fix: accept materialized Source Timeline audio identity"
+          git push origin HEAD:fool-for-love-upstream-0.6.37
