@@ -1,0 +1,46 @@
+name: FFL 0.6.37 exact-final frontend patch
+
+on:
+  push:
+    branches:
+      - fool-for-love-upstream-0.6.37
+    paths:
+      - tools/ffl_patch_exact_timeline_frontend_0637.py
+      - .github/workflows/ffl-exact-frontend-0637.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fool-for-love-upstream-0.6.37
+          fetch-depth: 0
+      - name: Apply surgical frontend patch
+        run: python tools/ffl_patch_exact_timeline_frontend_0637.py
+      - name: Focused Plan core regression
+        run: node tests/_plan_editor_js_test.mjs
+      - name: Plan Studio regression
+        run: node tests/_plan_studio_js_test.mjs
+      - name: Exact continuation regression
+        env:
+          PYTHONPATH: .
+        run: python tests/_exact_final_timeline_continuation_0637_unit_test.py
+      - name: Web cache-bust invariant
+        run: python tests/_web_cache_bust_unit_test.py
+      - name: Diff hygiene
+        run: git diff --check
+      - name: Commit validated frontend fix
+        run: |
+          if git diff --quiet; then
+            echo "No patch changes produced."
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add web/h3_chain_plan_core.mjs tests/_plan_editor_js_test.mjs
+          git commit -m "fix: align Plan Studio with exact final timeline"
+          git push origin HEAD:fool-for-love-upstream-0.6.37
