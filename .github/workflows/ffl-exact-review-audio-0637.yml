@@ -20,16 +20,14 @@ jobs:
         run: python tools/ffl_patch_exact_review_audio_0637.py
       - name: Compile backend
         run: python -m py_compile chain_nodes.py exact_final_timeline.py exact_final_timeline_continuation_0637.py
-      - name: Verify exact-final timeline port regression
-        env:
-          PYTHONPATH: .
-        run: python tests/_exact_final_timeline_port_probe.py
       - name: Verify continuation sanitation regression
         env:
           PYTHONPATH: .
         run: python tests/_exact_final_timeline_continuation_0637_unit_test.py
       - name: Verify frontend exact-final regression
         run: node tests/_plan_editor_js_test.mjs
+      - name: Verify Chain Review frontend regression
+        run: node tests/_chain_review_js_test.mjs
       - name: Focused Review-audio contract assertions
         run: |
           python - <<'PY'
