@@ -166,13 +166,13 @@ assert.deepEqual(exactLengthShot, {length: 209});
 
 const requestedSecondsShot = {duration_seconds: 10};
 setShotLengthMode(requestedSecondsShot, "frames", 15);
-assert.deepEqual(requestedSecondsShot, {length: 243});
+assert.deepEqual(requestedSecondsShot, {length: 240});
 setShotLengthMode(requestedSecondsShot, "seconds", 15);
-assert.deepEqual(requestedSecondsShot, {duration_seconds: 243 / 24});
+assert.deepEqual(requestedSecondsShot, {duration_seconds: 10});
 
 const inheritedLengthShot = {};
 setShotLengthMode(inheritedLengthShot, "frames", 15);
-assert.deepEqual(inheritedLengthShot, {length: 362});
+assert.deepEqual(inheritedLengthShot, {length: 360});
 setShotLengthMode(inheritedLengthShot, "default", 15);
 assert.deepEqual(inheritedLengthShot, {});
 
@@ -343,8 +343,18 @@ assert.equal(shorthandDefaults.shots[0].steps, 12);
 assert.equal(h3FrameLength(5), 124);
 assert.equal(h3FrameLength(10), 243);
 assert.equal(h3FrameLength(15), 362);
+assert.equal(h3FrameLength(7), 175);
 assert.equal(validateH3Length(260), 260);
 assert.throws(() => validateH3Length(240), /length % 17/);
+const exactFinalTiming = calculatePlanTiming({shots:[
+    {id:"exact_a", prompt:"A", length:240},
+    {id:"exact_b", prompt:"B", length:129},
+]}, {contextLength:39, anchorMode:"head", defaultDurationSeconds:5});
+assert.deepEqual(exactFinalTiming.errors, []);
+assert.deepEqual(exactFinalTiming.shots.map((shot) => shot.deliveredFrames), [240, 129]);
+assert.deepEqual(exactFinalTiming.shots.map((shot) => shot.rawFrames), [243, 175]);
+assert.deepEqual(exactFinalTiming.shots.map((shot) => shot.tailTrimFrames), [3, 7]);
+assert.equal(exactFinalTiming.totalFrames, 369);
 
 const timing = calculatePlanTiming(plan, {
     contextLength: 22,
@@ -355,10 +365,10 @@ const timing = calculatePlanTiming(plan, {
     defaultDurationSeconds: 5,
     defaultSteps: 10,
 });
-assert.deepEqual(timing.shots.map((shot) => shot.rawFrames), [362, 260]);
-assert.deepEqual(timing.shots.map((shot) => shot.deliveredFrames), [362, 238]);
-assert.equal(timing.shots[1].generationStartFrame, 340);
-assert.equal(timing.totalFrames, 600);
+assert.deepEqual(timing.shots.map((shot) => shot.rawFrames), [362, 294]);
+assert.deepEqual(timing.shots.map((shot) => shot.deliveredFrames), [360, 260]);
+assert.equal(timing.shots[1].generationStartFrame, 338);
+assert.equal(timing.totalFrames, 620);
 assert.deepEqual(timing.errors, []);
 assert.deepEqual(
     timing.shots.map((shot) => shot.continuationMode),
@@ -708,8 +718,8 @@ const longTiming = calculatePlanTiming(longPlan, {
     defaultDurationSeconds: 15,
     defaultSteps: 20,
 });
-assert.equal(longTiming.totalFrames, 4544);
-assert.equal(longTiming.totalSeconds, 189 + 1 / 3);
+assert.equal(longTiming.totalFrames, 4800);
+assert.equal(longTiming.totalSeconds, 200);
 assert.deepEqual(longTiming.errors, []);
 
 const nonlinearPlan = parsePlanJson(JSON.stringify({
@@ -807,18 +817,18 @@ assert.equal(composedTiming.shots[4].visualContextSource, 3);
 assert.equal(composedTiming.shots[4].visualContextLeadSource, 4);
 assert.equal(composedTiming.shots[4].visualContextLeadSourceId, "four");
 assert.equal(composedTiming.shots[4].visualContextLeadFrames, 5);
-assert.equal(composedTiming.shots[4].visualContextStartFrame, 17);
-assert.equal(composedTiming.shots[4].visualContextLeadStartFrame, 46);
+assert.equal(composedTiming.shots[4].visualContextStartFrame, 56);
+assert.equal(composedTiming.shots[4].visualContextLeadStartFrame, 85);
 const windowedComposition = structuredClone(composedPlan);
-windowedComposition.shots[4].visual_context_start_frame = 0;
-windowedComposition.shots[4].visual_context_lead_start_frame = 29;
+windowedComposition.shots[4].visual_context_start_frame = 5;
+windowedComposition.shots[4].visual_context_lead_start_frame = 17;
 const windowedTiming = calculatePlanTiming(windowedComposition, {
     contextLength:39, videoBlendFrames:0, anchorMode:"head",
     defaultDurationSeconds:5, defaultSteps:10,
 });
 assert.deepEqual(windowedTiming.errors, []);
-assert.equal(windowedTiming.shots[4].visualContextStartFrame, 0);
-assert.equal(windowedTiming.shots[4].visualContextLeadStartFrame, 29);
+assert.equal(windowedTiming.shots[4].visualContextStartFrame, 5);
+assert.equal(windowedTiming.shots[4].visualContextLeadStartFrame, 17);
 
 const sameSourceComposition = structuredClone(composedPlan);
 sameSourceComposition.shots[4].visual_context_lead_source = "three";

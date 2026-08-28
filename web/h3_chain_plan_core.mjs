@@ -563,7 +563,7 @@ export function h3FrameLength(seconds) {
         throw new Error("Duration must be a finite positive number.");
     }
     const requested = Math.max(5, Math.ceil(numeric * FPS - 1e-9));
-    const length = requested + ((5 - (requested % 17)) % 17);
+    const length = requested + (((5 - (requested % 17)) + 17) % 17);
     if (length > MAX_H3_FRAMES) {
         throw new Error(
             `Duration rounds to ${length} frames; H3's largest valid length is ${MAX_H3_FRAMES}.`,
@@ -606,7 +606,7 @@ export function setShotLengthMode(shot, mode, fallbackSeconds = 15) {
     // Compute the replacement before deleting the active representation. If
     // conversion fails (for example an out-of-range duration), the scene stays
     // untouched and the editor can continue to report the original problem.
-    const replacement = mode === "frames" ? h3FrameLength(currentSeconds)
+    const replacement = mode === "frames" ? requestedFrameLength(currentSeconds)
         : mode === "seconds" ? currentSeconds : null;
     delete shot.length;
     delete shot.frames;
@@ -918,21 +918,62 @@ export function validateH3Length(value) {
     const length = Number(value);
     if (!Number.isInteger(length) || length < 5 || length > MAX_H3_FRAMES || length % 17 !== 5) {
         throw new Error(
-            `Exact length must be 5..${MAX_H3_FRAMES} frames with length % 17 == 5.`,
+            `Native H3 length must be 5..${MAX_H3_FRAMES} frames with length % 17 == 5.`,
         );
     }
     return length;
 }
 
-function sceneRawFrames(shot, defaultDuration) {
+export function validateRequestedFrameLength(value, label = "Final length") {
+    const length = Number(value);
+    if (!Number.isInteger(length) || length < 1 || length > MAX_H3_FRAMES) {
+        throw new Error(
+            `${label} must be 1..${MAX_H3_FRAMES} exact final frames.`,
+        );
+    }
+    return length;
+}
+
+export function requestedFrameLength(seconds) {
+    const numeric = Number(seconds);
+    if (!Number.isFinite(numeric) || numeric <= 0) {
+        throw new Error("Duration must be a finite positive number.");
+    }
+    return validateRequestedFrameLength(
+        Math.max(1, Math.round(numeric * FPS)), "Final duration",
+    );
+}
+
+export function quantizedH3Delivery(deliveredFrames, repeatedHeadFrames = 0) {
+    const delivered = validateRequestedFrameLength(deliveredFrames);
+    const repeatedHead = Number(repeatedHeadFrames);
+    if (!Number.isInteger(repeatedHead) || repeatedHead < 0) {
+        throw new Error("Repeated head context must be a non-negative integer.");
+    }
+    const targetRaw = delivered + repeatedHead;
+    let raw = targetRaw + (((5 - (targetRaw % 17)) + 17) % 17);
+    raw = Math.max(5, raw);
+    if (raw > MAX_H3_FRAMES) {
+        throw new Error(
+            `Final length ${delivered} with ${repeatedHead} repeated context frames needs ${raw} raw frames; H3's largest valid native length is ${MAX_H3_FRAMES}.`,
+        );
+    }
+    return Object.freeze({
+        rawFrames: raw,
+        deliveredFrames: delivered,
+        tailTrimFrames: raw - repeatedHead - delivered,
+    });
+}
+
+function sceneRequestedFrames(shot, defaultDuration) {
     if (shot.length !== undefined && shot.length !== null && shot.length !== "") {
-        return validateH3Length(shot.length);
+        return validateRequestedFrameLength(shot.length, "Scene final length");
     }
     if (shot.frames !== undefined && shot.frames !== null && shot.frames !== "") {
-        return validateH3Length(shot.frames);
+        return validateRequestedFrameLength(shot.frames, "Scene final length");
     }
     const duration = shot.duration_seconds ?? defaultDuration;
-    return h3FrameLength(duration);
+    return requestedFrameLength(duration);
 }
 
 function validateSeed(seed) {
@@ -1207,32 +1248,37 @@ export function calculatePlanTiming(plan, settings = {}) {
             }
         }
 
+        let requestedFrames = 0;
         let rawFrames = 0;
+        let deliveredFrames = 0;
+        let tailTrimFrames = 0;
+        let generationStartFrame = stitchedFrames;
         try {
-            rawFrames = sceneRawFrames(shot, planDefaultDuration);
+            requestedFrames = sceneRequestedFrames(shot, planDefaultDuration);
+            const repeatedHeadFrames = index > 1 && anchorMode === "head"
+                ? sceneContext : 0;
+            const delivery = quantizedH3Delivery(
+                requestedFrames, repeatedHeadFrames,
+            );
+            rawFrames = delivery.rawFrames;
+            deliveredFrames = delivery.deliveredFrames;
+            tailTrimFrames = delivery.tailTrimFrames;
+            if (index > 1 && anchorMode === "head") {
+                generationStartFrame = stitchedFrames - sceneContext;
+            }
         } catch (error) {
             rowErrors.push(error.message);
-        }
-
-        let deliveredFrames = rawFrames;
-        let generationStartFrame = stitchedFrames;
-        if (index > 1 && anchorMode === "head") {
-            if (sceneContext > 0 && rawFrames <= sceneContext) {
-                rowErrors.push(
-                    `${rawFrames} raw frames are not longer than the ${sceneContext}-frame overlap.`,
-                );
-            }
-            deliveredFrames = Math.max(0, rawFrames - sceneContext);
-            generationStartFrame = stitchedFrames - sceneContext;
         }
 
         rows.push({
             index,
             id,
+            requestedFrames,
             rawFrames,
             rawSeconds: rawFrames / FPS,
             deliveredFrames,
             deliveredSeconds: deliveredFrames / FPS,
+            tailTrimFrames,
             generationStartFrame,
             contextLength: sceneContext,
             visualContextSource,
