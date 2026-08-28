@@ -17,7 +17,7 @@ jobs:
           ref: fool-for-love-upstream-0.6.37
           fetch-depth: 0
       - name: Apply focused Review requested/raw separation patch
-        run: python tools/ffl_patch_exact_review_reroll_frames_0637.py
+        run: python tools/ffl_patch_exact_review_reroll_frames_0637_v2.py
       - name: Compile exact backend overlays
         run: python -m py_compile exact_final_timeline.py exact_final_timeline_continuation_0637.py
       - name: Existing Review frontend regression
