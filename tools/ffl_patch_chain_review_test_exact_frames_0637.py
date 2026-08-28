@@ -3,6 +3,23 @@ from pathlib import Path
 path = Path("tests/_chain_review_js_test.mjs")
 text = path.read_text(encoding="utf-8")
 
+# The old test suite deliberately asserted the pre-Exact-Timeline Review UI.
+# Change only those assertions that encode the obsolete duration authority.
+old_duration = r'''assert.match(reviewSource, /Duration \(s\)/);'''
+new_duration = r'''assert.match(reviewSource, /Final frames/);'''
+if old_duration in text:
+    text = text.replace(old_duration, new_duration, 1)
+elif new_duration not in text:
+    raise SystemExit("Review duration-label assertion not found in expected old/new form")
+
+old_generic_length = r'''assert.match(reviewSource, /body\.length/);'''
+new_generic_length = r'''assert.match(reviewSource, /length: normalizedLength/);'''
+if old_generic_length in text:
+    text = text.replace(old_generic_length, new_generic_length, 1)
+elif new_generic_length not in text:
+    raise SystemExit("Review generic body.length assertion not found in expected old/new form")
+
+# The retry Plan write must no longer trust the ambiguous response body.length.
 body_needle = r"acceptedPrompt, body\.seed, body\.length"
 body_pos = text.find(body_needle)
 if body_pos < 0:
@@ -16,6 +33,7 @@ elif body_start_match >= 0:
 else:
     raise SystemExit("Review body.length assertion wrapper not found")
 
+# The Review editor must not initialize its authored exact duration from raw H3.
 raw_needle = r"reviewDurationText\(data\.raw_frames\)"
 raw_pos = text.find(raw_needle)
 if raw_pos < 0:
