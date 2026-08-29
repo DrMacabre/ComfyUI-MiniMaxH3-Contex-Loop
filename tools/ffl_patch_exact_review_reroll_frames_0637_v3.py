@@ -2,10 +2,14 @@ from pathlib import Path
 
 # First preserve/apply the existing exact requested-vs-raw Review contract.
 v2 = Path(__file__).with_name("ffl_patch_exact_review_reroll_frames_0637_v2.py")
-exec(compile(v2.read_text(encoding="utf-8"), str(v2), "exec"), {
-    "__name__": "__main__",
-    "__file__": str(v2),
-})
+try:
+    exec(compile(v2.read_text(encoding="utf-8"), str(v2), "exec"), {
+        "__name__": "__main__",
+        "__file__": str(v2),
+    })
+except SystemExit as exc:
+    if exc.code not in (0, None):
+        raise
 
 chain_path = Path("chain_nodes.py")
 final_path = Path("web/h3_chain_review_final.js")
