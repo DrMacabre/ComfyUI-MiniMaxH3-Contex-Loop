@@ -1,5 +1,7 @@
 from pathlib import Path
 
+# Validation trigger: run both Review workflows against the committed source,
+# not only the patcher's temporary working tree.
 # First preserve/apply the existing exact requested-vs-raw Review contract.
 v2 = Path(__file__).with_name("ffl_patch_exact_review_reroll_frames_0637_v2.py")
 try:
