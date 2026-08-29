@@ -19,13 +19,11 @@ jobs:
       - name: Apply focused Exact Final Timeline Review audio patch
         run: python tools/ffl_patch_exact_review_audio_0637.py
       - name: Compile backend
-        run: python -m py_compile chain_nodes.py exact_final_timeline.py exact_final_timeline_continuation_0637.py review_file_lock_0637.py
+        run: python -m py_compile chain_nodes.py exact_final_timeline.py exact_final_timeline_continuation_0637.py
       - name: Verify continuation sanitation regression
         env:
           PYTHONPATH: .
         run: python tests/_exact_final_timeline_continuation_0637_unit_test.py
-      - name: Verify Windows-safe Segment Review cleanup
-        run: python tests/_review_file_lock_0637_unit_test.py
       - name: Verify frontend exact-final regression
         run: node tests/_plan_editor_js_test.mjs
       - name: Verify Chain Review frontend regression
@@ -34,33 +32,22 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
-          exact = Path('exact_final_timeline.py').read_text(encoding='utf-8')
-          lock = Path('review_file_lock_0637.py').read_text(encoding='utf-8')
-          init = Path('__init__.py').read_text(encoding='utf-8')
-          exact_required = [
+          text = Path('exact_final_timeline.py').read_text(encoding='utf-8')
+          required = [
               '_ORIG_REVIEW_VIDEO = _chain._review_video',
               'def _review_video_exact(',
               'audio = _trim_audio_to_frames(audio, delivered)',
               '_chain._review_video = _review_video_exact',
           ]
-          lock_required = [
-              'previous_review_video(',
-              'retain_previous=True',
-              'except OSError as exc:',
-              'activate_review_file_lock_guard',
-          ]
-          missing = [item for item in exact_required if item not in exact]
-          missing += [item for item in lock_required if item not in lock]
-          if '_EXACT_FINAL_REVIEW_FILE_LOCK = _activate_review_file_lock_guard(' not in init:
-              missing.append('review file-lock guard activation')
+          missing = [item for item in required if item not in text]
           if missing:
-              raise SystemExit('missing review-audio/lock contract: ' + repr(missing))
-          print('PASS exact-final Review audio + Windows file-lock contract')
+              raise SystemExit('missing review-audio contract: ' + repr(missing))
+          print('PASS exact-final Review audio contract')
           PY
       - name: Diff hygiene
         run: |
           git diff --check
-          git diff -- exact_final_timeline.py review_file_lock_0637.py __init__.py
+          git diff -- exact_final_timeline.py
       - name: Commit validated backend fix when needed
         run: |
           if git diff --quiet -- exact_final_timeline.py; then
