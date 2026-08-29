@@ -16,16 +16,18 @@ jobs:
         with:
           ref: fool-for-love-upstream-0.6.37
           fetch-depth: 0
-      - name: Apply focused Review requested/raw separation patch
-        run: python tools/ffl_patch_exact_review_reroll_frames_0637_v2.py
+      - name: Apply focused Review requested/raw separation and seed-only reroll patch
+        run: python tools/ffl_patch_exact_review_reroll_frames_0637_v3.py
       - name: Update stale upstream Review regression expectations
         run: python tools/ffl_patch_chain_review_test_exact_frames_0637.py
-      - name: Compile exact backend overlays
-        run: python -m py_compile exact_final_timeline.py exact_final_timeline_continuation_0637.py
+      - name: Compile exact backend overlays and Review backend
+        run: python -m py_compile chain_nodes.py exact_final_timeline.py exact_final_timeline_continuation_0637.py
       - name: Existing Review frontend regression
         run: node tests/_chain_review_js_test.mjs
       - name: Exact 129 requested / 141 raw reroll regression
         run: node tests/_ffl_review_exact_reroll_0637_test.mjs
+      - name: Seed-only Reroll exact-frame regression
+        run: python tests/_ffl_review_reroll_seed_only_0637_test.py
       - name: Existing Plan frontend regression
         run: node tests/_plan_editor_js_test.mjs
       - name: Existing continuation sanitation regression
@@ -36,8 +38,14 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
+          chain = Path('chain_nodes.py').read_text(encoding='utf-8')
           core = Path('web/h3_chain_review_core.mjs').read_text(encoding='utf-8')
           final = Path('web/h3_chain_review_final.js').read_text(encoding='utf-8')
+          required_chain = [
+              '"current_requested_frames": int(shot.get(',
+              'pending.get("current_requested_frames",',
+              'review_length, "H3 review retry length"',
+          ]
           required_core = [
               'export function reviewFrameLength(value)',
               'export function reviewAcceptedFrameLength(payload, fallback = null)',
@@ -50,13 +58,18 @@ jobs:
               'length: normalizedLength',
               'exactResponseLength(',
               'reviewFrameLengthText(',
+              'const normalizedLength = action === "retry"',
+              ': action === "reroll"',
+              '? exactResponseLength(node, submittedReview, submittedReview)',
           ]
-          missing = [x for x in required_core if x not in core]
+          missing = [x for x in required_chain if x not in chain]
+          missing += [x for x in required_core if x not in core]
           missing += [x for x in required_final if x not in final]
           forbidden = [
               'body.scene_prompt, body.seed, body.length',
               'acceptedPrompt, body.seed, body.length',
               'reviewDurationText(data.raw_frames)',
+              'const normalizedLength = action === "retry" || action === "reroll"',
           ]
           present = [x for x in forbidden if x in final]
           if missing or present:
@@ -66,15 +79,15 @@ jobs:
       - name: Diff hygiene
         run: |
           git diff --check
-          git diff -- web/h3_chain_review_core.mjs web/h3_chain_review_final.js tests/_chain_review_js_test.mjs
+          git diff -- chain_nodes.py web/h3_chain_review_core.mjs web/h3_chain_review_final.js tests/_chain_review_js_test.mjs
       - name: Commit validated Review exact-frame fix when needed
         run: |
-          if git diff --quiet -- web/h3_chain_review_core.mjs web/h3_chain_review_final.js tests/_chain_review_js_test.mjs; then
+          if git diff --quiet -- chain_nodes.py web/h3_chain_review_core.mjs web/h3_chain_review_final.js tests/_chain_review_js_test.mjs; then
             echo "Review exact-frame patch already committed."
             exit 0
           fi
           git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add web/h3_chain_review_core.mjs web/h3_chain_review_final.js tests/_chain_review_js_test.mjs
-          git commit -m "fix: keep exact requested frames across Review rerolls"
+          git config user.email "4189823+github-actions[bot]@users.noreply.github.com"
+          git add chain_nodes.py web/h3_chain_review_core.mjs web/h3_chain_review_final.js tests/_chain_review_js_test.mjs
+          git commit -m "fix: make Review reroll seed preserve exact frames"
           git push origin HEAD:fool-for-love-upstream-0.6.37
