@@ -66,6 +66,18 @@ from .exact_final_timeline_continuation_0637 import (
 _EXACT_FINAL_TIMELINE_CONTINUATION = _activate_exact_continuation(
     _exact_final_timeline_chain)
 
+# Windows may transiently lock an older browser-facing Review MP4.  A sharing
+# violation while deleting that disposable stale cache must not downgrade an
+# already-successful synchronized Review mux to the silent fallback.  This guard
+# wraps only _safe_unlink for final clip_*.review.mp4 cache paths; it does not
+# alter _review_video or retain_previous behavior.
+from .review_cleanup_win32_0637 import (
+    activate_review_cleanup_win32_guard as _activate_review_cleanup_win32_guard,
+)
+
+_EXACT_FINAL_REVIEW_CLEANUP_WIN32 = _activate_review_cleanup_win32_guard(
+    _exact_final_timeline_chain)
+
 from .upscale_nodes import (
     UPSCALE_NODE_CLASS_MAPPINGS,
     UPSCALE_NODE_DISPLAY_NAME_MAPPINGS,
