@@ -66,6 +66,16 @@ from .exact_final_timeline_continuation_0637 import (
 _EXACT_FINAL_TIMELINE_CONTINUATION = _activate_exact_continuation(
     _exact_final_timeline_chain)
 
+# Segment Review MP4s are browser-facing cache.  Windows may keep a previously
+# displayed review file open; stale-cache cleanup must never invalidate a new
+# synchronized Review mux or its already-valid segment/checkpoint.
+from .review_file_lock_0637 import (
+    activate_review_file_lock_guard as _activate_review_file_lock_guard,
+)
+
+_EXACT_FINAL_REVIEW_FILE_LOCK = _activate_review_file_lock_guard(
+    _exact_final_timeline_chain)
+
 from .upscale_nodes import (
     UPSCALE_NODE_CLASS_MAPPINGS,
     UPSCALE_NODE_DISPLAY_NAME_MAPPINGS,
