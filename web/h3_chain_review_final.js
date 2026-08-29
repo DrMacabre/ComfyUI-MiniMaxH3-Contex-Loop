@@ -1635,8 +1635,11 @@ function mount(node) {
                     ?? submittedReview.scene_prompt
                     ?? prompt.value);
             const normalizedSeed = action === "retry" ? reviewSeed(seed.value) : seed.value;
-            const normalizedLength = action === "retry" || action === "reroll"
-                ? reviewFrameLength(duration.value) : null;
+            const normalizedLength = action === "retry"
+                ? reviewFrameLength(duration.value)
+                : action === "reroll"
+                    ? exactResponseLength(node, submittedReview, submittedReview)
+                    : null;
             stopCountdown();
             root.classList.add("h3r-busy");
             setActionsEnabled(false);

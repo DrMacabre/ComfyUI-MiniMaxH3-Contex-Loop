@@ -16690,6 +16690,9 @@ class MiniMaxH3ChainReview:
             "plan": plan,
             "current_seed": int(shot["seed"]),
             "current_length": int(shot["raw_frames"]),
+            "current_requested_frames": int(shot.get(
+                "requested_frames",
+                shot.get("delivered_frames", shot["raw_frames"]))),
             "candidates": candidates,
         }
         PromptServer.instance.send_sync(
@@ -20466,9 +20469,13 @@ async def _submit_review_decision(request):
             return web.json_response(
                 {"error": "The retry prompt is too large."}, status=400)
         try:
+            review_length = (
+                pending.get("current_requested_frames",
+                            pending.get("current_length"))
+                if action == "reroll"
+                else body.get("length", pending.get("current_length")))
             raw_frames = _validate_h3_length(
-                body.get("length", pending.get("current_length")),
-                "H3 review retry length")
+                review_length, "H3 review retry length")
         except (TypeError, ValueError) as exc:
             return web.json_response({"error": str(exc)}, status=400)
         if action == "reroll":
