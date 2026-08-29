@@ -34,11 +34,14 @@ def main() -> None:
     assert MODULE.activate_review_cleanup_win32_guard(chain) == MODULE.BUILD
     assert MODULE.activate_review_cleanup_win32_guard(chain) == MODULE.BUILD
 
-    stale = r"G:\run\reviews\clip_0015.old.old.review.mp4"
+    # Use host-native path syntax so the path-classification test is portable.
+    # The simulated exception still carries winerror=32, which is the Windows
+    # condition guarded by the compatibility layer.
+    stale = "/tmp/run/reviews/clip_0015.old.old.review.mp4"
     chain._safe_unlink(stale)
     assert calls == [stale]
 
-    temporary = r"G:\run\reviews\.review.abc123.mp4"
+    temporary = "/tmp/run/reviews/.review.abc123.mp4"
     try:
         chain._safe_unlink(temporary)
     except SharingViolation:
@@ -46,7 +49,7 @@ def main() -> None:
     else:
         raise AssertionError("temporary Review mux errors must still propagate")
 
-    unrelated = r"G:\run\segments\clip_0015.mp4"
+    unrelated = "/tmp/run/segments/clip_0015.mp4"
     try:
         chain._safe_unlink(unrelated)
     except SharingViolation:
@@ -54,7 +57,7 @@ def main() -> None:
     else:
         raise AssertionError("non-Review cleanup errors must still propagate")
 
-    wrong_parent = r"G:\other\clip_0015.old.old.review.mp4"
+    wrong_parent = "/tmp/other/clip_0015.old.old.review.mp4"
     try:
         chain._safe_unlink(wrong_parent)
     except SharingViolation:
