@@ -1065,6 +1065,7 @@ function mount(node) {
     );
 
     let current = null;
+    let currentExactFrames = null;
     let countdownTimer = null;
     let resumeChoices = [];
     let checkpointRevisions = [];
@@ -1638,7 +1639,7 @@ function mount(node) {
             const normalizedLength = action === "retry"
                 ? reviewFrameLength(duration.value)
                 : action === "reroll"
-                    ? exactResponseLength(node, submittedReview, submittedReview)
+                    ? reviewFrameLength(currentExactFrames)
                     : null;
             stopCountdown();
             root.classList.add("h3r-busy");
@@ -1722,6 +1723,7 @@ function mount(node) {
                 const acceptedLength = exactResponseLength(
                     node, submittedReview, body, normalizedLength);
                 const acceptedFrames = reviewFrameLengthText(acceptedLength);
+                currentExactFrames = acceptedLength;
                 const saved = updatePlan(
                     node, submittedIndex, acceptedPrompt, body.seed, acceptedLength);
                 if (current?.token === submittedToken) {
@@ -1809,11 +1811,12 @@ function mount(node) {
             setTimeout(refreshResumeOptions, 0);
         }
         if (!sameToken) {
+            const incomingExactFrames = exactResponseLength(node, data, data);
+            currentExactFrames = incomingExactFrames;
             prompt.value = data.scene_prompt ?? "";
             promptEditedInGate = false;
             seed.value = data.seed ?? "";
-            duration.value = reviewFrameLengthText(
-                exactResponseLength(node, data, data));
+            duration.value = reviewFrameLengthText(incomingExactFrames);
             prefix.textContent = data.prompt_prefix ?
                 `Shared prompt (unchanged)\n${data.prompt_prefix}` : "";
             prefix.hidden = !data.prompt_prefix;
