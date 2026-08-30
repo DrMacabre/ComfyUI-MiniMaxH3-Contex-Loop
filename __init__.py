@@ -88,6 +88,17 @@ from .review_exact_frames_payload_0637 import (
 _EXACT_FINAL_REVIEW_FRAME_PAYLOAD = _activate_review_exact_frames_payload(
     _exact_final_timeline_chain)
 
+# Resume preflight and recursive runtime can see the same Source Timeline audio
+# through two representations: deferred AUDIO tensor first, then materialized
+# path-backed state. Canonicalize deferred windows on absolute 24 fps sample
+# boundaries so 44.1 kHz rounding cannot invalidate an unchanged predecessor.
+from .resume_source_pcm_canonical_0637 import (
+    activate_resume_source_pcm_canonical as _activate_resume_source_pcm_canonical,
+)
+
+_EXACT_FINAL_RESUME_SOURCE_PCM = _activate_resume_source_pcm_canonical(
+    _exact_final_timeline_chain)
+
 from .upscale_nodes import (
     UPSCALE_NODE_CLASS_MAPPINGS,
     UPSCALE_NODE_DISPLAY_NAME_MAPPINGS,
