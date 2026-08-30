@@ -78,6 +78,16 @@ from .review_cleanup_win32_0637 import (
 _EXACT_FINAL_REVIEW_CLEANUP_WIN32 = _activate_review_cleanup_win32_guard(
     _exact_final_timeline_chain)
 
+# Review Gate must receive the exact authored/delivered frame count as explicit
+# metadata.  H3 raw 17k+5 length remains internal generation geometry; seed-only
+# Reroll reads this public exact value and never falls back to raw H3 frames.
+from .review_exact_frames_payload_0637 import (
+    activate_review_exact_frames_payload as _activate_review_exact_frames_payload,
+)
+
+_EXACT_FINAL_REVIEW_FRAME_PAYLOAD = _activate_review_exact_frames_payload(
+    _exact_final_timeline_chain)
+
 from .upscale_nodes import (
     UPSCALE_NODE_CLASS_MAPPINGS,
     UPSCALE_NODE_DISPLAY_NAME_MAPPINGS,
