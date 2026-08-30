@@ -16,8 +16,8 @@ jobs:
         with:
           ref: fool-for-love-upstream-0.6.37
           fetch-depth: 0
-      - name: Apply focused Review requested/raw separation and seed-only reroll patch
-        run: python tools/ffl_patch_exact_review_reroll_frames_0637_v3.py
+      - name: Apply requested/raw separation, seed-only reroll, and exact-frame latch
+        run: python tools/ffl_patch_review_reroll_latched_exact_frames_0637.py
       - name: Update stale upstream Review regression expectations
         run: python tools/ffl_patch_chain_review_test_exact_frames_0637.py
       - name: Compile exact backend overlays and Review backend
@@ -28,6 +28,8 @@ jobs:
         run: node tests/_ffl_review_exact_reroll_0637_test.mjs
       - name: Seed-only Reroll exact-frame regression
         run: python tests/_ffl_review_reroll_seed_only_0637_test.py
+      - name: Recovered Review metadata-loss regression
+        run: python tests/_ffl_review_reroll_latched_exact_frames_0637_test.py
       - name: Existing Plan frontend regression
         run: node tests/_plan_editor_js_test.mjs
       - name: Existing continuation sanitation regression
@@ -58,9 +60,10 @@ jobs:
               'length: normalizedLength',
               'exactResponseLength(',
               'reviewFrameLengthText(',
-              'const normalizedLength = action === "retry"',
-              ': action === "reroll"',
-              '? exactResponseLength(node, submittedReview, submittedReview)',
+              'let currentExactFrames = null;',
+              'currentExactFrames = incomingExactFrames;',
+              '? reviewFrameLength(currentExactFrames)',
+              'currentExactFrames = acceptedLength;',
           ]
           missing = [x for x in required_chain if x not in chain]
           missing += [x for x in required_core if x not in core]
@@ -70,6 +73,7 @@ jobs:
               'acceptedPrompt, body.seed, body.length',
               'reviewDurationText(data.raw_frames)',
               'const normalizedLength = action === "retry" || action === "reroll"',
+              '? exactResponseLength(node, submittedReview, submittedReview)',
           ]
           present = [x for x in forbidden if x in final]
           if missing or present:
@@ -89,5 +93,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "4189823+github-actions[bot]@users.noreply.github.com"
           git add chain_nodes.py web/h3_chain_review_core.mjs web/h3_chain_review_final.js tests/_chain_review_js_test.mjs
-          git commit -m "fix: make Review reroll seed preserve exact frames"
+          git commit -m "fix: latch exact frames for Review reroll seed"
           git push origin HEAD:fool-for-love-upstream-0.6.37
