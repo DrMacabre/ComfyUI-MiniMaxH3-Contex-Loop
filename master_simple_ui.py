@@ -114,8 +114,51 @@ class MiniMaxH3MasterPictureReferenceSlot:
             dynprompt=dynprompt, unique_id=unique_id)
 
 
+def _native_video_reference(source_video: Any):
+    """Normalize one native VIDEO to a complete synchronized 24 fps Ref2VA pair."""
+    source_frames, source_audio, source_fps, input_route = (
+        _chain._resolve_video_inputs(
+            source_video, None, None, 24.0, "Master H3 video reference"))
+    if torch is None or not torch.is_tensor(source_frames):
+        raise ValueError("Master H3 video reference did not resolve to IMAGE frames.")
+    if source_frames.ndim != 4 or int(source_frames.shape[-1]) < 3:
+        raise ValueError(
+            "Master H3 video reference must resolve to [frames,height,width,channels].")
+    indices = _chain._external_video_frame_indices(
+        int(source_frames.shape[0]), float(source_fps))
+    count = int(indices.numel())
+    if count < 5:
+        raise ValueError(
+            "Master H3 video reference becomes only %d frames at 24 fps; at least 5 are required."
+            % count)
+    frames = source_frames.index_select(
+        0, indices.to(device=source_frames.device))
+
+    paired_audio = None
+    audio_status = "no embedded audio"
+    if source_audio is not None:
+        waveform, sample_rate = _chain._audio_waveform_3d(
+            source_audio, "Master H3 video-reference audio")
+        required_samples = int(round(count / float(_chain.FPS) * sample_rate))
+        available_samples = int(waveform.shape[-1])
+        if available_samples < required_samples:
+            waveform = torch.nn.functional.pad(
+                waveform, (0, required_samples - available_samples))
+            audio_status = "embedded audio tail silence-padded"
+        else:
+            waveform = waveform[..., :required_samples]
+            audio_status = "embedded audio paired automatically"
+        paired_audio = {
+            "waveform": waveform.clone(),
+            "sample_rate": int(sample_rate),
+        }
+    return frames, paired_audio, (
+        "%s -> %d frames at %d fps; %s" %
+        (input_route, count, _chain.FPS, audio_status))
+
+
 class MiniMaxH3MasterVideoReferenceSlot:
-    """One permanent video slot; paired audio and timing policy are internal."""
+    """One permanent native VIDEO slot; preparation and paired audio are internal."""
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -123,22 +166,18 @@ class MiniMaxH3MasterVideoReferenceSlot:
             "required": {
                 "enabled": ("BOOLEAN", {
                     "default": False,
-                    "tooltip": "ON registers this video as an H3 @reference. OFF keeps the slot wired without evaluating its video/audio preparation branch.",
+                    "tooltip": "ON registers this native video as an H3 @reference. OFF keeps the slot wired without evaluating the video loader.",
                 }),
                 "tag": ("STRING", {
                     "default": "video_ref_1",
                     "tooltip": "Stable prompt tag without @.",
                 }),
-                "video": ("IMAGE", {
+                "video": ("VIDEO", {
                     "lazy": True,
-                    "tooltip": "Permanent 24 fps reference-video connection. It is evaluated only when this slot is ON.",
+                    "tooltip": "Permanent native Load Video connection. FPS normalization and embedded-audio pairing happen internally only when ON.",
                 }),
             },
             "optional": {
-                "audio": ("AUDIO", {
-                    "lazy": True,
-                    "tooltip": "Optional synchronized audio from the same reference video. When connected it is paired automatically; no extra user switch is required.",
-                }),
                 "previous": (TAGGED_REFERENCE_TYPE, {
                     "tooltip": "Previous master reference slot.",
                 }),
@@ -150,26 +189,26 @@ class MiniMaxH3MasterVideoReferenceSlot:
     RETURN_NAMES = ("references", "reference_fingerprint", "status")
     FUNCTION = "add"
     CATEGORY = "conditioning/minimax/contex_loop/master/references"
-    DESCRIPTION = "Simple lazy H3 video-reference slot with automatic paired audio."
+    DESCRIPTION = (
+        "Simple lazy native H3 video-reference slot: ON/OFF and @tag only. "
+        "24 fps normalization and synchronized embedded audio are automatic."
+    )
 
     def check_lazy_status(self, enabled, **kwargs):
-        if not bool(enabled):
-            return []
-        needed = _require_lazy_input(True, "video", kwargs)
-        if "audio" in kwargs and kwargs.get("audio") is None:
-            needed.append("audio")
-        return needed
+        return _require_lazy_input(enabled, "video", kwargs)
 
-    def add(self, enabled, tag, video=None, audio=None, previous=None,
+    def add(self, enabled, tag, video=None, previous=None,
             dynprompt=None, unique_id=None):
         if not bool(enabled):
             return _disabled_reference(previous, "VIDEO REF")
         if video is None:
-            raise ValueError("Video reference is ON but no video is connected.")
-        return _chain.MiniMaxH3TaggedVideoReference().add(
-            video, tag, "", timeline_mode="restart_each_scene",
+            raise ValueError("Video reference is ON but no Load Video is connected.")
+        frames, audio, prep_status = _native_video_reference(video)
+        references, fingerprint, status = _chain.MiniMaxH3TaggedVideoReference().add(
+            frames, tag, "", timeline_mode="restart_each_scene",
             audio=audio, previous=previous,
             dynprompt=dynprompt, unique_id=unique_id)
+        return references, fingerprint, "%s; %s" % (status, prep_status)
 
 
 class MiniMaxH3MasterAudioReferenceSlot:
