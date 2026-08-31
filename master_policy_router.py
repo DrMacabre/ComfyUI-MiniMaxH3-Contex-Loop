@@ -14,6 +14,7 @@ from .master_simple_ui import (
     MASTER_AUDIO_CONTROL_TYPE,
     MASTER_AUDIO_CONTROL_VERSION,
 )
+from .companion_core_compat import MiniMaxH3MasterCoreCompat
 
 
 MASTER_TRANSITION_CONTROL_TYPE = "H3_MASTER_TRANSITION_CONTROL"
@@ -182,10 +183,12 @@ NODE_CLASS_MAPPINGS = {
     "MiniMaxH3MasterTransitionMode": MiniMaxH3MasterTransitionMode,
     "MiniMaxH3MasterChainPolicyRouter": MiniMaxH3MasterChainPolicyRouter,
     "MiniMaxH3MasterSourceAudioGate": MiniMaxH3MasterSourceAudioGate,
+    "MiniMaxH3MasterCoreCompat": MiniMaxH3MasterCoreCompat,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "MiniMaxH3MasterTransitionMode": "MiniMax H3 · Continuation Mode",
     "MiniMaxH3MasterChainPolicyRouter": "MiniMax H3 · Internal Policy Router",
     "MiniMaxH3MasterSourceAudioGate": "MiniMax H3 · Internal Source Audio Gate",
+    "MiniMaxH3MasterCoreCompat": "MASTER — Core Compatibility",
 }
