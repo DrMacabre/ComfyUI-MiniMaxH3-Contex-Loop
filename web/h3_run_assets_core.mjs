@@ -99,6 +99,43 @@ function sourceBinding(manager, source, link, createId, {
     };
 }
 
+function storedBindings(manager) {
+    const widget = manager?.widgets?.find((item) => item.name === "asset_bindings_json");
+    if (!widget || typeof widget.value !== "string") return [];
+    try {
+        const parsed = JSON.parse(widget.value || "[]");
+        return Array.isArray(parsed) ? parsed.filter((item) => item && typeof item === "object") : [];
+    } catch (_error) {
+        return [];
+    }
+}
+
+function refreshedStoredBinding(manager, binding) {
+    const target = findAssetTarget(manager?.graph, binding);
+    const source = target?.node;
+    if (!source) return {...binding};
+    source.properties ??= {};
+    const outputSlot = Number(binding.output_slot) || 0;
+    source.properties.h3_asset_binding_ids ??= {};
+    source.properties.h3_asset_binding_ids[outputSlot] = binding.binding_id;
+    const output = source.outputs?.[outputSlot] ?? {};
+    const widget = mediaWidget(source, binding.widget_name);
+    const role = String(binding.role || inferAssetRole(output.type, nodeType(source)));
+    manager.properties.h3_asset_roles[binding.binding_id] = role;
+    return {
+        ...binding,
+        role,
+        node_id: String(source.id ?? binding.node_id ?? ""),
+        node_type: nodeType(source),
+        node_title: String(source.title ?? binding.node_title ?? ""),
+        output_slot: outputSlot,
+        output_type: String(output.type ?? binding.output_type ?? ""),
+        widget_name: String(widget?.name ?? binding.widget_name ?? ""),
+        original_value: typeof widget?.value === "string"
+            ? widget.value : String(binding.original_value ?? ""),
+    };
+}
+
 export function collectSemanticAnchorBindings(manager, createId = randomBindingId) {
     manager.properties ??= {};
     manager.properties.h3_asset_roles ??= {};
@@ -141,6 +178,15 @@ export function collectAssetBindings(manager, createId = randomBindingId) {
             manager, source, link, createId, {input}));
     }
     const seen = new Set(bindings.map((binding) => binding.binding_id));
+    if (manager.properties.h3_persist_detached_asset_bindings) {
+        for (const stored of storedBindings(manager)) {
+            const bindingId = String(stored.binding_id ?? "");
+            if (!bindingId || seen.has(bindingId)) continue;
+            const refreshed = refreshedStoredBinding(manager, stored);
+            seen.add(bindingId);
+            bindings.push(refreshed);
+        }
+    }
     for (const binding of collectSemanticAnchorBindings(manager, createId)) {
         if (seen.has(binding.binding_id)) continue;
         seen.add(binding.binding_id);
