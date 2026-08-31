@@ -51,10 +51,11 @@ def _normalize_export(codec: Any, bit_depth: Any, quality_mode: Any,
             "%s master export supports 8-bit or 10-bit output, not 16-bit. "
             "Use FFV1 lossless or uncompressed RGB for 16-bit masters."
             % codec.upper())
-    if codec == "uncompressed_rgb" and depth == "10":
+    if codec == "uncompressed_rgb" and depth != "8":
         raise ValueError(
-            "Uncompressed RGB uses 8-bit RGB24 or 16-bit RGB48. For a standard "
-            "10-bit uncompressed editing master, choose uncompressed_v210.")
+            "Uncompressed RGB is the edit-friendly RGB24 8-bit profile. For "
+            "10-bit uncompressed editing choose uncompressed_v210; for a "
+            "16-bit mathematically lossless master choose FFV1.")
     if codec == "uncompressed_v210" and depth != "10":
         raise ValueError(
             "Uncompressed V210 is a fixed 10-bit 4:2:2 format. Set bit_depth "
@@ -142,14 +143,13 @@ def _codec_layout(config: dict[str, Any]) -> dict[str, Any]:
             "label": "Uncompressed V210 10-bit 4:2:2",
         }
 
-    pix_fmt = "rgb48le" if depth == 16 else "rgb24"
     return {
         "extension": ".mov",
         "encoder": "rawvideo",
-        "pix_fmt": pix_fmt,
+        "pix_fmt": "rgb24",
         "options": [],
-        "input_depth": 16 if depth == 16 else 8,
-        "label": "Uncompressed RGB %d-bit" % depth,
+        "input_depth": 8,
+        "label": "Uncompressed RGB24 8-bit",
     }
 
 
@@ -352,7 +352,7 @@ class MiniMaxH3ChainMasterVideoExport:
                     "default": "h265",
                     "tooltip": "H.264/H.265 for delivery, FFV1 for true "
                                "lossless compression, uncompressed_rgb for raw "
-                               "RGB, or uncompressed_v210 for standard 10-bit "
+                               "RGB24 8-bit, or uncompressed_v210 for standard 10-bit "
                                "4:2:2 editing video."}),
                 "bit_depth": (MASTER_BIT_DEPTHS, {
                     "default": "10",
