@@ -8,6 +8,8 @@ from . import chain_nodes as c
 from . import master_video_export_0637 as advanced
 
 
+MASTER_EXPORT_CONFIG_TYPE = "H3_MASTER_EXPORT_CONFIG"
+MASTER_EXPORT_CONFIG_VERSION = "h3_master_export_config_v1"
 MASTER_EXPORT_PROFILES = (
     "DELIVERY / MOBILE",
     "HIGH QUALITY",
@@ -47,22 +49,66 @@ _PROFILE_CONFIG = {
 }
 
 
+def _normalized_config(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict) or value.get("version") != MASTER_EXPORT_CONFIG_VERSION:
+        raise ValueError("Master Export Profile is missing or obsolete.")
+    profile = str(value.get("profile") or "")
+    if profile not in _PROFILE_CONFIG:
+        raise ValueError("Unknown H3 master export profile %r." % profile)
+    return {"version": MASTER_EXPORT_CONFIG_VERSION, "profile": profile,
+            **dict(_PROFILE_CONFIG[profile])}
+
+
+class MiniMaxH3MasterExportProfile:
+    """The single export-quality control shared by every master output."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "profile": (list(MASTER_EXPORT_PROFILES), {
+                    "default": "HIGH QUALITY",
+                    "tooltip": "One shared choice for normal and recovery exports. DELIVERY/MOBILE is H.264 8-bit compatible output; HIGH QUALITY is HEVC 10-bit; LOSSLESS ARCHIVE is FFV1 16-bit; EDITING MASTER is true uncompressed V210 10-bit.",
+                }),
+            },
+        }
+
+    RETURN_TYPES = (MASTER_EXPORT_CONFIG_TYPE, "STRING")
+    RETURN_NAMES = ("export_config", "status")
+    FUNCTION = "build"
+    CATEGORY = "conditioning/minimax/contex_loop/master"
+    DESCRIPTION = "One export profile fan-outs to every final/recovery master exporter."
+
+    def build(self, profile="HIGH QUALITY"):
+        try:
+            recipe = dict(_PROFILE_CONFIG[str(profile)])
+        except KeyError as exc:
+            raise ValueError("Unknown H3 master export profile %r." % profile) from exc
+        config = {
+            "version": MASTER_EXPORT_CONFIG_VERSION,
+            "profile": str(profile),
+            **recipe,
+        }
+        return config, "%s — %s %s-bit %s" % (
+            profile, recipe["video_codec"], recipe["bit_depth"],
+            recipe["quality_mode"])
+
+
 class MiniMaxH3MasterExport:
-    """Expose only the useful export profile and basename to normal users."""
+    """Export one manifest using the shared master profile."""
 
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
                 "manifest": (c.MANIFEST_TYPE, {
-                    "tooltip": "Completed H3 checkpoint lineage.",
+                    "tooltip": "Completed H3 checkpoint lineage from normal Loop End or recovery Manifest Load.",
                 }),
                 "video_vae": ("VAE", {
                     "tooltip": "MiniMax H3 video VAE used for high-fidelity latent decode.",
                 }),
-                "profile": (list(MASTER_EXPORT_PROFILES), {
-                    "default": "HIGH QUALITY",
-                    "tooltip": "One master-facing choice. Codec, real bit depth, quality mode, blend handling, cache strategy and audio mux settings are resolved internally.",
+                "export_config": (MASTER_EXPORT_CONFIG_TYPE, {
+                    "tooltip": "Shared config from the single Master Export Profile node.",
                 }),
                 "filename": ("STRING", {
                     "default": "master",
@@ -72,7 +118,7 @@ class MiniMaxH3MasterExport:
             "optional": {
                 "source_audio": ("AUDIO", {
                     "lazy": True,
-                    "tooltip": "Legacy/source-track fallback. It is requested only when this manifest's final audio policy resolves to source.",
+                    "tooltip": "Source-track fallback, evaluated only when the manifest's final audio policy resolves to source.",
                 }),
             },
         }
@@ -82,23 +128,23 @@ class MiniMaxH3MasterExport:
     OUTPUT_TOOLTIPS = (
         "File-backed master video.",
         "Absolute master path.",
-        "Resolved profile and underlying export status.",
+        "Resolved shared profile and underlying export status.",
     )
     FUNCTION = "export"
     OUTPUT_NODE = True
     CATEGORY = "conditioning/minimax/contex_loop/master"
     DESCRIPTION = (
-        "Simple master export. DELIVERY/MOBILE, HIGH QUALITY, LOSSLESS ARCHIVE "
-        "and EDITING MASTER are complete internal recipes; the advanced codec "
-        "node remains available outside the normal master workflow."
+        "Master exporter driven by the shared profile node. Codec, bit depth, "
+        "quality mode, blend handling, cache and audio mux settings are internal."
     )
 
     @classmethod
     def IS_CHANGED(cls, *args, **kwargs):
         return float("NaN")
 
-    def check_lazy_status(self, manifest, video_vae, profile, filename,
+    def check_lazy_status(self, manifest, video_vae, export_config, filename,
                           **kwargs):
+        _normalized_config(export_config)
         try:
             selected = c._audio_policy_final(manifest)
         except Exception:
@@ -108,13 +154,10 @@ class MiniMaxH3MasterExport:
             return ["source_audio"]
         return []
 
-    def export(self, manifest, video_vae, profile="HIGH QUALITY",
+    def export(self, manifest, video_vae, export_config,
                filename="master", source_audio=None):
-        try:
-            config = dict(_PROFILE_CONFIG[str(profile)])
-        except KeyError as exc:
-            raise ValueError("Unknown H3 master export profile %r." % profile) from exc
-
+        config = _normalized_config(export_config)
+        profile = config["profile"]
         video, path, status = advanced.MiniMaxH3ChainMasterVideoExport().export(
             manifest=manifest,
             video_vae=video_vae,
@@ -134,9 +177,11 @@ class MiniMaxH3MasterExport:
 
 
 NODE_CLASS_MAPPINGS = {
+    "MiniMaxH3MasterExportProfile": MiniMaxH3MasterExportProfile,
     "MiniMaxH3MasterExport": MiniMaxH3MasterExport,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
+    "MiniMaxH3MasterExportProfile": "MiniMax H3 · Export Profile",
     "MiniMaxH3MasterExport": "MiniMax H3 · Master Export",
 }
