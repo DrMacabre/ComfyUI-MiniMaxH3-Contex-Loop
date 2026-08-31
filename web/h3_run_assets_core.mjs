@@ -104,10 +104,22 @@ function storedBindings(manager) {
     if (!widget || typeof widget.value !== "string") return [];
     try {
         const parsed = JSON.parse(widget.value || "[]");
-        return Array.isArray(parsed) ? parsed.filter((item) => item && typeof item === "object") : [];
+        return Array.isArray(parsed)
+            ? parsed.filter((item) => item && typeof item === "object") : [];
     } catch (_error) {
         return [];
     }
+}
+
+function detachedTemplates(manager) {
+    const explicit = manager?.properties?.h3_detached_asset_templates;
+    if (Array.isArray(explicit)) {
+        return explicit.filter((item) => item && typeof item === "object");
+    }
+    if (manager?.properties?.h3_persist_detached_asset_bindings) {
+        return storedBindings(manager);
+    }
+    return [];
 }
 
 function refreshedStoredBinding(manager, binding) {
@@ -122,8 +134,10 @@ function refreshedStoredBinding(manager, binding) {
     const widget = mediaWidget(source, binding.widget_name);
     const role = String(binding.role || inferAssetRole(output.type, nodeType(source)));
     manager.properties.h3_asset_roles[binding.binding_id] = role;
+    const title = String(source.title || nodeType(source) || binding.label || "Asset");
     return {
         ...binding,
+        label: title,
         role,
         node_id: String(source.id ?? binding.node_id ?? ""),
         node_type: nodeType(source),
@@ -134,6 +148,11 @@ function refreshedStoredBinding(manager, binding) {
         original_value: typeof widget?.value === "string"
             ? widget.value : String(binding.original_value ?? ""),
     };
+}
+
+function activeBinding(binding) {
+    return typeof binding?.original_value === "string"
+        && binding.original_value.trim().length > 0;
 }
 
 export function collectSemanticAnchorBindings(manager, createId = randomBindingId) {
@@ -154,38 +173,54 @@ export function collectSemanticAnchorBindings(manager, createId = randomBindingI
             ?? "semantic").trim();
         const image = linkedNode(anchor, "image");
         if (image) {
-            bindings.push(sourceBinding(manager, image.source, image.link, createId, {
+            const binding = sourceBinding(manager, image.source, image.link, createId, {
                 roleOverride: "picture",
                 labelPrefix: `#${tag || "semantic"}`,
-            }));
+            });
+            if (activeBinding(binding)) bindings.push(binding);
         }
         linked = linkedNode(anchor, "previous");
     }
     return bindings.reverse();
 }
 
+export function collectDetachedAssetNodes(manager) {
+    manager.properties ??= {};
+    manager.properties.h3_asset_roles ??= {};
+    const result = [];
+    const seen = new Set();
+    for (const stored of detachedTemplates(manager)) {
+        const refreshed = refreshedStoredBinding(manager, stored);
+        const target = findAssetTarget(manager?.graph, refreshed);
+        const node = target?.node;
+        if (!node || seen.has(node)) continue;
+        seen.add(node);
+        result.push(node);
+    }
+    return result;
+}
+
 export function collectAssetBindings(manager, createId = randomBindingId) {
     manager.properties ??= {};
     manager.properties.h3_asset_roles ??= {};
     const bindings = [];
+    const seen = new Set();
     for (const input of manager.inputs ?? []) {
         const number = assetInputNumber(input);
         if (number == null || input.link == null) continue;
         const linked = sourceForInput(manager, input);
         if (!linked) continue;
         const {source, link} = linked;
-        bindings.push(sourceBinding(
-            manager, source, link, createId, {input}));
+        const binding = sourceBinding(manager, source, link, createId, {input});
+        seen.add(binding.binding_id);
+        if (activeBinding(binding)) bindings.push(binding);
     }
-    const seen = new Set(bindings.map((binding) => binding.binding_id));
-    if (manager.properties.h3_persist_detached_asset_bindings) {
-        for (const stored of storedBindings(manager)) {
-            const bindingId = String(stored.binding_id ?? "");
-            if (!bindingId || seen.has(bindingId)) continue;
-            const refreshed = refreshedStoredBinding(manager, stored);
-            seen.add(bindingId);
-            bindings.push(refreshed);
-        }
+    for (const stored of detachedTemplates(manager)) {
+        const bindingId = String(stored.binding_id ?? "");
+        if (!bindingId || seen.has(bindingId)) continue;
+        const refreshed = refreshedStoredBinding(manager, stored);
+        seen.add(bindingId);
+        if (activeBinding(refreshed)) bindings.push(refreshed);
     }
     for (const binding of collectSemanticAnchorBindings(manager, createId)) {
         if (seen.has(binding.binding_id)) continue;
