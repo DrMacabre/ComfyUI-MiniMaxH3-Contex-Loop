@@ -28,13 +28,15 @@ jobs:
           python -m pip install numpy av safetensors
       - name: Compile simplified master backend and migrators
         run: |
-          python -m py_compile master_simple_ui.py master_export_simple.py master_video_mode.py master_policy_router.py exact_generated_audio_tail_0637.py tools/build_master_workflow.py tools/repack_master_workflow.py tools/patch_master_runtime_v1.py tools/patch_master_runtime_v2.py __init__.py
+          python -m py_compile master_simple_ui.py master_export_simple.py master_video_mode.py master_policy_router.py exact_generated_audio_tail_0637.py master_export_audio_verify_0637.py tools/build_master_workflow.py tools/repack_master_workflow.py tools/patch_master_runtime_v1.py tools/patch_master_runtime_v2.py __init__.py
       - name: Run simplified master UI contract regression
         run: python tests/_master_simple_ui_unit_test.py
       - name: Run simplified master policy regression
         run: python tests/_master_policy_router_unit_test.py
       - name: Run exact generated-audio tail regression
         run: python tests/_exact_generated_audio_tail_unit_test.py
+      - name: Run master export audio verification regression
+        run: python tests/_master_export_audio_verify_unit_test.py
       - name: Verify master work did not modify Exact Final Timeline guard
         run: git diff --exit-code origin/fool-for-love-upstream-0.6.37...HEAD -- exact_final_timeline.py
       - name: Run deterministic workflow migration regression
