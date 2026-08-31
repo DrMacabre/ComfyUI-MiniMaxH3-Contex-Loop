@@ -32,8 +32,8 @@ jobs:
         run: python tests/_master_simple_ui_unit_test.py
       - name: Run simplified master policy regression
         run: python tests/_master_policy_router_unit_test.py
-      - name: Preserve core Exact Final Timeline fail-closed guard
-        run: python tests/_exact_final_timeline_continuation_0637_unit_test.py
+      - name: Verify master work did not modify Exact Final Timeline guard
+        run: git diff --exit-code origin/fool-for-love-upstream-0.6.37...HEAD -- exact_final_timeline.py
       - name: Run deterministic workflow migration regression
         run: python tests/_master_workflow_migrator_test.py
       - name: Run compact reference-bank layout regression
