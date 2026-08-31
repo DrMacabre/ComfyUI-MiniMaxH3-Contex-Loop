@@ -88,7 +88,17 @@ class MiniMaxH3MasterTransitionMode:
 
 
 class MiniMaxH3MasterChainPolicyRouter:
-    """Internal adapter from the two simple master controls to H3 Chain Policy."""
+    """Internal adapter from the two simple master controls to H3 Chain Policy.
+
+    The reusable master accepts arbitrary exact delivered lengths. H3 may sample
+    a longer 17k+5 raw scene and trim a hidden tail. Carrying the predecessor's
+    generated-audio *latent* through such a boundary would also carry that
+    hidden raw tail. Therefore every generated master mode keeps generated
+    audio as the final soundtrack but deliberately disables raw latent audio
+    carry. Visual Guide/Masked-AV continuation remains governed independently
+    by the Continuation Mode control. Advanced/non-master H3 workflows retain
+    their explicit generated-continuity policy and Exact Final Timeline guard.
+    """
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -110,15 +120,21 @@ class MiniMaxH3MasterChainPolicyRouter:
         transition = _transition_control(transition_control)
         mode = str(audio["mode"])
         if mode == "source":
-            final_audio, source_reference, generated_continuity = (
-                "source", "on", "off")
+            final_audio, source_reference = "source", "on"
         else:
-            final_audio, source_reference, generated_continuity = (
-                "generated", "off", "on")
+            final_audio, source_reference = "generated", "off"
+
+        # Master invariant: arbitrary exact delivered lengths must never depend
+        # on the predecessor's raw generated-audio latent. A padded predecessor
+        # contains samples beyond the authored boundary, so latent carry is not
+        # timeline-safe. Each scene still generates H3 audio and final_audio
+        # remains "generated" for all non-source master modes.
+        generated_continuity = "off"
+
         policy = _chain_policy(
             transition["preset"], final_audio, source_reference,
             generated_continuity, False)
-        return policy, "%s / %s" % (
+        return policy, "%s / %s / exact-safe audio carry" % (
             transition.get("label", transition["preset"]),
             audio.get("label", mode))
 
