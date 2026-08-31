@@ -3,20 +3,41 @@
 
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
 entry = (ROOT / "__init__.py").read_text(encoding="utf-8")
+entry_tree = ast.parse(entry, filename="__init__.py")
 policy = (ROOT / "companion_runtime_policy.py").read_text(encoding="utf-8")
 masking = (ROOT / "masking_support.py").read_text(encoding="utf-8")
 legacy_widget = (ROOT / "web" / "h3_legacy_widget_width_fix.js").read_text(
     encoding="utf-8")
 
+
+def dotted_name(node):
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        parent = dotted_name(node.value)
+        return (parent + "." if parent else "") + node.attr
+    return ""
+
+
 # Import-time tokenizer compatibility would mutate the shared ComfyUI MiniMax
-# module and therefore influence Ethan's pack.
-assert "install_minimax_tokenizer_compat" not in entry
-assert "tokenizer_compat import" not in entry
+# module and therefore influence Ethan's pack. Inspect executable syntax rather
+# than raw text so an explanatory comment cannot trip the regression check.
+for node in ast.walk(entry_tree):
+    if isinstance(node, ast.Import):
+        assert all("tokenizer_compat" not in alias.name for alias in node.names)
+    elif isinstance(node, ast.ImportFrom):
+        assert "tokenizer_compat" not in str(node.module or "")
+        assert all(alias.name != "install_minimax_tokenizer_compat"
+                   for alias in node.names)
+    elif isinstance(node, ast.Call):
+        assert not dotted_name(node.func).endswith(
+            "install_minimax_tokenizer_compat")
 assert "require_native_minimax_tokenizer" in entry
 
 # The companion must replace legacy H3 guide fallbacks before chain_nodes is
