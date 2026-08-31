@@ -36,3 +36,5 @@ jobs:
         run: python tests/_master_workflow_migrator_test.py
       - name: Diff hygiene
         run: git diff --check origin/fool-for-love-upstream-0.6.37...HEAD
+
+# Validation touch: re-run the complete suite after builder-normalized group IDs.
