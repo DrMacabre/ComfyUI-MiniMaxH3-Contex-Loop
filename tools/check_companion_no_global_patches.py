@@ -62,18 +62,27 @@ assert "ensure_av_mask_payload_compat" not in masking
 assert "companion_core_compat" in masking
 
 # Scoped core compatibility must use clone-local facilities. In particular it
-# must never assign to a comfy.* attribute/class or replace the global sampler.
+# must never assign to a comfy.* attribute/class, import comfy.samplers, or
+# replace/access KSamplerX0Inpaint as executable code. Docstrings may name the
+# forbidden legacy technique while explaining why it is not used.
 assert "set_model_denoise_mask_function" in core_compat
 assert 'add_object_patch("__class__"' in core_compat
 assert 'add_object_patch("diffusion_model.__class__"' in core_compat
-assert "KSamplerX0Inpaint" not in core_compat
 assert "install_minimax_tokenizer_compat" not in core_compat
 assert "MiniMaxQwenSDTokenizer =" not in core_compat
 assert "MiniMaxH3Model._forward =" not in core_compat
 assert "MiniMaxH3.extra_conds =" not in core_compat
 
 for node in ast.walk(core_tree):
-    if isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+    if isinstance(node, ast.Import):
+        assert all(alias.name != "comfy.samplers" for alias in node.names)
+    elif isinstance(node, ast.ImportFrom):
+        assert str(node.module or "") != "comfy.samplers"
+    elif isinstance(node, ast.Name):
+        assert node.id != "KSamplerX0Inpaint"
+    elif isinstance(node, ast.Attribute):
+        assert node.attr != "KSamplerX0Inpaint"
+    elif isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
         targets = (
             node.targets if isinstance(node, ast.Assign)
             else [node.target]
