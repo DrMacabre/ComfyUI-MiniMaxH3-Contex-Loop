@@ -200,9 +200,17 @@ def _insert_core_compat_graph(
             raise RuntimeError(
                 "CLIP output/link metadata disagree at link #%s." % link_id)
 
-    compat_id = _next_numeric_id(
-        [node.get("id") for node in nodes], "node")
-    next_link = _next_numeric_id([record[0] for record in links], "link")
+    # ComfyUI's last_* values are high-water marks and may be greater than every
+    # surviving object after deletions. Never recycle an old node/link id.
+    node_id_values = [node.get("id") for node in nodes]
+    if workflow.get("last_node_id") is not None:
+        node_id_values.append(workflow.get("last_node_id"))
+    link_id_values = [record[0] for record in links]
+    if workflow.get("last_link_id") is not None:
+        link_id_values.append(workflow.get("last_link_id"))
+
+    compat_id = _next_numeric_id(node_id_values, "node")
+    next_link = _next_numeric_id(link_id_values, "link")
     model_input_link = next_link
     clip_input_link = next_link + 1
 
