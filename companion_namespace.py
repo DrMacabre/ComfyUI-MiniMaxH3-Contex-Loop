@@ -201,15 +201,18 @@ def _transform_web_text(text: str, original_node_ids: Iterable[str]) -> str:
     text = text.replace(SOURCE_CAMEL_TOKEN, COMPANION_CAMEL_TOKEN)
 
     # The MASTER simplification stylesheet intentionally changes Plan Studio and
-    # Scene Plan presentation.  Give those DOM classes private prefixes so its
+    # Scene Plan presentation. Give those DOM namespaces private prefixes so its
     # CSS cannot hide controls on Ethan's legacy nodes in the same browser.
     text = text.replace("h3studio", "dmh3studio")
     text = text.replace("h3c-", "dmh3c-")
     text = text.replace("h3c ", "dmh3c ")
     text = text.replace("h3c\"", "dmh3c\"")
     text = text.replace("h3c'", "dmh3c'")
-    text = text.replace("h3-plan-studio-style", "dmh3-plan-studio-style")
-    text = text.replace("h3-master-simple-ui-style", "dmh3-master-simple-ui-style")
+
+    # Style element ids and other hyphenated frontend-only ids are also private.
+    # Web module filenames use underscores (h3_*.js), so this does not rewrite
+    # import paths or the source file layout.
+    text = text.replace("h3-", "dmh3-")
     return text
 
 
