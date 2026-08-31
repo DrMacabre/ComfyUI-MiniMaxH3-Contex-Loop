@@ -1,0 +1,45 @@
+name: MiniMax H3 master builder normalize
+
+on:
+  push:
+    branches:
+      - master-workflow-simple-ui
+
+permissions:
+  contents: write
+
+jobs:
+  normalize-builder:
+    if: ${{ !contains(github.event.head_commit.message, '[builder-normalized]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master-workflow-simple-ui
+          fetch-depth: 0
+      - name: Normalize LiteGraph group ids
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('tools/build_master_workflow.py')
+          text = path.read_text(encoding='utf-8')
+          needle = '''    out["groups"] = [\n        _group(title, categories[title], colors[index])\n        for index, title in enumerate(GROUP_ORDER) if categories[title]\n    ]\n\n    g.finish()\n'''
+          replacement = '''    out["groups"] = [\n        _group(title, categories[title], colors[index])\n        for index, title in enumerate(GROUP_ORDER) if categories[title]\n    ]\n    # LiteGraph serializes group ids as numeric values. Keep them stable and\n    # deterministic instead of deriving ids from titles.\n    for group_id, group in enumerate(out["groups"], 1):\n        group["id"] = group_id\n\n    g.finish()\n'''
+          if replacement in text:
+              print('builder already normalized')
+          elif needle in text:
+              path.write_text(text.replace(needle, replacement, 1), encoding='utf-8')
+              print('builder normalized')
+          else:
+              raise SystemExit('builder normalization anchor not found')
+          PY
+      - name: Commit normalization when needed
+        run: |
+          if git diff --quiet -- tools/build_master_workflow.py; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add tools/build_master_workflow.py
+          git commit -m "fix: normalize master workflow group ids [builder-normalized]"
+          git push origin HEAD:master-workflow-simple-ui
