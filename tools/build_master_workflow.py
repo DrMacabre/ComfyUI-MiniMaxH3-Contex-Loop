@@ -983,6 +983,10 @@ def migrate(workflow: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
         _group(title, categories[title], colors[index])
         for index, title in enumerate(GROUP_ORDER) if categories[title]
     ]
+    # LiteGraph serializes group ids as numeric values. Keep them stable and
+    # deterministic instead of deriving ids from titles.
+    for group_id, group in enumerate(out["groups"], 1):
+        group["id"] = group_id
 
     g.finish()
     errors = _validate(g)
