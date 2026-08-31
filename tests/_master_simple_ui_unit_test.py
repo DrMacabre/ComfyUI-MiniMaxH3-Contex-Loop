@@ -21,11 +21,14 @@ def main():
     sys.modules[harness.PACKAGE] = package
     harness._load("patch_layout")
     harness._load("patch_payload")
-    harness._load("nodes")
+    nodes = harness._load("nodes")
     contracts = harness._load("contracts_v05")
     chain = harness._load("chain_nodes")
+    harness._load("masked_context")
     harness._load("exact_final_timeline")
+    harness._load("source_av_target")
     simple = harness._load("master_simple_ui")
+    video_simple = harness._load("master_video_mode")
 
     # OFF is a true lazy absence: it preserves the chain and requests no media.
     picture = simple.MiniMaxH3MasterPictureReferenceSlot()
@@ -124,6 +127,89 @@ def main():
     assert attenuation == 0.5
     assert torch.all(hot["waveform"].abs() <= 1.0)
 
+    # Source-video behavior is also one visible semantic mode. Audio routing is
+    # intentionally absent from this selector and remains owned by Master Audio.
+    video_mode = video_simple.MiniMaxH3MasterVideoMode()
+    control, status = video_mode.build("H3 GENERATION")
+    assert control["mode"] == "generate"
+    assert status == "H3 GENERATION"
+    control, _ = video_mode.build("CONTINUE SOURCE VIDEO")
+    assert control["mode"] == "continue"
+    control, _ = video_mode.build("EDIT SOURCE VIDEO")
+    assert control["mode"] == "edit"
+    assert set(control) == {"version", "mode", "label"}
+
+    existing = video_simple.MiniMaxH3MasterExistingVideoRouter()
+    generate_control, _ = video_mode.build("H3 GENERATION")
+    assert existing.check_lazy_status(
+        {}, generate_control, source_video=None) == []
+    context, status = existing.prepare({}, generate_control, source_video=None)
+    assert context is None
+    assert "inactive" in status
+
+    edit = video_simple.MiniMaxH3MasterSourceVideoTarget()
+    latent = {"samples": object()}
+    assert edit.check_lazy_status(
+        {}, latent, object(), generate_control, source_video=None) == []
+    untouched, status = edit.prepare(
+        {}, latent, object(), generate_control, source_video=None)
+    assert untouched is latent
+    assert "inactive" in status
+
+    edit_control, _ = video_mode.build("EDIT SOURCE VIDEO")
+    assert edit.check_lazy_status(
+        {}, latent, object(), edit_control, source_video=None) == ["source_video"]
+
+    # Exact-final edit target must repeat-pad only the hidden raw H3 tail, never
+    # consume source-picture frames belonging to the next delivered scene.
+    video_steps = 37
+    audio_steps = 207
+    raw_frames = nodes._pixel_frames(video_steps)
+    assert raw_frames == 124
+    target_video = torch.zeros((1, 16, video_steps, 2, 4))
+    target_audio = torch.zeros((1, 32, 2, audio_steps))
+    target_latent = {
+        "samples": harness.NestedTensor((target_video, target_audio)),
+    }
+    source_frames = torch.arange(
+        200, dtype=torch.float32).reshape(200, 1, 1, 1).expand(
+            200, 32, 64, 3).clone()
+    state = {
+        "index": 1,
+        "plan": {"shots": [{
+            "generation_start_frame": 10,
+            "raw_frames": raw_frames,
+            "tail_trim_frames": 4,
+        }]},
+    }
+
+    chain._resolve_video_inputs = lambda source_video, *_args: (
+        source_frames, None, 24.0, "test")
+    video_simple._canonical_indices = lambda count, fps, device: torch.arange(
+        count, device=device)
+    video_simple._resize = lambda frames, *_args: frames
+
+    class VideoVAE:
+        def __init__(self):
+            self.seen = None
+
+        def encode(self, frames):
+            self.seen = frames.detach().clone()
+            return target_video.clone()
+
+    vae = VideoVAE()
+    output, status = video_simple._edit_source_frames(
+        state, object(), target_latent, vae)
+    out_video, out_audio = output["samples"].unbind()
+    assert torch.equal(out_video, target_video)
+    assert torch.equal(out_audio, target_audio)
+    assert int(vae.seen.shape[0]) == raw_frames
+    # 120 delivered/source frames are consumed: 10..129. The four hidden raw
+    # tail frames all repeat source frame 129; frame 130 is never borrowed.
+    assert torch.all(vae.seen[-5] == 129.0)
+    assert torch.all(vae.seen[-4:] == 129.0)
+    assert "audio target untouched" in status
+
     # Load the simple export facade against a fake advanced exporter so this
     # regression freezes the profile recipes without invoking ffmpeg.
     fake_export = types.ModuleType(harness.PACKAGE + ".master_video_export_0637")
@@ -190,9 +276,14 @@ def main():
         "MiniMaxH3MasterAudioRouter",
     }
     assert required.issubset(simple.NODE_CLASS_MAPPINGS)
+    assert {
+        "MiniMaxH3MasterVideoMode",
+        "MiniMaxH3MasterExistingVideoRouter",
+        "MiniMaxH3MasterSourceVideoTarget",
+    }.issubset(video_simple.NODE_CLASS_MAPPINGS)
     assert "MiniMaxH3MasterExport" in export_simple.NODE_CLASS_MAPPINGS
 
-    print("PASS simplified master UI/reference/audio/export contracts")
+    print("PASS simplified master UI/reference/audio/video/export contracts")
 
 
 if __name__ == "__main__":
