@@ -64,17 +64,36 @@ def main():
     assert entries[-1]["timeline_mode"] == "standalone"
     assert not entries[-1].get("align_audio_reference", False)
 
+    # Video refs accept one native VIDEO connection. The slot itself performs
+    # 24 fps normalization and pairs embedded audio; there is no prep/audio
+    # switch exposed to the master-workflow user.
     video_slot = simple.MiniMaxH3MasterVideoReferenceSlot()
-    assert video_slot.check_lazy_status(False, video=None, audio=None) == []
+    assert video_slot.check_lazy_status(False, video=None) == []
     assert video_slot.check_lazy_status(True, video=None) == ["video"]
-    video = torch.zeros((5, 32, 32, 3), dtype=torch.float32)
-    refs, _, _ = video_slot.add(
-        True, "video_ref_1", video=video, previous=refs)
+    native_video = object()
+    video_frames = torch.zeros((5, 32, 32, 3), dtype=torch.float32)
+    embedded_audio = {
+        "waveform": torch.ones((1, 2, 7000), dtype=torch.float32),
+        "sample_rate": 32000,
+    }
+    original_resolve = chain._resolve_video_inputs
+    original_indices = chain._external_video_frame_indices
+    chain._resolve_video_inputs = lambda source_video, *_args: (
+        video_frames, embedded_audio, 24.0, "native VIDEO")
+    chain._external_video_frame_indices = lambda count, fps: torch.arange(count)
+    try:
+        refs, _, video_status = video_slot.add(
+            True, "video_ref_1", video=native_video, previous=refs)
+    finally:
+        chain._resolve_video_inputs = original_resolve
+        chain._external_video_frame_indices = original_indices
     entries = chain._tagged_reference_entries(refs)
     assert len(entries) == 3
     assert entries[-1]["kind"] == "video"
     assert entries[-1]["tag"] == "video_ref_1"
     assert entries[-1]["timeline_mode"] == "restart_each_scene"
+    assert entries[-1].get("audio") is not None
+    assert "embedded audio" in video_status
 
     # One visible audio mode replaces the four low-level Chain Policy axes.
     mode = simple.MiniMaxH3MasterAudioMode()
