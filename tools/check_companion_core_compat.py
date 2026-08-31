@@ -4,15 +4,21 @@
 from __future__ import annotations
 
 import importlib.util
+import sys
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
 MODULE_PATH = ROOT / "companion_core_compat.py"
-spec = importlib.util.spec_from_file_location("companion_core_compat_test", MODULE_PATH)
+MODULE_NAME = "companion_core_compat_test"
+spec = importlib.util.spec_from_file_location(MODULE_NAME, MODULE_PATH)
 module = importlib.util.module_from_spec(spec)
 assert spec.loader is not None
-spec.loader.exec_module(module)
+sys.modules[MODULE_NAME] = module
+try:
+    spec.loader.exec_module(module)
+finally:
+    sys.modules.pop(MODULE_NAME, None)
 
 
 class FakeInnerTokenizer:
