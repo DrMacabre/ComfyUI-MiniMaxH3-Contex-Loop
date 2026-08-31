@@ -19,6 +19,7 @@ from .companion_namespace import (
     prepare_companion_web_directory as _prepare_companion_web_directory,
     register_owned_node_ids as _register_owned_node_ids,
     restore_import_shims as _restore_import_shims,
+    rewrite_package_node_id_literals as _rewrite_package_node_id_literals,
 )
 
 # During our own module imports only, expose package-local PromptServer and
@@ -156,8 +157,8 @@ finally:
     _restore_import_shims(_IMPORT_SHIM_STATE)
 
 
-# Build the complete *original* id table first.  Internal modules/classes retain
-# these names, but ComfyUI never sees them from this companion package.
+# Build the complete *original* id table first.  Internal mapping keys retain
+# these source ids, but ComfyUI never sees them from this companion package.
 _ORIGINAL_NODE_CLASS_MAPPINGS = dict(_CONTEXT_NODE_CLASS_MAPPINGS)
 _ORIGINAL_NODE_CLASS_MAPPINGS.update(CHAIN_NODE_CLASS_MAPPINGS)
 _ORIGINAL_NODE_CLASS_MAPPINGS.update(UPSCALE_NODE_CLASS_MAPPINGS)
@@ -194,6 +195,12 @@ _ORIGINAL_NODE_DISPLAY_NAME_MAPPINGS.update(_VISUAL_CONTEXT_SCHEDULE_DISPLAY_NAM
 
 # GraphBuilder facades captured above consult this exact set at execution time.
 _register_owned_node_ids(_ORIGINAL_NODE_CLASS_MAPPINGS.keys())
+
+# The inherited runtime contains a few exact class_type comparisons and explicit
+# package-owned GraphBuilder class strings.  Rewrite those *inside this loaded
+# package only* so migrated MASTER workflows stay fully inside the companion id
+# namespace.  Generic ComfyUI node ids remain unchanged.
+_RUNTIME_NODE_LITERAL_REWRITE_COUNT = _rewrite_package_node_id_literals(__name__)
 
 # These are the only public machine ids exported to ComfyUI.
 NODE_CLASS_MAPPINGS = _namespace_node_mappings(_ORIGINAL_NODE_CLASS_MAPPINGS)
