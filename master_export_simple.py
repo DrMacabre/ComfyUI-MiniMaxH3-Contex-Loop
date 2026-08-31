@@ -49,14 +49,26 @@ _PROFILE_CONFIG = {
 }
 
 
+def _profile_config(profile: Any) -> dict[str, Any]:
+    name = str(profile or "HIGH QUALITY")
+    try:
+        recipe = dict(_PROFILE_CONFIG[name])
+    except KeyError as exc:
+        raise ValueError("Unknown H3 master export profile %r." % profile) from exc
+    return {
+        "version": MASTER_EXPORT_CONFIG_VERSION,
+        "profile": name,
+        **recipe,
+    }
+
+
 def _normalized_config(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict) or value.get("version") != MASTER_EXPORT_CONFIG_VERSION:
         raise ValueError("Master Export Profile is missing or obsolete.")
     profile = str(value.get("profile") or "")
     if profile not in _PROFILE_CONFIG:
         raise ValueError("Unknown H3 master export profile %r." % profile)
-    return {"version": MASTER_EXPORT_CONFIG_VERSION, "profile": profile,
-            **dict(_PROFILE_CONFIG[profile])}
+    return _profile_config(profile)
 
 
 class MiniMaxH3MasterExportProfile:
@@ -80,18 +92,10 @@ class MiniMaxH3MasterExportProfile:
     DESCRIPTION = "One export profile fan-outs to every final/recovery master exporter."
 
     def build(self, profile="HIGH QUALITY"):
-        try:
-            recipe = dict(_PROFILE_CONFIG[str(profile)])
-        except KeyError as exc:
-            raise ValueError("Unknown H3 master export profile %r." % profile) from exc
-        config = {
-            "version": MASTER_EXPORT_CONFIG_VERSION,
-            "profile": str(profile),
-            **recipe,
-        }
+        config = _profile_config(profile)
         return config, "%s — %s %s-bit %s" % (
-            profile, recipe["video_codec"], recipe["bit_depth"],
-            recipe["quality_mode"])
+            config["profile"], config["video_codec"], config["bit_depth"],
+            config["quality_mode"])
 
 
 class MiniMaxH3MasterExport:
@@ -142,9 +146,10 @@ class MiniMaxH3MasterExport:
     def IS_CHANGED(cls, *args, **kwargs):
         return float("NaN")
 
-    def check_lazy_status(self, manifest, video_vae, export_config, filename,
-                          **kwargs):
-        _normalized_config(export_config)
+    def check_lazy_status(self, manifest, video_vae, export_config=None,
+                          filename="master", **kwargs):
+        if export_config is not None:
+            _normalized_config(export_config)
         try:
             selected = c._audio_policy_final(manifest)
         except Exception:
@@ -154,10 +159,15 @@ class MiniMaxH3MasterExport:
             return ["source_audio"]
         return []
 
-    def export(self, manifest, video_vae, export_config,
-               filename="master", source_audio=None):
-        config = _normalized_config(export_config)
-        profile = config["profile"]
+    def export(self, manifest, video_vae, export_config=None,
+               filename="master", source_audio=None, profile=None):
+        # `profile` is a hidden Python-level compatibility path for the first
+        # development facade/tests. The ComfyUI master workflow exposes only
+        # export_config from MiniMaxH3MasterExportProfile.
+        config = (
+            _normalized_config(export_config)
+            if export_config is not None else _profile_config(profile))
+        profile_name = config["profile"]
         video, path, status = advanced.MiniMaxH3ChainMasterVideoExport().export(
             manifest=manifest,
             video_vae=video_vae,
@@ -173,7 +183,7 @@ class MiniMaxH3MasterExport:
             audio_bitrate=config["audio_bitrate"],
             source_audio=source_audio,
         )
-        return video, path, "%s — %s" % (profile, status)
+        return video, path, "%s — %s" % (profile_name, status)
 
 
 NODE_CLASS_MAPPINGS = {
