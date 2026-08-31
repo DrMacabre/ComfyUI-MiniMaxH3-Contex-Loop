@@ -1,10 +1,9 @@
-"""Fail-closed runtime policy for the independent MASTER companion pack.
+"""Runtime policy for the independent MASTER companion pack.
 
-The companion is allowed to mutate its own package modules, but not shared
-ComfyUI H3/tokenizer classes.  Older upstream code in this repository contains
-compatibility fallbacks that patch global ComfyUI objects; this module replaces
-those entry points with native-only guards before the chain runtime imports
-them.
+The companion may alter only its package-local modules or private MODEL/CLIP
+objects. Shared ComfyUI H3/tokenizer classes remain read-only. Native H3 Guides
+are still mandatory; newer tokenizer/masked-AV features may be supplied by the
+explicit MASTER Core Compatibility node.
 """
 
 from __future__ import annotations
@@ -14,12 +13,12 @@ from typing import Any
 
 
 def require_native_minimax_tokenizer() -> dict[str, str]:
-    """Require ComfyUI's native MiniMax special-token implementation.
+    """Report native #15808 support or select the private companion fallback.
 
-    The legacy pack contains a compatibility helper that rewrites the module-
-    global ``comfy.text_encoders.minimax.Qwen3VLSDTokenizer`` alias.  That is
-    intentionally forbidden in the companion because the same alias is visible
-    to Ethan's installed pack.  Fail closed instead of changing shared core.
+    The historical compatibility helper rewrites the module-global
+    ``comfy.text_encoders.minimax.Qwen3VLSDTokenizer`` alias and is therefore
+    forbidden. Older cores are instead handled later by a private CLIP tokenizer
+    proxy in ``MASTER — Core Compatibility``.
     """
     try:
         minimax_module = importlib.import_module("comfy.text_encoders.minimax")
@@ -29,17 +28,17 @@ def require_native_minimax_tokenizer() -> dict[str, str]:
         ) from exc
 
     native = getattr(minimax_module, "MiniMaxQwenSDTokenizer", None)
-    if native is None:
-        raise RuntimeError(
-            "DrMacabre H3 MASTER requires ComfyUI's native MiniMax H3 special-"
-            "token support (PR #15808 or newer). The companion will not install "
-            "the legacy process-global tokenizer compatibility patch because it "
-            "must remain isolated from Ethan's nodepack. Update ComfyUI and "
-            "restart."
-        )
+    if native is not None:
+        return {
+            "state": "native",
+            "message": "ComfyUI owns MiniMax H3 additional special tokens",
+        }
     return {
-        "state": "native",
-        "message": "ComfyUI owns MiniMax H3 additional special tokens",
+        "state": "scoped_compat",
+        "message": (
+            "MASTER Core Compatibility will provide MiniMax H3 special tokens "
+            "on a private CLIP object"
+        ),
     }
 
 
