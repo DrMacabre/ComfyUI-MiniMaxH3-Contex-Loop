@@ -111,6 +111,14 @@ from .master_video_export_0637 import (
     NODE_CLASS_MAPPINGS as _MASTER_VIDEO_EXPORT_NODE_CLASS_MAPPINGS,
     NODE_DISPLAY_NAME_MAPPINGS as _MASTER_VIDEO_EXPORT_DISPLAY_NAMES,
 )
+from . import master_video_export_0637 as _master_video_export_module
+from .master_export_audio_verify_0637 import (
+    activate_master_export_audio_verify as _activate_master_export_audio_verify,
+)
+
+_MASTER_EXPORT_AUDIO_VERIFY = _activate_master_export_audio_verify(
+    _master_video_export_module, _exact_final_timeline_chain)
+
 from .audio_mode_switch_0637 import (
     NODE_CLASS_MAPPINGS as _AUDIO_MODE_SWITCH_NODE_CLASS_MAPPINGS,
     NODE_DISPLAY_NAME_MAPPINGS as _AUDIO_MODE_SWITCH_DISPLAY_NAMES,
