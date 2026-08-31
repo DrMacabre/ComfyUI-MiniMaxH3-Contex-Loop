@@ -27,8 +27,8 @@ jobs:
           python -m pip install torch numpy av safetensors
       - name: Compile simplified master backend
         run: |
-          python -m py_compile master_simple_ui.py master_export_simple.py __init__.py
+          python -m py_compile master_simple_ui.py master_export_simple.py master_video_mode.py __init__.py
       - name: Run simplified master contract regression
         run: python tests/_master_simple_ui_unit_test.py
       - name: Diff hygiene
-        run: git diff --check fool-for-love-upstream-0.6.37...HEAD
+        run: git diff --check origin/fool-for-love-upstream-0.6.37...HEAD
