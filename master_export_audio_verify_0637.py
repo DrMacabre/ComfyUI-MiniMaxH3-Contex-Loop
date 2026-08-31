@@ -2,9 +2,9 @@
 
 The reusable master must never report/reuse a successful final when the selected
 final-audio policy expects audio but the produced container has no decodable
-audio stream. This overlay is intentionally narrow: it does not alter scene
-audio, exact-timeline assembly, or ffmpeg mux semantics. It only validates the
-container produced/reused by ``master_video_export_0637``.
+audio stream. Cached masters also carry an audio-assembly version so a file
+built with obsolete scene-boundary semantics cannot be silently reused after
+an audio-timeline correction.
 """
 from __future__ import annotations
 
@@ -16,7 +16,8 @@ from typing import Any, Callable
 
 
 _SENTINEL = "_h3_master_export_audio_verify_v1"
-BUILD = "H3_MASTER_EXPORT_AUDIO_VERIFY_0_6_37_V1"
+BUILD = "H3_MASTER_EXPORT_AUDIO_VERIFY_0_6_37_V2"
+AUDIO_ASSEMBLY_VERSION = "exact_generated_audio_boundary_v1"
 
 
 class MasterExportAudioVerifyError(RuntimeError):
@@ -49,8 +50,6 @@ def _probe_audio(path: str, av_module: Any) -> tuple[bool, str]:
             streams = list(getattr(container.streams, "audio", ()) or ())
             if not streams:
                 return False, "container has no audio stream"
-            # Decode one frame. A declared-but-empty audio stream is not an
-            # acceptable final master either.
             frame = next(container.decode(audio=0), None)
             if frame is None:
                 return False, "audio stream exists but contains no decodable frame"
@@ -86,7 +85,10 @@ def preflight_master_export_audio_verify(export_module: Any, chain_module: Any) 
         export,
         ("self", "manifest", "video_vae", "video_codec", "bit_depth", "quality_mode"),
         label="MiniMaxH3ChainMasterVideoExport.export")
-    for name in ("_audio_policy_final", "_read_json", "_safe_unlink", "av", "_LOG"):
+    for name in (
+        "_audio_policy_final", "_read_json", "_atomic_json", "_safe_unlink",
+        "av", "_LOG",
+    ):
         if not hasattr(chain_module, name):
             raise MasterExportAudioVerifyError(
                 "chain module is missing required master-audio symbol %s" % name)
@@ -120,6 +122,11 @@ def activate_master_export_audio_verify(
             return False
         if selected == "none":
             return True
+        if str((record or {}).get("audio_assembly_version") or "") != AUDIO_ASSEMBLY_VERSION:
+            chain_module._LOG.info(
+                "H3 Master cache rejected %s: audio assembly version is obsolete or missing.",
+                path)
+            return False
         ok, detail = _probe_audio(path, chain_module.av)
         if not ok:
             chain_module._LOG.warning(
@@ -156,17 +163,30 @@ def activate_master_export_audio_verify(
         ok, detail = _probe_audio(path, chain_module.av)
         if not ok:
             sidecar = os.path.splitext(path)[0] + ".json"
-            # Keep the bad media file for forensic inspection, but invalidate
-            # its cache record so the next queue cannot silently reuse it.
             chain_module._safe_unlink(sidecar)
             raise MasterExportAudioVerifyError(
                 "H3 Master final expected %s audio but %s: %s. "
                 "The cache sidecar was invalidated; this file will not be reused."
                 % (selected, path, detail))
+
+        sidecar = os.path.splitext(path)[0] + ".json"
+        try:
+            record = chain_module._read_json(sidecar)
+            if not isinstance(record, dict):
+                raise TypeError("sidecar is not a mapping")
+            record = dict(record)
+            record["audio_assembly_version"] = AUDIO_ASSEMBLY_VERSION
+            chain_module._atomic_json(sidecar, record)
+        except Exception as exc:
+            chain_module._safe_unlink(sidecar)
+            raise MasterExportAudioVerifyError(
+                "H3 Master audio is present but its assembly-version sidecar could not be persisted: %s"
+                % exc) from exc
+
         chain_module._LOG.info(
-            "H3 Master final audio verified: %s / %s / %s",
-            selected, path, detail)
-        status = str(result[2]) + " / audio verified"
+            "H3 Master final audio verified: %s / %s / %s / assembly=%s",
+            selected, path, detail, AUDIO_ASSEMBLY_VERSION)
+        status = str(result[2]) + " / audio verified / assembly=" + AUDIO_ASSEMBLY_VERSION
         return result[0], result[1], status
 
     setattr(export, _SENTINEL, True)
