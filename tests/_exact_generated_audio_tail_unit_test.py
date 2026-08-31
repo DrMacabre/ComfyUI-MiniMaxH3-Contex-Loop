@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import sys
 import types
 
 import torch
@@ -20,6 +21,7 @@ def _load_module():
     if spec is None or spec.loader is None:
         raise RuntimeError("cannot load exact_generated_audio_tail_0637.py")
     module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
 
