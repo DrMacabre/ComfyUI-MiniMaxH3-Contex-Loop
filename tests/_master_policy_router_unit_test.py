@@ -46,12 +46,18 @@ def main():
     assert generated_policy_unused["transition_policy"]["preset"] == "guide"
 
     router = policy.MiniMaxH3MasterChainPolicyRouter()
-    combined, _ = router.build(generated, hard)
+
+    # Generated master modes keep H3-generated final audio but never carry the
+    # predecessor RAW audio latent. This makes arbitrary exact delivered
+    # lengths safe when H3 sampled a longer 17k+5 raw scene and trimmed it.
+    combined, status = router.build(generated, hard)
     assert combined["transition_policy"]["preset"] == "hard_av"
     assert combined["transition_policy"]["continuation_mode"] == "masked_av"
     assert combined["transition_policy"]["context_length"] == 39
     assert combined["audio_policy"]["final_audio"] == "generated"
-    assert combined["audio_policy"]["generated_continuity"] == "on"
+    assert combined["audio_policy"]["source_reference"] == "off"
+    assert combined["audio_policy"]["generated_continuity"] == "off"
+    assert "exact-safe audio carry" in status
 
     combined, _ = router.build(source, guide)
     assert combined["transition_policy"]["preset"] == "guide"
@@ -64,6 +70,7 @@ def main():
         assert combined["transition_policy"]["preset"] == "cut"
         assert combined["audio_policy"]["final_audio"] == "generated"
         assert combined["audio_policy"]["source_reference"] == "off"
+        assert combined["audio_policy"]["generated_continuity"] == "off"
 
     gate = policy.MiniMaxH3MasterSourceAudioGate()
     assert gate.check_lazy_status(generated, source_audio=None) == []
@@ -85,7 +92,7 @@ def main():
         "MiniMaxH3MasterSourceAudioGate",
     }
     assert required.issubset(policy.NODE_CLASS_MAPPINGS)
-    print("PASS simplified master continuation/source-audio policy routing")
+    print("PASS simplified master exact-safe continuation/source-audio policy routing")
 
 
 if __name__ == "__main__":
