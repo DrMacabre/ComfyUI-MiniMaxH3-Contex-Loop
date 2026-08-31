@@ -27,11 +27,13 @@ jobs:
           python -m pip install torch numpy av safetensors
       - name: Compile simplified master backend and migrators
         run: |
-          python -m py_compile master_simple_ui.py master_export_simple.py master_video_mode.py master_policy_router.py tools/build_master_workflow.py tools/repack_master_workflow.py tools/patch_master_runtime_v1.py __init__.py
+          python -m py_compile master_simple_ui.py master_export_simple.py master_video_mode.py master_policy_router.py tools/build_master_workflow.py tools/repack_master_workflow.py tools/patch_master_runtime_v1.py tools/patch_master_runtime_v2.py __init__.py
       - name: Run simplified master UI contract regression
         run: python tests/_master_simple_ui_unit_test.py
       - name: Run simplified master policy regression
         run: python tests/_master_policy_router_unit_test.py
+      - name: Preserve core Exact Final Timeline fail-closed guard
+        run: python tests/_exact_final_timeline_continuation_0637_unit_test.py
       - name: Run deterministic workflow migration regression
         run: python tests/_master_workflow_migrator_test.py
       - name: Run compact reference-bank layout regression
@@ -40,6 +42,8 @@ jobs:
         run: python tests/_master_simple_ui_surface_test.py
       - name: Run runtime smoke 01 workflow patch regression
         run: python tests/_master_runtime_patch_test.py
+      - name: Run runtime smoke 02 metadata patch regression
+        run: python tests/_master_runtime_patch_v2_test.py
       - name: Run detached Run Manager asset regression
         run: node tests/_master_detached_assets_unit_test.mjs
       - name: Diff hygiene
