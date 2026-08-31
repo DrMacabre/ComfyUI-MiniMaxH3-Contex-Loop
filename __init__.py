@@ -6,8 +6,9 @@ ComfyUI custom-node pack that can be installed beside Ethan's legacy
 
 The implementation intentionally keeps its own copy of the H3 runtime, patches
 only that local copy, exports collision-free public node ids, and serves a
-private frontend/API namespace.  It never imports or edits Ethan's installed
-nodepack.
+private frontend/API namespace. It never imports or edits Ethan's installed
+nodepack and it refuses legacy compatibility paths that would mutate shared
+ComfyUI H3/tokenizer classes.
 """
 
 from pathlib import Path
@@ -21,17 +22,28 @@ from .companion_namespace import (
     restore_import_shims as _restore_import_shims,
     rewrite_package_node_id_literals as _rewrite_package_node_id_literals,
 )
+from .companion_runtime_policy import (
+    install_native_only_guide_policy as _install_native_only_guide_policy,
+    require_native_minimax_tokenizer as _require_native_minimax_tokenizer,
+)
 
 # During our own module imports only, expose package-local PromptServer and
-# GraphBuilder facades.  Modules capture those facades, then the real ComfyUI
+# GraphBuilder facades. Modules capture those facades, then the real ComfyUI
 # globals are restored before this package import returns.
 _IMPORT_SHIM_STATE = _install_import_shims()
 try:
-    from .tokenizer_compat import (
-        install_minimax_tokenizer_compat as _install_minimax_tokenizer_compat,
-    )
+    # Do not run tokenizer_compat.install_minimax_tokenizer_compat() here. That
+    # compatibility path rewrites a shared ComfyUI module alias and would affect
+    # Ethan's pack in the same process. The companion requires native core.
+    _MINIMAX_TOKENIZER_STATUS = _require_native_minimax_tokenizer()
 
-    _MINIMAX_TOKENIZER_COMPAT_STATUS = _install_minimax_tokenizer_compat()
+    # Import our local nodes module first, replace its legacy process-global H3
+    # fallback entry points with native-only guards, THEN import chain_nodes so
+    # it captures the isolated functions.
+    from . import nodes as _companion_nodes_module
+
+    _COMPANION_GUIDE_POLICY = _install_native_only_guide_policy(
+        _companion_nodes_module)
 
     from .nodes import (
         NODE_CLASS_MAPPINGS as _CONTEXT_NODE_CLASS_MAPPINGS,
@@ -157,7 +169,7 @@ finally:
     _restore_import_shims(_IMPORT_SHIM_STATE)
 
 
-# Build the complete *original* id table first.  Internal mapping keys retain
+# Build the complete *original* id table first. Internal mapping keys retain
 # these source ids, but ComfyUI never sees them from this companion package.
 _ORIGINAL_NODE_CLASS_MAPPINGS = dict(_CONTEXT_NODE_CLASS_MAPPINGS)
 _ORIGINAL_NODE_CLASS_MAPPINGS.update(CHAIN_NODE_CLASS_MAPPINGS)
@@ -197,9 +209,9 @@ _ORIGINAL_NODE_DISPLAY_NAME_MAPPINGS.update(_VISUAL_CONTEXT_SCHEDULE_DISPLAY_NAM
 _register_owned_node_ids(_ORIGINAL_NODE_CLASS_MAPPINGS.keys())
 
 # The inherited runtime contains a few exact class_type comparisons and explicit
-# package-owned GraphBuilder class strings.  Rewrite those *inside this loaded
+# package-owned GraphBuilder class strings. Rewrite those *inside this loaded
 # package only* so migrated MASTER workflows stay fully inside the companion id
-# namespace.  Generic ComfyUI node ids remain unchanged.
+# namespace. Generic ComfyUI node ids remain unchanged.
 _RUNTIME_NODE_LITERAL_REWRITE_COUNT = _rewrite_package_node_id_literals(__name__)
 
 # These are the only public machine ids exported to ComfyUI.
