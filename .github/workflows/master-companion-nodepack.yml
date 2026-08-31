@@ -18,7 +18,7 @@ jobs:
           python-version: "3.11"
       - name: Compile companion entrypoint and helpers
         run: |
-          python -m py_compile __init__.py companion_namespace.py companion_runtime_policy.py tools/migrate_workflow_to_companion.py tools/check_companion_static.py tools/check_companion_runtime_literals.py tools/check_companion_no_global_patches.py
+          python -m py_compile __init__.py companion_namespace.py companion_runtime_policy.py tools/migrate_workflow_to_companion.py tools/preflight_companion_runtime.py tools/check_companion_static.py tools/check_companion_runtime_literals.py tools/check_companion_no_global_patches.py
       - name: Run standalone isolation checks
         run: python tools/check_companion_static.py
       - name: Run runtime node-id literal rewrite check
