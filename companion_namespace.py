@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import shutil
 from pathlib import Path
 from typing import Any, Iterable, Mapping
@@ -185,11 +186,15 @@ def restore_import_shims(state: Mapping[str, Any]) -> None:
 
 
 def _transform_web_text(text: str, original_node_ids: Iterable[str]) -> str:
-    # Longest-first avoids a shorter node id rewriting the prefix of a longer id.
-    for original_id in sorted(
-            (str(value) for value in original_node_ids),
-            key=len, reverse=True):
-        text = text.replace(original_id, NODE_ID_PREFIX + original_id)
+    # One regex substitution is essential here: replacement text still contains
+    # the original id, so a sequence of str.replace calls could double-prefix a
+    # longer id when a shorter owned id is processed later.
+    node_ids = sorted(
+        {str(value) for value in original_node_ids if str(value)},
+        key=len, reverse=True)
+    if node_ids:
+        pattern = re.compile("|".join(re.escape(value) for value in node_ids))
+        text = pattern.sub(lambda match: NODE_ID_PREFIX + match.group(0), text)
 
     # REST endpoints, websocket event names and extension ids all share this token.
     text = text.replace(SOURCE_RUNTIME_TOKEN, COMPANION_RUNTIME_TOKEN)
