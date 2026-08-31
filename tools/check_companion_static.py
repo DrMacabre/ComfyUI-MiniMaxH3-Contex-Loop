@@ -7,6 +7,8 @@ Runs without ComfyUI, torch, aiohttp or any model files.
 from __future__ import annotations
 
 import importlib.util
+import re
+import shutil
 import sys
 import tempfile
 import types
@@ -144,8 +146,7 @@ finally:
         sys.modules["comfy_execution.graph_utils"] = old_graph_utils
 
 
-# Frontend generation rewrites node ids, API/events, extension tokens, and the
-# MASTER DOM/style namespaces that would otherwise alter legacy UI.
+# Small synthetic frontend generation test.
 with tempfile.TemporaryDirectory() as temp_dir:
     package = Path(temp_dir)
     web = package / "web"
@@ -174,7 +175,6 @@ with tempfile.TemporaryDirectory() as temp_dir:
     assert "dmh3c-audio" in output
     assert "dmh3-chain-plan-editor-style" in output
     assert "dmh3-plan-studio-style" in output
-    # Cached second call must remain valid and deterministic.
     assert ns.prepare_companion_web_directory(package, owned) == generated
 
 
@@ -209,6 +209,71 @@ migrator.remaining_legacy_types(migrated, discovered, leftovers)
 assert leftovers == []
 
 
+# Audit the REAL browser bundle.  Every registered extension name must change,
+# every package-owned node type occurrence must be prefixed, and source API /
+# websocket namespace tokens must disappear from transformed JS/MJS text.
+def extension_names(text: str) -> set[str]:
+    result = set(re.findall(
+        r"registerExtension\s*\(\s*\{\s*name\s*:\s*[\"']([^\"']+)[\"']",
+        text, re.S))
+    constants = dict(re.findall(
+        r"\b([A-Z][A-Z0-9_]*EXTENSION[A-Z0-9_]*)\s*=\s*[\"']([^\"']+)[\"']",
+        text))
+    used = set(re.findall(
+        r"registerExtension\s*\(\s*\{\s*name\s*:\s*([A-Z][A-Z0-9_]*)",
+        text, re.S))
+    for variable in used:
+        if variable in constants:
+            result.add(constants[variable])
+    return result
+
+
+real_target = ROOT / ns.WEB_COMPANION_DIRECTORY
+if real_target.exists():
+    shutil.rmtree(real_target)
+try:
+    ns.prepare_companion_web_directory(ROOT, discovered)
+    source_web = ROOT / "web"
+    assert real_target.is_dir()
+
+    source_extension_names: set[str] = set()
+    target_extension_names: set[str] = set()
+
+    for source_path in sorted(source_web.rglob("*")):
+        if not source_path.is_file() or source_path.suffix.lower() not in {".js", ".mjs"}:
+            continue
+        relative = source_path.relative_to(source_web)
+        target_path = real_target / relative
+        assert target_path.is_file(), "Missing generated web file: %s" % relative
+        source_text = source_path.read_text(encoding="utf-8")
+        target_text = target_path.read_text(encoding="utf-8")
+
+        assert ns.SOURCE_RUNTIME_TOKEN not in target_text, (
+            "Unnamespaced runtime token remains in %s" % relative)
+        assert ns.SOURCE_CAMEL_TOKEN not in target_text, (
+            "Unnamespaced camel token remains in %s" % relative)
+
+        for original_id in discovered:
+            pattern = re.compile(
+                r"(?<!%s)%s" % (
+                    re.escape(ns.NODE_ID_PREFIX), re.escape(original_id)))
+            assert pattern.search(target_text) is None, (
+                "Unprefixed companion node id %s remains in %s" %
+                (original_id, relative))
+
+        source_extension_names.update(extension_names(source_text))
+        target_extension_names.update(extension_names(target_text))
+
+    assert source_extension_names, "No frontend extension names were discovered."
+    unchanged_extensions = source_extension_names & target_extension_names
+    assert not unchanged_extensions, (
+        "Companion frontend extension names still collide with legacy: %s" %
+        sorted(unchanged_extensions))
+finally:
+    if real_target.exists():
+        shutil.rmtree(real_target)
+
+
 # Syntax-only checks for the entrypoint and tools; importing __init__.py here
 # would require a full ComfyUI runtime, which is intentionally outside this test.
 for path in [
@@ -220,3 +285,4 @@ for path in [
 
 print("MASTER COMPANION STATIC CHECKS: OK")
 print("discovered_owned_node_ids=%d" % len(discovered))
+print("frontend_extensions=%d" % len(source_extension_names))
