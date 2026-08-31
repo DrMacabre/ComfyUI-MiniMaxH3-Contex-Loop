@@ -54,10 +54,6 @@ from .exact_final_timeline import install as _install_exact_final_timeline
 
 _EXACT_FINAL_TIMELINE_BUILD = _install_exact_final_timeline()
 
-# Fool for Love 0.6.37 continuation sanitation is intentionally activated only
-# after the existing exact-final-timeline layer. It wraps Loop End recursion
-# and disk resume state only; the existing _context_apply_exact policy remains
-# the sole owner of Masked AV / latent-guide / generated-audio fallback logic.
 from . import chain_nodes as _exact_final_timeline_chain
 from .exact_final_timeline_continuation_0637 import (
     activate_exact_continuation as _activate_exact_continuation,
@@ -66,11 +62,6 @@ from .exact_final_timeline_continuation_0637 import (
 _EXACT_FINAL_TIMELINE_CONTINUATION = _activate_exact_continuation(
     _exact_final_timeline_chain)
 
-# Windows may transiently lock an older browser-facing Review MP4. A sharing
-# violation while deleting that disposable stale cache must not downgrade an
-# already-successful synchronized Review mux to the silent fallback. This guard
-# wraps only _safe_unlink for final clip_*.review.mp4 cache paths; it does not
-# alter _review_video or retain_previous behavior.
 from .review_cleanup_win32_0637 import (
     activate_review_cleanup_win32_guard as _activate_review_cleanup_win32_guard,
 )
@@ -78,9 +69,6 @@ from .review_cleanup_win32_0637 import (
 _EXACT_FINAL_REVIEW_CLEANUP_WIN32 = _activate_review_cleanup_win32_guard(
     _exact_final_timeline_chain)
 
-# Review Gate must receive the exact authored/delivered frame count as explicit
-# metadata. H3 raw 17k+5 length remains internal generation geometry; seed-only
-# Reroll reads this public exact value and never falls back to raw H3 frames.
 from .review_exact_frames_payload_0637 import (
     activate_review_exact_frames_payload as _activate_review_exact_frames_payload,
 )
@@ -88,10 +76,6 @@ from .review_exact_frames_payload_0637 import (
 _EXACT_FINAL_REVIEW_FRAME_PAYLOAD = _activate_review_exact_frames_payload(
     _exact_final_timeline_chain)
 
-# Resume preflight and recursive runtime can see the same Source Timeline audio
-# through two representations: deferred AUDIO tensor first, then materialized
-# path-backed state. Canonicalize deferred windows on absolute 24 fps sample
-# boundaries so 44.1 kHz rounding cannot invalidate an unchanged predecessor.
 from .resume_source_pcm_canonical_0637 import (
     activate_resume_source_pcm_canonical as _activate_resume_source_pcm_canonical,
 )
@@ -127,6 +111,10 @@ from .master_simple_ui import (
     NODE_CLASS_MAPPINGS as _MASTER_SIMPLE_UI_NODE_CLASS_MAPPINGS,
     NODE_DISPLAY_NAME_MAPPINGS as _MASTER_SIMPLE_UI_DISPLAY_NAMES,
 )
+from .master_export_simple import (
+    NODE_CLASS_MAPPINGS as _MASTER_EXPORT_SIMPLE_NODE_CLASS_MAPPINGS,
+    NODE_DISPLAY_NAME_MAPPINGS as _MASTER_EXPORT_SIMPLE_DISPLAY_NAMES,
+)
 from .masked_bridge import (
     NODE_CLASS_MAPPINGS as _MASKED_BRIDGE_NODE_CLASS_MAPPINGS,
     NODE_DISPLAY_NAME_MAPPINGS as _MASKED_BRIDGE_NODE_DISPLAY_NAME_MAPPINGS,
@@ -153,6 +141,7 @@ NODE_CLASS_MAPPINGS.update(_MASTER_AUDIO_NODE_CLASS_MAPPINGS)
 NODE_CLASS_MAPPINGS.update(_MASTER_VIDEO_EXPORT_NODE_CLASS_MAPPINGS)
 NODE_CLASS_MAPPINGS.update(_AUDIO_MODE_SWITCH_NODE_CLASS_MAPPINGS)
 NODE_CLASS_MAPPINGS.update(_MASTER_SIMPLE_UI_NODE_CLASS_MAPPINGS)
+NODE_CLASS_MAPPINGS.update(_MASTER_EXPORT_SIMPLE_NODE_CLASS_MAPPINGS)
 NODE_CLASS_MAPPINGS.update(_MASKED_BRIDGE_NODE_CLASS_MAPPINGS)
 NODE_CLASS_MAPPINGS.update(_SOURCE_AV_TARGET_NODE_CLASS_MAPPINGS)
 NODE_CLASS_MAPPINGS.update(_REFERENCE_VIDEO_FADE_NODE_CLASS_MAPPINGS)
@@ -167,6 +156,7 @@ NODE_DISPLAY_NAME_MAPPINGS.update(_MASTER_AUDIO_NODE_DISPLAY_NAME_MAPPINGS)
 NODE_DISPLAY_NAME_MAPPINGS.update(_MASTER_VIDEO_EXPORT_DISPLAY_NAMES)
 NODE_DISPLAY_NAME_MAPPINGS.update(_AUDIO_MODE_SWITCH_DISPLAY_NAMES)
 NODE_DISPLAY_NAME_MAPPINGS.update(_MASTER_SIMPLE_UI_DISPLAY_NAMES)
+NODE_DISPLAY_NAME_MAPPINGS.update(_MASTER_EXPORT_SIMPLE_DISPLAY_NAMES)
 NODE_DISPLAY_NAME_MAPPINGS.update(_MASKED_BRIDGE_NODE_DISPLAY_NAME_MAPPINGS)
 NODE_DISPLAY_NAME_MAPPINGS.update(_SOURCE_AV_TARGET_NODE_DISPLAY_NAME_MAPPINGS)
 NODE_DISPLAY_NAME_MAPPINGS.update(
