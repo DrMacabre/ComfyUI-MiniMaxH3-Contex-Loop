@@ -186,12 +186,80 @@ class MiniMaxH3MasterExport:
         return video, path, "%s — %s" % (profile_name, status)
 
 
+class MiniMaxH3MasterRecoveryExport(MiniMaxH3MasterExport):
+    """Recovery exporter that is a clean no-op until a manifest is supplied."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "video_vae": ("VAE", {
+                    "tooltip": "MiniMax H3 video VAE used for high-fidelity latent decode.",
+                }),
+                "export_config": (MASTER_EXPORT_CONFIG_TYPE, {
+                    "tooltip": "Shared config from the single Master Export Profile node.",
+                }),
+                "filename": ("STRING", {
+                    "default": "recovery_master",
+                    "tooltip": "Readable recovery output basename.",
+                }),
+            },
+            "optional": {
+                "manifest": (c.MANIFEST_TYPE, {
+                    "tooltip": "Recovery manifest. When absent, this output stays inactive without making the prompt invalid.",
+                }),
+                "source_audio": ("AUDIO", {
+                    "lazy": True,
+                    "tooltip": "Source-track fallback, evaluated only when an active recovery manifest resolves final audio to source.",
+                }),
+            },
+        }
+
+    DESCRIPTION = (
+        "Recovery-only master exporter. It remains prompt-valid and performs no "
+        "I/O while no recovery manifest is connected."
+    )
+
+    def check_lazy_status(self, video_vae, export_config=None,
+                          filename="recovery_master", manifest=None, **kwargs):
+        if export_config is not None:
+            _normalized_config(export_config)
+        if manifest is None:
+            return []
+        try:
+            selected = c._audio_policy_final(manifest)
+        except Exception:
+            selected = None
+        if selected == "source" and "source_audio" in kwargs \
+                and kwargs.get("source_audio") is None:
+            return ["source_audio"]
+        return []
+
+    def export(self, video_vae, export_config=None,
+               filename="recovery_master", manifest=None,
+               source_audio=None, profile=None):
+        if manifest is None:
+            if export_config is not None:
+                _normalized_config(export_config)
+            return None, "", "RECOVERY INACTIVE — no manifest supplied"
+        return super().export(
+            manifest=manifest,
+            video_vae=video_vae,
+            export_config=export_config,
+            filename=filename,
+            source_audio=source_audio,
+            profile=profile,
+        )
+
+
 NODE_CLASS_MAPPINGS = {
     "MiniMaxH3MasterExportProfile": MiniMaxH3MasterExportProfile,
     "MiniMaxH3MasterExport": MiniMaxH3MasterExport,
+    "MiniMaxH3MasterRecoveryExport": MiniMaxH3MasterRecoveryExport,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "MiniMaxH3MasterExportProfile": "MiniMax H3 · Export Profile",
     "MiniMaxH3MasterExport": "MiniMax H3 · Master Export",
+    "MiniMaxH3MasterRecoveryExport": "MiniMax H3 · Recovery Export",
 }
