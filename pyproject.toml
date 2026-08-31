@@ -3,28 +3,27 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "comfyui-minimaxh3-contex-loop"
-description = "Recursive, checkpointed MiniMax H3 scene loops plus native-first AV target masking for inpainting, motion/audio continuity, audiovisual review, resume, and final assembly for ComfyUI."
-version = "0.6.37"
+name = "comfyui-minimaxh3-master"
+description = "DrMacabre's independent MiniMax H3 MASTER workflow runtime for ComfyUI, with isolated node ids, frontend events, API routes, exact timelines, references, review and export controls."
+version = "0.1.0"
 license = "GPL-3.0"
 license-files = ["LICENSE"]
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [
-    { name = "NikoDemon80", email = "262659861+NikoDemon80@users.noreply.github.com" },
-    { name = "Ethanfel", email = "28683423+ethanfel@users.noreply.github.com" },
+    { name = "DrMacabre" },
 ]
 keywords = [
     "comfyui",
     "minimax-h3",
     "video-generation",
     "audio",
-    "loop",
+    "master-workflow",
     "checkpoint",
     "resume",
 ]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 3 - Alpha",
     "Intended Audience :: End Users/Desktop",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
@@ -35,14 +34,13 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/ethanfel/ComfyUI-MiniMaxH3-Contex-Loop"
-Repository = "https://github.com/ethanfel/ComfyUI-MiniMaxH3-Contex-Loop"
-Issues = "https://github.com/ethanfel/ComfyUI-MiniMaxH3-Contex-Loop/issues"
-Upstream = "https://github.com/NikoDemon80/ComfyUI-H3-Motion-Context"
+Homepage = "https://github.com/DrMacabre/ComfyUI-MiniMaxH3-Contex-Loop/tree/master-companion-nodepack"
+Repository = "https://github.com/DrMacabre/ComfyUI-MiniMaxH3-Contex-Loop"
+Upstream = "https://github.com/ethanfel/ComfyUI-MiniMaxH3-Contex-Loop"
 
 [tool.comfy]
-PublisherId = "ethanfel"
-DisplayName = "MiniMax H3 Contex Loop"
+PublisherId = "drmacabre"
+DisplayName = "MiniMax H3 MASTER"
 
 [tool.setuptools]
 packages = []
