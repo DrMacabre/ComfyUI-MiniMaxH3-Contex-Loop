@@ -70,6 +70,13 @@ from .exact_generated_audio_tail_0637 import (
 _EXACT_FINAL_GENERATED_AUDIO_TAIL = _activate_exact_generated_audio_tail(
     _exact_final_timeline_chain, _exact_final_timeline_module)
 
+from .exact_generated_audio_boundary_0637 import (
+    activate_exact_generated_audio_boundary as _activate_exact_generated_audio_boundary,
+)
+
+_EXACT_FINAL_GENERATED_AUDIO_BOUNDARY = _activate_exact_generated_audio_boundary(
+    _exact_final_timeline_chain)
+
 from .review_cleanup_win32_0637 import (
     activate_review_cleanup_win32_guard as _activate_review_cleanup_win32_guard,
 )
