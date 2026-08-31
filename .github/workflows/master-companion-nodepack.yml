@@ -1,0 +1,23 @@
+name: MASTER companion nodepack
+
+on:
+  push:
+    branches:
+      - master-companion-nodepack
+  pull_request:
+    branches:
+      - master-companion-nodepack
+
+jobs:
+  static-companion-isolation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile companion entrypoint and helpers
+        run: |
+          python -m py_compile __init__.py companion_namespace.py tools/migrate_workflow_to_companion.py tools/check_companion_static.py
+      - name: Run standalone isolation checks
+        run: python tools/check_companion_static.py
