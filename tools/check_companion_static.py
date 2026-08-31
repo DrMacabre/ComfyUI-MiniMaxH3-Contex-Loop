@@ -31,8 +31,14 @@ migrator = load_module(
     "companion_migrator_static_test", ROOT / "tools" / "migrate_workflow_to_companion.py")
 
 
-# Public node ids are mechanically disjoint.
-owned = {"MiniMaxH3ChainPlan", "MiniMaxH3ChainCurrent", "MiniMaxH3MasterAudioMode"}
+# Public node ids are mechanically disjoint. Include an overlapping pair to
+# protect the single-pass browser rewrite from double-prefix regressions.
+owned = {
+    "MiniMaxH3ChainPlan",
+    "MiniMaxH3ChainPlanStudio",
+    "MiniMaxH3ChainCurrent",
+    "MiniMaxH3MasterAudioMode",
+}
 ns.register_owned_node_ids(owned)
 classes = {key: object() for key in owned}
 namespaced = ns.namespace_node_mappings(classes)
@@ -139,7 +145,7 @@ finally:
 
 
 # Frontend generation rewrites node ids, API/events, extension tokens, and the
-# two MASTER-specific DOM namespaces that would otherwise alter legacy UI.
+# MASTER DOM/style namespaces that would otherwise alter legacy UI.
 with tempfile.TemporaryDirectory() as temp_dir:
     package = Path(temp_dir)
     web = package / "web"
@@ -147,22 +153,26 @@ with tempfile.TemporaryDirectory() as temp_dir:
     sample = web / "sample.js"
     sample.write_text(
         'const A="MiniMaxH3ChainPlan";\n'
+        'const B="MiniMaxH3ChainPlanStudio";\n'
         'const U="/minimax_h3_context_loop/review";\n'
         'const E="minimax_h3_context_loop_review";\n'
         'const X="minimaxH3.master";\n'
         'const C="h3studio h3c-audio";\n'
-        'const S="h3-plan-studio-style";\n',
+        'const S="h3-chain-plan-editor-style h3-plan-studio-style";\n',
         encoding="utf-8")
     generated = ns.prepare_companion_web_directory(package, owned)
     assert generated == "./.web_master_companion"
     output = (package / ".web_master_companion" / "sample.js").read_text(
         encoding="utf-8")
     assert ns.NODE_ID_PREFIX + "MiniMaxH3ChainPlan" in output
+    assert ns.NODE_ID_PREFIX + "MiniMaxH3ChainPlanStudio" in output
+    assert (ns.NODE_ID_PREFIX + ns.NODE_ID_PREFIX) not in output
     assert "/drmacabre_h3_master_context_loop/review" in output
     assert "drmacabre_h3_master_context_loop_review" in output
     assert "drmacabreH3Master.master" in output
     assert "dmh3studio" in output
     assert "dmh3c-audio" in output
+    assert "dmh3-chain-plan-editor-style" in output
     assert "dmh3-plan-studio-style" in output
     # Cached second call must remain valid and deterministic.
     assert ns.prepare_companion_web_directory(package, owned) == generated
