@@ -27,7 +27,7 @@ jobs:
           python -m pip install torch numpy av safetensors
       - name: Compile simplified master backend and migrators
         run: |
-          python -m py_compile master_simple_ui.py master_export_simple.py master_video_mode.py master_policy_router.py tools/build_master_workflow.py tools/repack_master_workflow.py __init__.py
+          python -m py_compile master_simple_ui.py master_export_simple.py master_video_mode.py master_policy_router.py tools/build_master_workflow.py tools/repack_master_workflow.py tools/patch_master_runtime_v1.py __init__.py
       - name: Run simplified master UI contract regression
         run: python tests/_master_simple_ui_unit_test.py
       - name: Run simplified master policy regression
@@ -38,5 +38,9 @@ jobs:
         run: python tests/_master_reference_layout_test.py
       - name: Run master web UI surface regression
         run: python tests/_master_simple_ui_surface_test.py
+      - name: Run runtime smoke 01 workflow patch regression
+        run: python tests/_master_runtime_patch_test.py
+      - name: Run detached Run Manager asset regression
+        run: node tests/_master_detached_assets_unit_test.mjs
       - name: Diff hygiene
         run: git diff --check origin/fool-for-love-upstream-0.6.37...HEAD
