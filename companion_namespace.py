@@ -5,7 +5,7 @@ next to Ethan's legacy pack inside one ordinary ComfyUI process.  This module
 keeps that separation mechanical and centralized:
 
 * every public Comfy node id exported by this package receives a unique prefix;
-* GraphBuilder calls captured by this package rewrite only package-owned ids;
+* runtime code literals and GraphBuilder calls target those private ids;
 * PromptServer routes/events captured by this package receive a private API
   namespace while the real global PromptServer object is restored immediately
   after package import;
@@ -21,6 +21,8 @@ import hashlib
 import os
 import re
 import shutil
+import sys
+import types
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
@@ -185,6 +187,101 @@ def restore_import_shims(state: Mapping[str, Any]) -> None:
         graph_utils.GraphBuilder = state["graph_builder"]
 
 
+def _rewrite_code_constant(value: Any) -> tuple[Any, int]:
+    if isinstance(value, str):
+        rewritten = companion_node_id(value)
+        return rewritten, int(rewritten != value)
+    if isinstance(value, types.CodeType):
+        return _rewrite_code_object(value)
+    if isinstance(value, tuple):
+        total = 0
+        rewritten_items = []
+        for item in value:
+            rewritten, count = _rewrite_code_constant(item)
+            rewritten_items.append(rewritten)
+            total += count
+        return tuple(rewritten_items), total
+    if isinstance(value, frozenset):
+        total = 0
+        rewritten_items = []
+        for item in value:
+            rewritten, count = _rewrite_code_constant(item)
+            rewritten_items.append(rewritten)
+            total += count
+        return frozenset(rewritten_items), total
+    return value, 0
+
+
+def _rewrite_code_object(code: types.CodeType) -> tuple[types.CodeType, int]:
+    total = 0
+    constants = []
+    for value in code.co_consts:
+        rewritten, count = _rewrite_code_constant(value)
+        constants.append(rewritten)
+        total += count
+    if total:
+        code = code.replace(co_consts=tuple(constants))
+    return code, total
+
+
+def _rewrite_function_node_literals(function: Any, seen: set[int]) -> int:
+    if not isinstance(function, types.FunctionType):
+        return 0
+    identity = id(function)
+    if identity in seen:
+        return 0
+    seen.add(identity)
+    code, count = _rewrite_code_object(function.__code__)
+    if count:
+        function.__code__ = code
+    return count
+
+
+def rewrite_package_node_id_literals(package_name: str) -> int:
+    """Rewrite exact package-owned node-id literals in loaded companion code.
+
+    Saved workflow ``class_type`` values use the public namespaced ids.  The
+    inherited runtime still contains a few exact string comparisons such as
+    ``MiniMaxH3ChainLoopStart`` / ``MiniMaxH3ChainPlan``.  Rewriting only exact
+    constants after imports keeps those comparisons and explicit GraphBuilder
+    calls private without editing Ethan's source tree or registering aliases.
+    Mapping-dictionary keys are already materialized data and are deliberately
+    left unchanged as the internal/original id registry.
+    """
+    prefix = str(package_name) + "."
+    modules = [
+        module for name, module in tuple(sys.modules.items())
+        if module is not None and (name == package_name or name.startswith(prefix))
+    ]
+    seen: set[int] = set()
+    total = 0
+
+    for module in modules:
+        for value in tuple(vars(module).values()):
+            if isinstance(value, types.FunctionType):
+                if str(getattr(value, "__module__", "")).startswith(package_name):
+                    total += _rewrite_function_node_literals(value, seen)
+                continue
+            if not isinstance(value, type):
+                continue
+            if not str(getattr(value, "__module__", "")).startswith(package_name):
+                continue
+            for descriptor in tuple(vars(value).values()):
+                functions = []
+                if isinstance(descriptor, types.FunctionType):
+                    functions.append(descriptor)
+                elif isinstance(descriptor, (staticmethod, classmethod)):
+                    functions.append(descriptor.__func__)
+                elif isinstance(descriptor, property):
+                    functions.extend(
+                        item for item in (descriptor.fget, descriptor.fset, descriptor.fdel)
+                        if item is not None)
+                for function in functions:
+                    total += _rewrite_function_node_literals(function, seen)
+
+    return total
+
+
 def _transform_web_text(text: str, original_node_ids: Iterable[str]) -> str:
     # One regex substitution is essential here: replacement text still contains
     # the original id, so a sequence of str.replace calls could double-prefix a
@@ -282,5 +379,6 @@ __all__ = [
     "namespace_display_mappings",
     "install_import_shims",
     "restore_import_shims",
+    "rewrite_package_node_id_literals",
     "prepare_companion_web_directory",
 ]
