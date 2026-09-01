@@ -80,6 +80,14 @@ try:
     _EXACT_FINAL_GENERATED_AUDIO_BOUNDARY = _activate_exact_generated_audio_boundary(
         _exact_final_timeline_chain)
 
+    from . import masked_context as _master_masked_context
+    from .disposable_audio_head_0637 import (
+        activate_disposable_audio_head as _activate_disposable_audio_head,
+    )
+
+    _MASTER_DISPOSABLE_AUDIO_HEAD = _activate_disposable_audio_head(
+        _master_masked_context)
+
     from .review_cleanup_win32_0637 import (
         activate_review_cleanup_win32_guard as _activate_review_cleanup_win32_guard,
     )
