@@ -28,16 +28,15 @@ def _load_module():
 
 class FakeVAE:
     def encode(self, images):
-        assert int(images.shape[0]) == 39
-        return torch.zeros((1, 2, 12, 1, 1), dtype=torch.float32)
+        frames = int(images.shape[0])
+        latent_steps = {39: 12, 22: 7}.get(frames)
+        assert latent_steps is not None, frames
+        return torch.zeros((1, 2, latent_steps, 1, 1), dtype=torch.float32)
 
 
 def main():
     module = _load_module()
-
-    raw_video = torch.zeros((1, 2, 72, 1, 1), dtype=torch.float32)
-    raw_audio = torch.arange(405, dtype=torch.float32).reshape(1, 1, 1, 405)
-    checkpoint = {"video": raw_video, "audio": raw_audio}
+    checkpoint_holder = {}
     captured = {}
 
     def original_apply(self, state, conditioning, vae, latent, **kwargs):
@@ -47,7 +46,7 @@ def main():
 
     chain = types.SimpleNamespace(
         FPS=24,
-        _st_load=lambda path: checkpoint,
+        _st_load=lambda path: checkpoint_holder["value"],
         _absolute_output_path=lambda path: path,
         _resize=lambda images, width, height, crop: images,
         _streams_from_latent=lambda latent: latent["samples"],
@@ -60,6 +59,20 @@ def main():
         _resume_context_predecessors=lambda plan, index: {"audio": index - 1},
     )
 
+    target = {
+        "samples": [
+            torch.zeros((1, 2, 20, 1, 1), dtype=torch.float32),
+            torch.zeros((1, 1, 1, 100), dtype=torch.float32),
+        ]
+    }
+    wrapped = module._wrap_context_apply(original_apply, chain)
+
+    # Existing 39-frame regression: RAW 243 -> delivered 240, so generated
+    # audio must end at step 400 and exclude RAW tail steps 400..404.
+    checkpoint_holder["value"] = {
+        "video": torch.zeros((1, 2, 72, 1, 1), dtype=torch.float32),
+        "audio": torch.arange(405, dtype=torch.float32).reshape(1, 1, 1, 405),
+    }
     state = {
         "index": 2,
         "previous_latent_timeline_exact": False,
@@ -88,20 +101,12 @@ def main():
             ],
         },
     }
-    target = {
-        "samples": [
-            torch.zeros((1, 2, 20, 1, 1), dtype=torch.float32),
-            torch.zeros((1, 1, 1, 100), dtype=torch.float32),
-        ]
-    }
 
-    wrapped = module._wrap_context_apply(original_apply, chain)
     result = wrapped(
         object(), state, "conditioning", FakeVAE(), target,
         audio_vae="audio-vae", visual_cond_noise_aug=0.999,
     )
     assert result == ("ok",)
-
     safe = captured["state"]
     assert safe is not state
     assert safe["previous_latent_timeline_exact"] is True
@@ -109,15 +114,64 @@ def main():
     video, audio = safe["previous_latent"]["samples"]
     assert tuple(video.shape) == (1, 2, 12, 1, 1)
     assert tuple(audio.shape) == (1, 1, 1, 65)
-
-    # RAW scene 1 is 243 frames -> 405 audio steps. Exact delivery stops at
-    # frame 240 -> step 400. The 39-frame context is 65 steps, therefore the
-    # safe carrier MUST be [335:400], never the RAW-tail [340:405].
     assert float(audio[..., 0].item()) == 335.0
     assert float(audio[..., -1].item()) == 399.0
     assert 400.0 not in audio
     assert 404.0 not in audio
     assert captured["kwargs"]["visual_cond_noise_aug"] == 0.999
+
+    # Runtime regression from 2026-09-01: scene 2 generated 204 RAW frames,
+    # delivered exactly 192 after trimming 12, and scene 3 requests exactly
+    # 22f of shared visual/audio context.  The overlay must accept 22f as a
+    # valid H3 carrier rather than incorrectly requiring the old 39f subset.
+    captured.clear()
+    checkpoint_holder["value"] = {
+        "video": torch.zeros((1, 2, 60, 1, 1), dtype=torch.float32),
+        "audio": torch.arange(340, dtype=torch.float32).reshape(1, 1, 1, 340),
+    }
+    state22 = {
+        "index": 3,
+        "previous_latent_timeline_exact": False,
+        "previous_latent": None,
+        "previous_frames": torch.zeros((22, 1, 1, 3), dtype=torch.float32),
+        "segments": [{
+            "index": 2,
+            "checkpoint": "clip2.safetensors",
+            "raw_frames": 204,
+            "delivered_frames": 192,
+            "tail_trim_frames": 12,
+        }],
+        "plan": {
+            "compatibility": {
+                "context_length": 22,
+                "audio_context_length": 22,
+                "crop": "center",
+            },
+            "shots": [
+                {},
+                {},
+                {
+                    "context_length": 22,
+                    "audio_context_length": 22,
+                    "generated_continuity": True,
+                },
+            ],
+        },
+    }
+
+    result22 = wrapped(object(), state22, "conditioning", FakeVAE(), target)
+    assert result22 == ("ok",)
+    safe22 = captured["state"]
+    video22, audio22 = safe22["previous_latent"]["samples"]
+    assert safe22["previous_latent_timeline_exact"] is True
+    assert tuple(video22.shape) == (1, 2, 7, 1, 1)
+    assert tuple(audio22.shape) == (1, 1, 1, 37)
+    # RAW 204f -> 340 steps; exact boundary 192f -> 320 steps. 22f context
+    # -> 37 steps, so safe slice is [283:320].
+    assert float(audio22[..., 0].item()) == 283.0
+    assert float(audio22[..., -1].item()) == 319.0
+    assert 320.0 not in audio22
+    assert 339.0 not in audio22
 
     # Generated continuity OFF must not synthesize anything; the existing exact
     # wrapper remains responsible for its ordinary RGB fallback.
@@ -135,12 +189,17 @@ def main():
     assert captured["state"]["previous_latent_timeline_exact"] is False
     assert captured["state"]["previous_latent"] is None
 
+    assert module._choose_carrier_frames(22, 22, 192) == 22
     assert module._pixel_frames(72) == 243
+    assert module._pixel_frames(60) == 204
     assert module._pixel_frames(12) == 39
+    assert module._pixel_frames(7) == 22
     assert module._audio_steps(240, 24) == 400
+    assert module._audio_steps(192, 24) == 320
     assert module._audio_steps(39, 24) == 65
+    assert module._audio_steps(22, 24) == 37
 
-    print("PASS exact padded-scene generated-audio continuity")
+    print("PASS exact padded-scene generated-audio continuity (39f + 22f)")
 
 
 if __name__ == "__main__":
