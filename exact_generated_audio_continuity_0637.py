@@ -30,10 +30,13 @@ from typing import Any, Callable
 
 
 _LOG = logging.getLogger("minimax_h3_context_loop.exact_generated_continuity")
-_SENTINEL = "_h3_exact_generated_continuity_overlay_v1"
-BUILD = "H3_EXACT_GENERATED_CONTINUITY_0_6_37_V1"
+_SENTINEL = "_h3_exact_generated_continuity_overlay_v2"
+BUILD = "H3_EXACT_GENERATED_CONTINUITY_0_6_37_V2"
 AUDIO_HZ = 40
-_SHARED_AV_GRID = (243, 192, 141, 90, 39)
+_SHARED_AV_GRID = (
+    243, 226, 209, 192, 175, 158, 141, 124,
+    107, 90, 73, 56, 39, 22, 5, 1,
+)
 _FRAME_PER_TOKEN = (1, 4, 4, 4, 4)
 
 
