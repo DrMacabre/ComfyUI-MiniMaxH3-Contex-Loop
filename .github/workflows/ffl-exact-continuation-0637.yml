@@ -13,25 +13,50 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Compile sanitation integration
-        run: python -m py_compile exact_final_timeline_continuation_0637.py __init__.py
-      - name: Run focused LIVE and RESUME regression
+      - name: Compile exact legacy integration
+        run: >-
+          python -m py_compile
+          exact_final_timeline_continuation_0637.py
+          exact_generated_audio_continuity_0637.py
+          exact_generated_audio_tail_0637.py
+          __init__.py
+      - name: Run focused LIVE and RESUME sanitation regression
         env:
           PYTHONPATH: .
         run: python tests/_exact_final_timeline_continuation_0637_unit_test.py
-      - name: Verify activation order and context owner preservation
+      - name: Run padded-boundary generated continuity regression
+        run: python tests/_exact_generated_audio_continuity_0637_unit_test.py
+      - name: Run exact final generated-audio assembly regression
+        run: python tests/_exact_generated_audio_tail_unit_test.py
+      - name: Verify activation order and owner preservation
         run: |
           python - <<'PY'
           from pathlib import Path
 
           init = Path('__init__.py').read_text(encoding='utf-8')
           exact = Path('exact_final_timeline.py').read_text(encoding='utf-8')
+          sanitation_code = Path(
+              'exact_final_timeline_continuation_0637.py').read_text(encoding='utf-8')
+          continuity_code = Path(
+              'exact_generated_audio_continuity_0637.py').read_text(encoding='utf-8')
+          tail_code = Path(
+              'exact_generated_audio_tail_0637.py').read_text(encoding='utf-8')
+
           assert 'def _context_apply_exact(' in exact
           assert '_chain.MiniMaxH3ChainContext.apply = _context_apply_exact' in exact
           base = init.index('_EXACT_FINAL_TIMELINE_BUILD = _install_exact_final_timeline()')
-          sanitation = init.index('_EXACT_FINAL_TIMELINE_CONTINUATION = _activate_exact_continuation(')
-          assert base < sanitation
-          assert 'MiniMaxH3ChainContext.apply' not in Path(
-              'exact_final_timeline_continuation_0637.py').read_text(encoding='utf-8')
-          print('PASS existing _context_apply_exact preserved; sanitation activates after base exact layer')
+          sanitation = init.index(
+              '_EXACT_FINAL_TIMELINE_CONTINUATION = _activate_exact_continuation(')
+          continuity = init.index(
+              '_EXACT_GENERATED_AUDIO_CONTINUITY = _activate_exact_generated_continuity(')
+          tail = init.index(
+              '_EXACT_GENERATED_AUDIO_TAIL = _activate_exact_generated_audio_tail(')
+          assert base < sanitation < continuity < tail
+
+          assert 'MiniMaxH3ChainContext.apply' not in sanitation_code
+          assert 'previous_latent_timeline_exact' in continuity_code
+          assert 'start_audio = boundary_audio - carrier_audio' in continuity_code
+          assert 'chain_module._generated_audio = generated_audio' in tail_code
+          assert 'tail_frames' in tail_code
+          print('PASS exact legacy activation order and ownership')
           PY
