@@ -66,6 +66,28 @@ from .exact_final_timeline_continuation_0637 import (
 _EXACT_FINAL_TIMELINE_CONTINUATION = _activate_exact_continuation(
     _exact_final_timeline_chain)
 
+# Exact authored boundaries can coexist with generated-audio continuity even
+# when H3 internally padded the predecessor.  Keep the RAW checkpoint immutable,
+# rebuild picture context from delivered RGB, and slice generated audio so its
+# endpoint is the authored cut rather than the disposable RAW tail.
+from .exact_generated_audio_continuity_0637 import (
+    activate_exact_generated_continuity as _activate_exact_generated_continuity,
+)
+
+_EXACT_GENERATED_AUDIO_CONTINUITY = _activate_exact_generated_continuity(
+    _exact_final_timeline_chain)
+
+# Final generated-audio assembly uses exact delivered checkpoint audio plus the
+# private masked-AV overlap needed at joins.  Disposable RAW tail samples are
+# excluded from the final write budget instead of forcing the V1 global block.
+from . import exact_final_timeline as _exact_final_timeline_module
+from .exact_generated_audio_tail_0637 import (
+    activate_exact_generated_audio_tail as _activate_exact_generated_audio_tail,
+)
+
+_EXACT_GENERATED_AUDIO_TAIL = _activate_exact_generated_audio_tail(
+    _exact_final_timeline_chain, _exact_final_timeline_module)
+
 # Windows may transiently lock an older browser-facing Review MP4.  A sharing
 # violation while deleting that disposable stale cache must not downgrade an
 # already-successful synchronized Review mux to the silent fallback.  This guard
