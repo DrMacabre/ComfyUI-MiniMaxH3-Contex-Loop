@@ -1,0 +1,22 @@
+name: MASTER disposable audio head
+
+on:
+  push:
+    branches:
+      - master-companion-nodepack
+  pull_request:
+    branches:
+      - master-companion-nodepack
+
+jobs:
+  disposable-audio-head:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile MASTER audio-head overlay
+        run: python -m py_compile disposable_audio_head_0637.py tests/_disposable_audio_head_0637_unit_test.py
+      - name: Run disposable audio-head regression
+        run: python tests/_disposable_audio_head_0637_unit_test.py
